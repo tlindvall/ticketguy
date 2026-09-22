@@ -2,7 +2,7 @@
   "name": "ticketguy",
   "version": "0.1.0",
   "private": true,
-  "description": "Ticket Guy \u2014 email-first US live-event ticket concierge (MVP, fixture mode by default)",
+  "description": "Ticket Guy — email-first US live-event ticket concierge (MVP, fixture mode by default)",
   "type": "module",
   "engines": {
     "node": ">=22.12 <23"
@@ -29,6 +29,7 @@
     "staff:create": "tsx scripts/create-staff.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.128.0",
     "@electric-sql/pglite": "0.5.8",
     "@react-email/components": "1.0.12",
     "@react-email/render": "2.1.0",
@@ -36,7 +37,6 @@
     "drizzle-orm": "0.45.3",
     "inngest": "4.20.0",
     "next": "16.3.5",
-    "openai": "7.21.0",
     "postgres": "3.4.9",
     "react": "19.3.0",
     "react-dom": "19.3.0",

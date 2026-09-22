@@ -23,7 +23,7 @@ Email-first ticket concierge for US live events. A customer emails **my@ticketgu
 
 ## Stack
 
-Next.js 16 (App Router, TypeScript strict) · Drizzle ORM with one `pg-core` schema and reviewed SQL migrations in `/drizzle` · postgres.js on Render PostgreSQL (production) / PGlite (local + fast tests) · Better Auth (staff only, TOTP) · Inngest (durable steps + cron) · Resend (inbound + outbound; disabled by default) · OpenAI Responses API (structured outputs; fixture extractor/drafter by default) · Tailwind · Vitest · GitHub Actions with a real PostgreSQL 18 service.
+Next.js 16 (App Router, TypeScript strict) · Drizzle ORM with one `pg-core` schema and reviewed SQL migrations in `/drizzle` · postgres.js on Render PostgreSQL (production) / PGlite (local + fast tests) · Better Auth (staff only, TOTP) · Inngest (durable steps + cron) · Resend (inbound + outbound; disabled by default) · Anthropic Messages API (Claude Opus 5, structured outputs; fixture extractor/drafter by default) · Tailwind · Vitest · GitHub Actions with a real PostgreSQL 18 service.
 
 ## Local setup (fixture mode, no credentials)
 
@@ -61,7 +61,7 @@ PGlite is single-process: run one app process against `.local/pglite` at a time 
 ```
 Resend webhook (Svix-signed, raw bytes) ─▶ inbound_events + outbox (one tx) ─▶ outbox dispatcher (Inngest cron / recover endpoint)
   ─▶ ingestInbound: auto-reply detection, thread authorization, contact/conversation/message, bounded attachments (db media)
-  ─▶ interpret: extraction (fixture rules or OpenAI structured output) → revision → event resolution (never invents) → clarification | research
+  ─▶ interpret: extraction (fixture rules or Claude structured output) → revision → event resolution (never invents) → clarification | research
   ─▶ research: source plan from 29 category routes → adapters (not_integrated / manual / fixture / TM discovery) → coverage ledger
        → deterministic comparison (cents, hard constraints, unknowns flagged) → benchmark + trend + policy → claim packet
        → drafter (fixture or model) → renderer/validator (claim IDs only) → recommendation awaiting review
@@ -77,7 +77,7 @@ Key modules: `src/lib/intake/pipeline.ts` (orchestration), `src/lib/domain/*` (m
 |---|---|---|
 | Database | PGlite in `.local/pglite` | `DATABASE_URL` required; startup fails without it |
 | Sources | `fixture-source`, `fixture-source-b` synthetic offers; all 135 real sources `not_integrated` | Only adapters with recorded access approval; manual evidence path always available |
-| AI | Deterministic `FixtureExtractor` / `FixtureDrafter` | OpenAI Responses API with budget reservation |
+| AI | Deterministic `FixtureExtractor` / `FixtureDrafter` | Anthropic Messages API (Claude Opus 5) with budget reservation |
 | Email | Every send intent is created and then **blocked** by the gate (`app_mode_fixture`, `email_send_disabled`) | Requires `EMAIL_SEND_ENABLED=true`, `RESEND_API_KEY`, kill switches allowing, human approval, fresh evidence |
 | History | Synthetic Rangers preseason cohort (flagged `isFixture`) | Only `approved` licensed datasets; fixture rows inadmissible |
 

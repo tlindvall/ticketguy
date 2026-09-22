@@ -61,11 +61,13 @@ const rawSchema = z.object({
   EMAIL_TEST_RECIPIENT_ALLOWLIST: csv,
 
   /** 'rules' runs the deterministic extractor/drafter deliberately; it is never a silent fallback. */
-  EXTRACTION_PROVIDER: z.enum(['openai', 'rules']).default('openai'),
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_BASE_MODEL: z.string().default('gpt-5.4-mini-2026-03-17'),
-  OPENAI_ESCALATION_MODEL: z.string().default('gpt-5.4'),
-  OPENAI_ESCALATION_ENABLED: explicitBoolean,
+  EXTRACTION_PROVIDER: z.enum(['anthropic', 'rules']).default('anthropic'),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_BASE_MODEL: z.string().default('claude-opus-5'),
+  /** Escalation is the same model at a higher effort level, not a second model: one cache namespace, one price row. */
+  ANTHROPIC_BASE_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('low'),
+  ANTHROPIC_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
+  ANTHROPIC_ESCALATION_ENABLED: explicitBoolean,
   AI_REQUEST_SOFT_BUDGET_USD: usd,
   AI_REQUEST_HARD_BUDGET_USD: usd,
   AI_GLOBAL_DAILY_BUDGET_USD: usd,
@@ -151,8 +153,8 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     if (!appUrl.startsWith('https://')) {
       throw new ConfigurationError(`APP_URL must be an https:// URL in ${appEnv} (got "${appUrl}"); set APP_URL or deploy where RENDER_EXTERNAL_URL is provided`);
     }
-    if (e.EXTRACTION_PROVIDER === 'openai' && !e.OPENAI_API_KEY) {
-      throw new ConfigurationError(`EXTRACTION_PROVIDER=openai requires OPENAI_API_KEY in ${appEnv}; set EXTRACTION_PROVIDER=rules to run the deterministic extractor deliberately`);
+    if (e.EXTRACTION_PROVIDER === 'anthropic' && !e.ANTHROPIC_API_KEY) {
+      throw new ConfigurationError(`EXTRACTION_PROVIDER=anthropic requires ANTHROPIC_API_KEY in ${appEnv}; set EXTRACTION_PROVIDER=rules to run the deterministic extractor deliberately`);
     }
   }
   if (e.DATABASE_URL && !/^postgres(ql)?:\/\//.test(e.DATABASE_URL)) {

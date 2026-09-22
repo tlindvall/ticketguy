@@ -7,7 +7,7 @@ import { ConfigurationError, resetEnvForTests } from '@/lib/config/env';
  * It must need the database URL and nothing else: an unset auth secret, model key or public URL is not
  * a reason a migration cannot run, and making it one turns every missing secret into a failed deploy.
  */
-const APP_KEYS = ['APP_ENV', 'APP_MODE', 'APP_URL', 'RENDER_EXTERNAL_URL', 'DATABASE_URL', 'BETTER_AUTH_SECRET', 'PREFERENCE_TOKEN_SIGNING_KEY', 'INTERNAL_CRON_SECRET', 'OPENAI_API_KEY'];
+const APP_KEYS = ['APP_ENV', 'APP_MODE', 'APP_URL', 'RENDER_EXTERNAL_URL', 'DATABASE_URL', 'BETTER_AUTH_SECRET', 'PREFERENCE_TOKEN_SIGNING_KEY', 'INTERNAL_CRON_SECRET', 'ANTHROPIC_API_KEY'];
 
 describe('migration step configuration independence', () => {
   const saved = Object.fromEntries(APP_KEYS.map((k) => [k, process.env[k]]));

@@ -26,7 +26,7 @@ Status as of 2026-09-22. **The service is not live and must not be marked live.*
 | G1 | Domain ownership + DNS access for `ticketguy.live`; MX coexistence decision | Owner | Any inbound/outbound mail |
 | G2 | Resend account, verified domains, webhook secret; written suitability confirmation for (a) service replies with affiliate links and (b) opt-in promotions | Owner + Resend | `EMAIL_SEND_ENABLED`, marketing |
 | G3 | Staging test of real Resend payload shapes (received email retrieval, attachment URLs, event field names) | Staging account | Trusting the intake normalizer |
-| G4 | OpenAI account, model availability (`gpt-5.4-mini-2026-03-17`, `gpt-5.4`), budget; bounded eval run | Owner | Live extraction/drafting; eval report |
+| G4 | Anthropic API key with `claude-opus-5` available, spend budget; bounded eval run | Owner | Live extraction/drafting; eval report |
 | G5 | Render account, dedicated US-region app + PostgreSQL 18, migration/runtime roles, PITR enabled, restore drill | Owner | Deployment |
 | G6 | Inngest account and keys (or Render cron hitting `/api/internal/recover-outbox`) | Owner | Unattended processing |
 | G7 | Ticket-source access rights (per adapter: commercial use, caching, monitoring, retention, rate limits) recorded in activation evidence | Owner + vendors | Any non-fixture adapter; unattended watches |

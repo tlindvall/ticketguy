@@ -68,7 +68,7 @@ Not available: the campaign builder/sender is not implemented and `MARKETING_SEN
 
 ## 11. Rotate secrets
 
-`BETTER_AUTH_SECRET` (invalidates staff sessions), `PREFERENCE_TOKEN_SIGNING_KEY` (invalidates outstanding preference/unsubscribe links; tokens carry `v` for future multi-key rotation), `INTERNAL_CRON_SECRET`, `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` (see §2), `OPENAI_API_KEY`, Inngest keys. Rotate in the Render dashboard, redeploy, then revoke the old value at the provider. Never paste secrets into chat, tickets or commits.
+`BETTER_AUTH_SECRET` (invalidates staff sessions), `PREFERENCE_TOKEN_SIGNING_KEY` (invalidates outstanding preference/unsubscribe links; tokens carry `v` for future multi-key rotation), `INTERNAL_CRON_SECRET`, `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` (see §2), `ANTHROPIC_API_KEY`, Inngest keys. Rotate in the Render dashboard, redeploy, then revoke the old value at the provider. Never paste secrets into chat, tickets or commits.
 
 ## 12. Investigate a complaint without exposing bodies
 

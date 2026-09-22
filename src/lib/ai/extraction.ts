@@ -6,7 +6,7 @@ import { classifyOptOutText } from '@/lib/domain/suppression';
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
  *  - FixtureExtractor: deterministic rules for local demos/tests (no network, no cost).
- *  - OpenAIExtractor: Responses API structured output (src/lib/ai/openai.ts).
+ *  - AnthropicExtractor: Messages API structured output (src/lib/ai/anthropic.ts).
  * Both return null for unknown facts; nothing is invented.
  */
 export type ExtractionInput = {

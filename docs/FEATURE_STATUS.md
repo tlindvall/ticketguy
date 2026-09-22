@@ -20,7 +20,7 @@ Legend — **Real**: implemented and exercised against the real dependency. **Fi
 | Attachment validation (magic bytes, dimensions, pixel bomb, SVG/HTML/PDF rejection), db media with budget | Real | A22/A44/A45 tests; sharp installed but re-encode/resize not yet wired (validation is decoder-free) |
 | Extraction schema (strict) | Real | Zod schema shared by fixture and OpenAI extractors |
 | Fixture extractor (rules) | Fixture-only | Handles budget basis, quantities, dates, negation, gifts, opt-outs, preferences |
-| OpenAI extractor/drafter (Responses API, structured outputs, store:false) | Blocked | Coded; no API key; no eval run. Bounded eval report is therefore **not delivered** |
+| Claude extractor/drafter (Messages API, Zod structured outputs, adaptive thinking at `low` effort, server-side refusal fallbacks) | Blocked | Coded against the installed SDK and typechecked; no API key, so no live call and no eval run. Bounded eval report is therefore **not delivered** |
 | AI budget reservation (per-request soft/hard, global daily, call cap; advisory lock) | Real | A34 unit + real-PG concurrency test |
 | Event resolution (canonical events only; ambiguity → clarification; no invention) | Real | A02 test |
 | Clarification (≤3 questions, no re-asking, country check) | Real | Pipeline tests |

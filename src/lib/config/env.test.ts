@@ -35,7 +35,7 @@ describe('env parsing', () => {
     BETTER_AUTH_SECRET: 'x'.repeat(40),
     PREFERENCE_TOKEN_SIGNING_KEY: 'y'.repeat(40),
     INTERNAL_CRON_SECRET: 'z',
-    OPENAI_API_KEY: 'sk-test',
+    ANTHROPIC_API_KEY: 'sk-ant-test',
   };
 
   it('accepts a complete production configuration', () => {
@@ -57,8 +57,8 @@ describe('env parsing', () => {
   });
 
   it('never silently degrades to the rules extractor in production', () => {
-    const { OPENAI_API_KEY: _key, ...noKey } = prod;
-    expect(() => parseEnv(noKey)).toThrow(/EXTRACTION_PROVIDER=openai requires OPENAI_API_KEY/);
+    const { ANTHROPIC_API_KEY: _key, ...noKey } = prod;
+    expect(() => parseEnv(noKey)).toThrow(/EXTRACTION_PROVIDER=anthropic requires ANTHROPIC_API_KEY/);
     // Rules-only is allowed, but only as a deliberate choice.
     expect(parseEnv({ ...noKey, EXTRACTION_PROVIDER: 'rules' }).EXTRACTION_PROVIDER).toBe('rules');
   });

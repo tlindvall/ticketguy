@@ -7,15 +7,21 @@ import { usageLedger } from '@/lib/db/schema';
  * first re-reads the current total; concurrent reservations serialize on an advisory lock keyed by request.
  * Amounts are USD micros (1e-6 USD) to keep integer arithmetic.
  */
-export const PRICE_TABLE_VERSION = '2026-09-22';
+export const PRICE_TABLE_VERSION = '2026-09-22-anthropic';
+/** Published Anthropic API rates, USD per million tokens. Recheck before launch; keep in step with the models in use. */
 export const PRICES_USD_PER_MTOKEN: Record<string, { input: number; output: number }> = {
-  'gpt-5.4-mini': { input: 0.75, output: 4.5 },
-  'gpt-5.4': { input: 2.5, output: 15 },
+  'claude-opus-5': { input: 5, output: 25 },
+  'claude-sonnet-5': { input: 2, output: 10 },
+  'claude-haiku-4-5': { input: 1, output: 5 },
 };
 
+/**
+ * Exact match only. A near-miss id such as 'claude-opus-5-5' is a model we have no published rate for,
+ * so it must fall through to the conservative default rather than inherit 'claude-opus-5' pricing and
+ * under-report spend against the budget caps.
+ */
 export function priceFor(model: string): { input: number; output: number } {
-  const key = Object.keys(PRICES_USD_PER_MTOKEN).find((k) => model.startsWith(k));
-  return key ? PRICES_USD_PER_MTOKEN[key]! : { input: 15, output: 60 }; // unknown model → conservative
+  return PRICES_USD_PER_MTOKEN[model] ?? { input: 15, output: 75 }; // unknown model -> conservative
 }
 
 export function estimateUsdMicros(model: string, inputTokens: number, outputTokens: number, extraUsd = 0): number {
