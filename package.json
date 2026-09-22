@@ -1,0 +1,61 @@
+{
+  "name": "ticketguy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ticket Guy \u2014 email-first US live-event ticket concierge (MVP, fixture mode by default)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:pg": "TEST_DATABASE_URL=${TEST_DATABASE_URL:?set TEST_DATABASE_URL} vitest run --project pg",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:reset-local": "rm -rf .local/pglite && pnpm db:migrate && pnpm db:seed",
+    "simulate:inbound": "tsx scripts/simulate-inbound.ts",
+    "demo": "tsx scripts/demo.ts",
+    "registry:build": "node scripts/build-registry.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "watches:evaluate": "tsx scripts/evaluate-watches.ts",
+    "staff:create": "tsx scripts/create-staff.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@react-email/components": "1.0.12",
+    "@react-email/render": "2.1.0",
+    "better-auth": "1.7.5",
+    "drizzle-orm": "0.45.3",
+    "inngest": "4.20.0",
+    "next": "16.3.5",
+    "openai": "7.21.0",
+    "postgres": "3.4.9",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "resend": "6.28.1",
+    "sharp": "0.35.4",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "26.6.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.5",
+    "prettier": "3.9.8",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.0.1"
+  }
+}

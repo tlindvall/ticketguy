@@ -1,0 +1,24 @@
+# Decision log
+
+Dated 2026-09-22 unless noted. Categories: **implemented**, **fixture-only**, **manual**, **approved-live** (none yet), **deviation**.
+
+1. **Handoff persisted into the repo (implemented).** The handoff arrived as pasted text; `docs/handoff/*.md`, `research/*`, and `.env.example` reproduce it. The research master's per-source tables were replaced by a pointer to the canonical JSON registry (identical data; avoids two divergent copies). The JSON is generated from `scripts/registry-source.tsv` by `pnpm registry:build`; CI fails if the committed JSON drifts.
+2. **Webhook verification implemented in-house (deviation, low risk).** Resend webhooks are Svix-signed; `verifySvixSignature` implements the documented HMAC-SHA256 over `id.timestamp.body` with a 5-minute tolerance and constant-time compare, tested on tampered bytes/wrong secret/old timestamp. Swap to the SDK verifier once a staging account exists if it exposes one; the contract is the same.
+3. **Provider payload field names are assumptions (blocked).** `fetchReceivedEmail`/`normalizeReceived` follow the receiving docs as of the research date. They must be validated against a live staging payload before the intake path is trusted.
+4. **Country confirmation is asked, never inferred (implemented).** If a clarification goes out, the US question rides along (within the 3-question cap). For complete first requests the acknowledgment carries a one-line US check. Research proceeds; the recommendation review note flags "customer country unconfirmed" so staff decide. Explicit non-US statements → `unsupported`.
+5. **Ticketmaster Discovery drops price ranges (implemented).** The adapter returns events/URLs/dates only and reports `not_supported` for quotes; A12 is enforced at the adapter boundary.
+6. **Benchmark per-person display rounds to whole dollars (implemented).** Whole-party cents stay the source of truth; only the rendered per-person P25/P75/median are rounded to the dollar.
+7. **Trend "new seller lowered the floor" is inferred from the cheapest-source marker in snapshots (implemented).** Fixture snapshots carry `cheapest_source:<id>` in `qualityFlags`; live snapshot writers must set it the same way.
+8. **Manual evidence joins the comparison for 6 hours (implemented).** Staff observations for the same event/quantity within 6h of a research run are included; freshness at approval/send still applies (5/15-minute windows), so a stale manual observation blocks approval until revalidated.
+9. **Watch creation only from an explicit watch intent with a stated budget (implemented).** No budget basis → no watch; the clarification path asks. Watches attach to fixture sources only today; `monitoringAllowed` on a real adapter requires recorded polling rights.
+10. **Marketing campaigns not built (blocked).** Tables and permission/suppression logic exist; there is no segment builder, campaign UI or sender. Provider use-case clearance is a prerequisite anyway.
+11. **Historical import CLI not built (partial).** Datasets are quarantined by default and the benchmark refuses unapproved/expired/fixture data; an importer with lineage is the next piece when a vendor sample exists.
+12. **Sharp installed but not wired (partial).** Decoder-free header inspection enforces A22 limits; re-encode/strip-metadata/resize via sharp before any model call is a follow-up.
+13. **Sentry not wired (not built).** `SENTRY_DSN` is accepted; alerting destinations require the owner's account.
+14. **ESLint pinned to 9.x (deviation).** ESLint 10 is incompatible with `eslint-plugin-react` as pulled by `eslint-config-next@16.3.5`.
+15. **TypeScript 5.9 rather than 7.x (deviation).** TypeScript 7 is the Go-based compiler preview line; 5.9 is the stable toolchain Next.js/Drizzle are built against.
+16. **PGlite singletons via `globalThis` (implemented).** Next dev instantiates module graphs per route; PGlite refuses a second open of the same data dir. A stale `postmaster.pid` from an unclean kill is removed on open (dev only, single-process assumption documented).
+17. **Raw SQL timestamps as ISO strings with casts (implemented).** postgres.js and PGlite serialize untyped `Date` parameters differently; `leaseDueOutbox` and `recordProviderAccepted` pass ISO strings with `::timestamptz`.
+18. **No OpenAI eval report (blocked).** The handoff asks for a bounded eval; without an API key none was run. The fixture suite covers extraction/injection rules deterministically instead.
+19. **Real-Postgres tests ran on PostgreSQL 16 locally; CI uses 18 (implemented).** Only PG16 server binaries exist in this environment; the workflow's service container is `postgres:18`, matching the target.
+20. **Local demo staff account (implemented, not committed).** `scripts/create-staff.ts` requires `STAFF_INITIAL_PASSWORD` and honors `STAFF_EMAIL_ALLOWLIST`; no credentials are in the repo.

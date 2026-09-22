@@ -1,0 +1,67 @@
+# Render blueprint — no secrets embedded. Secrets are entered in the Render dashboard (sync: false).
+# One paid web service + one dedicated PostgreSQL database in the same US region. Migrations run once per
+# deploy in preDeployCommand with an advisory lock (never from web replicas, never drizzle-kit push).
+services:
+  - type: web
+    name: ticketguy
+    runtime: node
+    plan: starter
+    region: ohio
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    preDeployCommand: pnpm db:migrate
+    startCommand: pnpm start
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_ENV
+        value: production
+      - key: APP_MODE
+        value: live
+      - key: EMAIL_SEND_ENABLED
+        value: "false"
+      - key: MARKETING_SEND_ENABLED
+        value: "false"
+      - key: WATCH_SEND_ENABLED
+        value: "false"
+      - key: HUMAN_REVIEW_REQUIRED
+        value: "true"
+      - key: PG_POOL_MAX
+        value: "5"
+      - key: MEDIA_PROVIDER
+        value: db
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ticketguy-db
+          property: connectionString
+      - key: MIGRATION_DATABASE_URL
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        sync: false
+      - key: PREFERENCE_TOKEN_SIGNING_KEY
+        sync: false
+      - key: INTERNAL_CRON_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: INNGEST_EVENT_KEY
+        sync: false
+      - key: INNGEST_SIGNING_KEY
+        sync: false
+      - key: STAFF_EMAIL_ALLOWLIST
+        sync: false
+      - key: BUSINESS_POSTAL_ADDRESS
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+databases:
+  - name: ticketguy-db
+    plan: basic-256mb
+    region: ohio
+    postgresMajorVersion: "18"
+    ipAllowList: []

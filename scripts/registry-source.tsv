@@ -1,0 +1,135 @@
+ticketmaster	Ticketmaster	https://www.ticketmaster.com/	Core comparison	Hybrid	Sports|concerts|theater|family	core	Check applicable primary and resale offers separately.		A
+axs-us-axs-official-resale	AXS US / AXS Official Resale	https://www.axs.com/us	Core comparison	Hybrid	Sports|concerts|theater	core	Follow event-authorized primary and official resale; distinguish separate AXS Marketplace inventory.		A
+seatgeek	SeatGeek	https://seatgeek.com/	Core comparison	Hybrid	Sports|concerts|theater	core	Check for every broadly resold event; may also be the event's primary seller.		A
+stubhub	StubHub	https://www.stubhub.com/	Core comparison	Resale	Sports|concerts|theater	core	Check for every broadly resold event; event-level access still untested.		S
+vivid-seats	Vivid Seats	https://www.vividseats.com/	Core comparison	Resale	Sports|concerts|theater	core	Check for every broadly resold event.		A
+tickpick	TickPick	https://www.tickpick.com/	Core comparison	Resale	Sports|concerts|theater	core	Check for every broadly resold event.		A
+gametime	Gametime	https://gametime.co/	Core comparison	Resale	Sports|concerts|comedy|theater	core	Check for every broadly resold event; verify delivery cutoff for near-start purchases.	https://gametime.co/venues/	A
+ticketiq	TicketIQ	https://www.ticketiq.com/	Extended comparison	Resale/comparison	Sports|concerts|theater	extended	Check event coverage and final payable price.		A
+ticketnetwork	TicketNetwork	https://www.ticketnetwork.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Compare checkout offers; underlying inventory can overlap other storefronts.		A
+ticketsmarter	TicketSmarter	https://www.ticketsmarter.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Check matching event and quantity.		A
+ticketcity	TicketCity	https://www.ticketcity.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Include for college sports and premium sports as well as general inventory.		A
+megaseats	MegaSeats	https://www.megaseats.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Compare payable total, including applicable conditions.		A
+gotickets	GoTickets	https://gotickets.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Separate candidate offers from claims about seller quality; vet before recommendation.		A
+soldout-com	SOLDOUT.COM	https://www.soldout.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Include order-level charges in comparison.		A
+ticket-club	Ticket Club	https://www.ticketclub.com/	Extended comparison	Membership resale	Sports|concerts|theater	extended	Include incremental membership cost unless user already has access.		A
+scorebig	ScoreBig	https://www.scorebig.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Check final conditions and inventory overlap.		A
+ticket-liquidator	Ticket Liquidator	https://www.ticketliquidator.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Do not count overlapping inventory as additional seats.		A
+event-tickets-center	Event Tickets Center	https://www.eventticketscenter.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Resale source, not the venue box office; assess buyer terms before recommending.		A
+tickets-center	Tickets-Center	https://www.tickets-center.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Distinct from Event Tickets Center; not a venue box office; assess terms.		A
+ticketsonsale	TicketsOnSale	https://www.ticketsonsale.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Explicit resale storefront; assess terms and complete price.		A
+ticketfaster	TicketFaster	https://www.ticketfaster.com/	Extended comparison	Resale	Sports|concerts|theater	extended	Additional storefront; overlap and checkout review required.		A
+viagogo	viagogo	https://www.viagogo.com/	Extended comparison	Resale	US events	extended	US-event offers only; compare currency and totals; do not assume inventory independence from StubHub.		S
+seatpick	SeatPick	https://seatpick.com/	Extended comparison	Aggregator	Sports|concerts	extended	Discovery and additional seller coverage; follow through to actual seller; avoid double counting.		A
+live-nation	Live Nation	https://www.livenation.com/	Music and festival primary	Promoter/official links	Concerts|festivals	conditional	Check event offers, promotions, and actual ticket checkout destination.		A
+aeg-presents	AEG Presents	https://www.aegpresents.com/	Music and festival primary	Promoter/official links	Concerts|festivals	conditional	Discover official seller and event-specific information; not automatically distinct inventory.		A
+ticketweb	TicketWeb	https://www.ticketweb.com/	Music and festival primary	Primary	Clubs|concerts|comedy|theater	conditional	Check when linked by artist, venue, or promoter; homepage indexed but direct fetch failed.		B
+etix	Etix	https://etix.com/index.html	Music and festival primary	Primary	Music|sports|fairs|festivals|arts	conditional	Official venue checkout candidate; direct site can require browser verification.		B
+eventim-us-see-tickets-us	Eventim US / See Tickets US	https://www.eventim.us/	Music and festival primary	Primary	Music|festivals|clubs	conditional	Maintain seetickets.us aliases; same migrating source family, not two independent inventories.		A
+dice	DICE	https://dice.fm/	Music and festival primary	Primary/returns	Music|clubs|festivals	conditional	Check official event and waiting-list rules; app interaction may be necessary.		D
+tixr	Tixr	https://www.tixr.com/	Music and festival primary	Primary	Music|festivals|sports|comedy	conditional	Use event/group pages, not just the marketing homepage.		A
+front-gate-tickets	Front Gate Tickets	https://www.frontgatetickets.com/	Music and festival primary	Primary	Festivals	conditional	Check pass type, delivery, camping, and event-approved exchange separately.		A
+eventbrite	Eventbrite	https://www.eventbrite.com/	Music and festival primary	Primary platform	Local music|comedy|festivals|community	conditional	Organizer-specific ticket inventory; homepage fetch limited in this research.		E
+universe	Universe	https://www.universe.com/	Music and festival primary	Primary platform	GA events|exhibits|timed entry	conditional	Resolve organizer/event page; match exact session.		A
+prekindle	Prekindle	https://www.prekindle.com/	Music and festival primary	Primary platform	Music|comedy|local events	conditional	Follow venue/organizer listing.		A
+ticketstoday	Ticketstoday	https://ticketstoday.com/	Music and festival primary	Direct-to-fan primary	Artist sales|presales|festivals	conditional	Check artist-authorized presale and allotment links.		A
+resident-advisor-ra-tickets	Resident Advisor / RA Tickets	https://ra.co/tickets	Music and festival primary	Primary/discovery	Electronic music|clubs	conditional	Match entry window, age limit, and ticket tier.		A
+shotgun	Shotgun	https://shotgun.live/en	Music and festival primary	Primary	Electronic music|nightlife|festivals	conditional	Match event, entry restrictions, and ticket tier.		A
+posh	Posh	https://posh.vip/	Music and festival primary	Primary	Nightlife|parties|local events	conditional	Verify organizer, event address, entry conditions.		A
+ticket-fairy	Ticket Fairy	https://www.ticketfairy.com/	Music and festival primary	Primary	Festivals|music|nightlife	conditional	Use US events and event-specific exchange rules.		A
+venuepilot	VenuePilot	https://www.venuepilot.com/	Music and festival primary	Venue infrastructure	Independent venues	conditional	Resolve actual public event checkout; not a universal marketplace.		A
+cashortrade	CashorTrade	https://cashortrade.org/	Fan exchanges	Fan exchange	Concerts|festivals	conditional	Check applicable listings, transaction fees, and seller acceptance; offers are not necessarily instant purchases.		A
+tixel-us	Tixel US	https://tixel.com/us/	Fan exchanges	Fan exchange	Music|festivals|supported events	conditional	Prioritize when designated by organizer; verify transfer and event coverage.		A
+ticketswap	TicketSwap	https://www.ticketswap.com/	Fan exchanges	Fan exchange	Music|festivals|supported US events	conditional	Conditional US-event coverage; do not assume all tickets are supported.		A
+broadway-org	Broadway.org	https://www.broadway.org/shows	Theater and discounts	Official show directory	Broadway	conditional	Resolve each show's official seller, rush, and lottery.		A
+telecharge	Telecharge	https://www.telecharge.com/	Theater and discounts	Primary	Broadway|Off-Broadway	conditional	Check official show inventory and applicable offer codes.		S
+broadway-direct	Broadway Direct	https://broadwaydirect.com/	Theater and discounts	Primary/official show links	Broadway	conditional	Check official show inventory and lottery separately.		A
+todaytix	TodayTix	https://www.todaytix.com/	Theater and discounts	Ticket distribution	Theater|arts|selected concerts/comedy	conditional	Check ordinary purchase, rush, lottery, and location coverage separately.		A
+tkts-by-tdf	TKTS by TDF	https://www.tdf.org/	Theater and discounts	Discount booth program	NYC theater	conditional	Check available performances and physical purchase requirements; not guaranteed remote inventory.		A
+tdf-membership	TDF membership	https://www.tdf.org/faq/	Theater and discounts	Eligibility-based discount	NYC theater and arts	conditional	Eligibility and membership required; include membership cost if applicable.		A
+broadwaybox	BroadwayBox	https://www.broadwaybox.com/	Theater and discounts	Discount discovery	Broadway|Off-Broadway	conditional	Validate code against exact performance and checkout; not an independent seat pool.		A
+playbill-discounts	Playbill discounts	https://playbill.com/article/playbills-ultimate-guide-to-broadway-ticket-buying	Theater and discounts	Discount/rush discovery	Broadway|Off-Broadway	conditional	Check current show-linked discounts and rules, then official seller.		A
+theatermania	TheaterMania	https://www.theatermania.com/	Theater and discounts	Discovery/discount distribution	Broadway|regional theater	conditional	Confirm actual seller and valid offer.		A
+broadway-com	Broadway.com	https://www.broadway.com/about-us/	Theater and discounts	Authorized ticket seller	Broadway|Off-Broadway	conditional	Compare complete price; not automatically the show's primary box office.		A
+telecharge-lottery-rush	Telecharge Lottery + Rush	https://rush.telecharge.com/	Theater and discounts	Rush/lottery	Participating shows	conditional	Conditional opportunities, not immediately available guaranteed tickets.		A
+broadway-direct-lottery	Broadway Direct Lottery	https://lottery.broadwaydirect.com/	Theater and discounts	Lottery	Participating shows	conditional	Follow show rules, deadlines, quantity limits; keep separate from purchasable recommendations.		A
+lucky-seat	Lucky Seat	https://www.luckyseat.com/	Theater and discounts	Lottery	Participating Broadway/touring shows	conditional	Direct fetch blocked; corroborated by Playbill; check current show participation.	https://playbill.com/article/playbills-ultimate-guide-to-broadway-ticket-buying	L
+broadway-inbound	Broadway Inbound	https://www.broadwayinbound.com/	Theater and discounts	Group sales	Theater groups	conditional	Use only when party meets show-specific group minimum.		A
+tickets-com-provenue	Tickets.com / ProVenue	https://www.tickets.com/	Local and venue platforms	Primary/infrastructure	Sports|arts|venues	conditional	Follow club/venue's event-specific checkout.		A
+paciolan-evenue	Paciolan / eVenue	https://www.paciolan.com/	Local and venue platforms	Primary infrastructure	College sports|venues|performing arts	conditional	Resolve team/venue storefront; eVenue is an alias/platform pattern.		A
+ticketreturn	TicketReturn	https://www2.ticketreturn.com/boxofficenew/Default.aspx?reset=t	Local and venue platforms	Primary	College/minor sports|local events	conditional	Follow current box-office event pages.		A
+fevo	FEVO	https://www.fevo.com/	Local and venue platforms	Group/offer infrastructure	Sports|group and themed offers	conditional	Check official team/promoter offer links; verify quantity minimum and inclusions.		A
+vivenu	vivenu	https://www.vivenu.com/	Local and venue platforms	Primary infrastructure	Sports|festivals|venues	conditional	Discover and check event-specific branded storefront.		A
+audienceview-ovationtix	AudienceView / OvationTix	https://audienceview.com/ovationtix-is-now-audienceview/	Local and venue platforms	Primary infrastructure	Theater|arts|attractions	conditional	Resolve organization checkout; preserve OvationTix legacy domain recognition.		A
+spektrix	Spektrix	https://www.spektrix.com/en-us/regions/usa/	Local and venue platforms	Primary infrastructure	Arts|culture|US venues	conditional	Resolve venue's branded box office; no universal consumer inventory search implied.		A
+tessitura	Tessitura	https://www.tessitura.com/features/ticketing-admissions	Local and venue platforms	Primary infrastructure	Opera|orchestras|museums|performing arts	conditional	Resolve organization's own checkout and discount programs.		A
+showclix-leap-events	ShowClix / Leap Events	https://leapevents.com/	Local and venue platforms	Primary/discovery	Conventions|exhibits|festivals	conditional	showclix.com redirects to Leap Events; retain legacy event URL recognition.		A
+ticketleap	TicketLeap	https://www.ticketleap.com/	Local and venue platforms	Primary platform	Community|arts|local events	conditional	Check only relevant organizer storefronts.		A
+ticket-tailor	Ticket Tailor	https://www.tickettailor.com/	Local and venue platforms	Primary platform	Independent/community events	conditional	Check event-specific box offices, including custom domains.		A
+simpletix	SimpleTix	https://www.simpletix.com/	Local and venue platforms	Primary platform	Attractions|events|arts	conditional	Match ticket dates and admission options.		A
+ticketspice	TicketSpice	https://www.ticketspice.com/	Local and venue platforms	Primary platform	Fairs|attractions|festivals|local events	conditional	Resolve organizer checkout and package contents.		A
+tix	Tix	https://www.tix.com/	Local and venue platforms	Primary platform	Arts|local venues	conditional	Public site shell only; verify venue/event checkout before activation.		S
+purplepass	Purplepass	https://www.purplepass.com/	Local and venue platforms	Primary platform	Arts|schools|local events	conditional	Check event-specific inventory and restrictions.		A
+on-the-stage	On The Stage	https://onthestage.com/	Local and venue platforms	Primary platform	Theater|performing arts	conditional	Follow production storefront.		A
+ludus	Ludus	https://hello.ludus.com/	Local and venue platforms	Primary platform	Theater|schools|local arts	conditional	Resolve organization.ludus.com and event-specific availability.		A
+ticketpeak	TicketPeak	https://ticketpeak.com/	Local and venue platforms	Primary platform	Performing arts|local events	conditional	Resolve venue/organization checkout.		A
+ticketstage	TicketStage	https://www.ticketstage.com/	Local and venue platforms	Primary platform	Local theater	conditional	Resolve theater and exact performance.		A
+ticketsource	TicketSource	https://www.ticketsource.com/	Local and venue platforms	Primary platform	Local theater/events	conditional	US-event filter; ticketsource.us currently redirects here.		A
+ticketor	Ticketor	https://www.ticketor.com/	Local and venue platforms	Primary platform	Community and local events	conditional	Organizer-specific source.		A
+ticketstripe	Ticketstripe	https://ticketstripe.com/	Local and venue platforms	Primary platform	Local events|fundraising	conditional	Organizer-specific source.		A
+big-tickets	Big Tickets	https://www.bigtickets.com/	Local and venue platforms	Primary platform	Festivals|local events	conditional	Check matching US event.		A
+freshtix	Freshtix	https://www.freshtix.com/	Local and venue platforms	Primary platform	Music|festivals|local events	conditional	Check matching venue/organizer event.		A
+squadup	SquadUP	https://www.squadup.com/	Local and venue platforms	Primary platform	Local|food|festivals|special events	conditional	White-label organizer/event checkout.		A
+humanitix-us	Humanitix US	https://humanitix.com/us	Local and venue platforms	Primary platform	Local events|festivals|arts	conditional	Check matching event; global platform, US events only.		A
+ticketbud	Ticketbud	https://www.ticketbud.com/	Local and venue platforms	Primary platform	Local events|festivals	conditional	Organizer-specific source.		A
+events-com	Events.com	https://events.com/	Local and venue platforms	Primary platform	Local events|festivals|community	conditional	Include events migrated from Brown Paper Tickets.		A
+eventbee	Eventbee	https://www.eventbee.com/	Local and venue platforms	Primary platform	Community/local events	conditional	Check organizer-specific storefront.		A
+eventcreate	EventCreate	https://www.eventcreate.com/	Local and venue platforms	Primary platform	Local and special events	conditional	Resolve public event checkout.		A
+zeffy	Zeffy	https://www.zeffy.com/	Local and venue platforms	Nonprofit platform	Nonprofit ticketed events	conditional	Use official organizer links; check optional contributions separately.		A
+nfl-tickets	NFL tickets	https://www.nfl.com/tickets/	Sports routing	Official routing	NFL	conditional	Resolve home team's own tickets and offers; current league link routes to Ticketmaster.		A
+nhl-ticket-exchange	NHL Ticket Exchange	https://www.ticketmaster.com/nhl	Sports routing	Official routing	NHL	conditional	League route does not override home-team/venue provider exceptions.		A
+nba-tickets	NBA Tickets	https://nbatickets.nba.com/	Sports routing	Official routing	NBA	conditional	Resolve team primary, official resale, group and special offers.		A
+wnba-tickets	WNBA tickets	https://www.wnba.com/tickets	Sports routing	Official routing	WNBA	conditional	Resolve team checkout; US-hosted games only.		A
+mlb-tickets	MLB tickets	https://www.mlb.com/tickets	Sports routing	Official routing	MLB	conditional	Use home club ticket links, promotions and packages.		A
+mls-tickets	MLS tickets	https://www.mlssoccer.com/tickets/	Sports routing	Official routing	MLS	conditional	Use home club checkout; exclude Canadian-hosted matches.		A
+nwsl	NWSL	https://www.nwslsoccer.com/	Sports routing	Official routing	NWSL	conditional	Use team/event official ticket links; do not hard-code one primary seller.		A
+ncaa-tickets	NCAA tickets	https://www.ncaa.com/tickets	Sports routing	Official routing	College championships	conditional	Championship route; regular season starts with school's athletics ticket office; browser challenge encountered.		B
+milb-tickets	MiLB tickets	https://www.mlb.com/milb/tickets	Sports routing	Official routing	Minor-league baseball	conditional	Use club ticket pages and promotions.		A
+gofan	GoFan	https://gofan.co/	Sports routing	Primary	School sports/events	conditional	Start from official school/association; browser-rendered inventory.		S
+hometown-ticketing	HomeTown Ticketing	https://www.hometownticketing.com/	Sports routing	Primary platform	Schools|colleges|local sports	conditional	Follow official organization checkout.		A
+nascar-tickets	NASCAR tickets	https://www.nascar.com/tickets	Sports routing	Official routing	Motor racing	conditional	Use track and race/session-specific official ticket links.		A
+indycar-schedule	INDYCAR schedule	https://www.indycar.com/Schedule	Sports routing	Official routing	Motor racing	conditional	Resolve US circuit's ticket office; race-day vs weekend distinction.		A
+nhra-schedule	NHRA schedule	https://www.nhra.com/schedule/2026	Sports routing	Official routing	Drag racing	conditional	Use current-season schedule and track links; this URL is year-specific.		A
+formula-1-ticket-store	Formula 1 Ticket Store	https://tickets.formula1.com/en	Sports routing	Official ticket store	US Formula 1 rounds	conditional	Check alongside actual US race promoter/circuit; exclude foreign rounds.		A
+f1-experiences	F1 Experiences	https://f1experiences.com/	Sports routing	Hospitality	US Formula 1 rounds	conditional	Only compare when packages or hospitality are requested.		A
+wwe-events	WWE events	https://www.wwe.com/events	Sports routing	Official routing	Wrestling	conditional	Resolve exact US event and official seller.		A
+aew-events	AEW events	https://www.allelitewrestling.com/aew-events	Sports routing	Official routing	Wrestling	conditional	Resolve exact US event and official seller.		A
+us-open-tennis	US Open tennis	https://www.usopen.org/en_US/tickets/index.html	Sports routing	Official routing	Tennis	conditional	Check session, stadium, reserved seat versus grounds admission.		S
+masters-tickets	Masters tickets	https://www.masters.com/en_US/tickets/index.html	Sports routing	Official routing	Golf	conditional	Application, badge, and transfer conditions require specific review; not ordinary guaranteed availability.		S
+pbr	PBR	https://www.pbr.com/	Sports routing	Official routing	Bull riding	conditional	Resolve event and ticket seller.		A
+on-location	On Location	https://onlocationexp.com/	Sports routing	Hospitality/official packages	Sports|music	conditional	Conditional package route; do not compare package price to ticket-only price without adjustment.		A
+helium-comedy	Helium Comedy	https://www.heliumcomedy.com/	Comedy direct	Venue directory	Comedy	conditional	Check club-specific checkout, age rules, minimum purchase requirements.		A
+comedy-cellar	Comedy Cellar	https://www.comedycellar.com/	Comedy direct	Venue direct	Comedy	conditional	Reservations and cover/minimum spend can differ from ordinary ticket checkout.		A
+fever	Fever	https://feverup.com/en	Attractions and entertainment	Primary/distribution	Experiences|concerts|exhibits	conditional	Check exact session and venue; US filter.		A
+groupon	Groupon	https://www.groupon.com/	Attractions and entertainment	Offers	Comedy|attractions|local events	conditional	Check restrictions, booking requirements and redemption availability.		A
+vegas-com	Vegas.com	https://www.vegas.com/	Attractions and entertainment	Distribution	Las Vegas shows and attractions	conditional	Compare with venue/show official checkout; public content limited in research.		S
+tix4-tix4vegas	Tix4 / Tix4Vegas	https://tix4.com/	Attractions and entertainment	Discount distribution	Las Vegas shows	conditional	Check date, seating category, redemption and pickup requirements.		A
+tiqets	Tiqets	https://www.tiqets.com/en/	Attractions and entertainment	Distribution	Museums|attractions	conditional	US venues only; compare cancellation and timed-entry requirements.		A
+undercover-tourist	Undercover Tourist	https://www.undercovertourist.com/	Attractions and entertainment	Distribution	Theme parks|attractions	conditional	Check exact dates, park options and reservations; separate from core live-event MVP.		A
+citypass	CityPASS	https://www.citypass.com/	Attractions and entertainment	Attraction bundles	US cities	conditional	Only relevant when user will use the included attractions; not a single-ticket equivalent.		A
+fandango	Fandango	https://www.fandango.com/	Attractions and entertainment	Movie ticketing	Cinema	conditional	Optional entertainment extension; compare theater-direct total.		A
+atom-tickets	Atom Tickets	https://www.atomtickets.com/	Attractions and entertainment	Movie ticketing	Cinema	conditional	Optional extension; theater/date coverage must match.		A
+vet-tix	Vet Tix	https://www.vettix.org/	Eligibility and special offers	Eligibility program	Sports|music|theater	conditional	Only user-declared eligible members; request/allocation rules apply.		A
+1st-tix	1st Tix	https://www.1sttix.org/visitor/the-team/about	Eligibility and special offers	Eligibility program	Sports|music|theater	conditional	Only verified eligible first responders; not generally available inventory.		A
+govx	GOVX	https://www.govx.com/	Eligibility and special offers	Eligibility program	Supported events	conditional	User eligibility and account-specific availability required.		S
+ticketsatwork	TicketsatWork	https://www.ticketsatwork.com/tickets/	Eligibility and special offers	Employer/member program	Sports|theater|attractions	conditional	Only if user has legitimate access; no credential collection.		A
+american-express-experiences	American Express Experiences	https://www.americanexpress.com/en-us/benefits/entertainment/	Eligibility and special offers	Cardholder offers	Supported events	conditional	Card eligibility and offer rules; presale access is not necessarily a discount.		S
+citi-entertainment	Citi Entertainment	https://www.citientertainment.com/	Eligibility and special offers	Cardholder offers	Supported events	conditional	Check eligibility and event-specific presale/offer conditions.		A
+capital-one-entertainment	Capital One Entertainment	https://www.capitalone.com/credit-cards/benefits/entertainment/	Eligibility and special offers	Cardholder offers	Supported events	conditional	Distinguish cash, rewards and package pricing; access dependent.		A
+bandsintown	Bandsintown	https://www.bandsintown.com/	Discovery and context	Discovery	Concerts	context_only	Event discovery/official links, not an additional guaranteed inventory source.		A
+songkick	Songkick	https://www.songkick.com/	Discovery and context	Discovery	Concerts	context_only	Resolve dates and ticket links; confirm with artist/venue.		A
+seated	Seated	https://www.seated.com/	Discovery and context	Artist discovery/presales	Music	context_only	Follow artist-authorized ticket/presale links.		A
+a-view-from-my-seat	A View From My Seat	https://aviewfrommyseat.com/	Discovery and context	Seat context	Seated live events	context_only	Supporting photos/reviews; match configuration and date; not a seller or blanket data license.		A
+ticketmaster-partner-api	Ticketmaster Partner API	https://developer.ticketmaster.com/products-and-docs/apis/partner/	Infrastructure evaluation	Restricted API	Ticketmaster-supported events	integration_candidate	Distribution relationship required; discovery access does not establish listing-level access.		A
+stubhub-api	StubHub API	https://developer.stubhub.com/docs/overview/introduction/	Infrastructure evaluation	API	StubHub-supported events	integration_candidate	Documented API; credentials, commercial rights and practical coverage require validation.		A
+ticket-evolution	Ticket Evolution	https://developer.ticketevolution.com/	Infrastructure evaluation	B2B inventory API	Resale	integration_candidate	Evaluate licensed feed and economics; not a separate consumer seller quote.		A
