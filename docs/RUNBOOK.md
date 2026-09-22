@@ -10,7 +10,8 @@ Nothing in this runbook authorizes a live send. `EMAIL_SEND_ENABLED`, `MARKETING
 2. In Resend, add the sending domain (`ticketguy.now`) and the marketing subdomain (`news.ticketguy.now`) and the receiving domain. Copy the exact DKIM/SPF/MX records Resend shows; never hand-type guessed values.
 3. Publish DMARC at `p=none` with `rua=` pointing to a dedicated reporting mailbox. Tighten only after every legitimate sender is confirmed in reports.
 4. Route `postmaster@`, `abuse@`, `privacy@`, `support@` to a staff mailbox (not to the concierge intake). The app ignores inbound mail whose `To` is not `CONCIERGE_INBOUND_ADDRESS` (recorded in `audit_log` as `inbound.unknown_recipient_ignored`).
-5. Verify with a test send to Gmail, Outlook and Apple Mail: SPF/DKIM/DMARC pass, threading (`In-Reply-To`/`References`) intact, plain-text and HTML both readable.
+5. Sending from more than one address needs no extra DNS: DKIM and SPF authorize the *domain*, so any local part on a verified domain can send. Receiving is the constrained side — root MX has exactly one owner. Every address you send from must therefore appear in `CONCIERGE_INBOUND_ADDRESSES` (or be the public `CONCIERGE_INBOUND_ADDRESS`), or be listed in `UNMONITORED_FROM_ADDRESSES` to record that replies to it are dropped on purpose. Startup fails otherwise, which is the point: an unreceivable From loses customer replies silently. Vary the display name before you vary the address, and use a separate subdomain (`news.`) where you want separate sending reputation.
+6. Verify with a test send to Gmail, Outlook and Apple Mail: SPF/DKIM/DMARC pass, threading (`In-Reply-To`/`References`) intact, plain-text and HTML both readable.
 
 ## 2. Webhooks
 

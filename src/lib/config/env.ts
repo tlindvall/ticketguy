@@ -41,6 +41,26 @@ const csv = z
       .filter(Boolean),
   );
 
+/**
+ * `key=value` pairs, comma separated (e.g. `watch_alert=alerts@x.com,marketing=deals@x.com`).
+ * Keys and values are lowercased; a malformed entry is a configuration error, never a silent skip.
+ */
+const csvPairs = z
+  .string()
+  .optional()
+  .transform((v, ctx) => {
+    const out: Record<string, string> = {};
+    for (const part of (v ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+      const eq = part.indexOf('=');
+      if (eq <= 0 || eq === part.length - 1) {
+        ctx.addIssue({ code: 'custom', message: `Expected "key=value", got "${part}"` });
+        return z.NEVER;
+      }
+      out[part.slice(0, eq).trim().toLowerCase()] = part.slice(eq + 1).trim().toLowerCase();
+    }
+    return out;
+  });
+
 export const appEnvironment = z.enum(['development', 'test', 'staging', 'production']);
 export type AppEnvironment = z.infer<typeof appEnvironment>;
 
@@ -77,9 +97,16 @@ const rawSchema = z.object({
 
   RESEND_API_KEY: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
+  /** The public address. Shown on the site and used as Reply-To; also the first entry of inboundAddresses. */
   CONCIERGE_INBOUND_ADDRESS: z.string().email().default(`my@${SERVICE_DOMAIN}`),
+  /** Further addresses the intake accepts, comma separated. Mail to anything else is ignored. */
+  CONCIERGE_INBOUND_ADDRESSES: csv,
   CONCIERGE_FROM_ADDRESS: z.string().email().default(`my@${SERVICE_DOMAIN}`),
   MARKETING_FROM_ADDRESS: z.string().email().default(`deals@${MARKETING_SUBDOMAIN}`),
+  /** Per-message-class From overrides, e.g. `watch_alert=alerts@ticketguy.now`. Empty = one From for everything. */
+  MESSAGE_CLASS_FROM_ADDRESSES: csvPairs,
+  /** From addresses knowingly not receivable. Listing one is an explicit decision to drop replies to it. */
+  UNMONITORED_FROM_ADDRESSES: csv,
   BUSINESS_POSTAL_ADDRESS: z.string().optional(),
 
   DATABASE_URL: z.string().optional(),
@@ -114,12 +141,23 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
   APP_URL: string;
   appEnv: AppEnvironment;
   isProductionLike: boolean;
+  /** Every address the intake accepts, lowercased and deduped; CONCIERGE_INBOUND_ADDRESS is always first. */
+  inboundAddresses: string[];
+  /** Resolved From address per message class. Every class is present; unconfigured ones use CONCIERGE_FROM_ADDRESS. */
+  messageClassFromAddresses: Record<MessageClass, string>;
   aiRequestSoftBudgetUsd: number;
   aiRequestHardBudgetUsd: number;
   aiGlobalDailyBudgetUsd: number;
   pilotSupportedCategories: string[];
   pilotSupportedMarkets: string[];
 };
+
+/**
+ * Mirrors MessageClass in @/lib/email/send-gate. Declared here rather than imported: send-gate imports Env,
+ * and the cycle would leave one of the two undefined at module-evaluation time. A test pins the two in step.
+ */
+export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'marketing', 'verification'] as const;
+export type MessageClass = (typeof MESSAGE_CLASSES)[number];
 
 export class ConfigurationError extends Error {
   override name = 'ConfigurationError';
@@ -174,6 +212,28 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
   if (e.TICKETMASTER_DISCOVERY_ENABLED && !e.TICKETMASTER_DISCOVERY_API_KEY) {
     throw new ConfigurationError('TICKETMASTER_DISCOVERY_ENABLED=true requires TICKETMASTER_DISCOVERY_API_KEY');
   }
+  const inboundAddresses = [...new Set([e.CONCIERGE_INBOUND_ADDRESS.toLowerCase(), ...e.CONCIERGE_INBOUND_ADDRESSES])];
+
+  const unknownClass = Object.keys(e.MESSAGE_CLASS_FROM_ADDRESSES).find((k) => !(MESSAGE_CLASSES as readonly string[]).includes(k));
+  if (unknownClass) {
+    throw new ConfigurationError(`MESSAGE_CLASS_FROM_ADDRESSES has unknown message class "${unknownClass}"; valid: ${MESSAGE_CLASSES.join(', ')}`);
+  }
+  const messageClassFromAddresses = Object.fromEntries(
+    MESSAGE_CLASSES.map((c) => [c, e.MESSAGE_CLASS_FROM_ADDRESSES[c] ?? e.CONCIERGE_FROM_ADDRESS.toLowerCase()]),
+  ) as Record<MessageClass, string>;
+
+  // Anything we send from is somewhere a customer will reply, whatever Reply-To says. An address that is
+  // neither received nor explicitly declared unmonitored would drop those replies silently, so it fails here.
+  const unmonitored = new Set(e.UNMONITORED_FROM_ADDRESSES);
+  for (const [cls, from] of Object.entries(e.MESSAGE_CLASS_FROM_ADDRESSES)) {
+    if (!inboundAddresses.includes(from) && !unmonitored.has(from)) {
+      throw new ConfigurationError(
+        `MESSAGE_CLASS_FROM_ADDRESSES sends "${cls}" from ${from}, which the intake does not accept. ` +
+          `Add it to CONCIERGE_INBOUND_ADDRESSES, or to UNMONITORED_FROM_ADDRESSES to accept that replies to it are dropped.`,
+      );
+    }
+  }
+
   const soft = e.AI_REQUEST_SOFT_BUDGET_USD ?? 0.5;
   const hard = e.AI_REQUEST_HARD_BUDGET_USD ?? 1.0;
   if (hard < soft) throw new ConfigurationError('AI_REQUEST_HARD_BUDGET_USD must be >= AI_REQUEST_SOFT_BUDGET_USD');
@@ -183,6 +243,8 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     APP_URL: appUrl,
     appEnv,
     isProductionLike,
+    inboundAddresses,
+    messageClassFromAddresses,
     aiRequestSoftBudgetUsd: soft,
     aiRequestHardBudgetUsd: hard,
     aiGlobalDailyBudgetUsd: e.AI_GLOBAL_DAILY_BUDGET_USD ?? 10,

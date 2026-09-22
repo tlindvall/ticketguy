@@ -70,9 +70,11 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   async ingestInbound(msg: NormalizedInbound): Promise<IngestOutcome> {
     const now = this.now();
-    const svc = [this.env.CONCIERGE_INBOUND_ADDRESS, this.env.CONCIERGE_FROM_ADDRESS, this.env.MARKETING_FROM_ADDRESS];
+    // Every address we receive on or send from counts as our own, so a loop is detected whichever one bounced.
+    const svc = [...new Set([...this.env.inboundAddresses, ...Object.values(this.env.messageClassFromAddresses), this.env.MARKETING_FROM_ADDRESS])];
     const auto = detectAutoResponse({ headers: msg.headers, subject: msg.subject, from: msg.from, serviceAddresses: svc });
-    const toService = msg.to.map(normalizeEmailLookup).includes(normalizeEmailLookup(this.env.CONCIERGE_INBOUND_ADDRESS));
+    const accepted = new Set(this.env.inboundAddresses.map(normalizeEmailLookup));
+    const toService = msg.to.map(normalizeEmailLookup).some((a) => accepted.has(a));
     const senderLookup = normalizeEmailLookup(msg.from);
 
     return await this.db.transaction(async (tx) => {
@@ -579,7 +581,7 @@ export class Concierge {
     }
     if (a.containsFixtureData) headers['X-TicketGuy-Fixture'] = 'true';
     return await this.db.transaction(async (tx) => {
-      const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.CONCIERGE_FROM_ADDRESS}>`, subject: a.subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
+      const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject: a.subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
       if (r.created) await enqueueOutbox(tx, { eventType: 'email.send_requested', eventKey: `send:${r.id}`, entityId: r.id, payload: { sendIntentId: r.id }, now: this.now() });
       return r;
     });

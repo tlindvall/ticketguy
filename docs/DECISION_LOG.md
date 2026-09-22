@@ -51,3 +51,27 @@ Deliverability note for the owner, not a code concern: `.now` has no established
 unusual enough that some filters weight it against a new sender. It matters little for inbound (customers
 email us) and more for the marketing subdomain. Warm up `news.ticketguy.now` separately from the service
 address, and keep DMARC at `p=none` until reports confirm every legitimate sender.
+
+## 26. Many send addresses, one receivable set, enforced at startup
+
+The owner needs to send from more than `my@`. Sending is the easy half: DKIM and SPF authorize a domain, not
+a local part, so a verified sending domain can send from any address on it with no extra DNS.
+
+Receiving is the constrained half, and it is where the product breaks. Root MX has exactly one owner, the
+intake accepts only addresses it is configured for, and everything else is dropped as
+`inbound.unknown_recipient_ignored`. A `From` nobody receives on therefore loses customer replies in silence
+— Reply-To covers most clients, but not a customer who types the address or forwards the thread.
+
+So: `CONCIERGE_INBOUND_ADDRESSES` extends the accepted set beyond the public address, and
+`MESSAGE_CLASS_FROM_ADDRESSES` maps any of the eight message classes to its own `From`. `parseEnv` refuses to
+start when a configured `From` is neither accepted inbound nor listed in `UNMONITORED_FROM_ADDRESSES`. The
+escape hatch exists because a marketing subdomain legitimately is not receivable; requiring it to be named
+turns a silent drop into a recorded decision.
+
+Both settings default to empty, so behaviour is unchanged until an operator configures them. Loop detection
+now treats every accepted and every sending address as our own, so a bounce from any of them is still caught.
+
+Advice to the owner, unchanged from the discussion: prefer varying the display name over the local part, and
+use a separate subdomain where separate sending reputation is actually wanted. Extra local parts on one
+domain buy no deliverability — reputation is domain-and-IP level — and each one adds an address that must be
+received on.
