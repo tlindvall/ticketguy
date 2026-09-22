@@ -46,7 +46,9 @@ export type AppEnvironment = z.infer<typeof appEnvironment>;
 const rawSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_ENV: appEnvironment.optional(),
-  APP_URL: z.string().url().default('http://localhost:3000'),
+  /** Public base URL. Left unset on Render, RENDER_EXTERNAL_URL supplies it (see resolution in parseEnv). */
+  APP_URL: z.string().url().optional(),
+  RENDER_EXTERNAL_URL: z.string().url().optional(),
   APP_MODE: z.enum(['fixture', 'live']).default('fixture'),
 
   EMAIL_SEND_ENABLED: explicitBoolean,
@@ -58,6 +60,8 @@ const rawSchema = z.object({
     .transform((v) => (v === undefined ? true : v.trim().toLowerCase() !== 'false' && v.trim() !== '0')),
   EMAIL_TEST_RECIPIENT_ALLOWLIST: csv,
 
+  /** 'rules' runs the deterministic extractor/drafter deliberately; it is never a silent fallback. */
+  EXTRACTION_PROVIDER: z.enum(['openai', 'rules']).default('openai'),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_MODEL: z.string().default('gpt-5.4-mini-2026-03-17'),
   OPENAI_ESCALATION_MODEL: z.string().default('gpt-5.4'),
@@ -102,7 +106,9 @@ const rawSchema = z.object({
   STAFFED_HOURS_END: z.coerce.number().int().min(1).max(24).default(21),
 });
 
-export type Env = z.infer<typeof rawSchema> & {
+export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
+  /** Resolved from APP_URL, else RENDER_EXTERNAL_URL, else the local default. */
+  APP_URL: string;
   appEnv: AppEnvironment;
   isProductionLike: boolean;
   aiRequestSoftBudgetUsd: number;
@@ -124,6 +130,9 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
   const e = parsed.data;
   const appEnv: AppEnvironment = e.APP_ENV ?? (e.NODE_ENV === 'production' ? 'production' : e.NODE_ENV);
   const isProductionLike = appEnv === 'production' || appEnv === 'staging';
+  // Render supplies RENDER_EXTERNAL_URL; without this the default localhost URL would silently break
+  // Better Auth trusted origins, admin CSRF origin checks and every signed preference/unsubscribe link.
+  const appUrl = e.APP_URL ?? e.RENDER_EXTERNAL_URL ?? 'http://localhost:3000';
 
   if (isProductionLike) {
     if (!e.DATABASE_URL || !/^postgres(ql)?:\/\//.test(e.DATABASE_URL)) {
@@ -139,6 +148,12 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
       throw new ConfigurationError('PREFERENCE_TOKEN_SIGNING_KEY (>=32 chars) is required in production-like environments');
     }
     if (!e.INTERNAL_CRON_SECRET) throw new ConfigurationError('INTERNAL_CRON_SECRET is required in production-like environments');
+    if (!appUrl.startsWith('https://')) {
+      throw new ConfigurationError(`APP_URL must be an https:// URL in ${appEnv} (got "${appUrl}"); set APP_URL or deploy where RENDER_EXTERNAL_URL is provided`);
+    }
+    if (e.EXTRACTION_PROVIDER === 'openai' && !e.OPENAI_API_KEY) {
+      throw new ConfigurationError(`EXTRACTION_PROVIDER=openai requires OPENAI_API_KEY in ${appEnv}; set EXTRACTION_PROVIDER=rules to run the deterministic extractor deliberately`);
+    }
   }
   if (e.DATABASE_URL && !/^postgres(ql)?:\/\//.test(e.DATABASE_URL)) {
     throw new ConfigurationError('DATABASE_URL must be a postgres:// URL when set');
@@ -162,6 +177,7 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
 
   return {
     ...e,
+    APP_URL: appUrl,
     appEnv,
     isProductionLike,
     aiRequestSoftBudgetUsd: soft,

@@ -19,7 +19,11 @@ export function getConcierge(): Promise<Concierge> {
       const e = env();
       const { db } = await getDb();
       const fixture = e.APP_MODE === 'fixture';
-      const openai = !fixture && e.OPENAI_API_KEY ? new OpenAIClient(e.OPENAI_API_KEY, e.OPENAI_BASE_MODEL, e.OPENAI_ESCALATION_MODEL) : null;
+      // Provider is explicit: EXTRACTION_PROVIDER=openai in a production-like env requires a key (env validation),
+      // so the deterministic extractor is only ever reached in fixture mode or by deliberate configuration.
+      const useOpenAI = !fixture && e.EXTRACTION_PROVIDER === 'openai' && !!e.OPENAI_API_KEY;
+      const openai = useOpenAI ? new OpenAIClient(e.OPENAI_API_KEY!, e.OPENAI_BASE_MODEL, e.OPENAI_ESCALATION_MODEL) : null;
+      if (!fixture && !openai) console.warn(`[services] extraction/drafting running in rules mode (EXTRACTION_PROVIDER=${e.EXTRACTION_PROVIDER}, key ${e.OPENAI_API_KEY ? 'present' : 'absent'})`);
       return new Concierge({
         db,
         env: e,

@@ -19,6 +19,14 @@ services:
         value: production
       - key: APP_MODE
         value: live
+      # APP_URL is intentionally unset: RENDER_EXTERNAL_URL supplies the public https URL, which
+      # drives Better Auth trusted origins, admin CSRF origin checks and signed email links.
+      # Set it explicitly only once a custom domain is attached.
+      - key: EXTRACTION_PROVIDER
+        value: openai
+      # Database-backed media must stay well inside the database plan's storage. Raise only with the plan.
+      - key: MEDIA_MAX_TOTAL_BYTES
+        value: "268435456"
       - key: EMAIL_SEND_ENABLED
         value: "false"
       - key: MARKETING_SEND_ENABLED

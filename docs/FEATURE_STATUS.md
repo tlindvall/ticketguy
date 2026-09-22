@@ -4,7 +4,7 @@ Legend — **Real**: implemented and exercised against the real dependency. **Fi
 
 | Capability | Status | Notes / evidence |
 |---|---|---|
-| Config validation, explicit booleans, production refuses PGlite/fixture | Real | `src/lib/config/env.ts`, `env.test.ts` |
+| Config validation, explicit booleans, production refuses PGlite/fixture/non-https APP_URL/keyless OpenAI | Real | `src/lib/config/env.ts`, `env.test.ts` |
 | Drizzle schema + reviewed migrations, PGlite/postgres.js driver selection | Real | 50 tables; `drizzle/0000_init.sql`, `0001_two_factor_plugin_fields.sql`; applied on PGlite and PostgreSQL 16 locally, PostgreSQL 18 in CI |
 | Advisory-locked single migration step | Real (local PG16) | `src/lib/db/migrate.ts`, `render.yaml preDeployCommand` |
 | Staff auth (Better Auth, invite-only, TOTP), role + MFA + origin checks on every admin route | Real | Signed in and exercised console locally; MFA enrollment page; `DEV_ALLOW_STAFF_WITHOUT_MFA` dev-only |
