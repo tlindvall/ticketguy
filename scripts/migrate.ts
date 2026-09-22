@@ -1,10 +1,14 @@
-import { openDatabase } from '../src/lib/db';
+/**
+ * Controlled migration step (Render preDeployCommand). With a database URL it connects directly and
+ * skips application-configuration validation entirely — migrations must not be blocked by secrets that
+ * only the running app needs. Without one it falls back to the local PGlite database.
+ */
+import { openDatabase, openMigrationDatabase } from '../src/lib/db';
 import { applyMigrations } from '../src/lib/db/migrate';
 
-// Controlled migration step. Uses MIGRATION_DATABASE_URL (privileged) when provided, else DATABASE_URL, else local PGlite.
-const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL || undefined;
-const h = await openDatabase(url ? { databaseUrl: url } : {});
-console.log(`[migrate] driver=${h.driver}`);
+const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
+const h = url ? await openMigrationDatabase(url) : await openDatabase();
+console.log(`[migrate] driver=${h.driver}${url ? ' (url supplied; app config not read)' : ' (local)'}`);
 await applyMigrations(h);
 console.log('[migrate] done');
 await h.close();

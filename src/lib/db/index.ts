@@ -53,6 +53,20 @@ export async function openDatabase(opts: { databaseUrl?: string; pgliteDataDir?:
 }
 
 /**
+ * Opens a connection for the migration step alone. Deliberately does NOT read the application
+ * configuration: a deploy's pre-deploy step must depend on the database URL and nothing else, so a
+ * missing auth secret, model key or public URL — none of which a migration uses — cannot fail the deploy.
+ */
+export async function openMigrationDatabase(databaseUrl: string): Promise<DbHandle> {
+  if (!/^postgres(ql)?:\/\//.test(databaseUrl)) {
+    throw new ConfigurationError('Migration database URL must be a postgres:// URL');
+  }
+  const client = postgres(databaseUrl, { max: 1, idle_timeout: 20, connect_timeout: 15, prepare: false });
+  const db = drizzlePg(client, { schema }) as unknown as Db;
+  return { db, driver: 'postgres', close: () => client.end({ timeout: 5 }) };
+}
+
+/**
  * Process-wide handle (one pool per process). Stored on globalThis so Next.js dev's per-route module
  * instances and HMR reloads share one connection: PGlite refuses a second open of the same data dir,
  * and postgres.js pools must not multiply per compilation scope.
