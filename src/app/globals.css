@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+
+:root {
+  --tg-ink: #111827;
+  --tg-accent: #0f766e;
+}
+body {
+  @apply bg-white text-gray-900 antialiased;
+}
+.tg-container {
+  @apply mx-auto w-full max-w-3xl px-4 py-8;
+}
+.tg-btn {
+  @apply inline-flex items-center rounded-md border border-gray-900 bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 disabled:opacity-50;
+}
+.tg-btn-secondary {
+  @apply inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-900 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 disabled:opacity-50;
+}
+.tg-table {
+  @apply w-full border-collapse text-sm;
+}
+.tg-table th {
+  @apply border-b border-gray-300 px-2 py-1.5 text-left font-semibold;
+}
+.tg-table td {
+  @apply border-b border-gray-200 px-2 py-1.5 align-top;
+}
+.tg-badge {
+  @apply inline-block rounded px-1.5 py-0.5 text-xs font-medium;
+}
+.tg-badge-warn {
+  @apply bg-amber-100 text-amber-900;
+}
+.tg-badge-ok {
+  @apply bg-emerald-100 text-emerald-900;
+}
+.tg-badge-muted {
+  @apply bg-gray-100 text-gray-700;
+}
+.tg-badge-danger {
+  @apply bg-rose-100 text-rose-900;
+}
+.tg-input {
+  @apply w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600;
+}
