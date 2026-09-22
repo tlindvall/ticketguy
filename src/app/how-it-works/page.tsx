@@ -1,11 +1,15 @@
 import Link from 'next/link';
+import { env } from '@/lib/config/env';
+
+export const dynamic = 'force-dynamic';
 
 export default function HowItWorks() {
+  const address = env().CONCIERGE_INBOUND_ADDRESS;
   return (
     <main className="tg-container prose prose-gray max-w-3xl">
       <h1 className="text-3xl font-bold">How Ticket Guy works</h1>
       <ol className="mt-4 list-decimal space-y-3 pl-5 text-gray-800">
-        <li>You email <a href="mailto:my@ticketguy.live">my@ticketguy.live</a> with a link, screenshot or description.</li>
+        <li>You email <a href={`mailto:${address}`}>{address}</a> with a link, screenshot or description.</li>
         <li>We confirm the exact event, date, venue and how many seats you need. If something is unclear we ask up to three short questions.</li>
         <li>We check the sources we are permitted to check for that kind of event and record which ones we could and could not check.</li>
         <li>Deterministic rules compare whole-party totals including known fees; anything with unknown fees, taxes or seating is labeled as such—never counted as a saving.</li>

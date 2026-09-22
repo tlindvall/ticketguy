@@ -26,23 +26,23 @@ describe('A15 webhook signature', () => {
 });
 
 describe('A21 auto-response detection', () => {
-  const svc = ['my@ticketguy.live'];
+  const svc = ['my@ticketguy.now'];
   it('detects OOO, DSN, list mail, Auto-Submitted and own address', () => {
     expect(detectAutoResponse({ headers: { 'Auto-Submitted': 'auto-replied' }, subject: 'Re: tickets', from: 'a@b.com', serviceAddresses: svc }).autoResponse).toBe(true);
     expect(detectAutoResponse({ headers: {}, subject: 'Automatic reply: Out of Office', from: 'a@b.com', serviceAddresses: svc }).autoResponse).toBe(true);
     expect(detectAutoResponse({ headers: { 'content-type': 'multipart/report; report-type=delivery-status' }, subject: 'Undeliverable', from: 'mailer-daemon@x.com', serviceAddresses: svc }).reasons).toEqual(expect.arrayContaining(['delivery_status_notification', 'system_sender']));
     expect(detectAutoResponse({ headers: { 'List-Id': '<list.example.com>' }, subject: 'Newsletter', from: 'news@x.com', serviceAddresses: svc }).autoResponse).toBe(true);
-    expect(detectAutoResponse({ headers: {}, subject: 'hi', from: 'MY@ticketguy.live', serviceAddresses: svc }).reasons).toContain('own_address');
+    expect(detectAutoResponse({ headers: {}, subject: 'hi', from: 'MY@ticketguy.now', serviceAddresses: svc }).reasons).toContain('own_address');
     expect(detectAutoResponse({ headers: { 'Auto-Submitted': 'no' }, subject: 'Rangers tickets', from: 'fan@example.com', serviceAddresses: svc }).autoResponse).toBe(false);
   });
 });
 
 describe('A20 thread authorization', () => {
-  const store = new Map([['<m1@ticketguy.live>', { conversationId: 'conv-1', contactEmailLookup: 'alice@example.com', rfcMessageId: '<m1@ticketguy.live>' }]]);
+  const store = new Map([['<m1@ticketguy.now>', { conversationId: 'conv-1', contactEmailLookup: 'alice@example.com', rfcMessageId: '<m1@ticketguy.now>' }]]);
   const lookup = (id: string) => store.get(id);
   it('the same participant rejoins; a stranger copying the header gets a new conversation', () => {
-    expect(resolveThread({ senderEmail: 'Alice@Example.com', inReplyTo: '<m1@ticketguy.live>', references: null, lookup })).toEqual({ kind: 'existing', conversationId: 'conv-1' });
-    expect(resolveThread({ senderEmail: 'mallory@evil.example', inReplyTo: '<m1@ticketguy.live>', references: null, lookup })).toEqual({ kind: 'new', reason: 'participant_mismatch' });
+    expect(resolveThread({ senderEmail: 'Alice@Example.com', inReplyTo: '<m1@ticketguy.now>', references: null, lookup })).toEqual({ kind: 'existing', conversationId: 'conv-1' });
+    expect(resolveThread({ senderEmail: 'mallory@evil.example', inReplyTo: '<m1@ticketguy.now>', references: null, lookup })).toEqual({ kind: 'new', reason: 'participant_mismatch' });
     expect(resolveThread({ senderEmail: 'x@y.z', inReplyTo: '<unknown@x>', references: null, lookup })).toEqual({ kind: 'new', reason: 'unknown_reference' });
   });
   it('strips quoted/forwarded content so quoted instructions cannot become the request (A04)', () => {

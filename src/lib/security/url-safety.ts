@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { promises as dns } from 'node:dns';
+import { CRAWLER_USER_AGENT } from '@/lib/config/brand';
 
 /**
  * URL safety (A23): HTTPS only; no credentials, IP literals, localhost/private/link-local/reserved/metadata
@@ -88,7 +89,7 @@ export async function safeFetch(input: string, opts: { allowedHosts?: string[] |
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 8000);
     let res: Response;
     try {
-      res = await fetchImpl(syn.url, { redirect: 'manual', signal: ctrl.signal, headers: { 'user-agent': 'TicketGuy/0.1 (+https://ticketguy.live)' } });
+      res = await fetchImpl(syn.url, { redirect: 'manual', signal: ctrl.signal, headers: { 'user-agent': CRAWLER_USER_AGENT } });
     } catch {
       clearTimeout(t);
       return { ok: false, reason: `hop_${i}_fetch_failed`, hops };

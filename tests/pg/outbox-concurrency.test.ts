@@ -62,7 +62,7 @@ describeIf('real PostgreSQL', () => {
   it('A17: a send intent can be claimed by exactly one of many concurrent workers', async () => {
     const h = handles[0]!;
     const [contact] = await h.db.insert(t.contacts).values({ emailOriginal: 'pg@customer.example', emailLookup: 'pg@customer.example' }).returning();
-    const { id } = await createSendIntent(h.db, { dedupeKey: 'pg-claim-1', messageClass: 'acknowledgment', contactId: contact!.id, conversationId: null, requestId: null, requestRevision: null, approvalId: null, approvedHash: null, recipient: 'pg@customer.example', fromAddress: 'my@ticketguy.live', subject: 's', bodyText: 'b', bodyHtml: 'b', headers: {} });
+    const { id } = await createSendIntent(h.db, { dedupeKey: 'pg-claim-1', messageClass: 'acknowledgment', contactId: contact!.id, conversationId: null, requestId: null, requestRevision: null, approvalId: null, approvedHash: null, recipient: 'pg@customer.example', fromAddress: 'my@ticketguy.now', subject: 's', bodyText: 'b', bodyHtml: 'b', headers: {} });
     const workers = handles.slice(1);
     const claims = await Promise.all([...workers, ...workers].map((w) => claimSendIntent(w.db, id, new Date())));
     expect(claims.filter(Boolean)).toHaveLength(1);

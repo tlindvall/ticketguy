@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MARKETING_SUBDOMAIN, SERVICE_DOMAIN } from './brand';
 
 /**
  * Environment configuration. All booleans are parsed explicitly: only the literal strings
@@ -76,9 +77,9 @@ const rawSchema = z.object({
 
   RESEND_API_KEY: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
-  CONCIERGE_INBOUND_ADDRESS: z.string().email().default('my@ticketguy.live'),
-  CONCIERGE_FROM_ADDRESS: z.string().email().default('my@ticketguy.live'),
-  MARKETING_FROM_ADDRESS: z.string().email().default('deals@news.ticketguy.live'),
+  CONCIERGE_INBOUND_ADDRESS: z.string().email().default(`my@${SERVICE_DOMAIN}`),
+  CONCIERGE_FROM_ADDRESS: z.string().email().default(`my@${SERVICE_DOMAIN}`),
+  MARKETING_FROM_ADDRESS: z.string().email().default(`deals@${MARKETING_SUBDOMAIN}`),
   BUSINESS_POSTAL_ADDRESS: z.string().optional(),
 
   DATABASE_URL: z.string().optional(),

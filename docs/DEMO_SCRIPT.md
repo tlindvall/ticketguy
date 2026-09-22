@@ -4,7 +4,7 @@ Everything below runs locally with no credentials. Synthetic data only; every ou
 
 ```bash
 pnpm install && pnpm db:reset-local
-STAFF_INITIAL_PASSWORD='correct-horse-battery-staple-2026' pnpm tsx scripts/create-staff.ts demo@ticketguy.live admin
+STAFF_INITIAL_PASSWORD='correct-horse-battery-staple-2026' pnpm tsx scripts/create-staff.ts demo@ticketguy.now admin
 DEV_ALLOW_STAFF_WITHOUT_MFA=true pnpm dev
 ```
 Sign in at http://localhost:3000/admin/login. In production every staff route also requires TOTP (`/admin/setup-mfa`).

@@ -2,6 +2,7 @@ import { openDatabase, type DbHandle } from '@/lib/db';
 import { applyMigrations } from '@/lib/db/migrate';
 import { seedRegistry, seedFixtures } from '@/lib/db/seed';
 import { parseEnv, type Env } from '@/lib/config/env';
+import { SERVICE_DOMAIN } from '@/lib/config/brand';
 import { Concierge, type EmailProvider } from '@/lib/intake/pipeline';
 import { FixtureExtractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
@@ -50,7 +51,8 @@ export function inbound(over: Partial<NormalizedInbound> & { text: string }): No
     inReplyTo: null,
     references: null,
     from: 'alice@customer.example',
-    to: ['my@ticketguy.live'],
+    // Derived, not literal: a domain change must never silently make every fixture an unknown recipient.
+    to: [`my@${SERVICE_DOMAIN}`],
     subject: 'Rangers tickets',
     headers: {},
     receivedAt: FIXTURE_NOW,

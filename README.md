@@ -1,6 +1,6 @@
 # Ticket Guy — MVP (fixture mode)
 
-Email-first ticket concierge for US live events. A customer emails **my@ticketguy.live** with a link, screenshot or description; the service resolves the event, checks permitted sources, compares whole-party totals deterministically, computes group-aware advice (benchmark, trend, buy/wait policy), and a human approves every recommendation before it is sent. Customers buy from the seller; we never hold tickets or payments.
+Email-first ticket concierge for US live events. A customer emails **my@ticketguy.now** with a link, screenshot or description; the service resolves the event, checks permitted sources, compares whole-party totals deterministically, computes group-aware advice (benchmark, trend, buy/wait policy), and a human approves every recommendation before it is sent. Customers buy from the seller; we never hold tickets or payments.
 
 **Status: not live.** This repository runs end to end in `APP_MODE=fixture` with synthetic data and outbound email disabled. Live sending, provider accounts, ticket-data rights and DNS remain explicit launch gates — see [docs/READINESS_CHECKLIST.md](docs/READINESS_CHECKLIST.md) and [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md).
 

@@ -32,3 +32,22 @@ Dated 2026-09-22 unless noted. Categories: **implemented**, **fixture-only**, **
     - **Server-side refusal fallbacks enabled** (`fallbacks: 'default'`). If a safety classifier declines a request the API re-runs it on a fallback model in the same call; our own refusal path (route the request to staff) remains the last resort.
     - **Price table replaced** and longest-prefix matched, so a future `claude-opus-5-5` cannot silently bill at the `claude-opus-5` rate; unknown models price conservatively at $15/$75 per MTok.
     - **Privacy copy corrected.** The draft page claimed OpenAI storage was disabled via `store:false`. That parameter has no Anthropic equivalent; the page now says retention is governed by Anthropic's terms and our account configuration, and still requires legal review.
+
+## 25. Service domain is `ticketguy.now`, and it lives in one place
+
+The handoff specified `ticketguy.live` as the service domain. That domain was never registered (it does not
+resolve); the owner purchased `ticketguy.now` instead.
+
+The domain had been hard-coded in five places — two env defaults, the marketing subdomain, the root layout's
+meta description, the how-it-works page, and the crawler user-agent — so a change like this could silently
+half-apply. `src/lib/config/brand.ts` now holds `SERVICE_DOMAIN` and the values derived from it; the public
+pages read `CONCIERGE_INBOUND_ADDRESS` from the environment so an operator override is honoured without a
+deploy, and `tests/harness.ts` derives its fixture recipient from the same constant rather than repeating a
+literal. Repeating the literal was what turned this into six failing tests: the pipeline ignores inbound mail
+whose `To` is not `CONCIERGE_INBOUND_ADDRESS`, so a hard-coded fixture address becomes an unknown recipient
+the moment the domain moves.
+
+Deliverability note for the owner, not a code concern: `.now` has no established sending reputation and is
+unusual enough that some filters weight it against a new sender. It matters little for inbound (customers
+email us) and more for the marketing subdomain. Warm up `news.ticketguy.now` separately from the service
+address, and keep DMARC at `p=none` until reports confirm every legitimate sender.

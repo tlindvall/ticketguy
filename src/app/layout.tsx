@@ -4,10 +4,14 @@ import { env } from '@/lib/config/env';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Ticket Guy — email your ticket guy',
-  description: 'Send a ticket link, screenshot, or description to my@ticketguy.live. We check your options and link you to the seller.',
-};
+/** Dynamic so the public address tracks CONCIERGE_INBOUND_ADDRESS instead of being frozen at build time. */
+export function generateMetadata(): Metadata {
+  const address = env().CONCIERGE_INBOUND_ADDRESS;
+  return {
+    title: 'Ticket Guy — email your ticket guy',
+    description: `Send a ticket link, screenshot, or description to ${address}. We check your options and link you to the seller.`,
+  };
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const e = env();

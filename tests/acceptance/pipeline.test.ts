@@ -222,7 +222,7 @@ describe('durable messaging (PGlite fast checks; real PostgreSQL concurrency in 
     expect(provider.sent[0]!.idempotencyKey).toBe(provider.sent[1]!.idempotencyKey);
     expect((await c.dispatchSend(intent.id)).outcome).toBe('already_handled');
     // A18: uncertain older than 24h → manual reconciliation, no blind replay.
-    const [stale] = await h.db.insert(t.sendIntents).values({ dedupeKey: 'ack:stale', messageClass: 'acknowledgment', contactId: contact!.id, conversationId: conv!.id, recipient: 'zoe@customer.example', fromAddress: 'my@ticketguy.live', subject: 's', bodyText: 'b', bodyHtml: 'b', contentHash: 'h', state: 'uncertain', submittedAt: new Date(FIXTURE_NOW.getTime() - 30 * 3_600_000) }).returning();
+    const [stale] = await h.db.insert(t.sendIntents).values({ dedupeKey: 'ack:stale', messageClass: 'acknowledgment', contactId: contact!.id, conversationId: conv!.id, recipient: 'zoe@customer.example', fromAddress: 'my@ticketguy.now', subject: 's', bodyText: 'b', bodyHtml: 'b', contentHash: 'h', state: 'uncertain', submittedAt: new Date(FIXTURE_NOW.getTime() - 30 * 3_600_000) }).returning();
     expect((await c.dispatchSend(stale!.id)).outcome).toBe('manual_reconciliation');
     // A19: delivery webhook before the API response is mapped; a later "delivered" cannot erase a bounce.
     expect(await upsertProviderMapping(h.db, { providerMessageId: 'prov-early', dedupeKeyHint: 'ack:stale', status: 'delivered' })).toBe('applied');

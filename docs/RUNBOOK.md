@@ -6,8 +6,8 @@ Nothing in this runbook authorizes a live send. `EMAIL_SEND_ENABLED`, `MARKETING
 
 ## 1. Domain and DNS (do not overwrite existing mail)
 
-1. Confirm registrar ownership of `ticketguy.live`. `dig MX ticketguy.live` and `dig TXT ticketguy.live` — record what exists. If the root already has MX serving a real mailbox, do **not** replace it; plan forwarding/coexistence first (e.g. receive on a subdomain and forward the public address, or migrate the mailbox).
-2. In Resend, add the sending domain (`ticketguy.live`) and the marketing subdomain (`news.ticketguy.live`) and the receiving domain. Copy the exact DKIM/SPF/MX records Resend shows; never hand-type guessed values.
+1. Confirm registrar ownership of `ticketguy.now`. `dig MX ticketguy.now` and `dig TXT ticketguy.now` — record what exists. If the root already has MX serving a real mailbox, do **not** replace it; plan forwarding/coexistence first (e.g. receive on a subdomain and forward the public address, or migrate the mailbox).
+2. In Resend, add the sending domain (`ticketguy.now`) and the marketing subdomain (`news.ticketguy.now`) and the receiving domain. Copy the exact DKIM/SPF/MX records Resend shows; never hand-type guessed values.
 3. Publish DMARC at `p=none` with `rua=` pointing to a dedicated reporting mailbox. Tighten only after every legitimate sender is confirmed in reports.
 4. Route `postmaster@`, `abuse@`, `privacy@`, `support@` to a staff mailbox (not to the concierge intake). The app ignores inbound mail whose `To` is not `CONCIERGE_INBOUND_ADDRESS` (recorded in `audit_log` as `inbound.unknown_recipient_ignored`).
 5. Verify with a test send to Gmail, Outlook and Apple Mail: SPF/DKIM/DMARC pass, threading (`In-Reply-To`/`References`) intact, plain-text and HTML both readable.
