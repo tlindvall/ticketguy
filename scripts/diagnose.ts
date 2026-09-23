@@ -25,8 +25,14 @@ line('kill_switches', switches.length ? switches.map((s) => `${s.k}=${s.enabled 
 console.log('\n-- inbound --');
 for (const r of await db.select({ k: t.inboundEvents.processingState, n }).from(t.inboundEvents).groupBy(t.inboundEvents.processingState)) line(`inbound_events ${r.k}`, r.n);
 for (const r of await db.select({ k: t.inboundEvents.eventType, n }).from(t.inboundEvents).groupBy(t.inboundEvents.eventType)) line(`  type ${r.k}`, r.n);
-for (const r of await db.select({ id: t.inboundEvents.id, st: t.inboundEvents.processingState, q: t.inboundEvents.quarantineReason, at: t.inboundEvents.receivedAt }).from(t.inboundEvents).orderBy(desc(t.inboundEvents.receivedAt)).limit(10))
-  console.log(`  ${r.at.toISOString()} ${r.id.slice(0, 8)} ${r.st}${r.q ? ` (${r.q})` : ''}`);
+for (const r of await db.select({ id: t.inboundEvents.id, st: t.inboundEvents.processingState, q: t.inboundEvents.quarantineReason, at: t.inboundEvents.receivedAt, payload: t.inboundEvents.payload }).from(t.inboundEvents).orderBy(desc(t.inboundEvents.receivedAt)).limit(10)) {
+  // The provider's own id for the message, so the retrieval call can be reproduced by hand. It is an
+  // opaque identifier, not content: the payload's keys are listed, never their values.
+  const data = ((r.payload as { data?: Record<string, unknown> }).data ?? {}) as Record<string, unknown>;
+  const emailId = data.email_id ?? data.id ?? '—';
+  console.log(`  ${r.at.toISOString()} ${r.id.slice(0, 8)} ${r.st}${r.q ? ` (${r.q})` : ''} provider_email_id=${String(emailId)}`);
+  console.log(`      payload keys: ${Object.keys(data).sort().join(', ') || '(none)'}`);
+}
 
 console.log('\n-- outbox --');
 for (const r of await db.select({ k: t.outboxEvents.state, n }).from(t.outboxEvents).groupBy(t.outboxEvents.state)) line(`outbox ${r.k}`, r.n);

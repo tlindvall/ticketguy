@@ -1,6 +1,12 @@
+import { isSlotName, renderAuthored, type SlotName, type TemplateOverrides, type TemplateValue } from './custom-templates';
+
 /**
  * Bounded email templates (API_AND_DATA_CONTRACTS §6). Text + HTML, escaped user text, no invented availability.
  * Recommendation bodies come pre-rendered from the advice renderer ('raw').
+ *
+ * A slot may be overridden by staff-authored copy (see custom-templates.ts). The override replaces the body
+ * only: the sign-off, the signature and the compliance footer are appended here, so no template can drop them,
+ * and 'raw' is never overridable because that copy carries the offer evidence rules.
  */
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -8,8 +14,29 @@ function esc(s: string): string {
 
 const FOOTER_TEXT = 'Ticket Guy is AI-assisted and human-reviewed. We compare options and link you to the seller; we never buy, hold or resell tickets. Reply to this email any time.';
 
-export function renderTemplate(name: string, vars: Record<string, unknown>, _ctx: { appUrl: string; postalAddress: string | null }): { text: string; html: string } {
+/** Maps the pipeline's variables onto the names staff author against. */
+function authoringVars(slot: SlotName, v: Record<string, TemplateValue>): Record<string, TemplateValue> {
+  if (slot !== 'watch_alert') return v;
+  const total = Number(v.totalCents ?? 0);
+  return { ...v, priceTotal: `$${(total / 100).toFixed(total % 100 === 0 ? 0 : 2)}` };
+}
+
+export function renderTemplate(
+  name: string,
+  vars: Record<string, unknown>,
+  ctx: { appUrl: string; postalAddress: string | null; overrides?: TemplateOverrides },
+): { text: string; html: string } {
   const v = vars as Record<string, string | string[] | boolean | number | null | undefined>;
+  const slot: SlotName | null = isSlotName(name) ? name : null;
+  const override = slot ? ctx.overrides?.[slot] : undefined;
+  if (slot && override) {
+    const body = renderAuthored(override.body, authoringVars(slot, v));
+    const sig = override.signature ? renderAuthored(override.signature, {}) : { text: '— Ticket Guy', html: '<p>— Ticket Guy</p>' };
+    return {
+      text: [body.text, sig.text, FOOTER_TEXT].filter(Boolean).join('\n\n'),
+      html: `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;line-height:1.5;color:#111;max-width:640px;margin:0 auto;padding:16px">${body.html}\n${sig.html}<p style="color:#555;font-size:13px">${esc(FOOTER_TEXT)}</p></body></html>`,
+    };
+  }
   const wrap = (paras: string[], htmlParas: string[]) => ({
     text: [...paras, '', '— Ticket Guy', FOOTER_TEXT].join('\n\n'),
     html: `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;line-height:1.5;color:#111;max-width:640px;margin:0 auto;padding:16px">${htmlParas.join('\n')}<p>— Ticket Guy</p><p style="color:#555;font-size:13px">${esc(FOOTER_TEXT)}</p></body></html>`,

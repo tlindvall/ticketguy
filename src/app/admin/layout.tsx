@@ -5,6 +5,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     ['/admin/inbox', 'Inbox'],
     ['/admin/watches', 'Watches'],
     ['/admin/sources', 'Sources'],
+    ['/admin/templates', 'Templates'],
     ['/admin/operations', 'Operations'],
   ];
   return (

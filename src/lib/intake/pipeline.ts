@@ -29,6 +29,7 @@ import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
 import { renderTemplate } from '@/lib/email/templates';
+import { loadActiveTemplates } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, WATCH_MAX_ACTIVE_PER_CONTACT } from '@/lib/domain/watches';
@@ -584,7 +585,9 @@ export class Concierge {
   // Outbound
   // ---------------------------------------------------------------------------------------------
   async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean }> {
-    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null });
+    // Loaded per send, never cached: staff copy must take effect at the next send, like the kill switches.
+    const overrides = await loadActiveTemplates(this.db);
+    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides });
     const headers: Record<string, string> = { 'Reply-To': this.env.CONCIERGE_FROM_ADDRESS };
     if (a.inReplyTo) {
       headers['In-Reply-To'] = a.inReplyTo;
