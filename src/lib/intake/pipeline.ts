@@ -14,7 +14,7 @@ import { type Extractor, missingMandatoryFields, clarificationQuestions } from '
 import type { Drafter } from '@/lib/ai/drafting';
 import { RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { eventLocalDate } from '@/lib/domain/dates';
+import { eventLocalDate, monthWindowFor } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
@@ -358,7 +358,19 @@ export class Concierge {
     const now = this.now();
     const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(20);
     let cands = rows;
-    if (x.resolvedLocalDate) cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
+    if (x.resolvedLocalDate) {
+      cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
+    } else if (x.dateExpression) {
+      // A month named without a day still rules events out. Ignoring it let a request for November
+      // bind silently to the only October event on file, and every downstream claim inherited that event.
+      const win = monthWindowFor(x.dateExpression, now);
+      if (win) {
+        cands = cands.filter(({ e, v }) => {
+          const d = eventLocalDate(e.localStartAt, v.timezone);
+          return d >= win.from && d <= win.to;
+        });
+      }
+    }
     if (x.city) cands = cands.filter(({ v }) => (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
     if (cands.length === 0) return { kind: 'no_match' };
     if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => ({ id: e.id, label: eventLabel(e, v) })) };
