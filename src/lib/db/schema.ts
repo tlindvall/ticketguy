@@ -1008,6 +1008,48 @@ export const adviceOutcomes = pgTable('advice_outcomes', {
   createdAt: createdAt(),
 });
 
+/**
+ * Staff-authored email copy. Templates override a named built-in slot; they never introduce a new
+ * automatic send, and the compliance footer is appended by the renderer, not by the template, so it
+ * cannot be edited away. Bodies are plain text with {{placeholders}}; HTML is derived, never authored.
+ * Versions are immutable once activated so an approved recommendation's content hash stays meaningful.
+ */
+export const emailSignatures = pgTable(
+  'email_signatures',
+  {
+    id: id(),
+    name: text('name').notNull(),
+    bodyText: text('body_text').notNull(),
+    isDefault: boolean('is_default').notNull().default(false),
+    updatedBy: text('updated_by').notNull(),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('email_signatures_name_uq').on(t.name), uniqueIndex('email_signatures_default_uq').on(t.isDefault).where(sql`is_default`)],
+);
+
+export const emailTemplates = pgTable(
+  'email_templates',
+  {
+    id: id(),
+    slot: text('slot').notNull(), // acknowledgment | clarification | unsupported | deletion_verification | watch_alert
+    version: integer('version').notNull(),
+    subject: text('subject'),
+    bodyText: text('body_text').notNull(),
+    signatureId: uuid('signature_id').references(() => emailSignatures.id),
+    state: text('state').notNull().default('draft'), // draft | active | archived
+    note: text('note'),
+    createdBy: text('created_by').notNull(),
+    createdAt: createdAt(),
+    activatedBy: text('activated_by'),
+    activatedAt: ts('activated_at'),
+  },
+  (t) => [
+    uniqueIndex('email_templates_slot_version_uq').on(t.slot, t.version),
+    uniqueIndex('email_templates_active_uq').on(t.slot).where(sql`state = 'active'`),
+  ],
+);
+
 export const schema = {
   user, session, account, verification, twoFactor,
   contacts, contactPreferences, conversations, messages, mediaObjects, attachments,
@@ -1018,5 +1060,6 @@ export const schema = {
   interestTaxonomy, interestObservations, contactInterests, marketingPermissions, suppressions,
   segments, campaigns, campaignRecipients,
   inboundEvents, outboxEvents, sendIntents, usageLedger, auditLog, productEvents, killSwitches, deletionLedger,
+  emailSignatures, emailTemplates,
   marketDatasets, marketSnapshots, venueSeatZones, benchmarkRuns, trendRuns, adviceRuns, adviceOutcomes,
 };
