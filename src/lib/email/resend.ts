@@ -42,10 +42,27 @@ export type ReceivedEmailDetail = {
   dmarc?: string | null;
 };
 
+/**
+ * Reads the provider's error envelope so a failure names its cause. Only the envelope's own `name` and
+ * `message` are surfaced, bounded — never the email body, headers or any credential. A bare status code
+ * cannot distinguish a restricted key from a wrong id, which cost a day of guessing once.
+ */
+async function providerErrorDetail(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { name?: unknown; error?: unknown; message?: unknown };
+    const name = typeof body.name === 'string' ? body.name : typeof body.error === 'string' ? body.error : null;
+    const message = typeof body.message === 'string' ? body.message : null;
+    const parts = [name, message].filter((p): p is string => Boolean(p));
+    return parts.length ? `:${parts.join(': ').slice(0, 200)}` : '';
+  } catch {
+    return '';
+  }
+}
+
 /** Fetches a received email by id. Uses the SDK when it exposes the call, else the REST endpoint. */
 export async function fetchReceivedEmail(apiKey: string, emailId: string, fetchImpl: typeof fetch = fetch): Promise<ReceivedEmailDetail> {
   const res = await fetchImpl(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}?html_format=cid`, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(`resend_receive_fetch_failed:${res.status}`);
+  if (!res.ok) throw new Error(`resend_receive_fetch_failed:${res.status}${await providerErrorDetail(res)}`);
   const j = (await res.json()) as Record<string, unknown>;
   const hdrs = (j.headers ?? {}) as Record<string, string> | Array<{ name: string; value: string }>;
   const headers: Record<string, string> = Array.isArray(hdrs) ? Object.fromEntries(hdrs.map((h) => [h.name, h.value])) : hdrs;
