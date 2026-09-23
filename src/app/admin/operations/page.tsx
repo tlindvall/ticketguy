@@ -3,8 +3,8 @@ import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
 import { guardPage } from '@/lib/admin/guard';
-import { outboxLag } from '@/lib/intake/outbox';
-import { loadSwitches } from '@/lib/email/send-gate';
+import { outboxLag, retryingOutbox } from '@/lib/intake/outbox';
+import { DEFAULT_SWITCHES, loadSwitches } from '@/lib/email/send-gate';
 import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
 import { DbMediaStore } from '@/lib/media/storage';
@@ -17,8 +17,11 @@ export default async function Operations() {
   const { db, driver } = await getDb();
   const now = new Date();
   const lag = await outboxLag(db, now);
+  const retrying = await retryingOutbox(db);
+  const inboundPending = await db.select({ n: sql<number>`count(*)::int` }).from(t.inboundEvents).where(eq(t.inboundEvents.processingState, 'pending'));
   const dead = await db.select().from(t.outboxEvents).where(eq(t.outboxEvents.state, 'dead')).orderBy(desc(t.outboxEvents.createdAt)).limit(50);
   const switches = await loadSwitches(db);
+  const missingSwitches = DEFAULT_SWITCHES.filter((k) => !(k in switches));
   const intentStates = await db.select({ state: t.sendIntents.state, n: sql<number>`count(*)::int` }).from(t.sendIntents).groupBy(t.sendIntents.state);
   const uncertain = await db.select().from(t.sendIntents).where(eq(t.sendIntents.state, 'uncertain')).limit(20);
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -36,18 +39,23 @@ export default async function Operations() {
         <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'}</p>
       </header>
       <section className="grid gap-3 text-sm sm:grid-cols-3">
-        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Outbox</h2><p>pending {lag.pending} · dead {lag.dead} · oldest pending {lag.oldestPendingSeconds ?? 0}s</p></div>
+        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Outbox</h2><p>pending {lag.pending} ({lag.due} due now) · dead {lag.dead} · oldest pending {lag.oldestPendingSeconds ?? 0}s</p>{retrying.length ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{retrying.length} retrying after failure</span></p> : null}</div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">AI spend today</h2><p>${(Number(spend?.usd ?? 0) / 1e6).toFixed(3)} of ${e.aiGlobalDailyBudgetUsd.toFixed(2)} cap</p></div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Media</h2><p>{(media.totalBytes / 1048576).toFixed(1)} MiB of {(media.budgetBytes / 1048576).toFixed(0)} MiB {media.ratio >= 0.8 ? <span className="tg-badge tg-badge-warn">≥80%</span> : null}</p><p>pending-budget attachments: {pendingMedia[0]?.n ?? 0}</p></div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Sends by state</h2><ul>{intentStates.map((s) => <li key={s.state}>{s.state}: {s.n}</li>)}</ul></div>
-        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Attention</h2><p>stale approvals: {staleApprovals[0]?.n ?? 0}</p><p>quarantined webhooks: {quarantined[0]?.n ?? 0}</p><p>uncertain sends: {uncertain.length}</p></div>
+        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Attention</h2><p>stale approvals: {staleApprovals[0]?.n ?? 0}</p><p>quarantined webhooks: {quarantined[0]?.n ?? 0}</p><p>unprocessed inbound events: {inboundPending[0]?.n ?? 0}</p><p>uncertain sends: {uncertain.length}</p></div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Source failures (24h)</h2>{sourceFailures.length ? <ul>{sourceFailures.map((f) => <li key={f.sourceId + f.status}>{f.sourceId}: {f.status} ×{f.n}</li>)}</ul> : <p>none</p>}</div>
       </section>
       <section>
         <h2 className="font-semibold">Kill switches <span className="text-xs font-normal text-gray-500">(enabled = capability allowed; evaluated at every dispatch)</span></h2>
+        {missingSwitches.length ? <p className="mt-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-900">Missing switch rows: {missingSwitches.join(', ')}. The gate only stops a capability when its row says so, so a missing row is <strong>not</strong> a stop — it is an unseeded database. Run <code>pnpm db:seed</code> against this database.</p> : null}
         <table className="tg-table mt-2"><thead><tr><th>Switch</th><th>State</th><th></th></tr></thead>
           <tbody>{Object.entries(switches).map(([k, v]) => <tr key={k}><td>{k}</td><td><span className={`tg-badge ${v ? 'tg-badge-ok' : 'tg-badge-danger'}`}>{v ? 'allowed' : 'STOPPED'}</span></td><td>{staff.role === 'admin' ? <ActionButton url="/api/admin/switches" body={{ key: k, enabled: !v, reason: v ? 'staff stop' : 'staff resume' }} label={v ? 'Stop' : 'Resume'} /> : null}</td></tr>)}</tbody>
         </table>
+      </section>
+      <section>
+        <h2 className="font-semibold">Retrying outbox events <span className="text-xs font-normal text-gray-500">(failed at least once, still inside the retry budget)</span></h2>
+        {retrying.length ? <table className="tg-table mt-2"><thead><tr><th>Event</th><th>Type</th><th>Attempts</th><th>Next attempt</th><th>Last error</th></tr></thead><tbody>{retrying.map((r) => <tr key={r.id}><td>{r.eventKey}</td><td>{r.eventType}</td><td>{r.attempts} of 8</td><td>{r.nextAttemptAt.toISOString()}</td><td className="text-xs">{r.lastError}</td></tr>)}</tbody></table> : <p className="text-sm text-gray-600">None.</p>}
       </section>
       <section>
         <h2 className="font-semibold">Uncertain sends (reconcile against provider before any resend)</h2>

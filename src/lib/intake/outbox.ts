@@ -1,4 +1,4 @@
-import { and, eq, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { DbOrTx } from '@/lib/db';
 import { outboxEvents } from '@/lib/db/schema';
@@ -100,9 +100,39 @@ export async function replayDead(db: DbOrTx, id: string, now: Date): Promise<boo
   return rows.length > 0;
 }
 
-export async function outboxLag(db: DbOrTx, now: Date): Promise<{ pending: number; dead: number; oldestPendingSeconds: number | null }> {
-  const pend = await db.select({ n: sql<number>`count(*)::int`, oldest: sql<Date | null>`min(created_at)` }).from(outboxEvents).where(and(eq(outboxEvents.state, 'pending'), lte(outboxEvents.nextAttemptAt, now)));
-  const dead = await db.select({ n: sql<number>`count(*)::int` }).from(outboxEvents).where(eq(outboxEvents.state, 'dead'));
-  const oldest = pend[0]?.oldest ? new Date(pend[0].oldest) : null;
-  return { pending: pend[0]?.n ?? 0, dead: dead[0]?.n ?? 0, oldestPendingSeconds: oldest ? Math.round((now.getTime() - oldest.getTime()) / 1000) : null };
+export type OutboxLag = { pending: number; due: number; dead: number; oldestPendingSeconds: number | null };
+
+/**
+ * Outbox health. `due` is what the next dispatcher pass will pick up; `pending` also counts rows sitting in
+ * retry backoff. Reporting only `due` made a repeatedly failing pipeline read as an empty queue, because a row
+ * that just failed always has next_attempt_at in the future.
+ */
+export async function outboxLag(db: DbOrTx, now: Date): Promise<OutboxLag> {
+  // ISO string + explicit cast: a bare Date in a raw template throws on postgres.js (it only works on PGlite).
+  const nowIso = now.toISOString();
+  const [agg] = await db
+    .select({
+      pending: sql<number>`count(*) filter (where ${outboxEvents.state} = 'pending')::int`,
+      due: sql<number>`count(*) filter (where ${outboxEvents.state} = 'pending' and ${outboxEvents.nextAttemptAt} <= ${nowIso}::timestamptz)::int`,
+      dead: sql<number>`count(*) filter (where ${outboxEvents.state} = 'dead')::int`,
+      oldest: sql<Date | null>`min(created_at) filter (where ${outboxEvents.state} = 'pending')`,
+    })
+    .from(outboxEvents);
+  const oldest = agg?.oldest ? new Date(agg.oldest) : null;
+  return {
+    pending: agg?.pending ?? 0,
+    due: agg?.due ?? 0,
+    dead: agg?.dead ?? 0,
+    oldestPendingSeconds: oldest ? Math.round((now.getTime() - oldest.getTime()) / 1000) : null,
+  };
+}
+
+/** Rows that have failed at least once and are still being retried. Invisible in the plain lag counters. */
+export async function retryingOutbox(db: DbOrTx, limit = 20): Promise<Array<{ id: string; eventType: string; eventKey: string; attempts: number; lastError: string | null; nextAttemptAt: Date }>> {
+  return db
+    .select({ id: outboxEvents.id, eventType: outboxEvents.eventType, eventKey: outboxEvents.eventKey, attempts: outboxEvents.attempts, lastError: outboxEvents.lastError, nextAttemptAt: outboxEvents.nextAttemptAt })
+    .from(outboxEvents)
+    .where(and(inArray(outboxEvents.state, ['pending', 'leased']), gt(outboxEvents.attempts, 0)))
+    .orderBy(desc(outboxEvents.attempts))
+    .limit(limit);
 }
