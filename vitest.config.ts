@@ -23,6 +23,10 @@ export default defineConfig({
           environment: 'node',
           testTimeout: 60_000,
           hookTimeout: 60_000,
+          // These files share one disposable database and some of them drop and recreate the schema in
+          // beforeAll, so running two of them at once makes the loser query tables that no longer exist.
+          // Serialising the project is the only thing that makes the shared database safe.
+          fileParallelism: false,
         },
       },
     ],
