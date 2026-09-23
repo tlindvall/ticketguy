@@ -101,3 +101,31 @@ without a deploy; a malformed entry fails at startup rather than at spend time.
 One bug this surfaced: the pipeline estimated cost against `ANTHROPIC_BASE_MODEL` at four call sites, which
 would have priced every OpenAI call at Anthropic rates. Cost is now estimated against `env.modelName`, the
 model the selected provider actually calls.
+
+## 28. A named month constrains event resolution
+
+Found in owner testing. "my wife and I want to see the knicks sometime in November, flexible on price"
+resolved to a Knicks event on **2026-10-24** and said nothing about the mismatch. Every downstream artefact —
+source coverage, comparison, advice, draft — would have been built on an event in the wrong month, and the
+reviewer would have seen a confident, plausible header.
+
+`resolveEvent` filtered candidates by `resolvedLocalDate` and `city` only. `dateExpression` was captured and
+then ignored, so a request that named a month but no day carried no date constraint at all. With one Knicks
+event on file that left exactly one candidate, which the resolver treats as resolved. This was not a
+rules-extractor artefact: a model returning `dateExpression: "sometime in November"` with a null
+`resolvedLocalDate` — which the extraction instructions explicitly ask for — would have hit the same path.
+
+`monthWindowFor` turns a bare month into an inclusive local-date window (rolling to next year when the month
+is already past, matching `resolveMonthDay`), and the resolver narrows candidates to it when no exact date is
+known. Narrowing rather than refusing was the owner's call: it uses what the customer actually said, and
+leaves the ambiguous case to ask which game rather than asking from scratch.
+
+Two extractor defects surfaced by the same message:
+
+- `mustAttend` was set to `false` by a bare `\bflexible\b`, so "flexible on price" was recorded as flexible
+  about *attending*. That is not cosmetic: `mustAttend` drives the buy/wait decision, so a guess there
+  changes the advice a customer receives, and asserting a fact the customer never stated breaks the
+  extractor's own rule that unknown facts stay null. The pattern now requires the flexibility to be about the
+  date, day, game, night, timing, or going.
+- "my wife and I" did not yield a quantity, although the same phrase was already recognised for `forSelf`.
+  It failed safe by flagging `unresolved: quantity`, but cost a clarification round it did not need.

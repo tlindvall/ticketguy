@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/types';
-import { resolveRelativeDate } from '@/lib/domain/dates';
+import { monthWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 
 /**
@@ -29,9 +29,15 @@ export type ExtractionSchema = z.infer<typeof EXTRACTION_SCHEMA>;
 
 const NUM_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, a: 1, single: 1, pair: 2, couple: 2 };
 
+/** "my wife and I" states a party of two as plainly as "two tickets" does. */
+const COUPLE = /\b(?:my (?:wife|husband|partner|girlfriend|boyfriend) and (?:i|me)|(?:me|myself) and my (?:wife|husband|partner|girlfriend|boyfriend))\b/i;
+
 function parseQuantity(t: string): { value: number | null; quote: string | null } {
   const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(?:party|group)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
-  if (!m) return { value: null, quote: null };
+  if (!m) {
+    const couple = COUPLE.exec(t);
+    return couple ? { value: 2, quote: couple[0] } : { value: null, quote: null };
+  }
   const raw = m[1]!.toLowerCase();
   const v = NUM_WORDS[raw] ?? Number(raw);
   return Number.isFinite(v) && v > 0 ? { value: v, quote: m[0] } : { value: null, quote: null };
@@ -60,7 +66,7 @@ function findEntity(t: string, known: ExtractionInput['knownEntities']): { entit
   return best ? { entity: best.entity, quote: best.quote } : null;
 }
 
-const DATE_EXPR = /\b(tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
+const DATE_EXPR = /\b((?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 function resolveMonthDay(expr: string, receivedAt: Date): string | null {
@@ -119,7 +125,9 @@ export class FixtureExtractor implements Extractor {
     if (dateExpression) {
       const md = resolveMonthDay(dateExpression, input.receivedAt);
       if (md) resolvedLocalDate = md;
-      else {
+      else if (monthWindowFor(dateExpression, input.receivedAt)) {
+        // A named month narrows the search without picking a day; the resolver uses the window.
+      } else {
         const r = resolveRelativeDate(dateExpression, input.receivedAt, input.venueTimeZone);
         if (r.kind === 'resolved') {
           resolvedLocalDate = r.ambiguous ? null : r.localDate;
@@ -144,7 +152,11 @@ export class FixtureExtractor implements Extractor {
     const accessibility = /\b(wheelchair|accessible|ada)\b/i.exec(t);
     const performerOrTeam = ent ? ent.entity.name : null;
     const urls = [...t.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0]);
-    const mustAttend = /\b(must|definitely|have to|can'?t miss|need to) (attend|go|be there|make it)\b/i.test(t) ? true : /\b(flexible|not a big deal if|don'?t mind (skipping|missing)|only if (it'?s )?cheap)\b/i.test(t) ? false : null;
+    const mustAttend = /\b(must|definitely|have to|can'?t miss|need to) (attend|go|be there|make it)\b/i.test(t)
+      ? true
+      : /\b(flexible (?:on|about) (?:the )?(?:date|day|game|night|timing|when|going|attending)|not a big deal if|don'?t mind (skipping|missing)|only if (it'?s )?cheap)\b/i.test(t)
+        ? false
+        : null;
     const risk: RequestExtraction['waitRiskTolerance'] = /\b(happy to (wait|gamble|risk)|fine (to )?wait(ing)?|willing to (wait|risk)|ok(ay)? (to )?wait)\b/i.test(t) ? 'high' : /\b(don'?t want to risk|rather not risk|lock (it|them) in|secure (them|it) now)\b/i.test(t) ? 'low' : null;
     const forSelf = /\b(for (my|a) (friend|dad|mom|mother|father|sister|brother|boss|colleague|client)|as a gift|gift for)\b/i.test(t) ? false : /\b(for (me|us|myself)|my (wife|husband|partner|kids|family) and (i|me))\b/i.test(t) ? true : null;
     const countryStatement = /\b(i(?:'m| am) (?:in|from|based in) (?:the )?(us|usa|united states|uk|canada|[a-z]+))\b/i.exec(t)?.[0] ?? null;

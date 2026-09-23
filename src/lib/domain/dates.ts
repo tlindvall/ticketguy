@@ -67,6 +67,27 @@ export function resolveRelativeDate(expression: string, receivedAt: Date, venueT
   return { kind: 'resolved', localDate: toIsoDate(t.y, t.m, t.d), ambiguous: nearMidnight, note };
 }
 
+const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
+/**
+ * A month named without a day ("sometime in November") narrows the event search without resolving it.
+ * Returns the inclusive local-date window for that month, or null when the expression names no bare month.
+ * A month already past in the reference year is read as next year, the same rule resolveMonthDay uses.
+ */
+export function monthWindowFor(expression: string, receivedAt: Date): { from: string; to: string } | null {
+  const m = /(?:^|\b)(?:sometime\s+)?(?:in|during|for)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+(\d{4}))?(?:\b|$)/i.exec(expression.trim());
+  if (!m) return null;
+  // A day number anywhere in the expression means it is a specific date, not a whole month.
+  if (/\d{1,2}(?:st|nd|rd|th)?\b/.test(expression.replace(/\b\d{4}\b/g, ''))) return null;
+  const month = MONTH_NAMES.findIndex((n) => n.startsWith(m[1]!.toLowerCase().slice(0, 3))) + 1;
+  if (month === 0) return null;
+  const refY = receivedAt.getUTCFullYear();
+  const refM = receivedAt.getUTCMonth() + 1;
+  const year = m[2] ? Number(m[2]) : month < refM ? refY + 1 : refY;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { from: toIsoDate(year, month, 1), to: toIsoDate(year, month, lastDay) };
+}
+
 /** Local calendar date of an event instant in its venue timezone. */
 export function eventLocalDate(startAt: Date, timeZone: string): string {
   const p = localDateParts(startAt, timeZone);

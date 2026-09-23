@@ -6,6 +6,7 @@ import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { SERVICE_DOMAIN } from '@/lib/config/brand';
+import { eventLocalDate } from '@/lib/domain/dates';
 
 let h: DbHandle;
 beforeAll(async () => {
@@ -60,6 +61,27 @@ describe('multiple service addresses', () => {
       // acknowledgment carries no override, so remapping watch_alert must not have touched it.
       expect(r.fromAddress).toBe(`Ticket Guy <${PRIMARY}>`);
       expect((r.headers as Record<string, string>)['Reply-To']).toBe(PRIMARY);
+    }
+  });
+});
+
+describe('event resolution honours a month named without a day', () => {
+  const BODY = 'my wife and I want to see the knicks sometime in November, flexible on price';
+
+  it('refuses to bind an event outside the month the customer named', async () => {
+    const c = makeConcierge(h, { env: testEnv() });
+    const out = await c.ingestInbound(inbound({ from: 'nov-a@customer.example', to: [PRIMARY], text: BODY }));
+    expect(out.kind).toBe('queued');
+    await drain(c);
+
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, (out as { requestId: string }).requestId));
+    if (req?.eventId) {
+      // If an event was bound at all, it must fall inside November — never the October fixture event.
+      const [ev] = await h.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, req.eventId));
+      const local = eventLocalDate(ev!.e.localStartAt, ev!.v.timezone);
+      expect(local >= '2026-11-01' && local <= '2026-11-30').toBe(true);
+    } else {
+      expect(req?.state).toBe('needs_clarification');
     }
   });
 });
