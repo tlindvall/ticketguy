@@ -43,6 +43,61 @@ export type ReceivedEmailDetail = {
 };
 
 /**
+ * Builds the detail straight from the webhook payload when it already carries the message.
+ *
+ * The webhook body is verified against the Svix signature over the raw bytes before it is stored, so it is
+ * no less trustworthy than the retrieval call — and skipping that call removes a whole failure mode for
+ * plain email. Returns null unless the payload is unambiguously sufficient: a sender, a body, and either no
+ * attachments or attachments that already carry their download URL. Anything short of that falls through to
+ * the authenticated retrieval, so a payload shape this code does not recognise changes nothing.
+ */
+export function detailFromWebhookPayload(payload: unknown): ReceivedEmailDetail | null {
+  const data = ((payload as { data?: unknown })?.data ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
+
+  const from = str(data.from);
+  const text = str(data.text);
+  const html = str(data.html);
+  if (!from || (!text && !html)) return null;
+
+  const rawAttachments = Array.isArray(data.attachments) ? (data.attachments as Array<Record<string, unknown>>) : [];
+  const attachments = rawAttachments.map((a) => ({
+    id: String(a.id ?? ''),
+    filename: str(a.filename),
+    content_type: str(a.content_type) ?? str(a.contentType),
+    size: typeof a.size === 'number' ? a.size : null,
+    download_url: str(a.download_url) ?? str(a.downloadUrl),
+  }));
+  if (attachments.some((a) => !a.download_url)) return null; // the bytes only exist behind the API
+
+  const rawHeaders = data.headers;
+  const headers: Record<string, string> = Array.isArray(rawHeaders)
+    ? Object.fromEntries((rawHeaders as Array<{ name?: unknown; value?: unknown }>).filter((h) => typeof h.name === 'string' && typeof h.value === 'string').map((h) => [h.name as string, h.value as string]))
+    : rawHeaders && typeof rawHeaders === 'object'
+      ? Object.fromEntries(Object.entries(rawHeaders as Record<string, unknown>).filter(([, v]) => typeof v === 'string') as Array<[string, string]>)
+      : {};
+  const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+
+  return {
+    id: String(data.email_id ?? data.id ?? ''),
+    from,
+    to: Array.isArray(data.to) ? (data.to as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+    subject: str(data.subject),
+    text,
+    html,
+    headers,
+    message_id: str(data.message_id) ?? lower['message-id'] ?? null,
+    in_reply_to: str(data.in_reply_to) ?? lower['in-reply-to'] ?? null,
+    references: str(data.references) ?? lower['references'] ?? null,
+    created_at: str(data.created_at) ?? new Date().toISOString(),
+    attachments,
+    spf: str(data.spf),
+    dkim: str(data.dkim),
+    dmarc: str(data.dmarc),
+  };
+}
+
+/**
  * Reads the provider's error envelope so a failure names its cause. Only the envelope's own `name` and
  * `message` are surfaced, bounded — never the email body, headers or any credential. A bare status code
  * cannot distinguish a restricted key from a wrong id, which cost a day of guessing once.

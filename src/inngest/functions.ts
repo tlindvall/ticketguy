@@ -6,7 +6,7 @@ import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
 import { leaseDueOutbox, markDispatched, markFailed } from '@/lib/intake/outbox';
-import { fetchReceivedEmail, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
+import { detailFromWebhookPayload, fetchReceivedEmail, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
 import { audit } from '@/lib/util/audit';
 
 /**
@@ -71,19 +71,34 @@ export async function ingestFromProvider(inboundEventId: string): Promise<void> 
   const c = await getConcierge();
   const [ev] = await db.select().from(t.inboundEvents).where(eq(t.inboundEvents.id, inboundEventId));
   if (!ev || ev.processingState !== 'pending') return;
-  if (!e.RESEND_API_KEY) throw new Error('RESEND_API_KEY missing; cannot retrieve received email');
-  const data = (ev.payload as { data?: { email_id?: string; id?: string } }).data ?? {};
-  const emailId = data.email_id ?? data.id;
-  if (!emailId) {
-    await db.update(t.inboundEvents).set({ processingState: 'quarantined', quarantineReason: 'no_email_id' }).where(eq(t.inboundEvents.id, ev.id));
-    return;
+
+  // The webhook body was verified against the provider signature before it was stored, so when it already
+  // carries the message there is nothing the retrieval call would add — and one fewer call is one fewer way
+  // to get stuck. The retrieval path stays for payloads that are metadata only, or that reference
+  // attachments whose bytes live behind the API.
+  const inline = detailFromWebhookPayload(ev.payload);
+  let detail;
+  let retrievedVia: 'webhook_payload' | 'provider_api';
+  if (inline) {
+    detail = inline;
+    retrievedVia = 'webhook_payload';
+  } else {
+    if (!e.RESEND_API_KEY) throw new Error('RESEND_API_KEY missing; cannot retrieve received email');
+    const data = (ev.payload as { data?: { email_id?: string; id?: string } }).data ?? {};
+    const emailId = data.email_id ?? data.id;
+    if (!emailId) {
+      await db.update(t.inboundEvents).set({ processingState: 'quarantined', quarantineReason: 'no_email_id' }).where(eq(t.inboundEvents.id, ev.id));
+      return;
+    }
+    detail = await fetchReceivedEmail(e.RESEND_API_KEY, emailId);
+    retrievedVia = 'provider_api';
   }
-  const detail = await fetchReceivedEmail(e.RESEND_API_KEY, emailId);
+
   const { attachments, skipped } = await downloadAttachments(detail);
   const normalized = normalizeReceived(detail, attachments, ev.signatureVerified);
   const outcome = await c.ingestInbound(normalized);
   await db.update(t.inboundEvents).set({ processingState: 'processed', processedAt: new Date() }).where(eq(t.inboundEvents.id, ev.id));
-  await audit(db, { actor: 'system', action: 'inbound.provider_ingested', entityKind: 'inbound_event', entityId: ev.id, diff: { outcome: outcome.kind, skippedAttachments: skipped } });
+  await audit(db, { actor: 'system', action: 'inbound.provider_ingested', entityKind: 'inbound_event', entityId: ev.id, diff: { outcome: outcome.kind, skippedAttachments: skipped, retrievedVia } });
 }
 
 export const evaluateWatches = inngest.createFunction(
