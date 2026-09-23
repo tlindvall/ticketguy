@@ -152,3 +152,31 @@ unaffected.
 Verified end to end at `APP_MODE=live`: the simulator accepts a message, the event resolves, a draft is
 produced, and the draft still carries "FIXTURE DATA — cannot be sent" with the send gate refusing it. The
 fixture-content block never depended on `APP_MODE`, and this change does not weaken it.
+
+## 30. A JS Date in a raw SQL template only fails on real PostgreSQL
+
+`/admin/operations` returned 500 on the first real deployment. The cause was not the empty database it
+looked like:
+
+```
+Failed query: select count(*)::int from "recommendations"
+  where review_status = $1 and expires_at < $2
+TypeError: The "string" argument must be of type string or an instance of Buffer
+  or ArrayBuffer. Received an instance of Date
+```
+
+A `Date` interpolated into a raw ``sql`` `` template is handed to the driver unconverted. PGlite tolerates
+it; postgres.js throws. Every local run and every PGlite test therefore passed, and the failure waited for
+production. Two sites had it — the stale-approvals count on the operations page, and the due-watches query
+in `evaluateDueWatches`. The second is worse: it runs on a cron, so it would have failed silently rather
+than showing anyone a 500.
+
+Both now use Drizzle's typed operators (`lt`, `lte`), which serialise the value correctly on both drivers.
+`tests/pg/date-parameters.test.ts` runs those two query shapes against real PostgreSQL; both were confirmed
+to fail with the production error before the fix was restored.
+
+Separately, the deployment had the schema and no reference data: `preDeployCommand` ran only
+`pnpm db:migrate`, while the source registry and the default kill switches are created by `pnpm db:seed`.
+An operator therefore had no kill switches to flip and an empty sources page. The pre-deploy step now runs
+both. `seedRegistry` is idempotent and `scripts/seed.ts` refuses the fixture world unless
+`APP_MODE=fixture`, so this only ever loads reference data.

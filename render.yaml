@@ -8,7 +8,10 @@ services:
     plan: starter
     region: ohio
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
-    preDeployCommand: pnpm db:migrate
+    # Seed is idempotent (onConflictDoNothing) and scripts/seed.ts skips the fixture world unless
+    # APP_MODE=fixture, so this only ever loads the source registry and the default kill switches.
+    # Without it a fresh database has the schema and no reference data: no sources, no kill switches.
+    preDeployCommand: pnpm db:migrate && pnpm db:seed
     startCommand: pnpm start
     healthCheckPath: /api/health
     autoDeploy: false

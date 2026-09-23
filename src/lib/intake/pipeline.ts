@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
 import * as t from '@/lib/db/schema';
@@ -685,7 +685,7 @@ export class Concierge {
   /** Deterministic due-watch evaluation; never invokes a model. */
   async evaluateDueWatches(limit = 20): Promise<{ evaluated: number; alertsCreated: number }> {
     const now = this.now();
-    const due = await this.db.select().from(t.watches).where(and(eq(t.watches.state, 'active'), sql`${t.watches.nextCheckAt} <= ${now}`)).orderBy(asc(t.watches.nextCheckAt)).limit(limit);
+    const due = await this.db.select().from(t.watches).where(and(eq(t.watches.state, 'active'), lte(t.watches.nextCheckAt, now))).orderBy(asc(t.watches.nextCheckAt)).limit(limit);
     let alerts = 0;
     const configs = await this.db.select().from(t.adapterConfigs);
     for (const w of due) {
