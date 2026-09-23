@@ -30,7 +30,7 @@ import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
 import { renderTemplate } from '@/lib/email/templates';
 import { reserveBudget, settleBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
-import { ModelOutputError } from '@/lib/ai/anthropic';
+import { ModelOutputError } from '@/lib/ai/model-client';
 import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, WATCH_MAX_ACTIVE_PER_CONTACT } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -316,11 +316,11 @@ export class Concierge {
 
   private async runExtractor(input: Parameters<Extractor['extract']>[0], req: { id: string; currentRevision: number }): Promise<RequestExtraction> {
     if (this.deps.extractor.name === 'fixture') return this.deps.extractor.extract(input);
-    const est = estimateUsdMicros(this.env.ANTHROPIC_BASE_MODEL, Math.ceil(input.text.length / 3) + 800, 700);
+    const est = estimateUsdMicros(this.env.modelName ?? "rules", Math.ceil(input.text.length / 3) + 800, 700, 0, this.env.modelPrices);
     const res = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'extract', model: this.env.ANTHROPIC_BASE_MODEL, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
     const out = await this.deps.extractor.extract(input);
     const usage = (this.deps.extractor as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
-    if (usage) await settleBudget(this.db, res.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(this.env.ANTHROPIC_BASE_MODEL, usage.inputTokens, usage.outputTokens) });
+    if (usage) await settleBudget(this.db, res.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(this.env.modelName ?? "rules", usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
     return out;
   }
 
@@ -450,11 +450,11 @@ export class Concierge {
     for (let attempt = 0; attempt < 2 && !body; attempt++) {
       try {
         if (this.deps.drafter.name !== 'fixture') {
-          const est = estimateUsdMicros(this.env.ANTHROPIC_BASE_MODEL, 2500, 600);
+          const est = estimateUsdMicros(this.env.modelName ?? "rules", 2500, 600, 0, this.env.modelPrices);
           const r = await reserveBudget(this.db, { requestId: req.id, revision: args.revision, runId, jobName: 'draft', model: this.env.ANTHROPIC_BASE_MODEL, estimatedUsdMicros: est, limits: this.limits(), now });
           const blocks = await this.deps.drafter.draft(packet, { quantity, mustAttend: brief.mustAttend, waitRiskTolerance: brief.waitRiskTolerance, togetherRequired: brief.togetherRequired });
           const usage = (this.deps.drafter as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
-          if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(this.env.ANTHROPIC_BASE_MODEL, usage.inputTokens, usage.outputTokens) });
+          if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(this.env.modelName ?? "rules", usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
           const v = validateAndRender(packet, blocks);
           if (v.ok) body = { textBody: v.textBody, htmlBody: v.htmlBody };
           else draftNote = `draft rejected: ${v.errors.join('; ')}`;

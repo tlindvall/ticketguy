@@ -75,3 +75,29 @@ Advice to the owner, unchanged from the discussion: prefer varying the display n
 use a separate subdomain where separate sending reputation is actually wanted. Extra local parts on one
 domain buy no deliverability — reputation is domain-and-IP level — and each one adds an address that must be
 received on.
+
+## 27. Two model providers behind one interface, and no guessed prices
+
+The owner has OpenAI credits and no Anthropic account. Rather than migrate a second time, the model layer
+is now provider-neutral: `src/lib/ai/model-client.ts` owns the prompts, the untrusted-input framing and the
+schema validation, and each provider supplies only a `StructuredClient` that turns one request into typed
+output or a typed `ModelOutputError`. `EXTRACTION_PROVIDER` (`anthropic` | `openai` | `rules`) decides;
+the provider is never inferred from whichever key happens to be set, so a stale key cannot quietly take
+over a run.
+
+The OpenAI client was written against the installed SDK's own type definitions (`openai@7.23.0`), not from
+memory: `responses.parse` with `text.format: zodTextFormat(...)`, `reasoning.effort`, and failure mapping
+from the real response shape — a refusal is an output item rather than a status, so it is checked before
+the incomplete and malformed paths, which would otherwise report a refusal as a schema failure and hide
+the reason. `gpt-5.5` is the default because it is the model the shipped SDK's own documentation uses and
+the newest general-purpose entry in its model enum.
+
+**No OpenAI prices are hard-coded.** `platform.openai.com` and `openai.com` are blocked by this
+environment's network policy, so published rates could not be verified, and a guessed rate would
+under-reserve against the budget caps — worse than no rate, because the conservative default at least
+fails safe by exhausting the cap early. `MODEL_PRICES_USD_PER_MTOKEN` lets the owner supply real rates
+without a deploy; a malformed entry fails at startup rather than at spend time.
+
+One bug this surfaced: the pipeline estimated cost against `ANTHROPIC_BASE_MODEL` at four call sites, which
+would have priced every OpenAI call at Anthropic rates. Cost is now estimated against `env.modelName`, the
+model the selected provider actually calls.
