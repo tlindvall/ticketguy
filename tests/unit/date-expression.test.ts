@@ -44,6 +44,12 @@ describe('extraction of a loosely-worded request', () => {
     expect((await extract('me and my partner want knicks tickets')).quantity).toBe(2);
   });
 
+  it('counts a party named as a family or household', async () => {
+    expect((await extract('Looking for knicks tickets for my family of 4 in november')).quantity).toBe(4);
+    expect((await extract('need seats for my family of four in november')).quantity).toBe(4);
+    expect((await extract('party of 3 for the knicks in november')).quantity).toBe(3);
+  });
+
   it('does not read "flexible on price" as flexible about attending', async () => {
     // mustAttend drives the buy/wait decision, so a guess here changes the advice a customer receives.
     expect((await extract('knicks tickets sometime in November, flexible on price')).mustAttend).toBeNull();
