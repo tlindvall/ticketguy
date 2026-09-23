@@ -33,7 +33,7 @@ const NUM_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, f
 const COUPLE = /\b(?:my (?:wife|husband|partner|girlfriend|boyfriend) and (?:i|me)|(?:me|myself) and my (?:wife|husband|partner|girlfriend|boyfriend))\b/i;
 
 function parseQuantity(t: string): { value: number | null; quote: string | null } {
-  const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(?:party|group)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
+  const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(?:party|group|family|household|crew)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
   if (!m) {
     const couple = COUPLE.exec(t);
     return couple ? { value: 2, quote: couple[0] } : { value: null, quote: null };
