@@ -30,7 +30,7 @@ import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
 import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates } from '@/lib/email/template-store';
-import { reserveBudget, settleBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
+import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, WATCH_MAX_ACTIVE_PER_CONTACT } from '@/lib/domain/watches';
 
@@ -214,8 +214,15 @@ export class Concierge {
     try {
       extraction = await this.runExtractor({ messageId: msg.id, text: msg.sanitizedText ?? '', subject: msg.subject, receivedAt: msg.receivedAt, venueTimeZone: venueTz, knownEntities: known }, req);
     } catch (e) {
+      // A transport failure is transient, so it is rethrown and the outbox retries it with backoff.
+      // Parking it in manual_attention would turn one timeout into permanent staff work on a customer's
+      // request. Refusals, malformed and incomplete output are deterministic — the same message gets the
+      // same answer — so those do go to staff, carrying the kind and the provider's own message: the
+      // class name alone ('ModelOutputError') never said why.
+      if (e instanceof ModelOutputError && e.kind === 'transport') throw e;
       if (e instanceof BudgetExceededError || e instanceof ModelOutputError) {
-        await this.transition(req.id, 'manual_attention', `extraction_failed:${e.name}`);
+        const reason = e instanceof ModelOutputError ? `extraction_failed:${e.kind}: ${e.message}` : `extraction_failed:budget_exceeded: ${e.message}`;
+        await this.transition(req.id, 'manual_attention', reason.slice(0, 500));
         return { state: 'manual_attention', revision: req.currentRevision, extraction: null };
       }
       throw e;
@@ -317,11 +324,25 @@ export class Concierge {
 
   private async runExtractor(input: Parameters<Extractor['extract']>[0], req: { id: string; currentRevision: number }): Promise<RequestExtraction> {
     if (this.deps.extractor.name === 'fixture') return this.deps.extractor.extract(input);
-    const est = estimateUsdMicros(this.env.modelName ?? "rules", Math.ceil(input.text.length / 3) + 800, 700, 0, this.env.modelPrices);
-    const res = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'extract', model: this.env.ANTHROPIC_BASE_MODEL, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
-    const out = await this.deps.extractor.extract(input);
+    const model = this.env.modelName ?? 'rules';
+    const est = estimateUsdMicros(model, Math.ceil(input.text.length / 3) + 800, 700, 0, this.env.modelPrices);
+    // The ledger records the model the cost was estimated against; naming a different one makes every
+    // spend figure unattributable.
+    const res = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'extract', model, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
+    let out: RequestExtraction;
+    try {
+      out = await this.deps.extractor.extract(input);
+    } catch (e) {
+      // Nothing was billed when the call never reached the model, so the reservation must not stand: a
+      // run of transport failures would otherwise eat the daily cap without producing one extraction.
+      // A refusal, a malformed response or a truncated one did consume tokens, so those keep theirs.
+      if (e instanceof ModelOutputError && e.kind === 'transport') {
+        await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'extract' });
+      }
+      throw e;
+    }
     const usage = (this.deps.extractor as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
-    if (usage) await settleBudget(this.db, res.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(this.env.modelName ?? "rules", usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
+    if (usage) await settleBudget(this.db, res.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
     return out;
   }
 
@@ -463,11 +484,22 @@ export class Concierge {
     for (let attempt = 0; attempt < 2 && !body; attempt++) {
       try {
         if (this.deps.drafter.name !== 'fixture') {
-          const est = estimateUsdMicros(this.env.modelName ?? "rules", 2500, 600, 0, this.env.modelPrices);
-          const r = await reserveBudget(this.db, { requestId: req.id, revision: args.revision, runId, jobName: 'draft', model: this.env.ANTHROPIC_BASE_MODEL, estimatedUsdMicros: est, limits: this.limits(), now });
-          const blocks = await this.deps.drafter.draft(packet, { quantity, mustAttend: brief.mustAttend, waitRiskTolerance: brief.waitRiskTolerance, togetherRequired: brief.togetherRequired });
+          const model = this.env.modelName ?? 'rules';
+          const est = estimateUsdMicros(model, 2500, 600, 0, this.env.modelPrices);
+          const r = await reserveBudget(this.db, { requestId: req.id, revision: args.revision, runId, jobName: 'draft', model, estimatedUsdMicros: est, limits: this.limits(), now });
+          let blocks;
+          try {
+            blocks = await this.deps.drafter.draft(packet, { quantity, mustAttend: brief.mustAttend, waitRiskTolerance: brief.waitRiskTolerance, togetherRequired: brief.togetherRequired });
+          } catch (e) {
+            // Same rule as extraction: a call that never reached the model keeps no reservation. This
+            // loop retries, so an unreleased reservation would be charged twice for one draft.
+            if (e instanceof ModelOutputError && e.kind === 'transport') {
+              await releaseBudget(this.db, { requestId: req.id, revision: args.revision, model, estimatedUsdMicros: est, jobName: 'draft' });
+            }
+            throw e;
+          }
           const usage = (this.deps.drafter as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
-          if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(this.env.modelName ?? "rules", usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
+          if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
           const v = validateAndRender(packet, blocks);
           if (v.ok) body = { textBody: v.textBody, htmlBody: v.htmlBody };
           else draftNote = `draft rejected: ${v.errors.join('; ')}`;
