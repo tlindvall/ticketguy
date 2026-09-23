@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
@@ -24,7 +24,7 @@ export default async function Operations() {
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const [spend] = await db.select({ usd: sql<number>`coalesce(sum(case when kind='released' then -estimated_usd_micros else estimated_usd_micros end),0)::bigint` }).from(t.usageLedger).where(gte(t.usageLedger.createdAt, dayStart));
   const media = await new DbMediaStore(db, e.MEDIA_MAX_TOTAL_BYTES).usage();
-  const staleApprovals = await db.select({ n: sql<number>`count(*)::int` }).from(t.recommendations).where(and(eq(t.recommendations.reviewStatus, 'approved'), sql`${t.recommendations.expiresAt} < ${now}`));
+  const staleApprovals = await db.select({ n: sql<number>`count(*)::int` }).from(t.recommendations).where(and(eq(t.recommendations.reviewStatus, 'approved'), lt(t.recommendations.expiresAt, now)));
   const quarantined = await db.select({ n: sql<number>`count(*)::int` }).from(t.inboundEvents).where(eq(t.inboundEvents.processingState, 'quarantined'));
   const pendingMedia = await db.select({ n: sql<number>`count(*)::int` }).from(t.attachments).where(eq(t.attachments.validationState, 'pending_budget'));
   const sourceFailures = await db.select({ sourceId: t.sourceChecks.sourceId, status: t.sourceChecks.status, n: sql<number>`count(*)::int` }).from(t.sourceChecks).where(and(gte(t.sourceChecks.observedAt, new Date(now.getTime() - 86_400_000)), sql`${t.sourceChecks.status} in ('timeout','blocked','rate_limited','provider_error','budget_exhausted')`)).groupBy(t.sourceChecks.sourceId, t.sourceChecks.status);
