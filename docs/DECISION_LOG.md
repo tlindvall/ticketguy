@@ -129,3 +129,26 @@ Two extractor defects surfaced by the same message:
   date, day, game, night, timing, or going.
 - "my wife and I" did not yield a quantity, although the same phrase was already recognised for `forSelf`.
   It failed safe by flagging `unresolved: quantity`, but cost a clarification round it did not need.
+
+## 29. The model extractor had no way to be exercised
+
+Three quantity and date defects were found by hand in one session, all of them limitations of the
+deterministic rules extractor — the documented fallback, not the provider that ships. The reason they were
+found that way is that there was no configuration in which the model extractor could run at all:
+
+- `services.ts` selected a model client only when `APP_MODE !== 'fixture'`.
+- `simulate-inbound/route.ts` returned 403 unless `APP_MODE === 'fixture'`.
+
+The two conditions are mutually exclusive, so the only route to the model was a real Resend webhook, which
+needs DNS, a public URL and a deploy. Gate G4 was untestable, and hand-patching regexes in a fallback
+extractor does not converge.
+
+The simulator is now gated on `isProductionLike` alone, so it runs at any `APP_MODE` in development and
+stays refused in staging and production. `DEV_FIXTURE_OFFERS` serves the synthetic offer set at
+`APP_MODE=live` so the model extractor and the advice engine can be exercised together; `parseEnv` refuses
+it outright in a production-like environment, and it defaults off, so a deploy that never sets it is
+unaffected.
+
+Verified end to end at `APP_MODE=live`: the simulator accepts a message, the event resolves, a draft is
+produced, and the draft still carries "FIXTURE DATA — cannot be sent" with the send gate refusing it. The
+fixture-content block never depended on `APP_MODE`, and this change does not weaken it.

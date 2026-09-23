@@ -44,7 +44,7 @@ export function getConcierge(): Promise<Concierge> {
         extractor: selected ? new ModelExtractor(selected.client, selected.model, selected.effort) : new FixtureExtractor(),
         drafter: selected ? new ModelDrafter(selected.client, selected.model, selected.effort) : new FixtureDrafter(),
         emailProvider: e.EMAIL_SEND_ENABLED && e.RESEND_API_KEY ? new ResendProvider(e.RESEND_API_KEY) : null,
-        fixtureOffers: fixture ? FIXTURE_OFFERS : {},
+        fixtureOffers: fixture || e.DEV_FIXTURE_OFFERS ? FIXTURE_OFFERS : {},
       });
     })();
   }

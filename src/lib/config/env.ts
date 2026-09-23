@@ -128,6 +128,12 @@ const rawSchema = z.object({
   MEDIA_PROVIDER: z.enum(['db', 's3']).default('db'),
   MEDIA_MAX_TOTAL_BYTES: z.coerce.number().int().positive().default(1024 * 1024 * 1024),
 
+  /**
+   * Development only: serve the synthetic offer set even at APP_MODE=live, so the model extractor and the
+   * advice engine can be exercised together locally. Refused outright in staging/production — the send gate
+   * would block the content anyway (content_contains_fixture_data), but this never reaches a real deploy.
+   */
+  DEV_FIXTURE_OFFERS: explicitBoolean,
   BETTER_AUTH_URL: z.string().url().optional(),
   BETTER_AUTH_SECRET: z.string().optional(),
   STAFF_EMAIL_ALLOWLIST: csv,
@@ -213,6 +219,9 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     }
     if (e.EXTRACTION_PROVIDER === 'openai' && !e.OPENAI_API_KEY) {
       throw new ConfigurationError(`EXTRACTION_PROVIDER=openai requires OPENAI_API_KEY in ${appEnv}; set EXTRACTION_PROVIDER=rules to run the deterministic extractor deliberately`);
+    }
+    if (e.DEV_FIXTURE_OFFERS) {
+      throw new ConfigurationError(`DEV_FIXTURE_OFFERS is a local development switch and is not allowed in ${appEnv}`);
     }
   }
   if (e.DATABASE_URL && !/^postgres(ql)?:\/\//.test(e.DATABASE_URL)) {
