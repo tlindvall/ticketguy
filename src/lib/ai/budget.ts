@@ -1,31 +1,18 @@
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type { DbOrTx } from '@/lib/db';
 import { usageLedger } from '@/lib/db/schema';
+import { priceFor, type Price } from './prices';
 
 /**
  * Atomic AI budget reservation (A34). Reservations are ledger rows written inside a transaction that
  * first re-reads the current total; concurrent reservations serialize on an advisory lock keyed by request.
  * Amounts are USD micros (1e-6 USD) to keep integer arithmetic.
  */
-export const PRICE_TABLE_VERSION = '2026-09-22-anthropic';
-/** Published Anthropic API rates, USD per million tokens. Recheck before launch; keep in step with the models in use. */
-export const PRICES_USD_PER_MTOKEN: Record<string, { input: number; output: number }> = {
-  'claude-opus-5': { input: 5, output: 25 },
-  'claude-sonnet-5': { input: 2, output: 10 },
-  'claude-haiku-4-5': { input: 1, output: 5 },
-};
+export const PRICE_TABLE_VERSION = '2026-09-23';
+export { PRICES_USD_PER_MTOKEN, CONSERVATIVE_PRICE, parsePriceOverrides, priceFor, type Price } from './prices';
 
-/**
- * Exact match only. A near-miss id such as 'claude-opus-5-5' is a model we have no published rate for,
- * so it must fall through to the conservative default rather than inherit 'claude-opus-5' pricing and
- * under-report spend against the budget caps.
- */
-export function priceFor(model: string): { input: number; output: number } {
-  return PRICES_USD_PER_MTOKEN[model] ?? { input: 15, output: 75 }; // unknown model -> conservative
-}
-
-export function estimateUsdMicros(model: string, inputTokens: number, outputTokens: number, extraUsd = 0): number {
-  const p = priceFor(model);
+export function estimateUsdMicros(model: string, inputTokens: number, outputTokens: number, extraUsd = 0, overrides: Record<string, Price> = {}): number {
+  const p = priceFor(model, overrides);
   const usd = (inputTokens / 1e6) * p.input + (outputTokens / 1e6) * p.output + extraUsd;
   return Math.ceil(usd * 1e6);
 }

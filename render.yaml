@@ -23,7 +23,7 @@ services:
       # drives Better Auth trusted origins, admin CSRF origin checks and signed email links.
       # Set it explicitly only once a custom domain is attached.
       - key: EXTRACTION_PROVIDER
-        value: anthropic
+        value: openai
       # Database-backed media must stay well inside the database plan's storage. Raise only with the plan.
       - key: MEDIA_MAX_TOTAL_BYTES
         value: "268435456"
@@ -56,6 +56,11 @@ services:
       - key: RESEND_WEBHOOK_SECRET
         sync: false
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # No OpenAI rates ship with the code; without this every call bills at the conservative default.
+      - key: MODEL_PRICES_USD_PER_MTOKEN
         sync: false
       - key: INNGEST_EVENT_KEY
         sync: false

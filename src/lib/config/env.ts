@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MARKETING_SUBDOMAIN, SERVICE_DOMAIN } from './brand';
+import { parsePriceOverrides, type Price } from '@/lib/ai/prices';
 
 /**
  * Environment configuration. All booleans are parsed explicitly: only the literal strings
@@ -82,13 +83,24 @@ const rawSchema = z.object({
   EMAIL_TEST_RECIPIENT_ALLOWLIST: csv,
 
   /** 'rules' runs the deterministic extractor/drafter deliberately; it is never a silent fallback. */
-  EXTRACTION_PROVIDER: z.enum(['anthropic', 'rules']).default('anthropic'),
+  EXTRACTION_PROVIDER: z.enum(['anthropic', 'openai', 'rules']).default('anthropic'),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_BASE_MODEL: z.string().default('claude-opus-5'),
   /** Escalation is the same model at a higher effort level, not a second model: one cache namespace, one price row. */
   ANTHROPIC_BASE_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('low'),
   ANTHROPIC_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   ANTHROPIC_ESCALATION_ENABLED: explicitBoolean,
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_MODEL: z.string().default('gpt-5.5'),
+  OPENAI_BASE_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('low'),
+  OPENAI_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
+  /**
+   * Per-model rates as `model=inputUsdPerMTok:outputUsdPerMTok`, comma separated. Any model without a row
+   * here or in the built-in table bills at the conservative default, which over-reserves rather than
+   * under-reserves against the budget caps. Published rates change; this is how an operator corrects them
+   * without a deploy.
+   */
+  MODEL_PRICES_USD_PER_MTOKEN: z.string().optional(),
   AI_REQUEST_SOFT_BUDGET_USD: usd,
   AI_REQUEST_HARD_BUDGET_USD: usd,
   AI_GLOBAL_DAILY_BUDGET_USD: usd,
@@ -141,6 +153,10 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
   APP_URL: string;
   appEnv: AppEnvironment;
   isProductionLike: boolean;
+  /** The model the selected provider will actually call, or null under EXTRACTION_PROVIDER=rules. */
+  modelName: string | null;
+  /** Operator-supplied rates, layered over the built-in table. */
+  modelPrices: Record<string, Price>;
   /** Every address the intake accepts, lowercased and deduped; CONCIERGE_INBOUND_ADDRESS is always first. */
   inboundAddresses: string[];
   /** Resolved From address per message class. Every class is present; unconfigured ones use CONCIERGE_FROM_ADDRESS. */
@@ -195,6 +211,9 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     if (e.EXTRACTION_PROVIDER === 'anthropic' && !e.ANTHROPIC_API_KEY) {
       throw new ConfigurationError(`EXTRACTION_PROVIDER=anthropic requires ANTHROPIC_API_KEY in ${appEnv}; set EXTRACTION_PROVIDER=rules to run the deterministic extractor deliberately`);
     }
+    if (e.EXTRACTION_PROVIDER === 'openai' && !e.OPENAI_API_KEY) {
+      throw new ConfigurationError(`EXTRACTION_PROVIDER=openai requires OPENAI_API_KEY in ${appEnv}; set EXTRACTION_PROVIDER=rules to run the deterministic extractor deliberately`);
+    }
   }
   if (e.DATABASE_URL && !/^postgres(ql)?:\/\//.test(e.DATABASE_URL)) {
     throw new ConfigurationError('DATABASE_URL must be a postgres:// URL when set');
@@ -234,6 +253,16 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     }
   }
 
+  // Cost estimates must name the model that is actually called; pricing the Anthropic model while running
+  // OpenAI (or the reverse) would bill every call at the wrong rate.
+  const modelName = e.EXTRACTION_PROVIDER === 'anthropic' ? e.ANTHROPIC_BASE_MODEL : e.EXTRACTION_PROVIDER === 'openai' ? e.OPENAI_BASE_MODEL : null;
+  let modelPrices: Record<string, Price>;
+  try {
+    modelPrices = parsePriceOverrides(e.MODEL_PRICES_USD_PER_MTOKEN);
+  } catch (err) {
+    throw new ConfigurationError(err instanceof Error ? err.message : String(err));
+  }
+
   const soft = e.AI_REQUEST_SOFT_BUDGET_USD ?? 0.5;
   const hard = e.AI_REQUEST_HARD_BUDGET_USD ?? 1.0;
   if (hard < soft) throw new ConfigurationError('AI_REQUEST_HARD_BUDGET_USD must be >= AI_REQUEST_SOFT_BUDGET_USD');
@@ -243,6 +272,8 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     APP_URL: appUrl,
     appEnv,
     isProductionLike,
+    modelName,
+    modelPrices,
     inboundAddresses,
     messageClassFromAddresses,
     aiRequestSoftBudgetUsd: soft,
