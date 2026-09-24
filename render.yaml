@@ -30,8 +30,18 @@ services:
       # Database-backed media must stay well inside the database plan's storage. Raise only with the plan.
       - key: MEDIA_MAX_TOTAL_BYTES
         value: "268435456"
+      # Outbound email is ON. What keeps it safe is EMAIL_TEST_RECIPIENT_ALLOWLIST below: the send gate
+      # refuses any recipient not on that list, so only named addresses can be mailed. Empty that list only
+      # once the pipeline has run end to end and the sending domain has a delivery history.
+      # This value is set here rather than in the dashboard because the blueprint overwrites the dashboard
+      # on every deploy — a value set only there silently reverts to this one.
       - key: EMAIL_SEND_ENABLED
-        value: "false"
+        value: "true"
+      # Comma-separated recipients the service is allowed to email, entered in the dashboard and never in
+      # this file, because they are real addresses. An empty value means NO restriction, so it has no
+      # default here: forgetting to set it must not quietly open sending to everyone who writes in.
+      - key: EMAIL_TEST_RECIPIENT_ALLOWLIST
+        sync: false
       - key: MARKETING_SEND_ENABLED
         value: "false"
       - key: WATCH_SEND_ENABLED
