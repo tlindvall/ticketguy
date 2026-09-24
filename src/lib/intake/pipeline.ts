@@ -10,9 +10,9 @@ import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, missingMandatoryFields, clarificationQuestions } from '@/lib/ai/extraction';
+import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import type { Drafter } from '@/lib/ai/drafting';
-import { RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
+import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
 import { eventLocalDate, monthWindowFor } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
@@ -55,6 +55,27 @@ export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } 
 
 const RAW_RETENTION_DAYS = 30;
 const OBSERVATION_RETENTION_DAYS = 90;
+
+type NoMatchReason = 'no_performer' | 'unknown_performer' | 'no_scheduled_event';
+
+/** The keys that earn a clarification round. Ambiguities are a closed vocabulary, so this can match them. */
+const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', ...AMBIGUITY_KINDS];
+
+/**
+ * What we tell the customer when no event could be attached — which depends entirely on why.
+ *
+ * "We couldn't find it in the official listings we can check" reads as "we looked and it wasn't there".
+ * With no integrated source and an empty catalog that is a claim about diligence we did not do, and the
+ * same prohibition that stops us inventing availability stops us inventing a search.
+ */
+function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | null {
+  const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
+  const when = brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
+  const where = brief.city ? ` in ${brief.city}` : '';
+  if (reason === 'no_performer') return null; // nothing was named; the questions carry it
+  if (reason === 'unknown_performer') return `We don't have ${who ?? 'that performer or team'} in our event list yet, so we haven't looked at any prices.`;
+  return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
+}
 
 export class Concierge {
   private readonly db: Db;
@@ -291,7 +312,7 @@ export class Concierge {
       return { state: 'unsupported', revision, extraction: merged };
     }
 
-    if (unresolved.some((u) => ['event', 'quantity', 'budget_basis', 'event_ambiguous', 'date_near_midnight'].includes(u))) {
+    if (unresolved.some((u) => CLARIFIABLE.includes(u))) {
       const count = req.clarificationCount + 1;
       if (count > 3) {
         await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
@@ -304,7 +325,7 @@ export class Concierge {
       if (!contact!.countryConfirmed && qMissing.length < 3) qMissing.push('country');
       const questions = clarificationQuestions([...new Set(qMissing)], merged);
       const knownFacts = describeKnown(merged);
-      const eventNote = resolution.kind === 'no_match' ? `We couldn't find a verified ${merged.performerOrTeam ?? 'matching'} event${merged.city ? ` in ${merged.city}` : ''}${merged.dateExpression ? ` for "${merged.dateExpression}"` : ''} in the official listings we can check, so we haven't looked at prices yet.` : resolution.kind === 'ambiguous' ? `We found ${resolution.candidates.length} possible matches: ${resolution.candidates.map((c) => c.label).join('; ')}.` : null;
+      const eventNote = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : resolution.kind === 'ambiguous' ? `We found ${resolution.candidates.length} possible matches: ${resolution.candidates.map((c) => c.label).join('; ')}.` : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
       await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { knownFacts, questions, eventNote }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
@@ -373,10 +394,12 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   // Event resolution (canonical events only; never invents a show)
   // ---------------------------------------------------------------------------------------------
-  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: Array<{ id: string; label: string }> } | { kind: 'no_match' } | { kind: 'non_us' }> {
-    if (!x.performerOrTeam) return { kind: 'no_match' };
+  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: Array<{ id: string; label: string }> } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
+    if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     const [entity] = await this.db.select().from(t.entities).where(sql`lower(${t.entities.name}) = ${x.performerOrTeam.toLowerCase()}`);
-    if (!entity) return { kind: 'no_match' };
+    // Not on file at all is a different fact from on file with nothing scheduled, and the customer is told
+    // which: claiming we searched listings we do not have is a claim about our own diligence.
+    if (!entity) return { kind: 'no_match', reason: 'unknown_performer' };
     const now = this.now();
     const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(20);
     let cands = rows;
@@ -394,7 +417,7 @@ export class Concierge {
       }
     }
     if (x.city) cands = cands.filter(({ v }) => (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
-    if (cands.length === 0) return { kind: 'no_match' };
+    if (cands.length === 0) return { kind: 'no_match', reason: 'no_scheduled_event' };
     if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => ({ id: e.id, label: eventLabel(e, v) })) };
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };

@@ -38,7 +38,7 @@ export function renderTemplate(
     };
   }
   const wrap = (paras: string[], htmlParas: string[]) => ({
-    text: [...paras, '', '— Ticket Guy', FOOTER_TEXT].join('\n\n'),
+    text: [...paras, '— Ticket Guy', FOOTER_TEXT].join('\n\n'), // the empty entry left a double gap before the sign-off
     html: `<!doctype html><html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;line-height:1.5;color:#111;max-width:640px;margin:0 auto;padding:16px">${htmlParas.join('\n')}<p>— Ticket Guy</p><p style="color:#555;font-size:13px">${esc(FOOTER_TEXT)}</p></body></html>`,
   });
   const list = (items: string[]) => items.map((i) => `• ${i}`).join('\n');
