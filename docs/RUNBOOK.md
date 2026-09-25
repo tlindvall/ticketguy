@@ -19,6 +19,7 @@ Nothing in this runbook authorizes a live send. `EMAIL_SEND_ENABLED`, `MARKETING
 - Set `RESEND_WEBHOOK_SECRET` (starts `whsec_`). Without it the endpoint returns 503 and accepts nothing.
 - Test: send a signed test event from the Resend dashboard; expect 200 `{ok:true,duplicate:false}` then 200 `{duplicate:true}` on redelivery. A tampered body → 401. Check `inbound_events` and `outbox_events` rows.
 - Rotation: add the new secret to the environment, redeploy, then rotate in Resend. Events signed with the old secret after rotation fail closed (401) and Resend retries; watch `/admin/operations` for quarantined events.
+- **Lost `email.received` events** (webhook down, secret rotated badly, or the subscription silently dropped the event type — it has happened): `pnpm tsx scripts/reconcile-resend.ts` in the Render shell lists what the provider received that never became an inbound event here; `--apply` queues each one through the normal retrieval path, exactly as a webhook would have, and the dispatcher ingests it within a minute. Idempotent: a message the webhook did deliver, or one reconciled earlier, is never queued twice. If the provider's list response is not a shape the parser recognises it stops and says so — run `scripts/probe-resend-receiving.ts` and match the parser to the real shape before trusting a zero. Check the webhook's event subscription in the Resend dashboard afterwards; reconciliation is the backstop, not the fix.
 
 ## 3. Background processing
 
