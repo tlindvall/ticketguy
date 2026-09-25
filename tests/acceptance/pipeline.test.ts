@@ -89,7 +89,10 @@ describe('end-to-end fixture flow', () => {
     expect(req!.eventId).toBeNull();
     const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, req!.id));
     expect(intent!.messageClass).toBe('clarification');
-    expect(intent!.bodyText).toContain("couldn't find a verified Dua Lipa event");
+    // Dua Lipa is on file with nothing scheduled, so the reply says exactly that. It must not claim we
+    // searched listings: with no integrated source that is a statement about diligence we did not do.
+    expect(intent!.bodyText).toContain("We don't have a scheduled Dua Lipa event");
+    expect(intent!.bodyText).not.toContain('official listings');
     expect(intent!.bodyText).toContain('based in the US');
     expect(await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, req!.id))).toHaveLength(0);
   });

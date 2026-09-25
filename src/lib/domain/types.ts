@@ -89,6 +89,19 @@ export const SearchInputSchema = z.object({
 });
 export type SearchInput = z.infer<typeof SearchInputSchema>;
 
+/** What the extractor may flag as unclear. Each value has a clarification question bound to it. */
+export const AMBIGUITY_KINDS = [
+  'performer_ambiguous',
+  'event_location_unknown',
+  'date_near_midnight',
+  'date_unsupported_expression',
+  'date_venue_timezone_unknown',
+  'budget_basis_unknown',
+  'quantity_unclear',
+] as const;
+export const AmbiguitySchema = z.enum(AMBIGUITY_KINDS);
+export type Ambiguity = (typeof AMBIGUITY_KINDS)[number];
+
 export const RequestExtractionSchema = z
   .object({
     intent: z.enum(['new_search', 'clarification', 'watch_request', 'cancel_watch', 'marketing_opt_out', 'delete_data', 'other']),
@@ -107,7 +120,12 @@ export const RequestExtractionSchema = z
     alternativesAllowed: z.boolean().nullable(),
     submittedUrls: z.array(z.string()),
     evidence: z.array(z.object({ field: z.string(), messageId: z.string(), quote: z.string() })),
-    ambiguities: z.array(z.string()),
+    /**
+     * Closed vocabulary. It was a free string, and the model invented a new key for the same concept on
+     * every call ('rangers_ambiguous_team', then 'which_rangers_unknown'), so the clarification router —
+     * which matches known keys — could never act on any of them and silently dropped the question.
+     */
+    ambiguities: z.array(AmbiguitySchema),
     /** Advice-engine preference fields; null when not stated. */
     mustAttend: z.boolean().nullable().default(null),
     waitRiskTolerance: z.enum(['low', 'medium', 'high']).nullable().default(null),

@@ -42,6 +42,18 @@ const csv = z
       .filter(Boolean),
   );
 
+/** A csv with a default when the variable is unset; an explicitly empty value still means "none". */
+const csvDefault = (dflt: string) =>
+  z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v === undefined ? dflt : v)
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    );
+
 /**
  * `key=value` pairs, comma separated (e.g. `watch_alert=alerts@x.com,marketing=deals@x.com`).
  * Keys and values are lowercased; a malformed entry is a configuration error, never a silent skip.
@@ -145,6 +157,12 @@ const rawSchema = z.object({
 
   TICKETMASTER_DISCOVERY_API_KEY: z.string().optional(),
   TICKETMASTER_DISCOVERY_ENABLED: explicitBoolean,
+  /**
+   * Performers/teams the catalog is refreshed for every day before anyone writes in, so a pilot request
+   * resolves from the local catalog and the provider is only asked about names we have not seen. Comma
+   * separated; the default is the NYC pilot. Empty disables the pre-warm without disabling discovery.
+   */
+  CATALOG_SEED_KEYWORDS: csvDefault('new york rangers,new york knicks,new york islanders,new jersey devils,brooklyn nets,new york yankees,new york mets,new york liberty'),
   LIVE_INVENTORY_ENABLED: explicitBoolean,
 
   PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb'),

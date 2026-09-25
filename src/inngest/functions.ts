@@ -8,6 +8,7 @@ import * as t from '@/lib/db/schema';
 import { leaseDueOutbox, markDispatched, markFailed } from '@/lib/intake/outbox';
 import { detailFromWebhookPayload, fetchReceivedEmail, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
 import { audit } from '@/lib/util/audit';
+import { prewarmCatalog } from '@/lib/catalog/prewarm';
 
 /**
  * Durable workflows. Each step retrieves data by ID; nothing large is checkpointed. Handlers are idempotent
@@ -131,4 +132,17 @@ export async function runRetentionSweep(now: Date): Promise<{ mediaDeleted: numb
   return { mediaDeleted: media.length, attachmentsPurged: atts.length, observationsPurged: obs.length };
 }
 
-export const functions = [dispatchOutbox, evaluateWatches, retentionSweep];
+/** Catalog pre-warm: refresh the pilot names daily (04:05 UTC, before US business hours) so requests resolve locally. */
+export const catalogPrewarm = inngest.createFunction(
+  { id: 'catalog-prewarm', concurrency: { limit: 1 }, triggers: [cron('5 4 * * *')] },
+  async ({ step }) => {
+    return step.run('prewarm', async () => {
+      const { db } = await getDb();
+      const r = await prewarmCatalog(db, env());
+      await audit(db, { actor: 'system', action: 'catalog.prewarm', entityKind: 'catalog', entityId: 'prewarm', diff: { ran: r.ran, reason: r.reason ?? null, results: r.results.map((x) => ({ keyword: x.keyword, status: x.status, upserted: x.eventsUpserted })) } });
+      return r;
+    });
+  },
+);
+
+export const functions = [dispatchOutbox, evaluateWatches, retentionSweep, catalogPrewarm];

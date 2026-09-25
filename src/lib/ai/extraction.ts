@@ -200,12 +200,32 @@ export function missingMandatoryFields(x: RequestExtraction, opts: { eventResolv
 }
 
 /** At most three questions, never re-asking what the current revision already established. */
+/**
+ * Title-cases a name for customer-facing text. Only all-lowercase words are touched, so "NY Rangers" and
+ * "Dua Lipa" survive: the brief keeps whatever the customer typed, and only the email is tidied.
+ */
+export function titleCaseName(name: string): string {
+  return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1));
+}
+
 export function clarificationQuestions(missing: string[], known: RequestExtraction): string[] {
   const q: string[] = [];
+  const who = known.performerOrTeam ? titleCaseName(known.performerOrTeam) : null;
+  // A name that matches more than one team or artist has to be settled before anything else: asking which
+  // date a "Rangers" game is would assume the very thing in doubt, so it replaces the generic event question.
+  const nameAmbiguous = missing.includes('performer_ambiguous');
+  if (nameAmbiguous) q.push(who ? `First, which ${who} do you mean? There is more than one team or artist by that name — a link to the event settles it.` : 'Which performer or team do you mean? A link to the event settles it.');
   for (const m of missing) {
-    if (m === 'event') q.push(known.performerOrTeam ? `Which ${known.performerOrTeam} date and venue are you looking at? A link works too.` : 'Which event (performer or team, city, and date) are you looking at? A link or screenshot works.');
+    if (m === 'event' && !nameAmbiguous) q.push(who ? `Which ${who} date and venue are you looking at? A link works too.` : 'Which event (performer or team, city, and date) are you looking at? A link or screenshot works.');
+    if (m === 'event_location_unknown' && !missing.includes('event')) q.push('Which city or venue are you looking at?');
+    if (m === 'quantity_unclear' && !missing.includes('quantity')) q.push('How many tickets do you need in total?');
+    // A date we could not pin down is asked about explicitly. Guessing which day "tonight" means across a
+    // timezone we do not know is how a request ends up bound to the wrong game.
+    if (m === 'date_near_midnight') q.push(`Just to confirm the day${known.dateExpression ? ` — you said "${known.dateExpression}"` : ''}: which calendar date do you mean?`);
+    if (m === 'date_unsupported_expression') q.push(known.dateExpression ? `We weren't sure which date "${known.dateExpression}" means — could you give the calendar date?` : 'Which date are you looking at?');
+    if (m === 'date_venue_timezone_unknown' && !missing.includes('event')) q.push('Which city or venue, and which date? We need the venue to read the date correctly.');
     if (m === 'quantity') q.push('How many tickets do you need, and do they need to be together?');
-    if (m === 'budget_basis') q.push(`Is your budget of $${((known.budgetCents ?? 0) / 100).toFixed(0)} per ticket or for everyone combined?`);
+    if (m === 'budget_basis' || m === 'budget_basis_unknown') q.push(`Is your budget of $${((known.budgetCents ?? 0) / 100).toFixed(0)} per ticket or for everyone combined?`);
     if (m === 'country') q.push('Quick check so we send the right options: are you based in the US?');
     if (m === 'wait_risk_tolerance') q.push('If prices might drop but seats could disappear, would you rather lock in now or wait a bit?');
     if (m === 'decision_deadline') q.push('By when do you need to decide?');

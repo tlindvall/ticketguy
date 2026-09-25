@@ -10,17 +10,18 @@ import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, missingMandatoryFields, clarificationQuestions } from '@/lib/ai/extraction';
+import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import type { Drafter } from '@/lib/ai/drafting';
-import { RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
+import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { eventLocalDate, monthWindowFor } from '@/lib/domain/dates';
+import { eventLocalDate, monthWindowFor, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
 import { classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppression';
 import { sourcePlan } from '@/lib/sources/routing';
-import { buildAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
+import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
+import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -49,12 +50,37 @@ export type ConciergeDeps = {
   emailProvider: EmailProvider | null;
   fixtureOffers?: Record<string, Offer[]>;
   fixtureBehavior?: Record<string, { status?: SourceResult['status']; retryAfterSeconds?: number }>;
+  /** Fetch used by the Discovery adapter; tests inject a fake so no test ever reaches the provider. */
+  discoveryFetch?: typeof fetch;
 };
 
 export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } | { kind: 'ignored_recipient'; messageId: string } | { kind: 'duplicate'; messageId: string } | { kind: 'queued'; messageId: string; conversationId: string; requestId: string; contactId: string; isNewConversation: boolean };
 
 const RAW_RETENTION_DAYS = 30;
 const OBSERVATION_RETENTION_DAYS = 90;
+
+type NoMatchReason = 'no_performer' | 'unknown_performer' | 'no_scheduled_event' | 'discovery_no_results';
+
+/** The keys that earn a clarification round. Ambiguities are a closed vocabulary, so this can match them. */
+const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', ...AMBIGUITY_KINDS];
+
+/**
+ * What we tell the customer when no event could be attached — which depends entirely on why.
+ *
+ * "We couldn't find it in the official listings we can check" reads as "we looked and it wasn't there".
+ * With no integrated source and an empty catalog that is a claim about diligence we did not do, and the
+ * same prohibition that stops us inventing availability stops us inventing a search.
+ */
+function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | null {
+  const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
+  const when = brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
+  const where = brief.city ? ` in ${brief.city}` : '';
+  if (reason === 'no_performer') return null; // nothing was named; the questions carry it
+  if (reason === 'unknown_performer') return `We don't have ${who ?? 'that performer or team'} in our event list yet, so we haven't looked at any prices.`;
+  // This one is earned: the official listings were actually queried for this name and window.
+  if (reason === 'discovery_no_results') return `We checked the official listings and couldn't find a scheduled ${who ?? 'matching'} event${where}${when}, so we haven't looked at prices yet.`;
+  return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
+}
 
 export class Concierge {
   private readonly db: Db;
@@ -267,7 +293,7 @@ export class Concierge {
     }
 
     // Event resolution.
-    const resolution = await this.resolveEvent(merged);
+    const resolution = await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
     const eventResolved = resolution.kind === 'resolved';
     const missing = missingMandatoryFields(merged, { eventResolved });
     const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...merged.ambiguities];
@@ -291,7 +317,7 @@ export class Concierge {
       return { state: 'unsupported', revision, extraction: merged };
     }
 
-    if (unresolved.some((u) => ['event', 'quantity', 'budget_basis', 'event_ambiguous', 'date_near_midnight'].includes(u))) {
+    if (unresolved.some((u) => CLARIFIABLE.includes(u))) {
       const count = req.clarificationCount + 1;
       if (count > 3) {
         await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
@@ -304,7 +330,7 @@ export class Concierge {
       if (!contact!.countryConfirmed && qMissing.length < 3) qMissing.push('country');
       const questions = clarificationQuestions([...new Set(qMissing)], merged);
       const knownFacts = describeKnown(merged);
-      const eventNote = resolution.kind === 'no_match' ? `We couldn't find a verified ${merged.performerOrTeam ?? 'matching'} event${merged.city ? ` in ${merged.city}` : ''}${merged.dateExpression ? ` for "${merged.dateExpression}"` : ''} in the official listings we can check, so we haven't looked at prices yet.` : resolution.kind === 'ambiguous' ? `We found ${resolution.candidates.length} possible matches: ${resolution.candidates.map((c) => c.label).join('; ')}.` : null;
+      const eventNote = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : resolution.kind === 'ambiguous' ? `We found ${resolution.candidates.length} possible matches: ${resolution.candidates.map((c) => c.label).join('; ')}.` : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
       await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { knownFacts, questions, eventNote }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
@@ -373,32 +399,125 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   // Event resolution (canonical events only; never invents a show)
   // ---------------------------------------------------------------------------------------------
-  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: Array<{ id: string; label: string }> } | { kind: 'no_match' } | { kind: 'non_us' }> {
-    if (!x.performerOrTeam) return { kind: 'no_match' };
-    const [entity] = await this.db.select().from(t.entities).where(sql`lower(${t.entities.name}) = ${x.performerOrTeam.toLowerCase()}`);
-    if (!entity) return { kind: 'no_match' };
+  /**
+   * Performers/teams the customer's word could mean. Matches the canonical name, a stored alias ("Rangers" for
+   * "New York Rangers"), or the name containing the word — case-insensitively, because the customer typed
+   * "rangers". More than one hit is a real ambiguity (two teams share the nickname), not a bug.
+   */
+  private async matchEntities(performerOrTeam: string): Promise<Array<typeof t.entities.$inferSelect>> {
+    const kw = performerOrTeam.trim().toLowerCase();
+    if (!kw) return [];
+    const like = `%${kw}%`;
+    return this.db
+      .select()
+      .from(t.entities)
+      .where(sql`lower(${t.entities.name}) = ${kw}
+        or exists (select 1 from jsonb_array_elements_text(${t.entities.aliases}) a where lower(a) = ${kw})
+        or lower(${t.entities.name}) like ${like}`)
+      .orderBy(asc(t.entities.name))
+      .limit(10);
+  }
+
+  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: Array<{ id: string; label: string }> } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
+    if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
+    const entities = await this.matchEntities(x.performerOrTeam);
+    // Not on file at all is a different fact from on file with nothing scheduled, and the customer is told
+    // which: claiming we searched listings we do not have is a claim about our own diligence.
+    if (entities.length === 0) return { kind: 'no_match', reason: 'unknown_performer' };
     const now = this.now();
-    const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(20);
-    let cands = rows;
-    if (x.resolvedLocalDate) {
-      cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
-    } else if (x.dateExpression) {
-      // A month named without a day still rules events out. Ignoring it let a request for November
-      // bind silently to the only October event on file, and every downstream claim inherited that event.
-      const win = monthWindowFor(x.dateExpression, now);
-      if (win) {
-        cands = cands.filter(({ e, v }) => {
-          const d = eventLocalDate(e.localStartAt, v.timezone);
-          return d >= win.from && d <= win.to;
-        });
+
+    const windowFilter = (rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>) => {
+      let cands = rows.filter(({ e }) => !e.subtype || !NON_ADMISSION_SUBTYPES.includes(e.subtype)); // parking and packages are not "tickets to the game"
+      if (x.resolvedLocalDate) {
+        cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
+      } else if (x.dateExpression) {
+        // A month named without a day still rules events out. Ignoring it let a request for November
+        // bind silently to the only October event on file, and every downstream claim inherited that event.
+        const win = monthWindowFor(x.dateExpression, now);
+        if (win) {
+          cands = cands.filter(({ e, v }) => {
+            const d = eventLocalDate(e.localStartAt, v.timezone);
+            return d >= win.from && d <= win.to;
+          });
+        }
       }
+      if (x.city) cands = cands.filter(({ v }) => (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
+      return cands;
+    };
+
+    // Events per matched entity, filtered the same way, so a nickname shared by two teams is settled by the
+    // window and city when it can be and surfaced as a choice when it cannot.
+    const perEntity: Array<{ entity: typeof t.entities.$inferSelect; cands: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }> }> = [];
+    for (const entity of entities) {
+      const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+      perEntity.push({ entity, cands: windowFilter(rows) });
     }
-    if (x.city) cands = cands.filter(({ v }) => (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
-    if (cands.length === 0) return { kind: 'no_match' };
+    const withEvents = perEntity.filter((p) => p.cands.length > 0);
+    if (withEvents.length === 0) return { kind: 'no_match', reason: 'no_scheduled_event' };
+    if (withEvents.length > 1) {
+      // Two different teams both have a game in the window: name them, one candidate each.
+      return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => ({ id: cands[0]!.e.id, label: `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}` })) };
+    }
+    const { entity, cands } = withEvents[0]!;
     if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => ({ id: e.id, label: eventLabel(e, v) })) };
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
     return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist' };
+  }
+
+  /**
+   * Whether the catalog may be extended from the provider right now. Both halves are required on purpose: the
+   * key proves the account works, the adapter row proves someone accepted the terms and set the limits — a
+   * working key alone never enables an integration (ENGINEERING_SPEC §6).
+   */
+  private async discoveryAvailability(): Promise<{ adapter: TicketmasterDiscoveryAdapter; dailyCallLimit: number | null } | null> {
+    if (!this.env.TICKETMASTER_DISCOVERY_ENABLED || !this.env.TICKETMASTER_DISCOVERY_API_KEY) return null;
+    const [cfg] = await this.db.select().from(t.adapterConfigs).where(eq(t.adapterConfigs.sourceId, DISCOVERY_SOURCE_ID));
+    if (!cfg?.enabled || cfg.implementation !== 'ticketmaster_discovery') return null;
+    return { adapter: new TicketmasterDiscoveryAdapter(this.env.TICKETMASTER_DISCOVERY_API_KEY, true, this.deps.discoveryFetch ?? fetch), dailyCallLimit: cfg.dailyCallLimit };
+  }
+
+  /** The date window the provider is asked about: the customer's date when we have one, otherwise the next 90 days. */
+  private discoveryWindow(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null }): { start: string; end: string } {
+    const day = (iso: string, deltaDays: number) => {
+      const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+      const dt = new Date(Date.UTC(y, m - 1, d + deltaDays));
+      return toIsoDate(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+    };
+    let from: string | null = x.resolvedLocalDate;
+    let to: string | null = x.resolvedLocalDate;
+    if (!from && x.dateExpression) {
+      const win = monthWindowFor(x.dateExpression, ctx.receivedAt);
+      if (win) [from, to] = [win.from, win.to];
+      else {
+        // "tonight" needs a zone to be a date; the pilot's venues are all in one, and a wrong guess only
+        // widens the window by a day either side, it never binds an event.
+        const r = resolveRelativeDate(x.dateExpression, ctx.receivedAt, ctx.venueTimeZone ?? 'America/New_York');
+        if (r.kind === 'resolved') [from, to] = [r.localDate, r.localDate];
+      }
+    }
+    if (from && to) return { start: `${day(from, -1)}T00:00:00Z`, end: `${day(to, 1)}T23:59:59Z` };
+    const today = toIsoDate(ctx.receivedAt.getUTCFullYear(), ctx.receivedAt.getUTCMonth() + 1, ctx.receivedAt.getUTCDate());
+    return { start: `${today}T00:00:00Z`, end: `${day(today, 90)}T23:59:59Z` };
+  }
+
+  /**
+   * Local catalog first; when it has nothing for this name, ask the provider once and look again. A provider
+   * failure never fails the request — it is recorded and the customer gets the honest "not on file" answer.
+   */
+  async resolveEventWithDiscovery(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
+    const local = await this.resolveEvent(x);
+    if (local.kind !== 'no_match' || local.reason === 'no_performer') return local;
+    const discovery = await this.discoveryAvailability();
+    if (!discovery) return local;
+    const win = this.discoveryWindow(x, ctx);
+    const keyword = x.performerOrTeam ?? x.eventName ?? '';
+    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword, city: x.city, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now() });
+    await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
+    if (sync.status !== 'success' && sync.status !== 'skipped_fresh') return local; // provider trouble: say what we have, not what we could not check
+    const again = await this.resolveEvent(x);
+    if (again.kind === 'no_match' && again.reason !== 'no_performer') return { kind: 'no_match', reason: 'discovery_no_results' };
+    return again;
   }
 
   // ---------------------------------------------------------------------------------------------
