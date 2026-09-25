@@ -102,7 +102,7 @@ export function detailFromWebhookPayload(payload: unknown): ReceivedEmailDetail 
  * `message` are surfaced, bounded — never the email body, headers or any credential. A bare status code
  * cannot distinguish a restricted key from a wrong id, which cost a day of guessing once.
  */
-async function providerErrorDetail(res: Response): Promise<string> {
+export async function providerErrorDetail(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { name?: unknown; error?: unknown; message?: unknown };
     const name = typeof body.name === 'string' ? body.name : typeof body.error === 'string' ? body.error : null;

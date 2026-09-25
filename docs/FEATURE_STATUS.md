@@ -14,7 +14,8 @@ Legend — **Real**: implemented and exercised against the real dependency. **Fi
 | Any live listing/quote adapter (StubHub, Ticket Evolution, TicketNetwork, SeatGeek…) | Blocked | No access rights; manual evidence path covers the pilot |
 | Manual evidence entry with completeness flags | Manual | `/admin/requests/:id` form → `approved_manual` observations join the comparison |
 | Resend webhook (Svix signature on raw bytes, dedupe, transactional outbox) | Real (unit) / Blocked (staging) | Signature math tested; real provider payload/field names unverified until a staging account exists |
-| Resend retrieval + bounded attachment download + normalizer | Blocked | Coded to documented API; not exercised against a live account |
+| Resend retrieval + bounded attachment download + normalizer | Real | Retrieval by id exercised live in production; first end-to-end reply sent 2026-09-24 |
+| Inbound reconciliation sweep (`scripts/reconcile-resend.ts`) | Real (unit) / Blocked (list shape) | Queues provider-listed mail that never became an inbound event; parser fails loudly on an unrecognised list response until the live shape has been seen |
 | Local inbound simulator (normalized contract) | Real | CLI + admin form (fixture mode only) |
 | Auto-response suppression, thread authorization, quoted-content stripping | Real | A20/A21/A04 tests |
 | Attachment validation (magic bytes, dimensions, pixel bomb, SVG/HTML/PDF rejection), db media with budget | Real | A22/A44/A45 tests; sharp installed but re-encode/resize not yet wired (validation is decoder-free) |
