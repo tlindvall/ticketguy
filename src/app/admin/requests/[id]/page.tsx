@@ -9,6 +9,9 @@ import { JsonForm } from '@/components/JsonForm';
 import { formatUsd } from '@/lib/domain/money';
 import type { AdvicePacket } from '@/lib/advice/packet';
 import { newIdempotencyKey } from '@/lib/util/clock';
+import { sourcePlan } from '@/lib/sources/routing';
+import { researchLinksFor } from '@/lib/catalog/research-links';
+import { eventLocalDate } from '@/lib/domain/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +40,15 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const spend = await db.select().from(t.usageLedger).where(eq(t.usageLedger.requestId, id));
   const spendUsd = spend.reduce((s, r) => s + (r.kind === 'released' ? -r.estimatedUsdMicros : r.estimatedUsdMicros), 0) / 1e6;
   const packet = advice[0]?.packet as unknown as AdvicePacket | undefined;
+  // Sources the routing policy requires for this event that have no enabled adapter: those are a person's job
+  // until approved access exists, so they are listed with a link to check by hand.
+  const adapterRows = event ? await db.select().from(t.adapterConfigs) : [];
+  const enabledSources = new Set(adapterRows.filter((a) => a.enabled && a.implementation !== 'not_integrated').map((a) => a.sourceId));
+  const mappings = event ? await db.select().from(t.eventSourceMappings).where(eq(t.eventSourceMappings.eventId, event.e.id)) : [];
+  const officialUrls = Object.fromEntries(mappings.filter((m) => m.authoritativeUrl).map((m) => [m.sourceId, m.authoritativeUrl!]));
+  const plan = event ? sourcePlan(event.e.category) : { required: [], conditional: [] };
+  const manualSources = plan.required.filter((sid) => !enabledSources.has(sid));
+  const researchLinks = event ? researchLinksFor({ sourceIds: manualSources, eventName: event.e.name, localDate: eventLocalDate(event.e.localStartAt, event.v.timezone), officialUrls }) : [];
   const brief = versions[0]?.brief as Record<string, unknown> | undefined;
 
   return (
@@ -87,6 +99,21 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
           </table>
         ) : <p className="text-sm text-gray-600">No research run yet.</p>}
         {req.eventId ? <div className="mt-2"><ActionButton url={`/api/admin/requests/${id}/research`} body={{ expectedRevision: req.currentRevision, idempotencyKey: newIdempotencyKey() }} label="Re-run research" /></div> : null}
+        {researchLinks.length ? (
+          <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-3">
+            <h3 className="text-sm font-semibold text-amber-900">Manual research — {researchLinks.length} required source{researchLinks.length === 1 ? '' : 's'} with no approved adapter</h3>
+            <p className="mt-1 text-xs text-amber-900">These open the seller&rsquo;s own site for you to check by hand. Nothing is fetched by the system. Record what you find with the manual-observation form below, with the exact listing URL and every fee you saw.</p>
+            <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
+              {researchLinks.map((l) => (
+                <li key={l.sourceId}>
+                  <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{l.name}</a>
+                  {' '}<span className={`tg-badge ${l.kind === 'official_event_page' ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{l.kind === 'official_event_page' ? 'official event page' : 'search'}</span>
+                  {l.note ? <span className="ml-1 text-xs text-gray-600">{l.note}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </section>
 
       <section>

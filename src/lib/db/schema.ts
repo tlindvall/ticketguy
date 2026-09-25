@@ -308,6 +308,8 @@ export const venues = pgTable('venues', {
   country: text('country').notNull().default('US'),
   timezone: text('timezone').notNull(),
   layoutVersion: text('layout_version'),
+  /** Provider ids this venue is known by, e.g. { ticketmaster: 'KovZpZA7AAEA' }. Never matched on display name alone. */
+  externalIds: jsonb('external_ids').$type<Record<string, string>>().notNull().default({}),
   createdAt: createdAt(),
 });
 
@@ -319,6 +321,8 @@ export const entities = pgTable('entities', {
   aliases: jsonb('aliases').$type<string[]>().notNull().default([]),
   league: text('league'),
   homeVenueId: uuid('home_venue_id').references(() => venues.id),
+  /** Provider ids this performer/team is known by, e.g. { ticketmaster: 'K8vZ9171o-7' }. */
+  externalIds: jsonb('external_ids').$type<Record<string, string>>().notNull().default({}),
   createdAt: createdAt(),
 });
 
@@ -342,6 +346,27 @@ export const events = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('events_venue_start_idx').on(t.venueId, t.localStartAt), index('events_entity_idx').on(t.primaryEntityId)],
+);
+
+/**
+ * One row per discovery call made to build the catalog. It is the freshness record (do not ask the provider
+ * the same question twice in an hour) and the daily call counter the provider's quota is enforced against.
+ */
+export const catalogSyncs = pgTable(
+  'catalog_syncs',
+  {
+    id: id(),
+    sourceId: text('source_id').notNull(),
+    keywordNormalized: text('keyword_normalized').notNull(),
+    city: text('city'),
+    windowFrom: text('window_from'),
+    windowTo: text('window_to'),
+    status: text('status').notNull(), // SourceStatus
+    eventCount: integer('event_count').notNull().default(0),
+    trigger: text('trigger').notNull(), // interpret | prewarm | manual
+    syncedAt: createdAt(),
+  },
+  (t) => [index('catalog_syncs_lookup_idx').on(t.sourceId, t.keywordNormalized, t.syncedAt), index('catalog_syncs_day_idx').on(t.sourceId, t.syncedAt)],
 );
 
 export const eventSourceMappings = pgTable(
@@ -1054,7 +1079,7 @@ export const schema = {
   user, session, account, verification, twoFactor,
   contacts, contactPreferences, conversations, messages, mediaObjects, attachments,
   requests, requestVersions, requestTransitions,
-  venues, entities, events, eventSourceMappings,
+  venues, entities, events, eventSourceMappings, catalogSyncs,
   sourceRegistry, adapterConfigs, researchRuns, sourceChecks, offers, offerObservations,
   recommendations, watches, watchAlerts,
   interestTaxonomy, interestObservations, contactInterests, marketingPermissions, suppressions,

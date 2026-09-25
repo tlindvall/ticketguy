@@ -97,3 +97,27 @@ export function eventLocalDate(startAt: Date, timeZone: string): string {
 export function minutesBetween(a: Date, b: Date): number {
   return Math.round((b.getTime() - a.getTime()) / 60_000);
 }
+
+/**
+ * The instant at which a venue's local wall-clock time occurs. Discovery gives most events a start instant,
+ * but a time-to-be-announced event has only a local date; this turns that into a comparable instant without
+ * a timezone library, by guessing UTC and correcting by the zone's offset at that guess (two passes cover a
+ * DST edge). It is only ever used for ordering and windowing, never shown as the event time.
+ */
+export function localToInstant(localDate: string, localTime: string, timeZone: string): Date {
+  const [y, m, d] = localDate.split('-').map(Number) as [number, number, number];
+  const [hh, mm] = localTime.split(':').map(Number) as [number, number];
+  let guess = Date.UTC(y, m - 1, d, hh, mm ?? 0);
+  for (let pass = 0; pass < 2; pass += 1) {
+    const p = localDateParts(new Date(guess), timeZone);
+    const seen = Date.UTC(p.y, p.m - 1, p.d, p.hour, minuteInZone(new Date(guess), timeZone));
+    const want = Date.UTC(y, m - 1, d, hh, mm ?? 0);
+    guess += want - seen;
+  }
+  return new Date(guess);
+}
+
+function minuteInZone(instant: Date, timeZone: string): number {
+  const s = new Intl.DateTimeFormat('en-US', { timeZone, minute: '2-digit', hour12: false }).format(instant);
+  return Number(s) || 0;
+}

@@ -105,11 +105,16 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
   async revalidate(_offerId: string, _input: SearchInput): Promise<SourceResult> {
     return result(this.sourceId, 'not_supported', 'discovery_is_not_listing_level', []);
   }
-  /** Bounded discovery call (US only). Returns candidate events with official URLs; price ranges are dropped deliberately. */
-  async discoverEvents(q: { keyword: string; city?: string | null; stateCode?: string | null; startDateTime?: string | null; endDateTime?: string | null }): Promise<{ status: SourceStatus; events: Array<{ providerEventId: string; name: string; url: string; localDate: string | null; localTime: string | null; venueName: string | null; timezone: string | null }> }> {
+  /**
+   * Bounded discovery call (US only). Returns candidate events with the data the catalog needs to make a
+   * canonical event of each one — performers, venue with IANA timezone, start instant, sale status and
+   * classification. Price ranges are dropped deliberately: Discovery is event-level, and an event's price
+   * range is not a purchasable offer (A12).
+   */
+  async discoverEvents(q: DiscoveryQuery): Promise<{ status: SourceStatus; events: DiscoveredEvent[] }> {
     if (!this.enabled) return { status: 'access_not_approved', events: [] };
     if (!this.apiKey) return { status: 'not_configured', events: [] };
-    const params = new URLSearchParams({ apikey: this.apiKey, keyword: q.keyword, countryCode: 'US', size: '10', sort: 'date,asc' });
+    const params = new URLSearchParams({ apikey: this.apiKey, keyword: q.keyword, countryCode: 'US', size: String(q.size ?? 20), sort: 'date,asc' });
     if (q.city) params.set('city', q.city);
     if (q.stateCode) params.set('stateCode', q.stateCode);
     if (q.startDateTime) params.set('startDateTime', q.startDateTime);
@@ -124,22 +129,89 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
     if (res.status === 429) return { status: 'rate_limited', events: [] };
     if (res.status === 401 || res.status === 403) return { status: 'access_not_approved', events: [] };
     if (!res.ok) return { status: 'provider_error', events: [] };
-    const json = (await res.json()) as { _embedded?: { events?: Array<Record<string, unknown>> } };
-    const events = (json._embedded?.events ?? []).map((e) => {
-      const dates = (e.dates as { start?: { localDate?: string; localTime?: string }; timezone?: string } | undefined) ?? {};
-      const venues = ((e._embedded as { venues?: Array<{ name?: string }> } | undefined)?.venues ?? []) as Array<{ name?: string }>;
-      return {
-        providerEventId: String(e.id),
-        name: String(e.name ?? ''),
-        url: String(e.url ?? ''),
-        localDate: dates.start?.localDate ?? null,
-        localTime: dates.start?.localTime ?? null,
-        venueName: venues[0]?.name ?? null,
-        timezone: dates.timezone ?? null,
-      };
-    });
+    let json: { _embedded?: { events?: Array<Record<string, unknown>> } };
+    try {
+      json = (await res.json()) as typeof json;
+    } catch {
+      return { status: 'provider_error', events: [] };
+    }
+    const events = (json._embedded?.events ?? []).map(parseDiscoveryEvent).filter((e): e is DiscoveredEvent => e !== null);
     return { status: 'success', events };
   }
+}
+
+export type DiscoveryQuery = { keyword: string; city?: string | null; stateCode?: string | null; startDateTime?: string | null; endDateTime?: string | null; size?: number };
+
+export type DiscoveredAttraction = { providerId: string; name: string; url: string | null; segment: string | null; genre: string | null; subGenre: string | null };
+export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null };
+export type DiscoveredEvent = {
+  providerEventId: string;
+  name: string;
+  url: string;
+  /** Start instant when the provider gives one; null when only a local date is known (time TBA). */
+  startAt: string | null;
+  localDate: string | null;
+  localTime: string | null;
+  timeTba: boolean;
+  timezone: string | null;
+  /** Provider sale status code, lower-cased: onsale | offsale | cancelled | postponed | rescheduled | unknown. */
+  statusCode: string;
+  segment: string | null;
+  genre: string | null;
+  subGenre: string | null;
+  venue: DiscoveredVenue | null;
+  attractions: DiscoveredAttraction[];
+};
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
+
+/** Tolerant field-by-field read of one Discovery event. Anything unrecognised becomes null rather than a throw. */
+export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent | null {
+  const id = str(e.id);
+  const name = str(e.name);
+  const url = str(e.url);
+  if (!id || !name || !url) return null;
+  const dates = (e.dates ?? {}) as { start?: Record<string, unknown>; timezone?: unknown; status?: { code?: unknown } };
+  const start = dates.start ?? {};
+  const classification = (Array.isArray(e.classifications) ? (e.classifications as Array<Record<string, unknown>>) : []).find((c) => c.primary === true) ?? (Array.isArray(e.classifications) ? (e.classifications as Array<Record<string, unknown>>)[0] : undefined) ?? {};
+  const nameOf = (v: unknown) => str((v as { name?: unknown } | undefined)?.name);
+  const embedded = (e._embedded ?? {}) as { venues?: Array<Record<string, unknown>>; attractions?: Array<Record<string, unknown>> };
+  const v = embedded.venues?.[0];
+  const venue: DiscoveredVenue | null = v && str(v.id) && str(v.name)
+    ? {
+        providerId: str(v.id)!,
+        name: str(v.name)!,
+        city: nameOf(v.city),
+        stateCode: str((v.state as { stateCode?: unknown } | undefined)?.stateCode),
+        countryCode: str((v.country as { countryCode?: unknown } | undefined)?.countryCode),
+        timezone: str(v.timezone) ?? str(dates.timezone),
+      }
+    : null;
+  const attractions: DiscoveredAttraction[] = (embedded.attractions ?? [])
+    .map((a) => {
+      const aid = str(a.id);
+      const aname = str(a.name);
+      if (!aid || !aname) return null;
+      const ac = (Array.isArray(a.classifications) ? (a.classifications as Array<Record<string, unknown>>) : [])[0] ?? {};
+      return { providerId: aid, name: aname, url: str(a.url), segment: nameOf(ac.segment), genre: nameOf(ac.genre), subGenre: nameOf(ac.subGenre) };
+    })
+    .filter((a): a is DiscoveredAttraction => a !== null);
+  return {
+    providerEventId: id,
+    name,
+    url,
+    startAt: str(start.dateTime),
+    localDate: str(start.localDate),
+    localTime: str(start.localTime),
+    timeTba: start.timeTBA === true || start.noSpecificTime === true,
+    timezone: str(dates.timezone) ?? venue?.timezone ?? null,
+    statusCode: (str(dates.status?.code) ?? 'unknown').toLowerCase(),
+    segment: nameOf(classification.segment),
+    genre: nameOf(classification.genre),
+    subGenre: nameOf(classification.subGenre),
+    venue,
+    attractions,
+  };
 }
 
 export function buildAdapter(activation: AdapterActivation, deps: { fixtureOffers: Record<string, Offer[]>; fixtureBehavior?: Record<string, { status?: SourceStatus; retryAfterSeconds?: number }>; ticketmasterKey: string | null; ticketmasterEnabled: boolean; now?: () => Date }): TicketSourceAdapter {
