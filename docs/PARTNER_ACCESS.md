@@ -11,6 +11,21 @@ Read this before promising anyone a price comparison. It is the honest state of 
 
 The catalog layer is enough for the intake half of the product to work end to end: a request resolves to a real event with an official URL, the clarification email names the right game, and the review console lists exactly which sellers a person needs to check by hand. The listings layer is what turns that into a recommendation without a person in the loop, and it is gated on the agreements below.
 
+## What the 135 registry entries actually are
+
+`not_integrated` on every row is true and misleading. Classified by what it would take to get data out of each (`src/lib/sources/access.ts`, shown on `/admin/sources`):
+
+| Class | Count | What they are | What "integrating" means |
+|---|---|---|---|
+| Catalog API | 1 | Ticketmaster Discovery | Enabled below. Events, never prices. |
+| Listing API behind a partner agreement | 6 | Ticket Evolution, StubHub (+ its API entry), SeatGeek, TicketNetwork, Ticketmaster Partner | A commercial application, then a probe, then an adapter. The only rows that can ever become adapters. |
+| Listings, no API | 19 | Vivid Seats, TickPick, Gametime, AXS, viagogo, the extended resale storefronts, the fan exchanges | Manual research through the console, permanently unless they answer an email. Most overlap the same broker inventory Ticket Evolution licenses. |
+| Primary platform / seller of record | 64 | Etix, DICE, Tixr, Eventbrite, Paciolan, Tessitura, Telecharge, TodayTix, the venue engines | Never an adapter. The venue or show page is the source; the console links to it when the route calls for it. |
+| Official routing reference | 21 | nhl-ticket-exchange, nba-tickets, mlb-tickets, broadway.org, Live Nation, AEG | Says who the seller of record is. Followed by a person, not integrated. |
+| Context rule | 24 | TKTS, lotteries, rush, cardholder presales, Vet Tix, GovX, Bandsintown | A per-event policy fact recorded in the advice. There is nothing to fetch. |
+
+So the integration backlog is seven rows, not 135, and six of the seven are gated on an application only the business owner can file. Everything else is finished the day the console links exist — which they do.
+
 ## Enabling the catalog (Ticketmaster Discovery)
 
 1. Create a developer account at https://developer.ticketmaster.com and an app; copy its **Consumer Key**. Read the API terms of use — commercial use, caching and monitoring rights are the parts that matter.

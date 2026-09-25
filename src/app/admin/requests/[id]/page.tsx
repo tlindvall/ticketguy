@@ -10,7 +10,7 @@ import { formatUsd } from '@/lib/domain/money';
 import type { AdvicePacket } from '@/lib/advice/packet';
 import { newIdempotencyKey } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
-import { researchLinksFor } from '@/lib/catalog/research-links';
+import { researchLinksFor, type ResearchLink } from '@/lib/catalog/research-links';
 import { eventLocalDate } from '@/lib/domain/dates';
 
 export const dynamic = 'force-dynamic';
@@ -48,7 +48,10 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const officialUrls = Object.fromEntries(mappings.filter((m) => m.authoritativeUrl).map((m) => [m.sourceId, m.authoritativeUrl!]));
   const plan = event ? sourcePlan(event.e.category) : { required: [], conditional: [] };
   const manualSources = plan.required.filter((sid) => !enabledSources.has(sid));
-  const researchLinks = event ? researchLinksFor({ sourceIds: manualSources, eventName: event.e.name, localDate: eventLocalDate(event.e.localStartAt, event.v.timezone), officialUrls }) : [];
+  const conditionalSources = plan.conditional.filter((sid) => !enabledSources.has(sid));
+  const researchLinks = event ? researchLinksFor({ sourceIds: manualSources, conditionalSourceIds: conditionalSources, eventName: event.e.name, localDate: eventLocalDate(event.e.localStartAt, event.v.timezone), officialUrls }) : [];
+  const requiredLinks = researchLinks.filter((l) => l.role === 'required');
+  const conditionalLinks = researchLinks.filter((l) => l.role === 'conditional');
   const brief = versions[0]?.brief as Record<string, unknown> | undefined;
 
   return (
@@ -101,17 +104,15 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
         {req.eventId ? <div className="mt-2"><ActionButton url={`/api/admin/requests/${id}/research`} body={{ expectedRevision: req.currentRevision, idempotencyKey: newIdempotencyKey() }} label="Re-run research" /></div> : null}
         {researchLinks.length ? (
           <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-3">
-            <h3 className="text-sm font-semibold text-amber-900">Manual research — {researchLinks.length} required source{researchLinks.length === 1 ? '' : 's'} with no approved adapter</h3>
-            <p className="mt-1 text-xs text-amber-900">These open the seller&rsquo;s own site for you to check by hand. Nothing is fetched by the system. Record what you find with the manual-observation form below, with the exact listing URL and every fee you saw.</p>
-            <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
-              {researchLinks.map((l) => (
-                <li key={l.sourceId}>
-                  <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{l.name}</a>
-                  {' '}<span className={`tg-badge ${l.kind === 'official_event_page' ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{l.kind === 'official_event_page' ? 'official event page' : 'search'}</span>
-                  {l.note ? <span className="ml-1 text-xs text-gray-600">{l.note}</span> : null}
-                </li>
-              ))}
-            </ul>
+            <h3 className="text-sm font-semibold text-amber-900">Manual research — {requiredLinks.length} required source{requiredLinks.length === 1 ? '' : 's'} with no approved adapter{conditionalLinks.length ? `, ${conditionalLinks.length} conditional for this category` : ''}</h3>
+            <p className="mt-1 text-xs text-amber-900">These open the seller&rsquo;s own site for you to check by hand. Nothing is fetched by the system. Record what you find with the manual-observation form below, with the exact listing URL and every fee you saw. A <em>routing reference</em> tells you who the seller of record is; a <em>context rule</em> is a policy (rush, lottery, presale) to note in the advice, not a price.</p>
+            <ResearchLinkList links={requiredLinks} />
+            {conditionalLinks.length ? (
+              <>
+                <h4 className="mt-3 text-xs font-semibold uppercase tracking-wide text-amber-900">Conditional for this category — check when the route&rsquo;s note applies</h4>
+                <ResearchLinkList links={conditionalLinks} />
+              </>
+            ) : null}
           </div>
         ) : null}
       </section>
@@ -202,5 +203,29 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
         <p className="mt-2 text-xs text-gray-500">Viewing as {staff.email} ({staff.role}).</p>
       </section>
     </main>
+  );
+}
+
+const ACCESS_BADGE: Record<ResearchLink['access'], string | null> = {
+  catalog_api: null,
+  listing_api_partner: null,
+  listing_no_api: null,
+  primary_platform: 'seller of record',
+  routing_reference: 'routing reference',
+  context_rule: 'context rule',
+};
+
+function ResearchLinkList({ links }: { links: ResearchLink[] }) {
+  return (
+    <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
+      {links.map((l) => (
+        <li key={l.sourceId}>
+          <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{l.name}</a>
+          {' '}<span className={`tg-badge ${l.kind === 'official_event_page' ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{l.kind === 'official_event_page' ? 'official event page' : 'search'}</span>
+          {ACCESS_BADGE[l.access] ? <span className="tg-badge tg-badge-muted ml-1">{ACCESS_BADGE[l.access]}</span> : null}
+          {l.note ? <span className="ml-1 text-xs text-gray-600">{l.note}</span> : null}
+        </li>
+      ))}
+    </ul>
   );
 }
