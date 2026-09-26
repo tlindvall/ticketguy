@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { launchState, pilotScopeLabels } from '@/lib/config/launch';
+import { launchState } from '@/lib/config/launch';
 
 /**
  * The public page invites strangers to email only when a stranger would get a reply. The home page used
@@ -16,10 +16,5 @@ describe('public launch state', () => {
     expect(launchState({ ...live, EMAIL_TEST_RECIPIENT_ALLOWLIST: ['staff@example.test'] })).toBe('coming_soon');
     expect(launchState({ ...live, EMAIL_SEND_ENABLED: false })).toBe('coming_soon');
     expect(launchState({ ...live, APP_MODE: 'fixture' })).toBe('coming_soon');
-  });
-
-  it('labels the pilot scope for public copy', () => {
-    expect(pilotScopeLabels({ pilotSupportedCategories: ['concert', 'nhl', 'nba', 'mlb'], pilotSupportedMarkets: ['new-york'] })).toEqual({ categories: ['Concerts', 'NHL', 'NBA', 'MLB'], markets: ['New York'] });
-    expect(pilotScopeLabels({ pilotSupportedCategories: ['motorsport'], pilotSupportedMarkets: ['los-angeles'] })).toEqual({ categories: ['Motorsport'], markets: ['Los Angeles'] });
   });
 });

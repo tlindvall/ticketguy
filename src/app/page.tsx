@@ -1,22 +1,21 @@
 import type { Metadata } from 'next';
 import { env } from '@/lib/config/env';
-import { launchState, pilotScopeLabels } from '@/lib/config/launch';
-import { ComingSoon } from '@/components/public/ComingSoon';
-import { LiveHome } from '@/components/public/LiveHome';
+import { launchState } from '@/lib/config/launch';
+import { Landing } from '@/components/public/Landing';
 
 export const dynamic = 'force-dynamic';
 
 export function generateMetadata(): Metadata {
-  if (launchState(env()) === 'live') return {};
+  const live = launchState(env()) === 'live';
   return {
-    title: 'Ticket Guy — coming soon',
-    description: 'A ticket guy you can trust. We check the sellers, compare the real total with fees, and send you straight to the best ticket. You buy direct from the seller.',
+    title: 'Ticket Guy — Good tickets. Better advice.',
+    description: live
+      ? 'Independent advice for sports, concerts and shows across the US. Email a link, a screenshot or your plans.'
+      : 'Ticket Guy is coming soon. Independent advice for sports, concerts and shows across the US. Email for early access.',
   };
 }
 
 export default function Home() {
   const e = env();
-  if (launchState(e) === 'live') return <LiveHome />;
-  const scope = pilotScopeLabels(e);
-  return <ComingSoon address={e.CONCIERGE_INBOUND_ADDRESS} categories={scope.categories} markets={scope.markets} />;
+  return <Landing state={launchState(e)} address={e.CONCIERGE_INBOUND_ADDRESS} />;
 }
