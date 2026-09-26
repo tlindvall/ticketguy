@@ -10,6 +10,7 @@
  *
  * Credentials are read from the environment under the names below. Nothing here is enabled or stored;
  * the adapter row, approval evidence and limits are still entered in /admin/sources afterwards.
+ * For SeatGeek set PROBE_SEATGEEK_CLIENT_ID and, optionally, PROBE_SEATGEEK_CLIENT_SECRET.
  */
 const TARGETS: Record<string, { envKey: string; url: string; headers: (secret: string) => Record<string, string>; docs: string }> = {
   stubhub: {
@@ -26,7 +27,9 @@ const TARGETS: Record<string, { envKey: string; url: string; headers: (secret: s
   },
   seatgeek: {
     envKey: 'PROBE_SEATGEEK_CLIENT_ID',
-    url: 'https://api.seatgeek.com/2/events?q=Rangers&per_page=1',
+    // A named performer, not a free-text query: "Rangers" also matches Texas. Three events so an empty `stats`
+    // on one unlisted game is not mistaken for the account tier withholding the field.
+    url: 'https://api.seatgeek.com/2/events?performers.slug=new-york-rangers&per_page=3',
     headers: () => ({ accept: 'application/json' }),
     docs: 'https://platform.seatgeek.com/',
   },
@@ -46,8 +49,11 @@ if (!secret) {
   process.exit(1);
 }
 const credential: string = secret;
-const url = name === 'seatgeek' ? `${target.url}&client_id=${encodeURIComponent(credential)}` : target.url;
-console.log(`[probe] GET ${url.replace(credential, '<redacted>')}`);
+// SeatGeek authenticates by query parameter; the secret is optional there and sent only when provided.
+const sgSecret = name === 'seatgeek' ? process.env.PROBE_SEATGEEK_CLIENT_SECRET : undefined;
+const url = name === 'seatgeek' ? `${target.url}&client_id=${encodeURIComponent(credential)}${sgSecret ? `&client_secret=${encodeURIComponent(sgSecret)}` : ''}` : target.url;
+const redact = (u: string) => [credential, sgSecret].reduce<string>((acc, v) => (v ? acc.split(encodeURIComponent(v)).join('<redacted>').split(v).join('<redacted>') : acc), u);
+console.log(`[probe] GET ${redact(url)}${sgSecret ? ' (client_secret sent)' : ''}`);
 let res: Response;
 try {
   res = await fetch(url, { headers: target.headers(credential), signal: AbortSignal.timeout(15_000) });
@@ -82,4 +88,14 @@ const first = list[0] as Record<string, unknown> | undefined;
 if (first) {
   console.log(`[probe] first item keys: ${Object.keys(first).sort().join(', ')}`);
   for (const [k, v] of Object.entries(first)) if (v && typeof v === 'object' && !Array.isArray(v)) console.log(`[probe]   ${k} keys: ${Object.keys(v as object).sort().join(', ')}`);
+}
+// Whether price and inventory fields are populated decides what the source can ever feed: keys alone cannot tell
+// a withheld field from an empty one. Types only (number / null / string), never the values.
+const typeOf = (v: unknown) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+for (const [i, item] of list.slice(0, 3).entries()) {
+  const r = (item ?? {}) as Record<string, unknown>;
+  const stats = r.stats as Record<string, unknown> | undefined;
+  if (stats && typeof stats === 'object') {
+    console.log(`[probe] item ${i + 1} stats: ${Object.entries(stats).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${typeOf(v)}`).join(', ')}`);
+  }
 }
