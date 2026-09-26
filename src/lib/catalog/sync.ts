@@ -97,6 +97,18 @@ export function subtypeFor(e: { name: string; timeTba: boolean }): string | null
   return null;
 }
 
+/**
+ * Events filed under a team that are not one of its games: alumni games, fan fests, open practices, watch
+ * parties. Asked for "Rangers tickets next week", a November alumni night is not an answer, so resolution
+ * leaves these out unless the customer's own words name them. Deliberately narrow — "tour" or "experience"
+ * would also catch concerts and premium seats — and applied to teams only.
+ */
+export const NON_GAME_PATTERN = /\b(alumni|fan\s?fest|fanfest|watch party|viewing party|open practice|practice|skills (?:competition|challenge)|clinic|camp|draft party|gala|luncheon|autograph)\b/i;
+
+export function isNonGameName(name: string): boolean {
+  return NON_GAME_PATTERN.test(name);
+}
+
 /** Subtypes that are never what a customer means by "tickets to the game". */
 export const NON_ADMISSION_SUBTYPES: readonly string[] = ['parking', 'package'];
 

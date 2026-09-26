@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="80" height="64" viewBox="0 0 80 64" role="img" aria-label="Ticket Guy">
+<g transform="rotate(-8 40 32)">
+<path d="M8 10H72V21C59 21 59 43 72 43V54H8V43C21 43 21 21 8 21Z" fill="#d7f36b" stroke="#142438" stroke-width="4" stroke-linejoin="round"/>
+<ellipse cx="32" cy="32" rx="6" ry="10" fill="#142438"/><ellipse cx="49" cy="32" rx="6" ry="10" fill="#142438"/>
+<ellipse cx="34" cy="28" rx="2" ry="4" fill="#fff"/><ellipse cx="51" cy="28" rx="2" ry="4" fill="#fff"/>
+</g></svg>
