@@ -76,15 +76,24 @@ describe('override wiring', () => {
     expect(r.text).toContain("we're checking options for the Rangers game");
   });
 
-  it('uses staff copy when a slot is overridden, and still appends the footer', () => {
+  it('uses staff copy when a slot is overridden, and still appends the disclosure', () => {
     const r = renderTemplate('acknowledgment', { eventLabel: 'the Rangers game', knownFacts: [] }, {
       ...ctx,
       overrides: { acknowledgment: { slot: 'acknowledgment', subject: null, body: 'On it for {{eventLabel}}.', signature: '— Tobias\nTicket Guy', version: 3 } },
     });
     expect(r.text).toContain('On it for the Rangers game.');
     expect(r.text).toContain('— Tobias');
-    expect(r.text).toContain(FOOTER);
-    expect(r.html).toContain(FOOTER.replace(/ /g, ' '));
+    // An acknowledgment goes out automatically, so it may not claim a person reviewed it.
+    expect(r.text).toContain('AI-assisted ticket advice.');
+    expect(r.text).not.toContain('human-reviewed');
+    expect(r.html).toContain('AI-assisted ticket advice.');
+  });
+
+  it('keeps the human-reviewed disclosure for messages a person approved', () => {
+    const rec = renderTemplate('raw', { text: 'evidence-backed copy', html: '<p>evidence-backed copy</p>' }, ctx);
+    expect(rec.text).toContain(FOOTER);
+    const alert = renderTemplate('watch_alert', { quantity: 2, section: '112', totalCents: 30000, observedAt: 'now', url: 'https://x.test/o' }, ctx);
+    expect(alert.text).toContain(FOOTER);
   });
 
   it('never overrides the recommendation body', () => {

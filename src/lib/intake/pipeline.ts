@@ -14,14 +14,14 @@ import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCa
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { eventLocalDate, monthWindowFor, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { dateWindowFor, eventLocalDate, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
 import { classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppression';
 import { sourcePlan } from '@/lib/sources/routing';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
-import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
+import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -296,7 +296,11 @@ export class Concierge {
     const resolution = await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
     const eventResolved = resolution.kind === 'resolved';
     const missing = missingMandatoryFields(merged, { eventResolved });
-    const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...merged.ambiguities];
+    // "next week" is a window the resolver now reads; a model that still flags it as an unsupported date
+    // expression should not cost the customer a question about it.
+    const dateWindowKnown = !!merged.dateExpression && !!dateWindowFor(merged.dateExpression, msg.receivedAt, venueTz ?? 'America/New_York');
+    const ambiguities = merged.ambiguities.filter((a) => !(dateWindowKnown && a === 'date_unsupported_expression'));
+    const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities];
 
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: unresolved, createdBy: 'system' });
     await this.db.update(t.requests).set({ currentRevision: revision, eventId: eventResolved ? resolution.event.id : null, category: eventResolved ? resolution.event.category : req.category, mode: merged.intent === 'watch_request' ? 'keep_looking' : merged.submittedUrls.length ? 'beat_offer' : 'find_options', updatedAt: now, deadlineAt: merged.decisionDeadline ? new Date(merged.decisionDeadline) : req.deadlineAt }).where(eq(t.requests.id, req.id));
@@ -324,16 +328,21 @@ export class Concierge {
         await this.transition(req.id, 'manual_attention', 'clarification_limit_reached');
         return { state: 'manual_attention', revision, extraction: merged };
       }
-      const qMissing = [...missing];
-      if (resolution.kind === 'ambiguous') qMissing.unshift('event');
-      if (merged.ambiguities.includes('date_near_midnight') && !qMissing.includes('event')) qMissing.unshift('event');
-      if (!contact!.countryConfirmed && qMissing.length < 3) qMissing.push('country');
-      const questions = clarificationQuestions([...new Set(qMissing)], merged);
+      // The question that decides the event comes first and is built from the filtered candidates, never a
+      // dump of them. The extractor's ambiguities are asked too: they are why this clarification exists, and
+      // they used to trigger it without ever reaching the email.
+      const eventQuestion = resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
+      const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')));
+      if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
+      const questions = [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
+      // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
+      // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
+      const countryCheck = !contact!.countryConfirmed && count === 1;
       const knownFacts = describeKnown(merged);
-      const eventNote = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : resolution.kind === 'ambiguous' ? `We found ${resolution.candidates.length} possible matches: ${resolution.candidates.map((c) => c.label).join('; ')}.` : null;
+      const eventNote = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { knownFacts, questions, eventNote }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, countryCheck, knownFacts }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -408,7 +417,7 @@ export class Concierge {
     const kw = performerOrTeam.trim().toLowerCase();
     if (!kw) return [];
     const like = `%${kw}%`;
-    return this.db
+    const rows = await this.db
       .select()
       .from(t.entities)
       .where(sql`lower(${t.entities.name}) = ${kw}
@@ -416,9 +425,13 @@ export class Concierge {
         or lower(${t.entities.name}) like ${like}`)
       .orderBy(asc(t.entities.name))
       .limit(10);
+    // An exact name or nickname beats a name that merely contains the word: "rangers" is the New York and the
+    // Texas Rangers, not also "New York Rangers Alumni". Containment is the fallback when nothing is exact.
+    const exact = rows.filter((r) => r.name.toLowerCase() === kw || (r.aliases ?? []).some((a) => a.toLowerCase() === kw));
+    return exact.length ? exact : rows;
   }
 
-  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: Array<{ id: string; label: string }> } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
+  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     const entities = await this.matchEntities(x.performerOrTeam);
     // Not on file at all is a different fact from on file with nothing scheduled, and the customer is told
@@ -426,20 +439,22 @@ export class Concierge {
     if (entities.length === 0) return { kind: 'no_match', reason: 'unknown_performer' };
     const now = this.now();
 
-    const windowFilter = (rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>) => {
+    const asked = [x.performerOrTeam, x.eventName, x.dateExpression].filter(Boolean).join(' ');
+    const windowFilter = (rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, isTeam: boolean) => {
       let cands = rows.filter(({ e }) => !e.subtype || !NON_ADMISSION_SUBTYPES.includes(e.subtype)); // parking and packages are not "tickets to the game"
+      if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
       if (x.resolvedLocalDate) {
         cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
       } else if (x.dateExpression) {
-        // A month named without a day still rules events out. Ignoring it let a request for November
-        // bind silently to the only October event on file, and every downstream claim inherited that event.
-        const win = monthWindowFor(x.dateExpression, now);
-        if (win) {
-          cands = cands.filter(({ e, v }) => {
-            const d = eventLocalDate(e.localStartAt, v.timezone);
-            return d >= win.from && d <= win.to;
-          });
-        }
+        // A month or week named without a day still rules events out. Ignoring "next week" offered a November
+        // alumni night to someone asking in September; ignoring a month once bound a November request to the
+        // only October event on file. The window is read in each venue's own timezone.
+        cands = cands.filter(({ e, v }) => {
+          const win = dateWindowFor(x.dateExpression!, now, v.timezone);
+          if (!win) return true;
+          const d = eventLocalDate(e.localStartAt, v.timezone);
+          return d >= win.from && d <= win.to;
+        });
       }
       if (x.city) cands = cands.filter(({ v }) => (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
       return cands;
@@ -450,16 +465,16 @@ export class Concierge {
     const perEntity: Array<{ entity: typeof t.entities.$inferSelect; cands: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }> }> = [];
     for (const entity of entities) {
       const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
-      perEntity.push({ entity, cands: windowFilter(rows) });
+      perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team') });
     }
     const withEvents = perEntity.filter((p) => p.cands.length > 0);
     if (withEvents.length === 0) return { kind: 'no_match', reason: 'no_scheduled_event' };
     if (withEvents.length > 1) {
       // Two different teams both have a game in the window: name them, one candidate each.
-      return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => ({ id: cands[0]!.e.id, label: `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}` })) };
+      return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => candidateFrom(entity, cands[0]!.e, cands[0]!.v, `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}`)) };
     }
     const { entity, cands } = withEvents[0]!;
-    if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => ({ id: e.id, label: eventLabel(e, v) })) };
+    if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
     return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist' };
@@ -487,7 +502,7 @@ export class Concierge {
     let from: string | null = x.resolvedLocalDate;
     let to: string | null = x.resolvedLocalDate;
     if (!from && x.dateExpression) {
-      const win = monthWindowFor(x.dateExpression, ctx.receivedAt);
+      const win = dateWindowFor(x.dateExpression, ctx.receivedAt, ctx.venueTimeZone ?? 'America/New_York');
       if (win) [from, to] = [win.from, win.to];
       else {
         // "tonight" needs a zone to be a date; the pilot's venues are all in one, and a wrong guess only
@@ -738,7 +753,11 @@ export class Concierge {
   async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean }> {
     // Loaded per send, never cached: staff copy must take effect at the next send, like the kill switches.
     const overrides = await loadActiveTemplates(this.db);
-    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides });
+    // The full signature introduces us once per conversation; after that a thread signs "— Ticket Guy".
+    // Blocked and suppressed intents never reached the customer, so they do not count as the introduction.
+    const [prior] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, a.conversationId), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
+    const signature = (prior?.n ?? 0) === 0 ? 'full' : 'short';
+    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature });
     const headers: Record<string, string> = { 'Reply-To': this.env.CONCIERGE_FROM_ADDRESS };
     if (a.inReplyTo) {
       headers['In-Reply-To'] = a.inReplyTo;
@@ -917,6 +936,53 @@ export function sha(s: string): string {
 export function reSubject(original: string | null, fallback: string): string {
   if (original && original.trim()) return /^re:/i.test(original.trim()) ? original.trim() : `Re: ${original.trim()}`;
   return fallback;
+}
+
+/** A possible match offered back to the customer: enough to ask the one question that separates them. */
+export type EventCandidate = { id: string; label: string; entityName: string; league: string | null; name: string; venueName: string; isHome: boolean | null; when: string };
+
+function candidateFrom(entity: { name: string; league: string | null }, e: { id: string; name: string; localStartAt: Date; isHome: boolean | null }, v: { name: string; timezone: string }, label: string): EventCandidate {
+  const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt);
+  return { id: e.id, label, entityName: entity.name, league: entity.league, name: e.name, venueName: v.name, isHome: e.isHome, when };
+}
+
+/**
+ * The single question that separates the candidates, asked the way a person would. Two teams → which team.
+ * Home and away games in the window → home at the venue, or would they travel. A few games → name them. More
+ * than that → ask for the date. It never lists more than three events and never claims availability.
+ */
+export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtraction): string {
+  const who = x.performerOrTeam ? titleCaseName(x.performerOrTeam) : null;
+  const teams = [...new Map(cands.map((c) => [c.entityName, c])).values()];
+  if (teams.length > 1) {
+    const names = teams.map((c) => `the ${c.entityName}${c.league ? ` (${c.league})` : ''}`);
+    return `Which ${who ?? 'one'} do you mean: ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}?`;
+  }
+  const home = cands.filter((c) => c.isHome === true);
+  const away = cands.filter((c) => c.isHome === false);
+  if (home.length && away.length) return `Are you looking for a home game at ${home[0]!.venueName}, or are away games an option? Send a date or ticket link if you have one.`;
+  if (cands.length <= 3) {
+    const games = cands.map((c) => `${c.when} (${c.name})`);
+    return `Which game: ${games.slice(0, -1).join(', ')} or ${games[games.length - 1]}?`;
+  }
+  return 'Which date are you looking at? Send a date or ticket link if you have one.';
+}
+
+const QTY_WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+
+/** One sentence playing back the request — "Two Rangers tickets next week, up to $200 total—got it." */
+export function acknowledgementLine(x: RequestExtraction): string {
+  const who = x.performerOrTeam ? titleCaseName(x.performerOrTeam) : null;
+  const n = x.quantity;
+  if (!who && !n) return 'Thanks for getting in touch.';
+  const count = n ? (QTY_WORDS[n] ?? String(n)) : null;
+  const noun = n === 1 ? 'ticket' : 'tickets';
+  let line = [count, who, noun].filter(Boolean).join(' ');
+  line = line[0]!.toUpperCase() + line.slice(1);
+  if (x.togetherRequired) line += ' together';
+  if (x.dateExpression && !/^\d{4}-\d{2}-\d{2}$/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
+  if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
+  return `${line}—got it.`;
 }
 
 export function eventLabel(e: { name: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }): string {

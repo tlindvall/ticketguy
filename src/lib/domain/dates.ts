@@ -121,3 +121,34 @@ function minuteInZone(instant: Date, timeZone: string): number {
   const s = new Intl.DateTimeFormat('en-US', { timeZone, minute: '2-digit', hour12: false }).format(instant);
   return Number(s) || 0;
 }
+
+/**
+ * "This week", "next week" and the weekend phrases narrow the search to a span of days without picking one.
+ * Weeks run Monday to Sunday in the venue's timezone. "Next weekend" is genuinely read two ways (the coming
+ * one, or the one after), so it spans both and lets the resolver ask rather than guess. Returns the
+ * inclusive local-date window, or null when the expression names no week.
+ */
+export function weekWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
+  const e = expression.trim().toLowerCase();
+  const kind = /\bnext\s+weekend\b/.test(e) ? 'next_weekend' : /\b(?:this|the)\s+weekend\b|^weekend$|\bover the weekend\b/.test(e) ? 'this_weekend' : /\bnext\s+week\b/.test(e) ? 'next_week' : /\bthis\s+week\b|\blater this week\b/.test(e) ? 'this_week' : null;
+  if (!kind) return null;
+  const now = localDateParts(receivedAt, timeZone);
+  const dow = new Date(Date.UTC(now.y, now.m - 1, now.d)).getUTCDay(); // 0 Sunday … 6 Saturday
+  const toMonday = dow === 0 ? -6 : 1 - dow;
+  const day = (offset: number) => {
+    const t = addDaysToCalendar(now.y, now.m, now.d, offset);
+    return toIsoDate(t.y, t.m, t.d);
+  };
+  const thisSunday = toMonday + 6;
+  // The coming Friday, or today when the weekend has already started.
+  const toFriday = dow === 0 ? 0 : dow === 6 ? 0 : 5 - dow;
+  if (kind === 'this_week') return { from: day(0), to: day(thisSunday) };
+  if (kind === 'next_week') return { from: day(toMonday + 7), to: day(thisSunday + 7) };
+  if (kind === 'this_weekend') return { from: day(toFriday), to: day(dow === 0 ? 0 : thisSunday) };
+  return { from: day(toFriday), to: day((dow === 0 ? 0 : thisSunday) + 7) };
+}
+
+/** Any span a date phrase names without naming a day: a month or a week. */
+export function dateWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
+  return monthWindowFor(expression, receivedAt) ?? weekWindowFor(expression, receivedAt, timeZone);
+}

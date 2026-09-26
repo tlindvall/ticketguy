@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/types';
-import { monthWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
+import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 
 /**
@@ -66,7 +66,7 @@ function findEntity(t: string, known: ExtractionInput['knownEntities']): { entit
   return best ? { entity: best.entity, quote: best.quote } : null;
 }
 
-const DATE_EXPR = /\b((?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
+const DATE_EXPR = /\b((?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|(?:sometime |later )?(?:this|next) week(?:end)?|(?:this|the) weekend|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 function resolveMonthDay(expr: string, receivedAt: Date): string | null {
@@ -125,8 +125,8 @@ export class FixtureExtractor implements Extractor {
     if (dateExpression) {
       const md = resolveMonthDay(dateExpression, input.receivedAt);
       if (md) resolvedLocalDate = md;
-      else if (monthWindowFor(dateExpression, input.receivedAt)) {
-        // A named month narrows the search without picking a day; the resolver uses the window.
+      else if (dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York')) {
+        // A named month or week narrows the search without picking a day; the resolver uses the window.
       } else {
         const r = resolveRelativeDate(dateExpression, input.receivedAt, input.venueTimeZone);
         if (r.kind === 'resolved') {

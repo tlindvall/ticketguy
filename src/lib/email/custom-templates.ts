@@ -35,9 +35,11 @@ export const SLOTS: SlotSpec[] = [
     label: 'Clarification request',
     description: 'Asks the customer for missing details before any price research.',
     variables: [
-      { name: 'eventNote', kind: 'text', description: 'Opening line about the event, when we have one', sample: 'We found two Rangers games that week.' },
-      { name: 'knownFacts', kind: 'list', description: 'What we have so far', sample: ['4 tickets', 'Budget $600 total'] },
-      { name: 'questions', kind: 'list', description: 'The questions to ask', sample: ['Which date works?', 'Do all seats need to be together?'] },
+      { name: 'acknowledgement', kind: 'text', description: 'One sentence saying what we understood', sample: 'Two Rangers tickets next week, up to $200 total—got it.' },
+      { name: 'eventNote', kind: 'text', description: 'What we found (or did not) about the event, when there is something to say', sample: 'We don’t have a scheduled Dua Lipa event on file, so we haven’t looked at prices yet.' },
+      { name: 'questions', kind: 'list', description: 'The questions that decide it, most important first', sample: ['Are you looking for a home game at Madison Square Garden, or are away games an option?'] },
+      { name: 'countryCheck', kind: 'flag', description: 'True on the first clarification to a customer whose country is not yet confirmed', sample: true },
+      { name: 'knownFacts', kind: 'list', description: 'What we have so far, as a list (kept for existing templates)', sample: ['4 tickets', 'Budget $600 total'] },
     ],
   },
   {
@@ -230,17 +232,17 @@ What we understood:
 {{countryUnconfirmed}}One quick check: we serve US customers only — reply if you're not in the US.
 
 We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.`,
-  clarification: `{{eventNote}}
+  clarification: `Hey,
 
-Thanks — a couple of details before we check prices.
+{{acknowledgement}}
 
-What we have so far:
-{{knownFacts}}
+{{eventNote}}
 
-Could you tell us:
 {{questions}}
 
-Just reply in this thread.`,
+{{countryCheck}}One more thing, since we can only help US-based customers for now: are you based in the US?
+
+Just reply and I’ll narrow it down.`,
   unsupported: `{{reason}}
 
 We're sorry we can't help with this one yet.`,
