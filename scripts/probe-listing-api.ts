@@ -15,7 +15,12 @@
  * sandbox hosts). The probe exchanges them for an app-only token (client credentials, scope read:events) and
  * searches the catalog: per github.com/viagogo/stubhub-api-docs that is events, venues and a `min_ticket_price`,
  * not other sellers' listings — inventory, sales and webhooks are seller-account APIs.
+ * For Ticket Evolution set PROBE_TICKETEVOLUTION_TOKEN and PROBE_TICKETEVOLUTION_SECRET (PROBE_TICKETEVOLUTION_SANDBOX=1
+ * for api.sandbox.ticketevolution.com). Every request carries an X-Signature: base64 HMAC-SHA256, keyed by the secret,
+ * of "GET host/path?query" with no scheme and the query parameters in alphabetical order. After the event search the
+ * probe asks for one event's ticket groups, since those — not events — are where listing prices would be.
  */
+import { createHmac } from 'node:crypto';
 const TARGETS: Record<string, { envKey: string; url: string; headers: (secret: string) => Record<string, string>; docs: string }> = {
   stubhub: {
     envKey: 'PROBE_STUBHUB_CLIENT_ID',
@@ -26,7 +31,8 @@ const TARGETS: Record<string, { envKey: string; url: string; headers: (secret: s
   },
   'ticket-evolution': {
     envKey: 'PROBE_TICKETEVOLUTION_TOKEN',
-    url: 'https://api.ticketevolution.com/v9/events?q=Rangers&per_page=1',
+    // Parameters already in alphabetical order: the signed string must match the request exactly.
+    url: '/v9/events?per_page=3&q=Rangers',
     headers: (s) => ({ 'X-Token': s, accept: 'application/json' }),
     docs: 'https://developer.ticketevolution.com/',
   },
@@ -39,8 +45,6 @@ const TARGETS: Record<string, { envKey: string; url: string; headers: (secret: s
     docs: 'https://platform.seatgeek.com/',
   },
 };
-
-export {};
 
 const name = process.argv[2] ?? '';
 const target = TARGETS[name];
@@ -102,6 +106,25 @@ async function stubhubToken(clientId: string): Promise<string> {
   return body.access_token;
 }
 
+const tevoHost = `api.${process.env.PROBE_TICKETEVOLUTION_SANDBOX === '1' ? 'sandbox.' : ''}ticketevolution.com`;
+const tevoSecret = name === 'ticket-evolution' ? process.env.PROBE_TICKETEVOLUTION_SECRET : undefined;
+if (name === 'ticket-evolution' && !tevoSecret) {
+  console.error('[probe] PROBE_TICKETEVOLUTION_SECRET is not set. Every Ticket Evolution request must be signed with it.');
+  process.exit(1);
+}
+if (tevoSecret) hidden.push(tevoSecret);
+
+/** Sorts the query so the signed string and the sent URL cannot drift apart. */
+function tevoSigned(pathAndQuery: string, token: string, secret: string, host = tevoHost) {
+  const [path, query = ''] = pathAndQuery.split('?');
+  const sorted = new URLSearchParams(query);
+  sorted.sort();
+  const qs = sorted.toString();
+  const target = `${host}${path}${qs ? `?${qs}` : ''}`;
+  const signature = createHmac('sha256', secret).update(`GET ${target}`).digest('base64');
+  return { url: `https://${target}`, headers: { 'X-Token': token, 'X-Signature': signature, accept: 'application/json' } };
+}
+
 const bearer = name === 'stubhub' ? await stubhubToken(credential) : credential;
 // SeatGeek authenticates by query parameter; the secret is optional there and sent only when provided.
 const sgSecret = name === 'seatgeek' ? process.env.PROBE_SEATGEEK_CLIENT_SECRET : undefined;
@@ -111,12 +134,15 @@ const url =
     ? `${target.url}&client_id=${encodeURIComponent(credential)}${sgSecret ? `&client_secret=${encodeURIComponent(sgSecret)}` : ''}`
     : name === 'stubhub'
       ? `https://${sandbox ? 'sandbox.' : ''}api.stubhub.net${target.url}`
-      : target.url;
+      : name === 'ticket-evolution' && tevoSecret
+        ? tevoSigned(target.url, credential, tevoSecret).url
+        : target.url;
+const requestHeaders = name === 'ticket-evolution' && tevoSecret ? tevoSigned(target.url, credential, tevoSecret).headers : target.headers(bearer);
 const redact = (u: string) => hidden.reduce<string>((acc, v) => acc.split(encodeURIComponent(v)).join('<redacted>').split(v).join('<redacted>'), u);
 console.log(`[probe] GET ${redact(url)}${sgSecret ? ' (client_secret sent)' : ''}`);
 let res: Response;
 try {
-  res = await fetch(url, { headers: target.headers(bearer), signal: AbortSignal.timeout(15_000) });
+  res = await fetch(url, { headers: requestHeaders, signal: AbortSignal.timeout(15_000) });
 } catch (e) {
   console.log(`[probe] transport error: ${redact(e instanceof Error ? e.message : String(e))}`);
   process.exit(0);
@@ -166,5 +192,40 @@ for (const [i, item] of list.slice(0, 3).entries()) {
   if (name === 'stubhub') {
     const amount = minPrice && typeof minPrice === 'object' ? typeOf(minPrice.amount) : typeOf(minPrice);
     console.log(`[probe] item ${i + 1} min_ticket_price.amount=${amount}, currency_code=${typeOf(minPrice?.currency_code)}, status=${typeOf(r.status)}, event:webpage=${links && 'event:webpage' in links ? 'present' : 'absent'}`);
+  }
+}
+
+// Ticket Evolution: an event list says nothing about prices. One event's ticket groups decide whether the account
+// sees listing-level retail prices, which is the only thing that would make this source feed price trends.
+const firstId = (list[0] as Record<string, unknown> | undefined)?.id;
+if (name === 'ticket-evolution' && tevoSecret && (typeof firstId === 'number' || typeof firstId === 'string')) {
+  const tg = tevoSigned(`/v9/ticket_groups?event_id=${encodeURIComponent(String(firstId))}`, credential, tevoSecret);
+  console.log(`[probe] GET ${redact(tg.url)} (first event's ticket groups)`);
+  let tgRes: Response;
+  try {
+    tgRes = await fetch(tg.url, { headers: tg.headers, signal: AbortSignal.timeout(15_000) });
+  } catch (e) {
+    console.log(`[probe] transport error: ${redact(e instanceof Error ? e.message : String(e))}`);
+    process.exit(0);
+  }
+  console.log(`[probe] ticket groups HTTP ${tgRes.status}`);
+  let tgBody: Record<string, unknown> = {};
+  try {
+    tgBody = (await tgRes.json()) as Record<string, unknown>;
+  } catch {
+    console.log('[probe] ticket groups response is not JSON');
+    process.exit(0);
+  }
+  console.log(`[probe] ticket groups envelope keys: ${Object.keys(tgBody).sort().join(', ')}`);
+  if (!tgRes.ok) {
+    for (const k of ['error', 'message']) if (typeof tgBody[k] === 'string') console.log(`[probe]   ${k} = ${String(tgBody[k]).slice(0, 200)}`);
+    process.exit(0);
+  }
+  const groups = Array.isArray(tgBody.ticket_groups) ? (tgBody.ticket_groups as Record<string, unknown>[]) : [];
+  console.log(`[probe] ticket groups: ${groups.length}`);
+  if (groups[0]) console.log(`[probe] first ticket group keys: ${Object.keys(groups[0]).sort().join(', ')}`);
+  for (const [i, g] of groups.slice(0, 3).entries()) {
+    const fields = ['retail_price', 'wholesale_price', 'available_quantity', 'section', 'row', 'updated_at'];
+    console.log(`[probe] ticket group ${i + 1}: ${fields.map((f) => `${f}=${typeOf(g[f])}`).join(', ')}`);
   }
 }
