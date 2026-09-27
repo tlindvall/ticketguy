@@ -29,7 +29,8 @@ const disclosureHtml = (text: string) => `<p style="margin:16px 0 0;font-size:11
 const para = (text: string) => `<p style="margin:0 0 18px;">${esc(text)}</p>`;
 
 /** The eligibility question, asked once, on its own line rather than as one of the request questions. */
-export const COUNTRY_CHECK_LINE = 'One more thing, since we can only help US-based customers for now: are you based in the US?';
+/** A notice, not a question: nothing to answer unless it doesn't apply. The customer's own words set their country. */
+export const COUNTRY_CHECK_LINE = "Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.";
 
 /** Maps the pipeline's variables onto the names staff author against. */
 function authoringVars(slot: SlotName, v: Record<string, TemplateValue>): Record<string, TemplateValue> {

@@ -93,7 +93,7 @@ describe('end-to-end fixture flow', () => {
     // searched listings: with no integrated source that is a statement about diligence we did not do.
     expect(intent!.bodyText).toContain("We don't have a scheduled Dua Lipa event");
     expect(intent!.bodyText).not.toContain('official listings');
-    expect(intent!.bodyText).toContain('based in the US');
+    expect(intent!.bodyText).toContain("if you're outside the US, just let me know");
     expect(await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, req!.id))).toHaveLength(0);
   });
 
@@ -176,6 +176,22 @@ describe('end-to-end fixture flow', () => {
     // A US event alone does not confirm US residence.
     const [alice] = await h.db.select().from(t.contacts).where(eq(t.contacts.emailLookup, 'alice@customer.example'));
     expect(alice!.countryConfirmed).toBeNull();
+  });
+
+  it('A39b: an everyday phrase is not a country — "I\'m in a hurry" must not close a US request as US-only', async () => {
+    const c = makeConcierge(h);
+    const r = await c.ingestInbound(inbound({ text: "I'm in a hurry — two Rangers tickets Oct 3, $300 total.", from: 'gina@customer.example' }));
+    await drain(c);
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, (r as { requestId: string }).requestId));
+    expect(req!.state).not.toBe('unsupported');
+    expect(req!.countryConfirmed).toBeNull();
+    // A stated US place confirms residence, so the customer is not asked again.
+    const r2 = await c.ingestInbound(inbound({ text: "I'm in Brooklyn. Two Rangers tickets Oct 3, $300 total.", from: 'hal@customer.example' }));
+    await drain(c);
+    const [hal] = await h.db.select().from(t.contacts).where(eq(t.contacts.emailLookup, 'hal@customer.example'));
+    expect(hal!.countryConfirmed).toBe('US');
+    const [req2] = await h.db.select().from(t.requests).where(eq(t.requests.id, (r2 as { requestId: string }).requestId));
+    expect(req2!.state).not.toBe('unsupported');
   });
 
   it('A28/A29/A31/A32: opt-out via natural language, stop-all cancels watches, complaint suppresses globally', async () => {
