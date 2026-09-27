@@ -56,6 +56,8 @@ export type ReconcileOutcome = {
   known: number;
   /** Provider ids nothing accounts for. Populated in dry run and apply alike. */
   missing: string[];
+  /** When the provider says each missing message arrived, by id. Tells old pre-setup mail from a current loss. */
+  missingReceivedAt: Record<string, string | null>;
   /** Inbound events written and queued this run (0 in dry run). */
   enqueued: number;
 };
@@ -106,5 +108,5 @@ export async function reconcileReceived(db: DbOrTx, args: { apiKey: string; appl
       await audit(db, { actor: args.actor ?? 'system', action: 'inbound.reconciled', entityKind: 'inbound_event', entityId: id, diff: { providerEmailId: m.id, providerCreatedAt: m.createdAt } });
     }
   }
-  return { listed: listing.length, known: known.size, missing: missing.map((m) => m.id), enqueued };
+  return { listed: listing.length, known: known.size, missing: missing.map((m) => m.id), missingReceivedAt: Object.fromEntries(missing.map((m) => [m.id, m.createdAt])), enqueued };
 }

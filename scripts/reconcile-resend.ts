@@ -30,8 +30,16 @@ console.log(`[reconcile] mode=${apply ? 'APPLY' : 'dry run'} limit=${limit ?? 50
 try {
   const r = await reconcileReceived(db, { apiKey: e.RESEND_API_KEY, apply, limit, actor: 'script:reconcile-resend' });
   console.log(`[reconcile] provider listed ${r.listed}, already known ${r.known}, missing ${r.missing.length}, queued ${r.enqueued}`);
-  for (const id of r.missing) console.log(`  missing provider_email_id=${id}${apply ? ' → queued' : ''}`);
-  if (!apply && r.missing.length) console.log('[reconcile] re-run with --apply to queue these through the retrieval path.');
+  const now = Date.now();
+  for (const id of r.missing) {
+    const at = r.missingReceivedAt[id];
+    const age = at && !Number.isNaN(Date.parse(at)) ? ` (${((now - Date.parse(at)) / 3_600_000).toFixed(1)}h ago)` : '';
+    console.log(`  missing provider_email_id=${id} received_at=${at ?? 'unknown'}${age}${apply ? ' → queued' : ''}`);
+  }
+  if (!apply && r.missing.length) {
+    console.log('[reconcile] re-run with --apply to queue these through the retrieval path.');
+    console.log('[reconcile] each one is processed as new mail and gets the normal automatic reply, however old it is.');
+  }
   if (apply && r.enqueued) console.log('[reconcile] the dispatcher picks them up within a minute; check /admin/inbox and /admin/operations.');
 } catch (err) {
   if (err instanceof ReceivedListError) {
