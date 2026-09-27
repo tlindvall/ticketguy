@@ -62,7 +62,7 @@ describe('inbound reconciliation', () => {
     const f = fakeFetch(() => ({ status: 200, body: listing(['e-known', 'e-lost']) }));
 
     const dry = await reconcileReceived(h.db, { apiKey: 'key', apply: false, fetchImpl: f });
-    expect(dry).toEqual({ listed: 2, known: 1, missing: ['e-lost'], enqueued: 0 });
+    expect(dry).toEqual({ listed: 2, known: 1, missing: ['e-lost'], missingReceivedAt: { 'e-lost': '2026-09-24T10:00:00.000Z' }, enqueued: 0 });
     expect(await h.db.select().from(t.inboundEvents).where(eq(t.inboundEvents.providerEventId, 'reconcile:e-lost'))).toHaveLength(0);
 
     const applied = await reconcileReceived(h.db, { apiKey: 'key', apply: true, fetchImpl: f, actor: 'test' });
@@ -79,7 +79,7 @@ describe('inbound reconciliation', () => {
 
     // A second sweep sees the reconciled event as known and queues nothing more.
     const again = await reconcileReceived(h.db, { apiKey: 'key', apply: true, fetchImpl: f });
-    expect(again).toEqual({ listed: 2, known: 2, missing: [], enqueued: 0 });
+    expect(again).toEqual({ listed: 2, known: 2, missing: [], missingReceivedAt: {}, enqueued: 0 });
     expect(await h.db.select().from(t.outboxEvents).where(eq(t.outboxEvents.eventKey, 'received:reconcile:e-lost'))).toHaveLength(1);
   });
 
@@ -89,6 +89,6 @@ describe('inbound reconciliation', () => {
     const r0 = await c.ingestInbound(inbound({ provider: 'resend', providerEmailId: 'e-stored', text: 'Two tickets to the Rangers on Oct 3 please, $400 total.', from: 'carol@customer.example' }));
     expect(r0.kind).not.toBe('duplicate');
     const r = await reconcileReceived(h.db, { apiKey: 'key', apply: false, fetchImpl: fakeFetch(() => ({ status: 200, body: listing(['e-stored']) })) });
-    expect(r).toEqual({ listed: 1, known: 1, missing: [], enqueued: 0 });
+    expect(r).toEqual({ listed: 1, known: 1, missing: [], missingReceivedAt: {}, enqueued: 0 });
   });
 });
