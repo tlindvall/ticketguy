@@ -112,6 +112,21 @@ describe('still on general sale: point at the official sale', () => {
     expect(send!.bodyHtml).toContain(`href="${URL_OPEN}"`);
   });
 
+  it('a comedy show on general sale gets the drink-minimum note', async () => {
+    const COMIC = '20000000-0000-4000-8000-0000000000e2';
+    const SHOW = '30000000-0000-4000-8000-0000000000e9';
+    await h.db.insert(t.entities).values({ id: COMIC, kind: 'performer', name: 'Testy McJokes', slug: 'testy-mcjokes', aliases: [], league: null, homeVenueId: null });
+    await h.db.insert(t.events).values({ id: SHOW, name: 'Testy McJokes', category: 'comedy', venueId: ARENA, primaryEntityId: COMIC, isHome: null, localStartAt: new Date('2026-10-17T00:00:00Z'), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true, saleStatus: 'onsale', publicSaleStartAt: new Date('2026-08-01T14:00:00Z'), publicSaleEndAt: null });
+    await h.db.insert(t.eventSourceMappings).values({ eventId: SHOW, sourceId: 'ticketmaster', sourceEventId: 'JOKE1', authoritativeUrl: 'https://www.ticketmaster.com/x/event/JOKE1', role: 'discovery', confidence: 'provider_id' });
+    const c = makeConcierge(h);
+    const r = await c.ingestInbound(inbound({ text: '2 tickets for Testy McJokes Oct 16', from: 'comedy@customer.example', subject: 'Comedy' }));
+    await interpretAll(c);
+    const [send] = await sendsFor((r as { requestId: string }).requestId);
+    expect(send!.bodyText).toContain('is still on general sale on Ticketmaster');
+    expect(send!.bodyText).toContain("Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page before you go.");
+    expect(send!.bodyText).toContain("Events that aren't sold out often go for less on resale.");
+  });
+
   it('goes straight to the comparison when resale is asked about up front', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: '2 Testers tickets Oct 30 — is resale cheaper?', from: 'resale@customer.example', subject: 'Testers' }));

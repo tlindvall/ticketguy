@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { areaFor, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
+import { areaFor, categoryBuyingNote, collapseRuns, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
 import { genreFor, subtypeFor } from '@/lib/catalog/sync';
 import { isLocalTeam, mergeExtraction } from '@/lib/intake/pipeline';
 import { marketById } from '@/lib/domain/markets';
@@ -38,6 +38,7 @@ describe('football and soccer are their own kinds of event', () => {
   it('names the pilot coverage and the right thing to narrow by', () => {
     expect(pilotCoverageLabel(['concert', 'nhl', 'nba', 'mlb'])).toBe('concerts and NHL, NBA and MLB games');
     expect(pilotCoverageLabel(['concert', 'nhl', 'nba', 'mlb', 'nfl'])).toBe('concerts and NHL, NBA, MLB and NFL games');
+    expect(pilotCoverageLabel(['concert', 'nhl', 'broadway', 'comedy'])).toBe('concerts, NHL games, theater and comedy');
     expect(narrowByFor('nfl').askFor).toBe('a team');
     expect(narrowByFor('concert').narrowBy).toBe('an artist, venue or kind of music');
   });
@@ -106,5 +107,25 @@ describe('"the other 7" is more of the list, not seven tickets', () => {
     expect(more.quantity).toBeNull();
     const next = await x.extract({ ...base, text: 'Pennywise please' });
     expect(mergeExtraction(RequestExtractionSchema.parse(more), next).wantsMore).toBeNull();
+  });
+});
+
+describe('runs and category advice', () => {
+  it('folds a run of dates at one venue into its first date, and keeps different shows apart', () => {
+    const rows = [
+      { name: 'Hamilton', venueId: 'rr', day: '2026-10-06' },
+      { name: 'Wicked', venueId: 'gw', day: '2026-10-06' },
+      { name: 'Hamilton', venueId: 'rr', day: '2026-10-07' },
+      { name: 'Hamilton', venueId: 'rr', day: '2026-10-10' },
+      { name: 'Hamilton', venueId: 'other', day: '2026-10-08' }, // a touring company elsewhere is a different pick
+    ];
+    const out = collapseRuns(rows, (r) => r);
+    expect(out.map((r) => [r.item.name, r.item.venueId, r.moreDates, r.lastDay])).toEqual([['Hamilton', 'rr', 2, '2026-10-10'], ['Wicked', 'gw', 0, null], ['Hamilton', 'other', 0, null]]);
+  });
+
+  it('says the thing each kind of event needs said before buying', () => {
+    expect(categoryBuyingNote('comedy')).toContain('drink or food minimum');
+    expect(categoryBuyingNote('broadway')).toContain('TodayTix and the TKTS booth');
+    expect(categoryBuyingNote('nba')).toBeNull();
   });
 });

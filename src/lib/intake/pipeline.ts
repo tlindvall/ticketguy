@@ -13,7 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { areaFor, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { areaFor, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -390,7 +390,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : [])], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
       });
@@ -452,7 +452,7 @@ export class Concierge {
    * The picks as the email shows them: the line, why it fits, and at most two links — something to listen
    * to or explore, and the event's own ticket page (affiliate-wrapped after the picks were chosen).
    */
-  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect }>, lines: string[]): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean }>> {
+  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect }>, lines: string[], notes: Array<string | null> = []): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean }>> {
     if (!shown.length) return [];
     const ids = shown.map(({ e }) => e.id);
     const maps = await this.db.select({ eventId: t.eventSourceMappings.eventId, url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(inArray(t.eventSourceMappings.eventId, ids), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
@@ -465,7 +465,7 @@ export class Concierge {
       const ent = ents.find((x) => x.id === e.primaryEntityId);
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
       const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Tickets', url: tickets.url }] : [])];
-      return { line: lines[i]!, title: e.name, reason: pickReason(e) ?? '', eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
+      return { line: lines[i]!, title: e.name, reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
     });
   }
 
@@ -673,15 +673,19 @@ export class Concierge {
     const after = within.events.length ? null : await lookIn({ from: day(win.to, 1), to: day(win.to, 42) });
     const found = after?.events.length ? after : within;
     const { all, placed, areaKept, genreKept } = found;
-    // "The other 7": the same list, without what was already sent.
+    // A run of dates (a Broadway show, a two-night stand, a series) is one pick. Then "the other 7": the same
+    // list, without what was already sent. Runs are formed first, so a sent show never returns as its next date.
+    const runs = collapseRuns(found.events, ({ e, v }) => ({ name: e.name, venueId: v.id, day: eventLocalDate(e.localStartAt, v.timezone) }));
+    const runOf = new Map(runs.map((r) => [r.item.e.id, r]));
     const alreadyShown = new Set(more ? req.browseShown : []);
-    const events = found.events.filter(({ e }) => !alreadyShown.has(e.id));
+    const events = runs.map((r) => r.item).filter(({ e }) => !alreadyShown.has(e.id));
     const providerChecked = within.providerChecked;
 
     // One game in the window is the answer, not a menu of one. When they have said how many tickets, they are
     // buying: it goes straight on to prices as an ordinary request, and the reply says why. Without a number
     // it is shown as the one option, and only the number is asked.
-    const single = !more && !after && events.length === 1 && genreKept && areaKept;
+    // One show with many dates is not one match: which night is still theirs to pick.
+    const single = !more && !after && events.length === 1 && !runOf.get(events[0]!.e.id)?.moreDates && genreKept && areaKept;
     if (single && merged.quantity !== null) {
       const only = events[0]!;
       return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
@@ -691,7 +695,7 @@ export class Concierge {
     const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
     const shown = choosePicks(events, 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint) }));
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
-    const picks = await this.picksFor(shown, options);
+    const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
     const place = area && areaKept ? area.label : market.label;
     const span = spanLabel(win.from, win.to);
@@ -1413,6 +1417,14 @@ const SETTLED_BY_RESOLUTION = ['performer_ambiguous', 'event_location_unknown'];
 export function isLocalTeam(entity: { name: string }, cands: Array<{ e: { isHome: boolean | null }; v: { city: string | null; latitude?: number | null; longitude?: number | null } }>, market: Market): boolean {
   if (market.teamNames.test(entity.name.trim())) return true;
   return cands.some(({ e, v }) => e.isHome === true && inMarket(v, market));
+}
+
+/** "Also 6 more performances through Sat, Oct 10." — the rest of a run, said once on its pick. */
+function runNote(run: { moreDates: number; lastDay: string | null } | undefined, category: string): string | null {
+  if (!run?.moreDates || !run.lastDay) return null;
+  if (run.moreDates === 1) return `Also ${spanLabel(run.lastDay, run.lastDay)}.`;
+  const what = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(category) ? 'games' : ['broadway', 'touring_theater'].includes(category) ? 'performances' : 'dates';
+  return `Also ${run.moreDates} more ${what} through ${spanLabel(run.lastDay, run.lastDay)}.`;
 }
 
 /** SQL prefilter for venues in a market: inside its bounding box, or in one of its cities. inMarket refines it. */

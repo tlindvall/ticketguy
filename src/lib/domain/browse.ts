@@ -138,8 +138,48 @@ export function pickReason(e: { name: string; category: string; genre: string | 
 /** The pilot's categories in words, for telling a customer what is covered. */
 export function pilotCoverageLabel(pilotCategories: string[]): string {
   const leagues = ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].filter((c) => pilotCategories.includes(c)).map((c) => c.toUpperCase());
-  const parts = [pilotCategories.includes('concert') ? 'concerts' : null, leagues.length ? `${leagues.length > 1 ? `${leagues.slice(0, -1).join(', ')} and ${leagues.at(-1)}` : leagues[0]} games` : null].filter(Boolean);
-  return parts.join(' and ') || 'a few kinds of event';
+  const parts = [
+    pilotCategories.includes('concert') ? 'concerts' : null,
+    leagues.length ? `${leagues.length > 1 ? `${leagues.slice(0, -1).join(', ')} and ${leagues.at(-1)}` : leagues[0]} games` : null,
+    pilotCategories.includes('broadway') || pilotCategories.includes('touring_theater') ? 'theater' : null,
+    pilotCategories.includes('comedy') ? 'comedy' : null,
+  ].filter((x): x is string => !!x);
+  if (parts.length <= 2) return parts.join(' and ') || 'a few kinds of event';
+  return `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+}
+
+/**
+ * A show that plays many nights (a Broadway run, a two-night stand, a three-game series) is one pick, not
+ * one per date: same venue and the same show once extras are stripped. The first date stands for the run,
+ * with how many more dates follow and the last one.
+ */
+export function collapseRuns<T>(items: T[], of: (t: T) => { name: string; venueId: string; day: string }): Array<{ item: T; moreDates: number; lastDay: string | null }> {
+  const core = (name: string) => name.toLowerCase().replace(/\*[^*]*\*/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const runs = new Map<string, { item: T; days: Set<string>; last: string }>();
+  const order: string[] = [];
+  for (const it of items) {
+    const x = of(it);
+    const key = `${core(x.name)}|${x.venueId}`;
+    const run = runs.get(key);
+    if (!run) {
+      runs.set(key, { item: it, days: new Set([x.day]), last: x.day });
+      order.push(key);
+    } else {
+      run.days.add(x.day);
+      if (x.day > run.last) run.last = x.day;
+    }
+  }
+  return order.map((k) => {
+    const r = runs.get(k)!;
+    return { item: r.item, moreDates: r.days.size - 1, lastDay: r.days.size > 1 ? r.last : null };
+  });
+}
+
+/** Buying advice that belongs to the kind of event, said once on the buying email (the owner's category rules). */
+export function categoryBuyingNote(category: string): string | null {
+  if (category === 'comedy') return "Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page before you go.";
+  if (category === 'broadway') return 'For Broadway, TodayTix and the TKTS booth sometimes have cheaper seats for the same week.';
+  return null;
 }
 
 /**

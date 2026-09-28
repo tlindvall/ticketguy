@@ -416,3 +416,28 @@ metro's list. New York keeps its borough narrowing ("staying in Brooklyn").
   LA, that probably includes Crypto.com Arena. Browse doesn't show their events until an AXS or similar
   source exists.
 - The daily pre-warm still seeds only the New York teams. Other markets fill on demand.
+
+## 40. Theater and comedy are covered; a run of dates is one pick
+
+A Broadway request was answered "Theater isn't something I cover yet", for the same reason football was
+(#33): a pilot default, not a limit. The owner had already set the structure: comedy is its own category,
+and Broadway belongs under Theater & Shows.
+
+**`broadway`, `touring_theater` and `comedy` join the default pilot categories.** Soccer remains outside
+the pilot and says so.
+
+**A run is one pick.** A show that plays many nights at one venue (a Broadway run, a two-night stand, a
+series) is listed once, at its first date, with "Also 3 more performances through Sat, Oct 10". Runs are
+formed before paging, so a show already sent doesn't come back as its next night. A run is never treated
+as the single match that goes straight to prices: which night is still the customer's to pick.
+
+**Category advice on the buying email** (the owner's per-category rules):
+- Comedy: "Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page
+  before you go."
+- Broadway: "TodayTix and the TKTS booth sometimes have cheaper seats for the same week."
+
+The comedy note states the practice only; it claims nothing about this venue's minimum.
+
+**Known gap: most Broadway houses don't sell on Ticketmaster.** Shubert theatres sell through Telecharge,
+and others through Broadway Direct, so Ticketmaster Discovery covers only part of Broadway. Touring
+theater and comedy are much better covered.
