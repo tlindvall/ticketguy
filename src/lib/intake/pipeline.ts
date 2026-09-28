@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
 import * as t from '@/lib/db/schema';
@@ -13,7 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { NEW_YORK_AREA, areaFor, browseLabel, genreFamilyFor, genreMatches, inPilotVenueCity, isBrowseRequest, isPilotMarket, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { areaFor, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -26,6 +26,7 @@ import { sourcePlan } from '@/lib/sources/routing';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
+import { geohash, inMarket, isOutsideUs, marketById, marketFor, type Market } from '@/lib/domain/markets';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -321,7 +322,7 @@ export class Concierge {
     // Event resolution (a browse that found exactly one event has already resolved it).
     const resolution: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
-      : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
+      : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city ? null : await this.contactMarket(contact!.id) });
     const eventResolved = resolution.kind === 'resolved';
     if (resolution.kind === 'resolved' && resolution.assumed) assumptions.unshift(resolution.assumed);
     const missing = missingMandatoryFields(merged, { eventResolved });
@@ -407,6 +408,28 @@ export class Concierge {
 
     if (merged.intent === 'watch_request') await this.maybeCreateWatch({ requestId: req.id, revision, contactId: contact!.id, eventId: resolution.event.id, eventStartAt: resolution.event.localStartAt, brief: merged, consentMessageId: msg.id });
     return { state: 'researching', revision, extraction: merged };
+  }
+
+  /**
+   * Where a request is for: the place it names; else where this customer last asked about; else the default
+   * market. `assumed` is true unless they named it, so the reply can say so. Null for a place outside the US.
+   */
+  private async marketForRequest(x: RequestExtraction, contactId: string): Promise<{ market: Market; assumed: boolean } | null> {
+    if (x.city) {
+      const named = marketFor(x.city, x.state);
+      return named ? { market: named, assumed: false } : null;
+    }
+    return { market: (await this.contactMarket(contactId)) ?? marketById(this.env.DEFAULT_MARKET), assumed: true };
+  }
+
+  /** The market of this customer's most recent request that named a US place, if any. */
+  private async contactMarket(contactId: string): Promise<Market | null> {
+    const rows = await this.db.select({ brief: t.requestVersions.brief }).from(t.requestVersions).innerJoin(t.requests, eq(t.requests.id, t.requestVersions.requestId)).where(eq(t.requests.contactId, contactId)).orderBy(desc(t.requestVersions.createdAt)).limit(20);
+    for (const r of rows) {
+      const b = r.brief as { city?: string | null; state?: string | null };
+      if (b.city && !isOutsideUs(b.city)) return marketFor(b.city, b.state ?? null);
+    }
+    return null;
   }
 
   /**
@@ -554,7 +577,6 @@ export class Concierge {
     const { req, msg, contact, merged, revision } = a;
     const more = a.more === true;
     const now = this.now();
-    const tz = 'America/New_York';
     // Paging through a list is the customer steering, not a question we failed to settle: it does not count
     // towards the limit that hands a request to a person.
     const count = req.clarificationCount + (more ? 0 : 1);
@@ -576,9 +598,13 @@ export class Concierge {
       await this.queueSend({ messageClass: 'no_result', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, 'Not covered yet'), template: 'unsupported', vars: { reason }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'unsupported', revision, extraction: merged };
     };
-    if (!isPilotMarket(merged.city)) return unsupported(`For now I only cover events in the ${NEW_YORK_AREA.label} area.`, 'browse_outside_market');
+    // Any US market: the one they named, else where they looked last time, else the default, said as such.
+    const placed_ = await this.marketForRequest(merged, contact.id);
+    if (!placed_) return unsupported('For now I only cover events in the US.', 'browse_outside_us');
+    const { market, assumed: assumedPlace } = placed_;
+    const tz = market.timezone;
     const categories = pilotCategoriesFor(merged.categoryHint, this.env.pilotSupportedCategories);
-    const coverage = `For now I only cover ${pilotCoverageLabel(this.env.pilotSupportedCategories)} in ${NEW_YORK_AREA.label}.`;
+    const coverage = `For now I only cover ${pilotCoverageLabel(this.env.pilotSupportedCategories)}.`;
     if (!categories.length) return unsupported(merged.categoryHint && merged.categoryHint !== 'sports' ? `${browseLabel(merged.categoryHint)} isn't something I cover yet. ${coverage}` : coverage, 'browse_category_not_in_pilot');
 
     const day = (iso: string, delta: number) => {
@@ -595,7 +621,7 @@ export class Concierge {
 
     // The borough they named and the kind of music narrow the list; either is dropped, and the reply says so,
     // when nothing on file fits it.
-    const area = areaFor(merged.city);
+    const area = market.id === 'new-york' ? areaFor(merged.city) : null;
     const genre = merged.categoryHint === 'concert' || merged.categoryHint === null ? genreFamilyFor(merged.genreHint) : null;
 
     // Ask the provider about a window once per city (fresh results are reused), then read the catalog. A kind
@@ -604,23 +630,25 @@ export class Concierge {
     const lookIn = async (w: { from: string; to: string }) => {
       let providerChecked = false;
       if (discovery && w.from <= w.to) {
-        const cities = area?.providerCities ?? NEW_YORK_AREA.providerCities;
-        const asks = [
-          ...cities.map((city) => ({ city, classificationName: providerClassificationFor(merged.categoryHint) })),
-          ...(genre ? (area?.providerCities ?? ['New York', 'Brooklyn']).flatMap((city) => genre.provider.map((g) => ({ city, classificationName: g }))) : []),
-        ];
-        for (const q of asks) {
-          const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: '', classificationName: q.classificationName, city: q.city, startDateTime: `${w.from}T00:00:00Z`, endDateTime: `${day(w.to, 1)}T12:00:00Z`, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
-          await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: `browse:${q.city.toLowerCase()}`, diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: w, classification: q.classificationName } });
+        // A borough is asked about by its own cities; a metro by its centre and radius; a town by name.
+        const wheres: Array<{ city?: string; stateCode?: string | null; geoPoint?: string; radiusMiles?: number }> = area
+          ? area.providerCities.map((city) => ({ city }))
+          : market.lat !== null && market.lng !== null
+            ? [{ geoPoint: geohash(market.lat, market.lng), radiusMiles: market.radiusMiles }]
+            : [{ city: market.label, stateCode: merged.state }];
+        const classifications = [providerClassificationFor(merged.categoryHint), ...(genre?.provider ?? [])];
+        for (const where of wheres) for (const classificationName of classifications) {
+          const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: '', classificationName, ...where, startDateTime: `${w.from}T00:00:00Z`, endDateTime: `${day(w.to, 1)}T12:00:00Z`, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
+          await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: `browse:${(where.city ?? market.id).toLowerCase()}`, diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: w, classification: classificationName } });
           if (sync.status === 'success' || sync.status === 'skipped_fresh') providerChecked = true;
         }
       }
       const rows = w.from <= w.to
-        ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.category, categories), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(`${day(w.to, 2)}T00:00:00Z`)))).orderBy(asc(t.events.localStartAt)).limit(2000)
+        ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.category, categories), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(`${day(w.to, 2)}T00:00:00Z`)), marketFilter(market))).orderBy(asc(t.events.localStartAt)).limit(2000)
         : [];
       const seen = new Set<string>();
       const inWindow = rows.filter(({ e, v }) => {
-        if (!inPilotVenueCity(v.city)) return false;
+        if (!inMarket(v, market)) return false;
         if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
         if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
         const d = eventLocalDate(e.localStartAt, v.timezone);
@@ -656,7 +684,7 @@ export class Concierge {
     const single = !more && !after && events.length === 1 && genreKept && areaKept;
     if (single && merged.quantity !== null) {
       const only = events[0]!;
-      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? NEW_YORK_AREA.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
+      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
     }
     await recordVersion();
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
@@ -665,18 +693,18 @@ export class Concierge {
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
     const picks = await this.picksFor(shown, options);
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
-    const place = area && areaKept ? area.label : NEW_YORK_AREA.label;
+    const place = area && areaKept ? area.label : market.label;
     const span = spanLabel(win.from, win.to);
     const headline = more
       ? (options.length ? `More ${label.toLowerCase()} in ${place}, ${span}:` : `That's everything I have for ${label.toLowerCase()} in ${place}, ${span}.`)
       : after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
       : `${label} in ${place}, ${span}${single ? ' — there’s one on:' : options.length ? ` — here are my ${options.length === 3 ? 'three' : 'two'} picks:` : '.'}`;
-    const assumptions = [assumedWindow ? 'the next two weeks' : null, merged.city ? null : NEW_YORK_AREA.label].filter(Boolean);
+    const assumptions = [assumedWindow ? 'the next two weeks' : null, assumedPlace ? market.label : null].filter(Boolean);
     const notes = [
       assumptions.length ? `I've looked at ${assumptions.join(', in ')} — tell me if you had something else in mind.` : null,
       area && areaKept && events.length ? `I've kept it to ${area.label} venues — say if you'd go further.` : null,
-      area && !areaKept && all.length ? `Nothing in ${area.label} fits, so here's the rest of ${NEW_YORK_AREA.label}.` : null,
+      area && !areaKept && all.length ? `Nothing in ${area.label} fits, so here's the rest of ${market.label}.` : null,
       genre && !genreKept && placed.length ? `I couldn't find any ${genre.words} listed for those dates, so here's everything that's on.` : null,
     ].filter(Boolean);
     const assumption = notes.length ? notes.join(' ') : null;
@@ -731,7 +759,7 @@ export class Concierge {
     return exact.length ? exact : rows;
   }
 
-  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
+  async resolveEvent(x: RequestExtraction, home?: Market | null): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     // A matchup ("Rangers vs Lightning") is tried side by side: the side we know is the team, the other side
     // narrows its games. The first-named side goes first because it is usually the home team.
@@ -765,7 +793,12 @@ export class Concierge {
       }
       // A New York borough ("we're staying in Brooklyn") is where they are, not a rule that the Knicks move out
       // of Madison Square Garden: inside the pilot market any market venue fits; elsewhere the city must match.
-      if (x.city) cands = cands.filter(({ v }) => (isPilotMarket(x.city) ? inPilotVenueCity(v.city) || (v.city ?? '').toLowerCase() === x.city!.toLowerCase() : (v.city ?? '').toLowerCase() === x.city!.toLowerCase()));
+      // A place is its market: "LA" means Inglewood too, and a borough ("we're staying in Brooklyn") does not
+      // move the Knicks out of Madison Square Garden. Outside a known market the city must match.
+      if (x.city) {
+        const mk = marketFor(x.city, x.state);
+        cands = cands.filter(({ v }) => (mk ? inMarket(v, mk) : false) || (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
+      }
       // The provider lists one show more than once (package and presale variants under the same name); one
       // show at one venue on one day is one candidate, or the customer is asked to choose between twins.
       const seen = new Set<string>();
@@ -803,7 +836,8 @@ export class Concierge {
     // Only when neither or both are local is it asked.
     let assumed: string | null = null;
     if (withEvents.length > 1) {
-      const local = withEvents.filter((p) => isLocalTeam(p.entity, p.cands));
+      const homeMarket = marketFor(x.city, x.state) ?? home ?? marketById(this.env.DEFAULT_MARKET);
+      const local = withEvents.filter((p) => isLocalTeam(p.entity, p.cands, homeMarket));
       if (local.length === 1) {
         withEvents = local;
         assumed = `I've gone with the ${local[0]!.entity.name} — tell me if you meant a different ${local[0]!.entity.kind === 'team' ? 'team' : 'act'}.`;
@@ -860,18 +894,21 @@ export class Concierge {
    * Local catalog first; when it has nothing for this name, ask the provider once and look again. A provider
    * failure never fails the request — it is recorded and the customer gets the honest "not on file" answer.
    */
-  async resolveEventWithDiscovery(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
-    const local = await this.resolveEvent(x);
+  async resolveEventWithDiscovery(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null; home?: Market | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
+    const local = await this.resolveEvent(x, ctx.home);
     if (local.kind !== 'no_match' || local.reason === 'no_performer') return local;
     const discovery = await this.discoveryAvailability();
     if (!discovery) return local;
     const win = this.discoveryWindow(x, ctx);
     // For a matchup the provider is asked about one team; its schedule includes the game against the other.
     const keyword = splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam ?? x.eventName ?? '';
-    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword, city: x.city, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now() });
+    // A named metro is searched by its centre and radius ("LA" finds Inglewood); a town by name; none, nationally.
+    const mk = marketFor(x.city, x.state);
+    const where = mk && mk.lat !== null && mk.lng !== null ? { geoPoint: geohash(mk.lat, mk.lng), radiusMiles: mk.radiusMiles } : { city: x.city };
+    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword, ...where, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now() });
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
     if (sync.status !== 'success' && sync.status !== 'skipped_fresh') return local; // provider trouble: say what we have, not what we could not check
-    const again = await this.resolveEvent(x);
+    const again = await this.resolveEvent(x, ctx.home);
     if (again.kind === 'no_match' && again.reason !== 'no_performer') return { kind: 'no_match', reason: 'discovery_no_results' };
     return again;
   }
@@ -1373,9 +1410,18 @@ const SETTLED_BY_RESOLUTION = ['performer_ambiguous', 'event_location_unknown'];
  * The team a New York customer means by a shared nickname: named for the market ("New York Giants",
  * "Brooklyn Nets", "New Jersey Devils"), or at home in one of its venues in the games found.
  */
-export function isLocalTeam(entity: { name: string }, cands: Array<{ e: { isHome: boolean | null }; v: { city: string | null } }>): boolean {
-  if (/^(new york|brooklyn|new jersey|ny)\b/i.test(entity.name.trim())) return true;
-  return cands.some(({ e, v }) => e.isHome === true && inPilotVenueCity(v.city));
+export function isLocalTeam(entity: { name: string }, cands: Array<{ e: { isHome: boolean | null }; v: { city: string | null; latitude?: number | null; longitude?: number | null } }>, market: Market): boolean {
+  if (market.teamNames.test(entity.name.trim())) return true;
+  return cands.some(({ e, v }) => e.isHome === true && inMarket(v, market));
+}
+
+/** SQL prefilter for venues in a market: inside its bounding box, or in one of its cities. inMarket refines it. */
+function marketFilter(market: Market) {
+  const byCity = inArray(sql`lower(coalesce(${t.venues.city}, ''))`, market.cities.length ? market.cities : ['']);
+  if (market.lat === null || market.lng === null) return byCity;
+  const dLat = market.radiusMiles / 69;
+  const dLng = market.radiusMiles / (69 * Math.cos((market.lat * Math.PI) / 180));
+  return or(and(gte(t.venues.latitude, market.lat - dLat), lte(t.venues.latitude, market.lat + dLat), gte(t.venues.longitude, market.lng - dLng), lte(t.venues.longitude, market.lng + dLng)), byCity);
 }
 
 export function basketKeyFor(eventId: string, quantity: number, seatClass: string | null): string {

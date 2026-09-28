@@ -163,20 +163,9 @@ export function oneListingPerShow<T>(rows: T[], of: (r: T) => { name: string; ve
 }
 
 /**
- * The pilot's one market. Venues report their own city, and "New York" to a customer means the boroughs and
- * the arenas the pilot teams play in across the river, so the catalog is filtered by this list, not by an
- * exact city match. The provider matches its city filter exactly, so it is asked about each city that holds
- * a big venue: Manhattan and Brooklyn, Yankee Stadium, Citi Field, the Prudential Center, UBS Arena and MetLife.
- */
-export const NEW_YORK_AREA = {
-  label: 'New York',
-  providerCities: ['New York', 'Brooklyn', 'Bronx', 'Flushing', 'Newark', 'Elmont', 'East Rutherford'],
-  venueCities: ['new york', 'brooklyn', 'queens', 'bronx', 'the bronx', 'flushing', 'long island city', 'staten island', 'elmont', 'uniondale', 'newark', 'east rutherford', 'hoboken', 'jersey city'],
-};
-
-/**
- * A part of the market the customer named ("we're staying in Brooklyn"). The list is kept to its venues when
- * any are on, and says so; Manhattan is the venues the provider files under New York.
+ * A part of New York the customer named ("we're staying in Brooklyn"). The list is kept to its venues when
+ * any are on, and says so; Manhattan is the venues the provider files under New York. Other markets are
+ * whole metros (src/lib/domain/markets.ts).
  */
 export type MarketArea = { label: string; venueCities: string[]; providerCities: string[] };
 const AREAS: Array<[RegExp, MarketArea]> = [
@@ -229,16 +218,6 @@ export function genreMatches(family: GenreFamily, eventGenre: string | null | un
   return family.match.some((m) => main.includes(m)) || (family.sub ?? []).some((m) => sub.includes(m));
 }
 
-const NY_WORDS = /\b(new york|nyc|ny|manhattan|brooklyn|queens|bronx|staten island|long island|jersey city|hoboken|newark)\b/i;
-
-/** Whether a city the customer named is the pilot market. Null (not said) is treated as the market, and said so. */
-export function isPilotMarket(city: string | null | undefined): boolean {
-  return !city || NY_WORDS.test(city);
-}
-
-export function inPilotVenueCity(city: string | null | undefined): boolean {
-  return !!city && NEW_YORK_AREA.venueCities.includes(city.trim().toLowerCase());
-}
 
 /** "Oct 1–7", "Oct 28 – Nov 3", "Sat, Oct 3" — how a span reads in a reply. */
 export function spanLabel(from: string, to: string): string {

@@ -197,6 +197,8 @@ const rawSchema = z.object({
 
   PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb,nfl'),
   PILOT_SUPPORTED_MARKETS: z.string().default('new-york'),
+  /** The market assumed, and said, when a request names no place and the customer has never named one. */
+  DEFAULT_MARKET: z.string().default('new-york'),
   STAFFED_HOURS_TIMEZONE: z.string().default('America/New_York'),
   STAFFED_HOURS_START: z.coerce.number().int().min(0).max(23).default(9),
   STAFFED_HOURS_END: z.coerce.number().int().min(1).max(24).default(21),

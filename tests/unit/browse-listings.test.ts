@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { areaFor, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
 import { genreFor, subtypeFor } from '@/lib/catalog/sync';
 import { isLocalTeam, mergeExtraction } from '@/lib/intake/pipeline';
+import { marketById } from '@/lib/domain/markets';
 import { RequestExtractionSchema } from '@/lib/domain/types';
 import { FixtureExtractor } from '@/lib/ai/extraction';
 import { lexiconCategory } from '@/lib/lexicon/lexicon';
@@ -79,16 +80,20 @@ describe('NFL listings that are not a ticket to the game', () => {
   });
 });
 
-describe('a shared nickname means the local team', () => {
+describe('a shared nickname means the local team, wherever the customer is', () => {
   const away = [{ e: { isHome: false }, v: { city: 'San Francisco' } }];
+  const ny = marketById('new-york');
+  const la = marketById('los-angeles');
   it('is the team named for the market, or at home in one of its venues', () => {
-    expect(isLocalTeam({ name: 'New York Giants' }, [])).toBe(true);
-    expect(isLocalTeam({ name: 'San Francisco Giants' }, away)).toBe(false);
-    expect(isLocalTeam({ name: 'Brooklyn Nets' }, [])).toBe(true);
-    expect(isLocalTeam({ name: 'Anaheim Ducks' }, [{ e: { isHome: true }, v: { city: 'Elmont' } }])).toBe(true);
-    // Neither Kings is local, so "Kings" is still asked.
-    expect(isLocalTeam({ name: 'Los Angeles Kings' }, away)).toBe(false);
-    expect(isLocalTeam({ name: 'Sacramento Kings' }, away)).toBe(false);
+    expect(isLocalTeam({ name: 'New York Giants' }, [], ny)).toBe(true);
+    expect(isLocalTeam({ name: 'San Francisco Giants' }, away, ny)).toBe(false);
+    expect(isLocalTeam({ name: 'San Francisco Giants' }, [], marketById('bay-area'))).toBe(true);
+    expect(isLocalTeam({ name: 'Brooklyn Nets' }, [], ny)).toBe(true);
+    expect(isLocalTeam({ name: 'Anaheim Ducks' }, [{ e: { isHome: true }, v: { city: 'Elmont' } }], ny)).toBe(true);
+    // In LA, the LA Kings are the Kings; in New York, neither Kings is local, so "Kings" is still asked.
+    expect(isLocalTeam({ name: 'Los Angeles Kings' }, away, la)).toBe(true);
+    expect(isLocalTeam({ name: 'Los Angeles Kings' }, away, ny)).toBe(false);
+    expect(isLocalTeam({ name: 'Sacramento Kings' }, away, ny)).toBe(false);
   });
 });
 

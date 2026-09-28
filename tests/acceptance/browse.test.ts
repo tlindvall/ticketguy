@@ -125,12 +125,45 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).not.toContain('official listings'); // no provider was asked, so no claim that it was
   });
 
-  it('tells the customer plainly when the place or the kind of event is outside the pilot', async () => {
+  it('answers for any US city, and says plainly what is outside the US or not covered', async () => {
     const c = makeConcierge(h);
     const chicago = await ask(c, 'What concerts are on in Chicago next week?', 'chi@customer.example');
-    expect((await lastSend(chicago)).bodyText).toContain('For now I only cover events in the New York area.');
+    const body = (await lastSend(chicago)).bodyText;
+    expect(body).toContain('Live music in Chicago');
+    expect(body).toContain('Chicago Band at Thalia Hall');
+    expect(body).not.toContain('Jack White'); // a New York show is not a Chicago answer
+    const london = await ask(c, 'What concerts are on in London next week?', 'ldn@customer.example');
+    expect((await lastSend(london)).bodyText).toContain('For now I only cover events in the US.');
     const theater = await ask(c, 'Any good Broadway musicals on next week?', 'bway@customer.example');
-    expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA, MLB and NFL games in New York.');
+    expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA, MLB and NFL games.');
+  });
+
+  it('"LA" is the metro: Inglewood and Anaheim count, San Diego does not', async () => {
+    const FORUM = '10000000-0000-4000-8000-0000000000f1';
+    const HONDA = '10000000-0000-4000-8000-0000000000f2';
+    const SD = '10000000-0000-4000-8000-0000000000f3';
+    await h.db.insert(t.venues).values([
+      { id: FORUM, name: 'Kia Forum', city: 'Inglewood', state: 'CA', country: 'US', timezone: 'America/Los_Angeles', latitude: 33.958, longitude: -118.3419 },
+      { id: HONDA, name: 'Honda Center', city: 'Anaheim', state: 'CA', country: 'US', timezone: 'America/Los_Angeles', latitude: 33.8078, longitude: -117.8765 },
+      { id: SD, name: 'Petco Park', city: 'San Diego', state: 'CA', country: 'US', timezone: 'America/Los_Angeles', latitude: 32.7076, longitude: -117.157 },
+    ]);
+    const show = (name: string, venueId: string, at: string) => ({ name, category: 'concert', genre: null, venueId, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([show('Forum Headliner', FORUM, '2026-10-03T03:00:00Z'), show('Anaheim Act', HONDA, '2026-10-04T03:00:00Z'), show('San Diego Act', SD, '2026-10-03T03:00:00Z')]);
+    const body = (await lastSend(await ask(makeConcierge(h), 'Any concerts in LA the first week of October?', 'la@customer.example'))).bodyText;
+    expect(body).toContain('Live music in Los Angeles, Oct 1–7');
+    expect(body).toContain('Forum Headliner at Kia Forum');
+    expect(body).toContain('Anaheim Act at Honda Center');
+    expect(body).not.toContain('San Diego Act');
+    expect(body).not.toContain('Jack White');
+  });
+
+  it('with no place named, looks where the customer asked last time, and says so', async () => {
+    const c = makeConcierge(h);
+    await ask(c, 'What concerts are on in Chicago next week?', 'regular@customer.example', { subject: 'Chicago' });
+    const again = await ask(c, 'Any gigs next week?', 'regular@customer.example', { subject: 'More gigs' });
+    const body = (await lastSend(again)).bodyText;
+    expect(body).toContain('Chicago Band at Thalia Hall');
+    expect(body).toContain("I've looked at Chicago — tell me if you had something else in mind.");
   });
 
   it('answers "an american football game" with the NFL games that week, not every sport', async () => {

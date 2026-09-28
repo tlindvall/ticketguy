@@ -120,6 +120,11 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
     if (q.classificationName) params.set('classificationName', q.classificationName);
     if (q.city) params.set('city', q.city);
     if (q.stateCode) params.set('stateCode', q.stateCode);
+    if (q.geoPoint && q.radiusMiles) {
+      params.set('geoPoint', q.geoPoint);
+      params.set('radius', String(q.radiusMiles));
+      params.set('unit', 'miles');
+    }
     if (q.startDateTime) params.set('startDateTime', q.startDateTime);
     if (q.endDateTime) params.set('endDateTime', q.endDateTime);
     const url = `https://app.ticketmaster.com/discovery/v2/events.json?${params.toString()}`;
@@ -143,7 +148,7 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
   }
 }
 
-export type DiscoveryQuery = { keyword: string; classificationName?: string | null; city?: string | null; stateCode?: string | null; startDateTime?: string | null; endDateTime?: string | null; size?: number };
+export type DiscoveryQuery = { keyword: string; classificationName?: string | null; city?: string | null; stateCode?: string | null; /** Geohash of a market's centre, with its radius in miles: a metro, not one city. */ geoPoint?: string | null; radiusMiles?: number | null; startDateTime?: string | null; endDateTime?: string | null; size?: number };
 
 /** A performer's or team's own links as the provider lists them: listen (Spotify, Apple Music), watch (YouTube), official (homepage). */
 export type EntityLinks = { listen?: string; watch?: string; official?: string };
@@ -162,7 +167,7 @@ export function attractionLinks(a: Record<string, unknown>): EntityLinks {
   const out: EntityLinks = { listen: first('spotify', 'itunes'), watch: first('youtube'), official: first('homepage') };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v)) as EntityLinks;
 }
-export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null };
+export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null; latitude?: number | null; longitude?: number | null };
 export type DiscoveredEvent = {
   providerEventId: string;
   name: string;
@@ -187,6 +192,14 @@ export type DiscoveredEvent = {
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
+/** The provider sends coordinates as strings; anything that is not a real latitude/longitude pair is dropped. */
+function coordsOf(loc: unknown): { latitude: number; longitude: number } | Record<string, never> {
+  const l = (loc ?? {}) as { latitude?: unknown; longitude?: unknown };
+  const lat = Number(l.latitude);
+  const lng = Number(l.longitude);
+  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0) ? { latitude: lat, longitude: lng } : {};
+}
+
 /** Tolerant field-by-field read of one Discovery event. Anything unrecognised becomes null rather than a throw. */
 export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent | null {
   const id = str(e.id);
@@ -207,6 +220,7 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
         stateCode: str((v.state as { stateCode?: unknown } | undefined)?.stateCode),
         countryCode: str((v.country as { countryCode?: unknown } | undefined)?.countryCode),
         timezone: str(v.timezone) ?? str(dates.timezone),
+        ...coordsOf(v.location),
       }
     : null;
   const attractions: DiscoveredAttraction[] = (embedded.attractions ?? [])

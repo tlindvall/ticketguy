@@ -64,6 +64,13 @@
       "when": 1790633005831,
       "tag": "0008_entity_links",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790636531670,
+      "tag": "0009_venue_coordinates",
+      "breakpoints": true
     }
   ]
 }

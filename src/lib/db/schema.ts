@@ -16,6 +16,7 @@ import {
   uniqueIndex,
   uuid,
   bigint,
+  doublePrecision,
 } from 'drizzle-orm/pg-core';
 
 export const bytea = customType<{ data: Uint8Array; driverData: Uint8Array | Buffer }>({
@@ -309,6 +310,9 @@ export const venues = pgTable('venues', {
   state: text('state'),
   country: text('country').notNull().default('US'),
   timezone: text('timezone').notNull(),
+  /** Where it is, as the provider gives it; decides which market a venue belongs to. Null when not given. */
+  latitude: doublePrecision('latitude'),
+  longitude: doublePrecision('longitude'),
   layoutVersion: text('layout_version'),
   /** Provider ids this venue is known by, e.g. { ticketmaster: 'KovZpZA7AAEA' }. Never matched on display name alone. */
   externalIds: jsonb('external_ids').$type<Record<string, string>>().notNull().default({}),

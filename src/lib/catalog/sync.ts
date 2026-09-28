@@ -171,17 +171,18 @@ function leagueFor(a: DiscoveredAttraction): string | null {
 
 async function upsertVenue(db: DbOrTx, v: DiscoveredVenue): Promise<string | null> {
   if (!v.timezone) return null; // a venue with no timezone cannot host a date-resolvable event
+  const coords = v.latitude != null && v.longitude != null ? { latitude: v.latitude, longitude: v.longitude } : {};
   const byExternal = await db.select({ id: t.venues.id }).from(t.venues).where(sql`${t.venues.externalIds} ->> ${DISCOVERY_SOURCE_ID} = ${v.providerId}`);
   if (byExternal[0]) {
-    await db.update(t.venues).set({ timezone: v.timezone, city: v.city, state: v.stateCode }).where(eq(t.venues.id, byExternal[0].id));
+    await db.update(t.venues).set({ timezone: v.timezone, city: v.city, state: v.stateCode, ...coords }).where(eq(t.venues.id, byExternal[0].id));
     return byExternal[0].id;
   }
   const byName = await db.select({ id: t.venues.id, externalIds: t.venues.externalIds }).from(t.venues).where(and(sql`lower(${t.venues.name}) = ${v.name.toLowerCase()}`, v.city ? sql`lower(coalesce(${t.venues.city}, '')) = ${v.city.toLowerCase()}` : sql`true`));
   if (byName[0]) {
-    await db.update(t.venues).set({ externalIds: { ...byName[0].externalIds, [DISCOVERY_SOURCE_ID]: v.providerId }, timezone: v.timezone }).where(eq(t.venues.id, byName[0].id));
+    await db.update(t.venues).set({ externalIds: { ...byName[0].externalIds, [DISCOVERY_SOURCE_ID]: v.providerId }, timezone: v.timezone, ...coords }).where(eq(t.venues.id, byName[0].id));
     return byName[0].id;
   }
-  const [row] = await db.insert(t.venues).values({ name: v.name, aliases: [], city: v.city, state: v.stateCode, country: v.countryCode ?? 'US', timezone: v.timezone, externalIds: { [DISCOVERY_SOURCE_ID]: v.providerId } }).returning({ id: t.venues.id });
+  const [row] = await db.insert(t.venues).values({ name: v.name, aliases: [], city: v.city, state: v.stateCode, country: v.countryCode ?? 'US', timezone: v.timezone, ...coords, externalIds: { [DISCOVERY_SOURCE_ID]: v.providerId } }).returning({ id: t.venues.id });
   return row!.id;
 }
 
@@ -284,7 +285,8 @@ export async function syncFromDiscovery(
   // A browse has no keyword; its freshness is tracked per classification so one sync serves the next asker.
   // The window is part of that key: a fresh sync of October says nothing about November.
   const keyword = normalizeKeyword(q.keyword) || (q.classificationName ? `classification:${q.classificationName.toLowerCase()}:${q.startDateTime ?? ''}..${q.endDateTime ?? ''}` : '');
-  const city = q.city ?? null;
+  // A geo search is fresh per point and radius, the way a city search is fresh per city.
+  const city = q.city ?? (q.geoPoint && q.radiusMiles ? `geo:${q.geoPoint}:${q.radiusMiles}mi` : null);
   const record = async (status: SyncOutcome['status'], eventCount: number) => {
     await db.insert(t.catalogSyncs).values({ sourceId: DISCOVERY_SOURCE_ID, keywordNormalized: keyword, city, windowFrom: q.startDateTime ?? null, windowTo: q.endDateTime ?? null, status, eventCount, trigger: q.trigger, syncedAt: now });
   };
@@ -296,7 +298,7 @@ export async function syncFromDiscovery(
     return { status: 'skipped_budget', eventsSeen: 0, eventsUpserted: 0, entityIds: [] };
   }
 
-  const res = await adapter.discoverEvents({ keyword: q.keyword, classificationName: q.classificationName ?? null, city, stateCode: q.stateCode ?? null, startDateTime: q.startDateTime ?? null, endDateTime: q.endDateTime ?? null, size: q.size });
+  const res = await adapter.discoverEvents({ keyword: q.keyword, classificationName: q.classificationName ?? null, city: q.city ?? null, stateCode: q.stateCode ?? null, geoPoint: q.geoPoint ?? null, radiusMiles: q.radiusMiles ?? null, startDateTime: q.startDateTime ?? null, endDateTime: q.endDateTime ?? null, size: q.size });
   if (res.status !== 'success') {
     await record(res.status, 0);
     return { status: res.status, eventsSeen: 0, eventsUpserted: 0, entityIds: [] };
