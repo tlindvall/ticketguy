@@ -287,6 +287,9 @@ export class Concierge {
     if (residence) {
       const isUs = residence === 'US';
       await this.db.update(t.contacts).set({ countryConfirmed: isUs ? 'US' : 'NON_US' }).where(eq(t.contacts.id, contact!.id));
+      // The replies below read the contact loaded before this message; "I'm in Brooklyn" must not be followed
+      // by "reply if you're not in the US".
+      contact!.countryConfirmed = isUs ? 'US' : 'NON_US';
       await this.db.update(t.requests).set({ countryConfirmed: isUs ? 'US' : 'NON_US' }).where(eq(t.requests.id, req.id));
       if (!isUs) {
         await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });

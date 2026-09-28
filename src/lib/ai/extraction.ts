@@ -36,7 +36,9 @@ const NUM_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, f
 const COUPLE = /\b(?:my (?:wife|husband|partner|girlfriend|boyfriend) and (?:i|me)|(?:me|myself) and my (?:wife|husband|partner|girlfriend|boyfriend))\b/i;
 
 function parseQuantity(t: string): { value: number | null; quote: string | null } {
-  const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(?:party|group|family|household|crew)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
+  // Up to three words may sit between the number and the noun: "4 Knicks tickets", "two lower bowl seats".
+  // Without that, "Need 4 Knicks tickets" read as no quantity and was then assumed to be two.
+  const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[a-z'.-]+\s+){1,3}(?:tickets?|seats?|tix)\b/i.exec(t) ?? /\b(?:party|group|family|household|crew)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
   if (!m) {
     const couple = COUPLE.exec(t);
     if (couple) return { value: 2, quote: couple[0] };
@@ -60,6 +62,16 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
   return { cents, basis, quote: m[0] };
 }
 
+/** "Rangers vs Lightning" in the message, kept as the event name so the resolver can narrow by opponent. */
+function matchupPhrase(t: string): string | null {
+  const m = /\b([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3})\s+(?:vs\.?|v\.?|versus|against|@)\s+([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3})/i.exec(t);
+  if (!m) return null;
+  const stop = /\s+(?:on|at|in|for|this|next|tonight|tomorrow|please|\d.*)$/i;
+  const a = m[1]!.replace(stop, '').trim();
+  const b = m[2]!.replace(stop, '').trim();
+  return a && b ? `${a} vs ${b}` : null;
+}
+
 function findEntity(t: string, known: ExtractionInput['knownEntities']): { entity: ExtractionInput['knownEntities'][number]; quote: string } | null {
   const lower = t.toLowerCase();
   let best: { entity: ExtractionInput['knownEntities'][number]; quote: string; idx: number } | null = null;
@@ -73,6 +85,7 @@ function findEntity(t: string, known: ExtractionInput['knownEntities']): { entit
 }
 
 // Spans first: "Oct 1-7" must not be read as the single date Oct 1, nor "the first week in October" as the month.
+const MONTH_DAY_SRC = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.? \\d{1,2}(?:st|nd|rd|th)?(?:,? \\d{4})?(?!\\s*(?:-|–|to|through|thru)\\s*\\d)';
 const DATE_EXPR = /\b((?:the )?(?:first|1st|second|2nd|third|3rd|fourth|4th|last|final) week (?:of|on|in) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:early|beginning of|start of|mid|middle of|late|end of)\s*-?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|to|through|thru)\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? )?\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|to|through|thru)\s*\d{1,2}(?:st|nd|rd|th)? (?:of )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:next|coming) (?:few|couple(?: of)?|\d|two|three|four) weeks|(?:this|next) month|(?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|(?:sometime |later )?(?:this|next) week(?:end)?|(?:this|the) weekend|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
@@ -121,13 +134,18 @@ export class FixtureExtractor implements Extractor {
     // Negations first so "anything except X, Y please" resolves to Y (A29).
     const negated: string[] = [];
     for (const e of input.knownEntities) {
-      const re = new RegExp(`\\b(?:anything (?:but|except)|not|no|don'?t want)\\s+(?:the\\s+)?${e.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      // By any name the customer uses: "anything except the Knicks" names the New York Knicks by nickname.
+      const names = [e.name, ...e.aliases].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+      const re = new RegExp(`\\b(?:anything (?:but|except)|not|no|don'?t want)\\s+(?:the\\s+)?(?:${names})\\b`, 'i');
       if (re.test(t)) negated.push(e.name);
     }
     const ent = findEntity(t, input.knownEntities.filter((e) => !negated.includes(e.name)));
     ev('performerOrTeam', ent?.quote ?? null);
 
-    const dateM = DATE_EXPR.exec(t);
+    // A calendar date anywhere in the message beats a looser phrase before it: in "I'm in New York for the
+    // weekend, 2 Rangers tickets Oct 3" the weekend is the trip, and Oct 3 is the game.
+    const explicitDay = new RegExp(`\\b(${MONTH_DAY_SRC})\\b`, 'i').exec(t);
+    const dateM = explicitDay ?? DATE_EXPR.exec(t);
     const dateExpression = dateM ? dateM[1]! : null;
     ev('dateExpression', dateExpression);
     let resolvedLocalDate: string | null = null;
@@ -178,7 +196,7 @@ export class FixtureExtractor implements Extractor {
 
     return EXTRACTION_SCHEMA.parse({
       intent,
-      eventName: null,
+      eventName: matchupPhrase(t),
       performerOrTeam,
       city,
       state,
