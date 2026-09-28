@@ -20,7 +20,7 @@ export type LexiconCategory = CategoryHint | 'any';
 export type LexiconEntry = {
   id: string;
   /** What the phrase sets. */
-  field: 'intent' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
+  field: 'intent' | 'wantsMore' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
   /** The meaning, in words, for people. */
   meaning: string;
   /** The value it sets (for fields with a fixed value). */
@@ -76,6 +76,19 @@ export const LEXICON: LexiconEntry[] = [
     categories: ['any'],
     requestTypes: ['stop'],
     examples: [{ text: 'Please stop the watch, we bought tickets.', expect: { intent: 'cancel_watch' } }],
+  },
+
+  {
+    id: 'more.rest_of_list',
+    field: 'wantsMore',
+    value: true,
+    meaning: 'Show the rest of a list already sent. A number in the phrase ("the other 7") counts the list, not tickets.',
+    phrases: ['the other 7', 'the rest', 'what else is there', 'show me more', 'any others', 'more options'],
+    pattern: /\b(the (?:other|remaining) (?:\d+|few|ones|shows|games|options)|the rest(?: of (?:them|the list))?|(?:show|give|send|list) (?:me )?(?:the )?(?:rest|more|others)|what else(?: is (?:there|on))?|any (?:more|others)|more options|the others)\b/i,
+    categories: ['any'],
+    requestTypes: ['browse'],
+    teachModel: true,
+    examples: [{ text: 'can you give me the other 7', expect: { wantsMore: true, quantity: null } }],
   },
 
   // ── What kind of event (no performer or team named) ──────────────────────────────────────────────────
@@ -478,6 +491,10 @@ export function lexiconGenre(text: string): { value: string; quote: string } | n
     if (m) return { value: String(e.value), quote: m[0] };
   }
   return null;
+}
+
+export function lexiconWantsMore(text: string): boolean {
+  return entriesFor('wantsMore').some((e) => e.pattern.test(text));
 }
 
 export function lexiconBrowseAsk(text: string): boolean {

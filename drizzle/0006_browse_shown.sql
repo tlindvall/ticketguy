@@ -1,0 +1,1 @@
+ALTER TABLE "requests" ADD COLUMN "browse_shown" jsonb DEFAULT '[]'::jsonb NOT NULL;

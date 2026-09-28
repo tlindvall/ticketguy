@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { areaFor, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
 import { genreFor, subtypeFor } from '@/lib/catalog/sync';
+import { isLocalTeam, mergeExtraction } from '@/lib/intake/pipeline';
+import { RequestExtractionSchema } from '@/lib/domain/types';
+import { FixtureExtractor } from '@/lib/ai/extraction';
 import { lexiconCategory } from '@/lib/lexicon/lexicon';
 
 const at = new Date('2026-10-08T23:08:00Z');
@@ -73,5 +76,30 @@ describe('NFL listings that are not a ticket to the game', () => {
   it('files seat licences, season plans and tailgates as packages', () => {
     for (const name of ['New York Jets PSL', 'Giants Personal Seat License', 'Jets Season Tickets 2027', 'Giants Tailgate Party']) expect(subtypeFor({ name, timeTba: false }), name).toBe('package');
     expect(subtypeFor({ name: 'New York Giants vs. Philadelphia Eagles', timeTba: false })).toBeNull();
+  });
+});
+
+describe('a shared nickname means the local team', () => {
+  const away = [{ e: { isHome: false }, v: { city: 'San Francisco' } }];
+  it('is the team named for the market, or at home in one of its venues', () => {
+    expect(isLocalTeam({ name: 'New York Giants' }, [])).toBe(true);
+    expect(isLocalTeam({ name: 'San Francisco Giants' }, away)).toBe(false);
+    expect(isLocalTeam({ name: 'Brooklyn Nets' }, [])).toBe(true);
+    expect(isLocalTeam({ name: 'Anaheim Ducks' }, [{ e: { isHome: true }, v: { city: 'Elmont' } }])).toBe(true);
+    // Neither Kings is local, so "Kings" is still asked.
+    expect(isLocalTeam({ name: 'Los Angeles Kings' }, away)).toBe(false);
+    expect(isLocalTeam({ name: 'Sacramento Kings' }, away)).toBe(false);
+  });
+});
+
+describe('"the other 7" is more of the list, not seven tickets', () => {
+  it('reads as wantsMore with no quantity, and does not carry into the next message', async () => {
+    const x = new FixtureExtractor();
+    const base = { messageId: 'm', subject: null, receivedAt: new Date('2026-09-28T12:00:00Z'), venueTimeZone: 'America/New_York', knownEntities: [] };
+    const more = await x.extract({ ...base, text: 'can you give me the other 7' });
+    expect(more.wantsMore).toBe(true);
+    expect(more.quantity).toBeNull();
+    const next = await x.extract({ ...base, text: 'Pennywise please' });
+    expect(mergeExtraction(RequestExtractionSchema.parse(more), next).wantsMore).toBeNull();
   });
 });

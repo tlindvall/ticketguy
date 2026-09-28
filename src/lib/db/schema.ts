@@ -256,6 +256,8 @@ export const requests = pgTable(
     countryConfirmed: text('country_confirmed'),
     failureReason: text('failure_reason'),
     clarificationCount: integer('clarification_count').notNull().default(0),
+    /** Event ids a browse reply has already listed for the current criteria, so "the other 7" shows the rest. */
+    browseShown: jsonb('browse_shown').$type<string[]>().notNull().default([]),
     createdAt: createdAt(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },

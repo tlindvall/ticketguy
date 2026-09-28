@@ -20,6 +20,12 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 | Wants to be told when something changes, not a one-off answer. | “keep an eye”, “keep looking”, “let me know if”, “alert me”, “notify me”, “watch for” | `intent="watch_request"` | any | watch | “Knicks on October 24, 2 tickets, $300 total. Let me know if it drops.” |
 | Stop a watch that is running. | “stop the watch”, “cancel my alerts”, “stop looking” | `intent="cancel_watch"` | any | stop | “Please stop the watch, we bought tickets.” |
 
+## More of a list
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| Show the rest of a list already sent. A number in the phrase ("the other 7") counts the list, not tickets. **model** | “the other 7”, “the rest”, “what else is there”, “show me more”, “any others”, “more options” | `wantsMore=true` | any | browse | “can you give me the other 7” |
+
 ## What kind of event (no performer or team named)
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |

@@ -257,3 +257,49 @@ the market's other venues: "Knicks, we're staying in Brooklyn" still means Madis
 **One listing per show.** When listings share a venue and a start time, they are the same show if
 either name is contained in the other or they share a performer. The provider's Premium Seating
 and Pinstripe Pass copies of a game therefore collapse into the plain listing.
+
+## 34. One match is the answer, and a number already given is not asked again
+
+"An american football game… the second week of October. We need 4 tickets." got a one-item list, then
+"Reply with the one you want and how many tickets". Both halves of that are wrong: there was nothing to
+choose between, and the number was in the email.
+
+- **One match plus a quantity** goes straight on as an ordinary request. The reply is the usual
+  acknowledgement and the price check starts, with one line saying why: "That's the only football game in
+  New York for Oct 8–14, so I've gone ahead with it — tell me if you had something else in mind." This is
+  assume-and-say (#32) applied to the event.
+- **One match without a quantity** is shown as the one option ("there's one on"), and only the number is
+  asked. A customer asking "what's on?" has not said they're buying, so prices wait.
+- **Several matches with a quantity** ask only which one: "Reply with the one you want, and I'll check
+  prices for 4 tickets."
+- **Fallbacks never count as a match.** A borough or genre fallback, or the next-weeks list, always shows
+  options, because it isn't what was asked for.
+
+## 35. A shared nickname means the local team; "the other 7" means the rest of the list
+
+**"Giants tickets Oct 11"** was answered with "which Giants do you mean?" and "which city or venue?". Asking
+"which one" would have been fine; the problem was that the facts on file already answered it.
+
+The rule is local first. It is not "biggest" or "most famous": the San Francisco Giants are not a smaller
+team, and fame is not something code can compute (the LA Kings and the Sacramento Kings are both big).
+- When two teams share a nickname and both have a game in the window, the one that plays in the market we
+  serve is meant. That is a team named for it ("New York…", "Brooklyn…", "New Jersey…") or one playing at
+  home in one of its venues.
+- The reply says so in one line: "I've gone with the New York Giants — tell me if you meant a different
+  team."
+- When neither team is local, or both are, the customer is still asked.
+
+Two fixes in the pieces that feed that rule:
+- **The model's flags are dropped once the event is settled.** The model flags "Giants" as ambiguous and
+  "no city given" from the words alone. Once the catalog has settled the event, those two flags are dropped
+  instead of forcing questions.
+- **The rules extractor keeps a shared nickname as typed.** It used to swap in whichever team happened to
+  be listed first. Now it leaves "Giants" for the resolver to decide.
+
+**"Can you give me the other 7"** returned the same five. Nothing marked the reply as asking for more, and
+nothing remembered what had been shown. Now:
+- `wantsMore` (lexicon and model) marks it, and never carries over to the next message.
+- The number in the phrase counts the list, never tickets.
+- The request remembers what browse listed (`requests.browse_shown`, migration 0006). The next page leaves
+  those out.
+- The reply says "That's everything I have…" when the list runs out.

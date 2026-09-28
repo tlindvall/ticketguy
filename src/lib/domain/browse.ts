@@ -85,6 +85,13 @@ export function narrowByFor(hint: CategoryHint | null): { narrowBy: string; askF
   return { narrowBy: 'an artist, team or venue', askFor: 'an artist or team' };
 }
 
+/** One of what was asked for, in words: "football game", "hockey game", "rock or indie show". */
+export function oneOfLabel(hint: CategoryHint | null, genre: GenreFamily | null): string {
+  const sport: Partial<Record<CategoryHint, string>> = { sports: 'game', nhl: 'hockey game', nba: 'basketball game', mlb: 'baseball game', wnba: 'WNBA game', nfl: 'football game', soccer: 'soccer match' };
+  if (hint && sport[hint]) return sport[hint]!;
+  return genre ? `${genre.words} show` : 'show';
+}
+
 /** The pilot's categories in words, for telling a customer what is covered. */
 export function pilotCoverageLabel(pilotCategories: string[]): string {
   const leagues = ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].filter((c) => pilotCategories.includes(c)).map((c) => c.toUpperCase());
