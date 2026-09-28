@@ -15,7 +15,7 @@ export function isBrowseRequest(x: { intent: string; performerOrTeam: string | n
 }
 
 /** The kinds of event a customer names without naming a performer or team. */
-export const CATEGORY_HINTS = ['concert', 'sports', 'nhl', 'nba', 'mlb', 'wnba', 'theater', 'comedy'] as const;
+export const CATEGORY_HINTS = ['concert', 'sports', 'nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'theater', 'comedy'] as const;
 export type CategoryHint = (typeof CATEGORY_HINTS)[number];
 
 /** Catalog categories (catalog/sync categoryFor) each hint covers. */
@@ -26,6 +26,8 @@ const CATALOG: Record<CategoryHint, string[]> = {
   nba: ['nba'],
   mlb: ['mlb'],
   wnba: ['wnba'],
+  nfl: ['nfl'],
+  soccer: ['soccer'],
   theater: ['broadway', 'touring_theater'],
   comedy: ['comedy'],
 };
@@ -38,6 +40,8 @@ const PROVIDER: Record<CategoryHint, string> = {
   nba: 'basketball',
   mlb: 'baseball',
   wnba: 'basketball',
+  nfl: 'football',
+  soccer: 'soccer',
   theater: 'theatre',
   comedy: 'comedy',
 };
@@ -49,6 +53,8 @@ const LABEL: Record<CategoryHint, string> = {
   nba: 'Basketball',
   mlb: 'Baseball',
   wnba: 'WNBA games',
+  nfl: 'Football',
+  soccer: 'Soccer',
   theater: 'Theater',
   comedy: 'Comedy',
 };
@@ -70,14 +76,51 @@ export function browseLabel(hint: CategoryHint | null): string {
   return hint ? LABEL[hint] : 'Events';
 }
 
+const SPORT_HINTS: readonly CategoryHint[] = ['sports', 'nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'];
+
+/** What the customer can name to narrow a list (`narrowBy`) or to try instead of it (`askFor`): a team for games, an artist for music. */
+export function narrowByFor(hint: CategoryHint | null): { narrowBy: string; askFor: string } {
+  if (hint && SPORT_HINTS.includes(hint)) return { narrowBy: 'a team or a day', askFor: 'a team' };
+  if (hint === 'concert') return { narrowBy: 'an artist, venue or kind of music', askFor: 'an artist' };
+  return { narrowBy: 'an artist, team or venue', askFor: 'an artist or team' };
+}
+
+/** The pilot's categories in words, for telling a customer what is covered. */
+export function pilotCoverageLabel(pilotCategories: string[]): string {
+  const leagues = ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].filter((c) => pilotCategories.includes(c)).map((c) => c.toUpperCase());
+  const parts = [pilotCategories.includes('concert') ? 'concerts' : null, leagues.length ? `${leagues.length > 1 ? `${leagues.slice(0, -1).join(', ')} and ${leagues.at(-1)}` : leagues[0]} games` : null].filter(Boolean);
+  return parts.join(' and ') || 'a few kinds of event';
+}
+
+/**
+ * The provider lists one show several times: "Premium Seating" and "Pinstripe Pass" versions of the same game,
+ * VIP and presale twins of one concert. Listings at the same venue and the same start whose names are the same
+ * once the extras are stripped, or one inside the other, or that share a performer, are one show; the plainest
+ * name is kept, in the position of the first.
+ */
+export function oneListingPerShow<T>(rows: T[], of: (r: T) => { name: string; venueId: string; startAt: Date; entityId: string | null }): T[] {
+  const core = (name: string) => name.toLowerCase().replace(/\*[^*]*\*/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const kept: Array<{ row: T; core: string; slot: string; entityId: string | null }> = [];
+  for (const row of rows) {
+    const x = of(row);
+    const c = core(x.name);
+    const slot = `${x.venueId}|${x.startAt.getTime()}`;
+    const twin = kept.find((k) => k.slot === slot && (k.core.includes(c) || c.includes(k.core) || (!!k.entityId && k.entityId === x.entityId)));
+    if (!twin) kept.push({ row, core: c, slot, entityId: x.entityId });
+    else if (c.length < twin.core.length || (c.length === twin.core.length && !x.name.includes('*') && of(twin.row).name.includes('*'))) Object.assign(twin, { row, core: c });
+  }
+  return kept.map((k) => k.row);
+}
+
 /**
  * The pilot's one market. Venues report their own city, and "New York" to a customer means the boroughs and
  * the arenas the pilot teams play in across the river, so the catalog is filtered by this list, not by an
- * exact city match. The provider is asked about the two cities that hold nearly all of the venues.
+ * exact city match. The provider matches its city filter exactly, so it is asked about each city that holds
+ * a big venue: Manhattan and Brooklyn, Yankee Stadium, Citi Field, the Prudential Center, UBS Arena and MetLife.
  */
 export const NEW_YORK_AREA = {
   label: 'New York',
-  providerCities: ['New York', 'Brooklyn'],
+  providerCities: ['New York', 'Brooklyn', 'Bronx', 'Flushing', 'Newark', 'Elmont', 'East Rutherford'],
   venueCities: ['new york', 'brooklyn', 'queens', 'bronx', 'the bronx', 'flushing', 'long island city', 'staten island', 'elmont', 'uniondale', 'newark', 'east rutherford', 'hoboken', 'jersey city'],
 };
 

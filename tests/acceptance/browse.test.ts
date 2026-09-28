@@ -131,6 +131,41 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA and MLB games in New York.');
   });
 
+  it('reads "american football" as football, not every sport, and says it is not covered yet', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'I want to see an american football game in or near new york the second week of october. Anything interesting? We need 4 tickets.', 'nfl@customer.example', { subject: 'American football' });
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
+    expect(req!.state).toBe('unsupported');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain("Football isn't something I cover yet. For now I only cover concerts and NHL, NBA and MLB games in New York.");
+    expect(body).not.toContain('Games in New York');
+  });
+
+  it('shows one line per game when the provider lists premium and package versions of it', async () => {
+    const STADIUM = '10000000-0000-4000-8000-0000000000c3';
+    await h.db.insert(t.venues).values({ id: STADIUM, name: 'Yankee Stadium', city: 'Bronx', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    const game = (name: string, at = '2026-10-08T23:08:00Z') => ({ name, category: 'mlb', venueId: STADIUM, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([
+      game('Pinstripe Pass * 2026 NY Yankees Division Series Home Game 2'),
+      game('2026 NY Yankees Division Series Home Game 2 * Premium Seating *'),
+      game('2026 NY Yankees Division Series Home Game 2'),
+      game('2026 NY Yankees Division Series Home Game 3', '2026-10-09T23:08:00Z'),
+    ]);
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any baseball in New York Oct 8-9?', 'mlb@customer.example');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain('• Thu, Oct 8 — 2026 NY Yankees Division Series Home Game 2 at Yankee Stadium');
+    expect(body).toContain('• Fri, Oct 9 — 2026 NY Yankees Division Series Home Game 3 at Yankee Stadium');
+    expect(body).not.toContain('Premium Seating');
+    expect(body).not.toContain('Pinstripe Pass');
+  });
+
+  it('suggests a team, not an artist, when no games are on file', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any basketball games in New York the last week of November?', 'nba-empty@customer.example');
+    expect((await lastSend(requestId)).bodyText).toContain('Want me to look at different dates, or is there a team you have in mind?');
+  });
+
   it('asks the provider by classification and place, with no keyword', async () => {
     const urls: string[] = [];
     const fetchImpl = (async (u: string) => {

@@ -13,7 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { NEW_YORK_AREA, browseLabel, inPilotVenueCity, isBrowseRequest, isPilotMarket, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { NEW_YORK_AREA, browseLabel, inPilotVenueCity, isBrowseRequest, isPilotMarket, narrowByFor, oneListingPerShow, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -499,7 +499,8 @@ export class Concierge {
     };
     if (!isPilotMarket(merged.city)) return unsupported(`For now I only cover events in the ${NEW_YORK_AREA.label} area.`, 'browse_outside_market');
     const categories = pilotCategoriesFor(merged.categoryHint, this.env.pilotSupportedCategories);
-    if (!categories.length) return unsupported(`For now I only cover concerts and NHL, NBA and MLB games in ${NEW_YORK_AREA.label}.`, 'browse_category_not_in_pilot');
+    const coverage = `For now I only cover ${pilotCoverageLabel(this.env.pilotSupportedCategories)} in ${NEW_YORK_AREA.label}.`;
+    if (!categories.length) return unsupported(merged.categoryHint && merged.categoryHint !== 'sports' ? `${browseLabel(merged.categoryHint)} isn't something I cover yet. ${coverage}` : coverage, 'browse_category_not_in_pilot');
 
     const day = (iso: string, delta: number) => {
       const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
@@ -527,18 +528,19 @@ export class Concierge {
       ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.category, categories), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(`${day(win.to, 2)}T00:00:00Z`)))).orderBy(asc(t.events.localStartAt)).limit(300)
       : [];
     const seen = new Set<string>();
-    const events = rows.filter(({ e, v }) => {
+    const inWindow = rows.filter(({ e, v }) => {
       if (!inPilotVenueCity(v.city)) return false;
       if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
-      if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba'].includes(e.category)) return false;
+      if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
       const d = eventLocalDate(e.localStartAt, v.timezone);
       if (d < win!.from || d > win!.to) return false;
-      // The provider lists VIP and package variants as separate events; one line per show is enough.
       const key = `${e.name.toLowerCase()}|${d}|${v.id}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+    // The provider lists VIP, premium and package versions of one show as separate events; one line per show.
+    const events = oneListingPerShow(inWindow, ({ e, v }) => ({ name: e.name, venueId: v.id, startAt: e.localStartAt, entityId: e.primaryEntityId }));
     const shown = events.slice(0, 5);
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
     const label = browseLabel(merged.categoryHint);
@@ -553,7 +555,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${NEW_YORK_AREA.label}, ${span}`), template: 'browse_options',
-      vars: { headline: `${label} in ${NEW_YORK_AREA.label}, ${span}${options.length ? ' — here’s what’s on:' : '.'}`, options, moreCount: events.length - shown.length, assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
+      vars: { headline: `${label} in ${NEW_YORK_AREA.label}, ${span}${options.length ? ' — here’s what’s on:' : '.'}`, options, moreCount: events.length - shown.length, ...narrowByFor(merged.categoryHint), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };
@@ -630,12 +632,13 @@ export class Concierge {
       // The provider lists one show more than once (package and presale variants under the same name); one
       // show at one venue on one day is one candidate, or the customer is asked to choose between twins.
       const seen = new Set<string>();
-      return cands.filter(({ e, v }) => {
+      const twinsOut = cands.filter(({ e, v }) => {
         const key = `${e.name.toLowerCase()}|${eventLocalDate(e.localStartAt, v.timezone)}|${v.id}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
+      return oneListingPerShow(twinsOut, ({ e, v }) => ({ name: e.name, venueId: v.id, startAt: e.localStartAt, entityId: e.primaryEntityId }));
     };
 
     // Events per matched entity, filtered the same way, so a nickname shared by two teams is settled by the
