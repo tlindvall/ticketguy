@@ -149,6 +149,8 @@ const rawSchema = z.object({
   BETTER_AUTH_URL: z.string().url().optional(),
   BETTER_AUTH_SECRET: z.string().optional(),
   STAFF_EMAIL_ALLOWLIST: csv,
+  /** Where "needs a person" alerts go; empty means every address in STAFF_EMAIL_ALLOWLIST. */
+  STAFF_ALERT_ADDRESSES: csv,
   INNGEST_EVENT_KEY: z.string().optional(),
   INNGEST_SIGNING_KEY: z.string().optional(),
   PREFERENCE_TOKEN_SIGNING_KEY: z.string().optional(),

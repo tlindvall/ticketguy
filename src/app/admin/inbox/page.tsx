@@ -22,9 +22,17 @@ export default async function Inbox({ searchParams }: { searchParams: Promise<{ 
     .limit(200);
   rows.sort((a, b) => (PRIORITY[a.state] ?? 9) - (PRIORITY[b.state] ?? 9) || a.updatedAt.getTime() - b.updatedAt.getTime());
   const now = nowMs();
+  // Counted separately from the list, so it shows whichever filter is open.
+  const [waiting] = await db.select({ n: sql<number>`count(*)::int` }).from(t.requests).where(sql`${t.requests.state} = 'manual_attention'`);
   return (
     <main>
       <h1 className="text-xl font-bold">Inbox</h1>
+      {(waiting?.n ?? 0) > 0 ? (
+        <p className="mt-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-900">
+          <strong>{waiting!.n} request{waiting!.n === 1 ? '' : 's'} waiting on a person.</strong>{' '}
+          <Link className="underline" href="/admin/inbox?state=manual_attention">Show them</Link>
+        </p>
+      ) : null}
       <p className="mt-1 text-sm text-gray-600">{rows.length} open request(s). Sorted by review priority, then waiting age.</p>
       <div className="mt-3 flex flex-wrap gap-2 text-xs">
         {['', 'awaiting_review', 'manual_attention', 'needs_clarification', 'researching', 'monitoring', 'closed', 'unsupported'].map((s) => (

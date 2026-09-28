@@ -107,6 +107,15 @@ export function renderTemplate(
       const html = [...lead.map(para), ...(options.length ? [htmlList(options)] : []), ...end.map(para)];
       return wrap(text, html);
     }
+    case 'holding': {
+      // Sent when only a person can move the request; it promises a person, never a time or a result.
+      const paras = [
+        'Hey,',
+        'Thanks for bearing with me — this one needs a person, so I’ve passed it to the team.',
+        `You’ll hear back in this thread. The team replies between ${String(v.hours ?? '9am–9pm ET')}.`,
+      ];
+      return wrap(paras, paras.map(para));
+    }
     case 'unsupported':
       return wrap([String(v.reason ?? ''), `We're sorry we can't help with this one yet.`], [`<p>${esc(String(v.reason ?? ''))}</p>`, `<p>We're sorry we can't help with this one yet.</p>`]);
     case 'deletion_verification':

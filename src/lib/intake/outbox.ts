@@ -12,6 +12,7 @@ export type OutboxEventType =
   | 'email.received'
   | 'request.interpret'
   | 'research.requested'
+  | 'staff.alert'
   | 'recommendation.review_ready'
   | 'email.send_requested'
   | 'watch.due'

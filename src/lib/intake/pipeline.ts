@@ -251,7 +251,7 @@ export class Concierge {
       if (e instanceof ModelOutputError && e.kind === 'transport') throw e;
       if (e instanceof BudgetExceededError || e instanceof ModelOutputError) {
         const reason = e instanceof ModelOutputError ? `extraction_failed:${e.kind}: ${e.message}` : `extraction_failed:budget_exceeded: ${e.message}`;
-        await this.transition(req.id, 'manual_attention', reason.slice(0, 500));
+        await this.parkForStaff({ req, revision: req.currentRevision, reason, contact: contact!, msg });
         return { state: 'manual_attention', revision: req.currentRevision, extraction: null };
       }
       throw e;
@@ -343,7 +343,7 @@ export class Concierge {
       const count = req.clarificationCount + 1;
       if (count > 3) {
         await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
-        await this.transition(req.id, 'manual_attention', 'clarification_limit_reached');
+        await this.parkForStaff({ req, revision, reason: 'clarification_limit_reached', contact: contact!, msg });
         return { state: 'manual_attention', revision, extraction: merged };
       }
       // The question that decides the event comes first and is built from the filtered candidates, never a
@@ -408,6 +408,66 @@ export class Concierge {
     return v ?? null;
   }
 
+  /**
+   * A request only a person can move. It used to stop here in silence: no reply to the customer, nothing to
+   * staff, found only by someone opening the inbox. Now the customer is told once per request that a person
+   * has it, and staff are alerted once per revision with the reason and a link — never the message itself.
+   */
+  private async parkForStaff(a: { req: typeof t.requests.$inferSelect; revision: number; reason: string; contact: typeof t.contacts.$inferSelect; msg: typeof t.messages.$inferSelect }): Promise<void> {
+    const { req, revision, reason, contact, msg } = a;
+    await this.transition(req.id, 'manual_attention', reason.slice(0, 500));
+    await this.queueSend({
+      messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
+      subject: reSubject(msg.subject, 'A person is picking this up'), template: 'holding', vars: { hours: staffedHoursLabel(this.env) },
+      inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
+      dedupeKey: `holding:${req.id}`,
+    });
+    await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${req.id}:${revision}`, entityId: req.id, payload: { requestId: req.id, revision }, now: this.now() });
+  }
+
+  /**
+   * One email per staff address for a request waiting on a person. Internal mail, so it does not pass the
+   * customer send gate (whose test allowlist would drop staff), but "stop all outbound" still stops it. It
+   * carries the reason and a link, never the customer's words, like the diagnostic scripts.
+   */
+  async alertStaff(args: { requestId: string; revision: number }): Promise<{ outcome: 'sent' | 'skipped'; reason?: string }> {
+    const skip = async (why: string) => {
+      await audit(this.db, { actor: 'system', action: 'staff_alert.skipped', entityKind: 'request', entityId: args.requestId, revision: args.revision, diff: { reason: why } });
+      return { outcome: 'skipped' as const, reason: why };
+    };
+    const recipients = this.env.STAFF_ALERT_ADDRESSES.length ? this.env.STAFF_ALERT_ADDRESSES : this.env.STAFF_EMAIL_ALLOWLIST;
+    if (!recipients.length) return skip('no_staff_addresses');
+    if (!this.deps.emailProvider) return skip('sending_disabled');
+    const switches = await loadSwitches(this.db);
+    if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
+    const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, args.requestId));
+    if (!req) return skip('request_not_found');
+    if (req.state !== 'manual_attention') return skip('no_longer_waiting');
+    const [last] = await this.db.select({ reason: t.requestTransitions.reason, at: t.requestTransitions.createdAt }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.toState, 'manual_attention'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
+    const why = staffReasonLabel(last?.reason ?? 'unknown');
+    const link = `${this.env.APP_URL.replace(/\/$/, '')}/admin/requests/${req.id}`;
+    const subject = `Needs a person: ${why}`;
+    const text = [
+      `A request is waiting on a person: ${why}.`,
+      `Request ${req.id.slice(0, 8)}, revision ${args.revision}. The customer has been told a person is picking it up.`,
+      `Open it: ${link}`,
+      'This is an automatic alert. Reply to the customer from the request page, not to this email.',
+    ].join('\n\n');
+    const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const html = `<p>A request is waiting on a person: <strong>${esc(why)}</strong>.</p><p>Request ${esc(req.id.slice(0, 8))}, revision ${args.revision}. The customer has been told a person is picking it up.</p><p><a href="${esc(link)}">Open the request</a></p><p style="color:#666;font-size:12px;">This is an automatic alert. Reply to the customer from the request page, not to this email.</p>`;
+    for (const to of recipients) {
+      await this.deps.emailProvider.send({
+        idempotencyKey: `staff-alert:${req.id}:${args.revision}:${to}`,
+        from: `Ticket Guy alerts <${this.env.CONCIERGE_FROM_ADDRESS}>`,
+        to, subject, text, html,
+        // An out-of-office reply to this must not come back in as a customer request.
+        headers: { 'Auto-Submitted': 'auto-generated', 'X-TicketGuy-Staff-Alert': 'true' },
+      });
+    }
+    await audit(this.db, { actor: 'system', action: 'staff_alert.sent', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { recipients: recipients.length, reason: last?.reason?.split(':')[0] ?? 'unknown' } });
+    return { outcome: 'sent' };
+  }
+
   async transition(requestId: string, toState: string, reason: string, actor = 'system'): Promise<void> {
     const [r] = await this.db.select({ state: t.requests.state, rev: t.requests.currentRevision }).from(t.requests).where(eq(t.requests.id, requestId));
     await this.db.update(t.requests).set({ state: toState, updatedAt: this.now(), failureReason: toState === 'failed' || toState === 'unsupported' ? reason : null }).where(eq(t.requests.id, requestId));
@@ -429,7 +489,7 @@ export class Concierge {
     if (revision > 1) await this.invalidateForRevision(req.id, revision);
     if (count > 3) {
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
-      await this.transition(req.id, 'manual_attention', 'clarification_limit_reached');
+      await this.parkForStaff({ req, revision, reason: 'clarification_limit_reached', contact, msg });
       return { state: 'manual_attention', revision, extraction: merged };
     }
     const unsupported = async (reason: string, why: string) => {
@@ -1217,4 +1277,19 @@ export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: 
     lines.push(`I've read ${formatUsd(x.budgetCents)} as the total for ${n === 2 ? 'both' : `all ${n}`} — tell me if you meant per ticket.`);
   }
   return lines;
+}
+
+/** Why a request is waiting on a person, in words for the staff alert. */
+export function staffReasonLabel(reason: string): string {
+  if (reason === 'clarification_limit_reached') return 'three rounds of questions did not settle the request';
+  if (reason.startsWith('extraction_failed:budget_exceeded')) return 'the AI budget for this request ran out';
+  if (reason.startsWith('extraction_failed:')) return `the AI could not read the message (${reason.split(':')[1] ?? 'unknown'})`;
+  return reason.split(':')[0]!.replace(/_/g, ' ');
+}
+
+/** "9am–9pm ET" from the staffed-hours settings, for the holding reply. */
+export function staffedHoursLabel(e: { STAFFED_HOURS_START: number; STAFFED_HOURS_END: number; STAFFED_HOURS_TIMEZONE: string }): string {
+  const h = (n: number) => (n === 0 || n === 24 ? '12am' : n === 12 ? '12pm' : n < 12 ? `${n}am` : `${n - 12}pm`);
+  const zone = e.STAFFED_HOURS_TIMEZONE === 'America/New_York' ? 'ET' : e.STAFFED_HOURS_TIMEZONE;
+  return `${h(e.STAFFED_HOURS_START)}–${h(e.STAFFED_HOURS_END)} ${zone}`;
 }
