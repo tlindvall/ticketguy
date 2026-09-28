@@ -254,13 +254,13 @@ describe('resolving an event through discovery', () => {
     }
   });
 
-  it('two teams sharing a nickname on the same night is a choice, and a city settles it', async () => {
+  it('two teams sharing a nickname on the same night: the New York one is meant, and the reply says so', async () => {
     const c = concierge(h, fakeFetch({ rangers: [NYR_HOME, TEX_HOME] }));
     const open = await c.resolveEventWithDiscovery(brief({ performerOrTeam: 'rangers', resolvedLocalDate: '2026-10-20' }), ctx);
-    expect(open.kind).toBe('ambiguous');
-    if (open.kind === 'ambiguous') {
-      expect(open.candidates.map((x) => x.label).join(' | ')).toMatch(/New York Rangers \(NHL\)/);
-      expect(open.candidates.map((x) => x.label).join(' | ')).toMatch(/Texas Rangers \(MLB\)/);
+    expect(open.kind).toBe('resolved');
+    if (open.kind === 'resolved') {
+      expect(open.event.name).toBe('New York Rangers vs. New Jersey Devils');
+      expect(open.assumed).toBe("I've gone with the New York Rangers — tell me if you meant a different team.");
     }
     const settled = await c.resolveEventWithDiscovery(brief({ performerOrTeam: 'rangers', resolvedLocalDate: '2026-10-20', city: 'New York' }), ctx);
     expect(settled.kind).toBe('resolved');

@@ -231,6 +231,35 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).toContain("I couldn't find any Latin music listed for those dates, so here's everything that's on.");
   });
 
+  it('"the other 2" lists the rest, and then says that is everything', async () => {
+    const HALL = '10000000-0000-4000-8000-0000000000c6';
+    await h.db.insert(t.venues).values({ id: HALL, name: 'Music Hall of Williamsburg', city: 'Brooklyn', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    const names = ['Act One', 'Act Two', 'Act Three', 'Act Four', 'Act Five', 'Act Six', 'Act Seven'];
+    await h.db.insert(t.events).values(names.map((name, i) => ({ name, category: 'concert', genre: null, venueId: HALL, primaryEntityId: null, isHome: null, localStartAt: new Date(`2026-10-1${i < 4 ? 0 : 1}T${String(20 + (i % 4)).padStart(2, '0')}:00:00Z`), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true })));
+    const c = makeConcierge(h);
+    const first = inbound({ text: 'What concerts are on in Brooklyn Oct 10-11?', from: 'more@customer.example', subject: 'Brooklyn gigs' });
+    const r = await c.ingestInbound(first);
+    await interpretAll(h, c);
+    const requestId = (r as { requestId: string }).requestId;
+    const one = (await lastSend(requestId)).bodyText;
+    expect(one).toContain('There are 2 more in that window');
+    const firstFive = names.filter((n) => one.includes(`${n} at`));
+    expect(firstFive).toHaveLength(5);
+    const reply = (text: string) => c.ingestInbound(inbound({ text, from: 'more@customer.example', subject: 'Re: Brooklyn gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await reply('can you give me the other 2');
+    await interpretAll(h, c);
+    const two = (await lastSend(requestId)).bodyText;
+    expect(two).toContain('More live music in Brooklyn, Oct 10–11:');
+    const rest = names.filter((n) => two.includes(`${n} at`));
+    expect(rest).toHaveLength(2);
+    expect(rest.some((n) => firstFive.includes(n))).toBe(false); // none of the first five again
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
+    expect(req!.clarificationCount).toBe(2);
+    await reply('any others?');
+    await interpretAll(h, c);
+    expect((await lastSend(requestId)).bodyText).toContain("That's everything I have for live music in Brooklyn, Oct 10–11.");
+  });
+
   it('asks the provider by classification and place, with no keyword', async () => {
     const urls: string[] = [];
     const fetchImpl = (async (u: string) => {

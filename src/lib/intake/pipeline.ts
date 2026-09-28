@@ -305,7 +305,7 @@ export class Concierge {
     let picked: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
     let pickNote: string | null = null;
     if (isBrowseRequest(merged)) {
-      const b = await this.browse({ req, msg, contact: contact!, merged, revision });
+      const b = await this.browse({ req, msg, contact: contact!, merged, revision, more: extraction.wantsMore === true && req.browseShown.length > 0 });
       if (!('pick' in b)) return b;
       picked = b.pick;
       pickNote = b.note;
@@ -322,11 +322,14 @@ export class Concierge {
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
       : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
     const eventResolved = resolution.kind === 'resolved';
+    if (resolution.kind === 'resolved' && resolution.assumed) assumptions.unshift(resolution.assumed);
     const missing = missingMandatoryFields(merged, { eventResolved });
     // "next week" is a window the resolver now reads; a model that still flags it as an unsupported date
     // expression should not cost the customer a question about it.
     const dateWindowKnown = !!merged.dateExpression && !!dateWindowFor(merged.dateExpression, msg.receivedAt, venueTz ?? 'America/New_York');
-    const ambiguities = merged.ambiguities.filter((a) => !(dateWindowKnown && a === 'date_unsupported_expression'));
+    // The model flags "Giants" as ambiguous and "no city" as unknown from the words alone; once the catalog has
+    // settled the event (one team with a game then, or the local one), those questions have been answered.
+    const ambiguities = merged.ambiguities.filter((a) => !(dateWindowKnown && a === 'date_unsupported_expression') && !(eventResolved && SETTLED_BY_RESOLUTION.includes(a)));
     const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities];
 
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: unresolved, createdBy: 'system' });
@@ -489,8 +492,9 @@ export class Concierge {
    * named (the next two weeks when none was, and the reply says so). The request waits for the customer to
    * pick one; their reply names it, and the ordinary resolution takes over from there.
    */
-  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string }> {
+  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string }> {
     const { req, msg, contact, merged, revision } = a;
+    const more = a.more === true;
     const now = this.now();
     const tz = 'America/New_York';
     const count = req.clarificationCount + 1;
@@ -580,13 +584,16 @@ export class Concierge {
     const within = await lookIn(win);
     const after = within.events.length ? null : await lookIn({ from: day(win.to, 1), to: day(win.to, 42) });
     const found = after?.events.length ? after : within;
-    const { events, all, placed, areaKept, genreKept } = found;
+    const { all, placed, areaKept, genreKept } = found;
+    // "The other 7": the same list, without what was already sent.
+    const alreadyShown = new Set(more ? req.browseShown : []);
+    const events = found.events.filter(({ e }) => !alreadyShown.has(e.id));
     const providerChecked = within.providerChecked;
 
     // One game in the window is the answer, not a menu of one. When they have said how many tickets, they are
     // buying: it goes straight on to prices as an ordinary request, and the reply says why. Without a number
     // it is shown as the one option, and only the number is asked.
-    const single = !after && events.length === 1 && genreKept && areaKept;
+    const single = !more && !after && events.length === 1 && genreKept && areaKept;
     if (single && merged.quantity !== null) {
       const only = events[0]!;
       return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? NEW_YORK_AREA.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
@@ -597,7 +604,9 @@ export class Concierge {
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
     const place = area && areaKept ? area.label : NEW_YORK_AREA.label;
     const span = spanLabel(win.from, win.to);
-    const headline = after?.events.length
+    const headline = more
+      ? (options.length ? `More ${label.toLowerCase()} in ${place}, ${span}:` : `That's everything I have for ${label.toLowerCase()} in ${place}, ${span}.`)
+      : after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
       : `${label} in ${place}, ${span}${single ? ' — there’s one on:' : options.length ? ' — here’s what’s on:' : '.'}`;
     const assumptions = [assumedWindow ? 'the next two weeks' : null, merged.city ? null : NEW_YORK_AREA.label].filter(Boolean);
@@ -611,7 +620,9 @@ export class Concierge {
     const emptyNote = providerChecked
       ? `I checked the official listings and couldn't find any ${label.toLowerCase()} in ${place} for ${span}.`
       : `I don't have any ${label.toLowerCase()} in ${place} on file for ${span}.`;
-    await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
+    // What this reply lists is remembered, so "the other 7" continues from here; a new question starts over.
+    const listed = shown.map(({ e }) => e.id);
+    await this.db.update(t.requests).set({ clarificationCount: count, browseShown: more ? [...req.browseShown, ...listed] : listed }).where(eq(t.requests.id, req.id));
     await this.transition(req.id, 'needs_clarification', 'browse_options');
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
@@ -657,7 +668,7 @@ export class Concierge {
     return exact.length ? exact : rows;
   }
 
-  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
+  async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     // A matchup ("Rangers vs Lightning") is tried side by side: the side we know is the team, the other side
     // narrows its games. The first-named side goes first because it is usually the home team.
@@ -722,8 +733,19 @@ export class Concierge {
     // Not on file at all is a different fact from on file with nothing scheduled, and the customer is told
     // which: claiming we searched listings we do not have is a claim about our own diligence.
     if (!sawEntity) return { kind: 'no_match', reason: 'unknown_performer' };
-    const withEvents = perEntity.filter((p) => p.cands.length > 0);
+    let withEvents = perEntity.filter((p) => p.cands.length > 0);
     if (withEvents.length === 0) return { kind: 'no_match', reason: 'no_scheduled_event' };
+    // Two teams share the name and both have a game in the window ("Giants", "Rangers", "Jets"): the one
+    // that plays in the market we serve is meant, and the reply says so in a line the customer can correct.
+    // Only when neither or both are local is it asked.
+    let assumed: string | null = null;
+    if (withEvents.length > 1) {
+      const local = withEvents.filter((p) => isLocalTeam(p.entity, p.cands));
+      if (local.length === 1) {
+        withEvents = local;
+        assumed = `I've gone with the ${local[0]!.entity.name} — tell me if you meant a different ${local[0]!.entity.kind === 'team' ? 'team' : 'act'}.`;
+      }
+    }
     if (withEvents.length > 1) {
       // Two different teams both have a game in the window: name them, one candidate each.
       return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => candidateFrom(entity, cands[0]!.e, cands[0]!.v, `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}`)) };
@@ -732,7 +754,7 @@ export class Concierge {
     if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
-    return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist' };
+    return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist', assumed };
   }
 
   /**
@@ -1252,6 +1274,18 @@ export function eventLabel(e: { name: string; localStartAt: Date }, v: { name: s
   return `${e.name} — ${v.name}${v.city ? `, ${v.city}` : ''} — ${when}`;
 }
 
+/** Model ambiguities that a resolved event answers: which team by that name, and which city. */
+const SETTLED_BY_RESOLUTION = ['performer_ambiguous', 'event_location_unknown'];
+
+/**
+ * The team a New York customer means by a shared nickname: named for the market ("New York Giants",
+ * "Brooklyn Nets", "New Jersey Devils"), or at home in one of its venues in the games found.
+ */
+export function isLocalTeam(entity: { name: string }, cands: Array<{ e: { isHome: boolean | null }; v: { city: string | null } }>): boolean {
+  if (/^(new york|brooklyn|new jersey|ny)\b/i.test(entity.name.trim())) return true;
+  return cands.some(({ e, v }) => e.isHome === true && inPilotVenueCity(v.city));
+}
+
 export function basketKeyFor(eventId: string, quantity: number, seatClass: string | null): string {
   return sha(`${eventId}|q=${quantity}|class=${seatClass ?? 'any'}|fees=verified_total`).slice(0, 24);
 }
@@ -1264,6 +1298,7 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
     if (k === 'evidence' || k === 'submittedUrls' || k === 'negatedEntities') (out as Record<string, unknown>)[k] = [...(prior[k] as unknown[]), ...(v as unknown[])];
     else if (k === 'ambiguities') out.ambiguities = next.ambiguities;
     else if (k === 'intent') out.intent = next.intent === 'clarification' ? prior.intent : next.intent;
+    else if (k === 'wantsMore') out.wantsMore = next.wantsMore; // about this message's list, never the next one's
     else if (v !== null && v !== undefined) (out as Record<string, unknown>)[k] = v;
   }
   return out;

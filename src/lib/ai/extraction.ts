@@ -4,7 +4,7 @@ import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
-import { lexiconGenre, lexiconQuantity, lexiconVagueQuantity } from '@/lib/lexicon/lexicon';
+import { lexiconGenre, lexiconQuantity, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -181,7 +181,10 @@ export class FixtureExtractor implements Extractor {
     const together = /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i.test(t) ? false : /\b(together|next to each other|adjacent|side by side)\b/i.test(t) ? true : null;
     ev('togetherRequired', together === null ? null : (/\b(together|next to each other|adjacent|side by side|split|separate)\b/i.exec(t)?.[0] ?? null));
     const accessibility = /\b(wheelchair|accessible|ada)\b/i.exec(t);
-    const performerOrTeam = ent ? ent.entity.name : null;
+    // A nickname two teams share ("Giants") stays the customer's word: which one is meant is the resolver's call,
+    // from the catalog and the market, not whichever happened to be listed first.
+    const sharedNickname = !!ent && input.knownEntities.filter((k) => [k.name, ...k.aliases].some((n) => n.toLowerCase() === ent.quote.toLowerCase())).length > 1;
+    const performerOrTeam = ent ? (sharedNickname ? ent.quote : ent.entity.name) : null;
     const urls = [...t.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0]);
     const mustAttend = /\b(must|definitely|have to|can'?t miss|need to) (attend|go|be there|make it)\b/i.test(t)
       ? true
@@ -225,6 +228,7 @@ export class FixtureExtractor implements Extractor {
       countryStatement,
       categoryHint,
       genreHint: genre?.value ?? null,
+      wantsMore: lexiconWantsMore(t) ? true : null,
     });
   }
 }
