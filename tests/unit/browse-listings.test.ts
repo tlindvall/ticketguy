@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { areaFor, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
-import { genreFor } from '@/lib/catalog/sync';
+import { genreFor, subtypeFor } from '@/lib/catalog/sync';
 import { lexiconCategory } from '@/lib/lexicon/lexicon';
 
 const at = new Date('2026-10-08T23:08:00Z');
@@ -46,6 +46,9 @@ describe('kind of music and borough', () => {
     expect(genreMatches(rock, 'alternative / alternative rock')).toBe(true);
     expect(genreMatches(rock, 'jazz')).toBe(false);
     expect(genreMatches(rock, null)).toBe(false);
+    expect(genreMatches(rock, 'pop / pop rock')).toBe(false); // Charlie Puth is pop
+    expect(genreMatches(rock, 'hip-hop/rap / rock')).toBe(false);
+    expect(genreMatches(rock, 'other / punk')).toBe(true);
     expect(genreFamilyFor('jazz')!.label).toBe('Jazz');
     expect(genreFamilyFor('something fun')).toBeNull();
   });
@@ -54,6 +57,8 @@ describe('kind of music and borough', () => {
     expect(genreFor({ genre: 'Rock', subGenre: 'Indie Rock', attractions: [] })).toBe('rock / indie rock');
     expect(genreFor({ genre: 'Undefined', subGenre: null, attractions: [{ providerId: 'a', name: 'x', url: null, segment: 'Music', genre: 'Jazz', subGenre: 'Undefined' }] })).toBe('jazz');
     expect(genreFor({ genre: null, subGenre: null, attractions: [] })).toBeNull();
+    // A venue that files every night as Rock does not make a hip-hop headliner rock.
+    expect(genreFor({ genre: 'Rock', subGenre: 'Rock', attractions: [{ providerId: 'j', name: 'Jeru The Damaja', url: null, segment: 'Music', genre: 'Hip-Hop/Rap', subGenre: 'Hip-Hop/Rap' }] })).toBe('hip-hop/rap');
   });
 
   it('knows the boroughs and treats New York as the whole market', () => {
@@ -61,5 +66,12 @@ describe('kind of music and borough', () => {
     expect(areaFor('we are staying in brooklyn')!.venueCities).toEqual(['brooklyn']);
     expect(areaFor('New York')).toBeNull();
     expect(areaFor(null)).toBeNull();
+  });
+});
+
+describe('NFL listings that are not a ticket to the game', () => {
+  it('files seat licences, season plans and tailgates as packages', () => {
+    for (const name of ['New York Jets PSL', 'Giants Personal Seat License', 'Jets Season Tickets 2027', 'Giants Tailgate Party']) expect(subtypeFor({ name, timeTba: false }), name).toBe('package');
+    expect(subtypeFor({ name: 'New York Giants vs. Philadelphia Eagles', timeTba: false })).toBeNull();
   });
 });

@@ -230,13 +230,23 @@ The brief had no way to hold either fact. "Football" was not a kind of event, so
 was "game", which means every sport. The kind of music, and a borough inside the market, were read
 and then dropped.
 
-**Football and soccer are their own categories.** Both are outside the pilot, so the customer is
-told plainly what is covered. Turning NFL on is a config change (`PILOT_SUPPORTED_CATEGORIES`), and
-MetLife is now among the cities the provider is asked about.
+**Football and soccer are their own categories, and the NFL is in the pilot.**
+- The Giants and Jets at MetLife are some of the heaviest demand in New York, so a football request
+  gets the games, not a refusal.
+- NFL listings that aren't a ticket to the game are dropped: seat licences (PSLs), season plans,
+  tailgates and parking.
+- The provider is asked about East Rutherford.
+- The Giants and Jets are seeded into the catalog.
+- Soccer stays outside the pilot and says so.
+
+**A window with nothing in it is not a dead end.** NFL teams play at home about every other week, so
+the week asked for is often empty. The reply then offers the next few after it (up to six weeks on)
+and labels them as later dates.
 
 **Kind of music is `genreHint`.** It stores the customer's words, which match a genre family in
-the lexicon. The catalog now stores the provider's genre and sub-genre. The list is filtered by
-family, and the provider is also asked for that genre by name, so a busy week's first hundred shows
+the lexicon. The catalog now stores the headliner's genre and sub-genre, falling back to the event's, because
+venues file their whole calendar under one genre. The main genre decides: "pop / pop rock" is not
+rock. The list is filtered by family, and the provider is also asked for that genre by name, so a busy week's first hundred shows
 can't crowd it out. When nothing on file matches, the reply says so and shows everything that's on.
 It doesn't send an empty list, because genre tags are uneven.
 

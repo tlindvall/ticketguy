@@ -91,6 +91,8 @@ export function subtypeFor(e: { name: string; timeTba: boolean }): string | null
   const n = e.name.toLowerCase();
   if (/\bparking\b/.test(n)) return 'parking';
   if (/\b(vip|package|packages|suite|suites|hospitality|premium experience|fan pack|meet\s*(&|and)\s*greet)\b/.test(n)) return 'package';
+  // NFL listings sell the right to buy (seat licences), season plans and tailgates alongside the game itself.
+  if (/\b(psls?|personal seat licen[cs]es?|season tickets?|season (?:ticket )?plans?|tailgates?|tailgating)\b/.test(n)) return 'package';
   if (/\bpreseason\b/.test(n)) return 'preseason';
   if (/\b(playoff|playoffs|postseason)\b/.test(n)) return 'playoffs';
   if (e.timeTba) return 'time_tba';
@@ -106,13 +108,16 @@ export function subtypeFor(e: { name: string; timeTba: boolean }): string | null
 export const NON_GAME_PATTERN = /\b(alumni|fan\s?fest|fanfest|watch party|viewing party|open practice|practice|skills (?:competition|challenge)|clinic|camp|draft party|gala|luncheon|autograph)\b/i;
 
 /**
- * The provider's genre and sub-genre, lowercased ("rock / indie rock"), from the event's classification or,
- * when that is blank, its first performer's. "Undefined" and "Other" are the provider's way of saying none.
+ * The genre and sub-genre, lowercased ("rock / indie rock"), from the headliner's classification or, when
+ * that is blank, the event's. The headliner comes first because venues file their whole calendar under one
+ * genre: a hip-hop night at a bowling-alley venue arrives as "Rock". "Undefined" and "Other" mean none.
  */
 export function genreFor(e: Pick<DiscoveredEvent, 'genre' | 'subGenre' | 'attractions'>): string | null {
   const real = (v: string | null | undefined) => (v && !/^(undefined|other)$/i.test(v.trim()) ? v.trim().toLowerCase() : null);
   const a = e.attractions[0];
-  const parts = [real(e.genre) ?? real(a?.genre), real(e.subGenre) ?? real(a?.subGenre)].filter((x): x is string => !!x);
+  const main = real(a?.genre) ?? real(e.genre);
+  const sub = real(a?.genre) ? real(a?.subGenre) : real(e.subGenre);
+  const parts = [main, sub].filter((x): x is string => !!x);
   return parts.length ? [...new Set(parts)].join(' / ') : null;
 }
 

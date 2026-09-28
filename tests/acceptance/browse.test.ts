@@ -128,17 +128,37 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const chicago = await ask(c, 'What concerts are on in Chicago next week?', 'chi@customer.example');
     expect((await lastSend(chicago)).bodyText).toContain('For now I only cover events in the New York area.');
     const theater = await ask(c, 'Any good Broadway musicals on next week?', 'bway@customer.example');
-    expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA and MLB games in New York.');
+    expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA, MLB and NFL games in New York.');
   });
 
-  it('reads "american football" as football, not every sport, and says it is not covered yet', async () => {
+  it('answers "an american football game" with the NFL games that week, not every sport', async () => {
+    const METLIFE = '10000000-0000-4000-8000-0000000000c5';
+    await h.db.insert(t.venues).values({ id: METLIFE, name: 'MetLife Stadium', city: 'East Rutherford', state: 'NJ', country: 'US', timezone: 'America/New_York' });
+    const nfl = (name: string, at: string, extra: Record<string, unknown> = {}) => ({ name, category: 'nfl', venueId: METLIFE, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true, ...extra });
+    await h.db.insert(t.events).values([
+      nfl('New York Giants vs. Philadelphia Eagles', '2026-10-11T17:00:00Z'),
+      nfl('Parking: New York Giants vs. Philadelphia Eagles', '2026-10-11T17:00:00Z', { subtype: 'parking' }),
+      nfl('New York Jets vs. Buffalo Bills', '2026-10-25T17:00:00Z'),
+    ]);
     const c = makeConcierge(h);
     const requestId = await ask(c, 'I want to see an american football game in or near new york the second week of october. Anything interesting? We need 4 tickets.', 'nfl@customer.example', { subject: 'American football' });
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
-    expect(req!.state).toBe('unsupported');
+    expect(req!.state).toBe('needs_clarification');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain("Football isn't something I cover yet. For now I only cover concerts and NHL, NBA and MLB games in New York.");
-    expect(body).not.toContain('Games in New York');
+    expect(body).toContain('Football in New York, Oct 8–14 — here’s what’s on:');
+    expect(body).toContain('• Sun, Oct 11 — New York Giants vs. Philadelphia Eagles at MetLife Stadium');
+    expect(body).not.toContain('Parking');
+    expect(body).not.toContain('Jets'); // outside the week asked for
+    expect(body).not.toContain('Yankees');
+    expect(body).not.toContain("isn't something I cover");
+  });
+
+  it('offers the next games when the week asked for has none', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any NFL games in New York Oct 12-18?', 'nfl-later@customer.example');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain('Football in New York: nothing on Oct 12–18, but here are the next ones after that:');
+    expect(body).toContain('• Sun, Oct 25 — New York Jets vs. Buffalo Bills at MetLife Stadium');
   });
 
   it('shows one line per game when the provider lists premium and package versions of it', async () => {
@@ -190,6 +210,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).not.toContain('Manhattan Indie Night'); // the music, but not Brooklyn
     expect(body).not.toContain('Jack White');
     expect(body).toContain("I've kept it to Brooklyn venues — say if you'd go further.");
+    expect(body).not.toContain("kind of music and I'll narrow"); // the kind of music is already known
   });
 
   it('says so, and shows what is on, when nothing on file is the music asked for', async () => {

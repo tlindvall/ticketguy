@@ -130,7 +130,7 @@ export const LEXICON: LexiconEntry[] = [
     id: 'category.nfl',
     field: 'categoryHint',
     value: 'nfl',
-    meaning: 'American football. In a US product "football" is the NFL; college football reads the same and is outside the pilot too.',
+    meaning: 'American football. In a US product "football" is the NFL (the Giants and Jets at MetLife); college football reads the same.',
     phrases: ['football', 'American football', 'NFL', 'a football game'],
     pattern: /\b(nfl|(?:american )?football)\b/i,
     categories: ['nfl'],
