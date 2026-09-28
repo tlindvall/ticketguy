@@ -197,3 +197,25 @@ US customer's request with "Ticket Guy is US-only for now". `src/lib/domain/coun
 words after "I'm in / I live in / from / based in" to be a recognised place. It reads NYC-area places and US
 states as US, doesn't treat a trip ("visiting", "for the weekend") as residence, and returns NON_US only for
 a named non-US place or an explicit "not in the US". Anything else changes nothing.
+
+## 32. Assume and say, and answer "what's on?" with what's on
+
+The owner's review of real replies: the concierge "looks for too much 100% confirmation before acting".
+Two changes follow from it.
+
+**Assume and say.** An unstated quantity used to cost a round trip ("How many tickets do you need?"),
+and so did a budget with no basis ("per ticket or for everyone combined?"). Now:
+- an unstated quantity is two;
+- a bare budget is the total;
+- the reply says each assumption once, in a line the customer can correct ("I've assumed two tickets —
+  just tell me if you need a different number").
+
+The value is written into the brief, so a later "actually four" overrides it through the ordinary
+revision path, which also invalidates any draft built on the assumption. Real doubt is still asked: "a
+few tickets" flags `quantity_unclear` and gets the quantity question. This relaxes
+API_AND_DATA_CONTRACTS §1's mandatory fields. Recommendations remain human-reviewed, so an assumption
+that turns out wrong is caught before advice goes out, not after.
+
+**Browse.** A request that names no performer or team is not a malformed search; it asks what the
+options are. It now gets up to five real scheduled New York-area events for the span named, or the
+next two weeks, and says so. Quantity and budget wait until the customer picks one.

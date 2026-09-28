@@ -108,14 +108,26 @@ describe('the clarification email', () => {
     expect(second!.bodyText).not.toContain('outside the US');
   });
 
-  it('asks what the extractor was unsure of: a budget with no basis reaches the email as a question', async () => {
+  it('assumes instead of asking: a bare budget is the total and an unstated quantity is two, each said once', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: 'Two tickets for the Knicks on October 24, around $300.', from: 'jo@customer.example', subject: 'Knicks' }));
     await interpretAll(h, c);
     const requestId = (r as { requestId: string }).requestId;
     const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId));
-    expect(intent!.messageClass).toBe('clarification');
-    expect(intent!.bodyText).toContain('Is your budget of $300 per ticket or for everyone combined?');
+    expect(intent!.bodyText).not.toContain('per ticket or for everyone combined');
+    expect(intent!.bodyText).toContain("I've read $300 as the total for both — tell me if you meant per ticket.");
+
+    const q = await c.ingestInbound(inbound({ text: 'Rangers tickets on Oct 3 please.', from: 'noqty@customer.example', subject: 'Rangers' }));
+    await interpretAll(h, c);
+    const [qi] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, (q as { requestId: string }).requestId));
+    expect(qi!.bodyText).not.toContain('How many tickets do you need');
+    expect(qi!.bodyText).toContain("I've assumed two tickets — just tell me if you need a different number.");
+
+    // Real doubt is still asked, not papered over.
+    const few = await c.ingestInbound(inbound({ text: 'A few tickets for the Rangers on Oct 3.', from: 'few@customer.example', subject: 'Rangers' }));
+    await interpretAll(h, c);
+    const [fi] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, (few as { requestId: string }).requestId));
+    expect(fi!.bodyText).not.toContain("I've assumed two tickets");
   });
 
   it('names up to three games when they are all home games, and asks for a date beyond that', async () => {
@@ -152,6 +164,42 @@ describe('the clarification email', () => {
     expect(acknowledgementLine(brief({ performerOrTeam: 'Knicks', quantity: 1, budgetCents: 15000, budgetBasis: 'per_ticket' }))).toBe('One Knicks ticket, up to $150 each—got it.');
     expect(acknowledgementLine(brief({ performerOrTeam: 'Dua Lipa', quantity: 12, togetherRequired: true }))).toBe('12 Dua Lipa tickets together—got it.');
     expect(acknowledgementLine(brief({ quantity: null }))).toBe('Thanks for getting in touch.');
+    // A game reads as a game, with the matchup's "vs" left lower case.
+    expect(acknowledgementLine(brief({ performerOrTeam: 'new york rangers vs tampa bay lightning', quantity: 2, togetherRequired: true, dateExpression: 'oct 1st', budgetCents: 40000, budgetBasis: 'whole_party' }))).toBe(
+      'Two tickets together for New York Rangers vs Tampa Bay Lightning oct 1st, up to $400 total—got it.',
+    );
+  });
+
+  // The first real "Rangers vs Lightning" request came back "no scheduled event": the extractor put the whole
+  // matchup in the team field and no team has that name, although the Rangers' games were on file.
+  it('resolves a matchup to the game against that opponent', async () => {
+    const c = makeConcierge(h);
+    const full = await c.resolveEvent(brief({ performerOrTeam: 'New York Rangers vs New York Islanders' }));
+    expect(full.kind).toBe('resolved');
+    if (full.kind === 'resolved') expect(full.event.name).toContain('Islanders');
+
+    // The opponent settles it even when the date alone would not, and a nickname or city is enough.
+    const away = await c.resolveEvent(brief({ performerOrTeam: 'Rangers vs Bruins', dateExpression: 'in October' }));
+    expect(away.kind).toBe('resolved');
+    if (away.kind === 'resolved') expect(away.event.name).toBe('New York Rangers at Boston Bruins');
+
+    // The matchup in the event name, with the team alone in the team field, narrows the same way.
+    const split = await c.resolveEvent(brief({ performerOrTeam: 'Rangers', eventName: 'Rangers vs. Boston' }));
+    expect(split.kind).toBe('resolved');
+    if (split.kind === 'resolved') expect(split.event.name).toBe('New York Rangers at Boston Bruins');
+
+    // Named second, the known team still resolves.
+    const reversed = await c.resolveEvent(brief({ performerOrTeam: 'Tampa Bay Lightning vs New York Rangers' }));
+    expect(reversed.kind).toBe('no_match'); // a known team, but no game against the Lightning on file
+    if (reversed.kind === 'no_match') expect(reversed.reason).toBe('no_scheduled_event');
+    const islanders = await c.resolveEvent(brief({ performerOrTeam: 'Islanders @ Rangers' }));
+    expect(islanders.kind).toBe('resolved');
+    if (islanders.kind === 'resolved') expect(islanders.event.name).toContain('Islanders');
+
+    // A named opponent is a hard filter: no game against them is "none on file", never a different game.
+    const none = await c.resolveEvent(brief({ performerOrTeam: 'New York Rangers vs Tampa Bay Lightning', dateExpression: 'in October' }));
+    expect(none.kind).toBe('no_match');
+    if (none.kind === 'no_match') expect(none.reason).toBe('no_scheduled_event');
   });
 });
 

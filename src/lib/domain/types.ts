@@ -1,3 +1,4 @@
+import { CATEGORY_HINTS } from './browse';
 import { z } from 'zod';
 
 export const SourceStatus = z.enum([
@@ -104,7 +105,7 @@ export type Ambiguity = (typeof AMBIGUITY_KINDS)[number];
 
 export const RequestExtractionSchema = z
   .object({
-    intent: z.enum(['new_search', 'clarification', 'watch_request', 'cancel_watch', 'marketing_opt_out', 'delete_data', 'other']),
+    intent: z.enum(['new_search', 'browse', 'clarification', 'watch_request', 'cancel_watch', 'marketing_opt_out', 'delete_data', 'other']),
     eventName: z.string().nullable(),
     performerOrTeam: z.string().nullable(),
     city: z.string().nullable(),
@@ -136,6 +137,8 @@ export const RequestExtractionSchema = z
     /** Entities the customer explicitly does NOT want (negation). */
     negatedEntities: z.array(z.string()).default([]),
     countryStatement: z.string().nullable().default(null),
+    /** The kind of event asked about when no performer or team is named ("gigs", "a hockey game"). */
+    categoryHint: z.enum(CATEGORY_HINTS).nullable().default(null),
   })
   .strict();
 export type RequestExtraction = z.infer<typeof RequestExtractionSchema>;

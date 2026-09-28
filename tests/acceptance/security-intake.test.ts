@@ -124,7 +124,7 @@ describe('A22 image validation', () => {
 });
 
 const baseExtraction: RequestExtraction = {
-  intent: 'new_search', eventName: null, performerOrTeam: 'Dua Lipa', city: 'New York', state: 'NY', dateExpression: 'tomorrow', resolvedLocalDate: null, quantity: 2, budgetCents: 30000, budgetBasis: 'whole_party', seatingPreference: null, togetherRequired: true, accessibilityNeeds: null, alternativesAllowed: null, submittedUrls: [], evidence: [], ambiguities: [], mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, splitGroupAllowed: null, forSelf: null, negatedEntities: [], countryStatement: null,
+  intent: 'new_search', eventName: null, performerOrTeam: 'Dua Lipa', city: 'New York', state: 'NY', dateExpression: 'tomorrow', resolvedLocalDate: null, quantity: 2, budgetCents: 30000, budgetBasis: 'whole_party', seatingPreference: null, togetherRequired: true, accessibilityNeeds: null, alternativesAllowed: null, submittedUrls: [], evidence: [], ambiguities: [], mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, splitGroupAllowed: null, forSelf: null, negatedEntities: [], countryStatement: null, categoryHint: null,
 };
 
 describe('A28/A29 interests', () => {

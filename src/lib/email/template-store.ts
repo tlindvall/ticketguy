@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { DbOrTx } from '@/lib/db';
-import { emailSignatures, emailTemplates } from '@/lib/db/schema';
+import { emailBrandSignature, emailSignatures, emailTemplates } from '@/lib/db/schema';
+import { BRAND_LOGOS, BUILT_IN_BRAND, type BrandLogo, type BrandSignature } from './signature';
 import { isSlotName, validateTemplateBody, type SlotName, type TemplateOverrides } from './custom-templates';
 
 /**
@@ -133,4 +134,38 @@ export async function deleteSignature(db: DbOrTx, id: string): Promise<{ deleted
   if ((used?.n ?? 0) > 0) return { deleted: false, reason: 'signature_in_use' };
   const rows = await db.delete(emailSignatures).where(eq(emailSignatures.id, id)).returning({ id: emailSignatures.id });
   return { deleted: rows.length > 0 };
+}
+
+const BRAND_KEY = 'brand';
+const BRAND_LIMITS = { displayName: 40, tagline: 80, shortSignoff: 40 };
+
+/** The brand signature staff set, or the built-in one. Read per send, like the templates. */
+export async function loadBrandSignature(db: DbOrTx): Promise<BrandSignature> {
+  const [row] = await db.select().from(emailBrandSignature).where(eq(emailBrandSignature.key, BRAND_KEY));
+  if (!row) return BUILT_IN_BRAND;
+  const logo = (BRAND_LOGOS as readonly string[]).includes(row.logo) ? (row.logo as BrandLogo) : BUILT_IN_BRAND.logo;
+  return { displayName: row.displayName, tagline: row.tagline, shortSignoff: row.shortSignoff, logo };
+}
+
+/** Plain single-line text only: it lands in every automatic email, next to the compliance footer. */
+export async function saveBrandSignature(db: DbOrTx, args: BrandSignature & { staffUserId: string; now?: Date }): Promise<void> {
+  const errors: string[] = [];
+  const fields = { displayName: args.displayName.trim(), tagline: args.tagline.trim(), shortSignoff: args.shortSignoff.trim() };
+  for (const [k, v] of Object.entries(fields) as Array<[keyof typeof BRAND_LIMITS, string]>) {
+    if (/[\r\n]/.test(v)) errors.push(`Brand signature: ${k} must be one line.`);
+    if (/[<>]/.test(v)) errors.push(`Brand signature: ${k} must be plain text (no HTML).`);
+    if (v.length > BRAND_LIMITS[k]) errors.push(`Brand signature: ${k} is longer than ${BRAND_LIMITS[k]} characters.`);
+  }
+  if (!fields.displayName) errors.push('Brand signature: a name is required.');
+  if (!fields.shortSignoff) errors.push('Brand signature: a short sign-off is required.');
+  if (!(BRAND_LOGOS as readonly string[]).includes(args.logo)) errors.push('Brand signature: logo must be badge, mark or none.');
+  if (errors.length) throw new TemplateValidationError(errors);
+  const now = args.now ?? new Date();
+  const values = { ...fields, logo: args.logo, updatedBy: args.staffUserId, updatedAt: now };
+  await db.insert(emailBrandSignature).values({ key: BRAND_KEY, ...values }).onConflictDoUpdate({ target: emailBrandSignature.key, set: values });
+}
+
+/** Back to the built-in signature. */
+export async function resetBrandSignature(db: DbOrTx): Promise<void> {
+  await db.delete(emailBrandSignature).where(eq(emailBrandSignature.key, BRAND_KEY));
 }

@@ -3,6 +3,8 @@ import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/ty
 import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
+import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
+import { lexiconQuantity, lexiconVagueQuantity } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -37,7 +39,10 @@ function parseQuantity(t: string): { value: number | null; quote: string | null 
   const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(?:party|group|family|household|crew)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
   if (!m) {
     const couple = COUPLE.exec(t);
-    return couple ? { value: 2, quote: couple[0] } : { value: null, quote: null };
+    if (couple) return { value: 2, quote: couple[0] };
+    // "just me", "me and my son", "the two of us" — the lexicon's party phrases.
+    const phrase = lexiconQuantity(t);
+    return phrase ? { value: phrase.value, quote: phrase.quote } : { value: null, quote: null };
   }
   const raw = m[1]!.toLowerCase();
   const v = NUM_WORDS[raw] ?? Number(raw);
@@ -67,7 +72,8 @@ function findEntity(t: string, known: ExtractionInput['knownEntities']): { entit
   return best ? { entity: best.entity, quote: best.quote } : null;
 }
 
-const DATE_EXPR = /\b((?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|(?:sometime |later )?(?:this|next) week(?:end)?|(?:this|the) weekend|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
+// Spans first: "Oct 1-7" must not be read as the single date Oct 1, nor "the first week in October" as the month.
+const DATE_EXPR = /\b((?:the )?(?:first|1st|second|2nd|third|3rd|fourth|4th|last|final) week (?:of|on|in) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:early|beginning of|start of|mid|middle of|late|end of)\s*-?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|to|through|thru)\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? )?\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|to|through|thru)\s*\d{1,2}(?:st|nd|rd|th)? (?:of )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:next|coming) (?:few|couple(?: of)?|\d|two|three|four) weeks|(?:this|next) month|(?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|(?:sometime |later )?(?:this|next) week(?:end)?|(?:this|the) weekend|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 function resolveMonthDay(expr: string, receivedAt: Date): string | null {
@@ -109,6 +115,8 @@ export class FixtureExtractor implements Extractor {
     const budget = parseBudget(t);
     ev('budgetCents', budget.quote);
     if (budget.cents !== null && budget.basis === null) ambiguities.push('budget_basis_unknown');
+    // "A few" or "some" tickets is a real doubt about the number, so it is asked rather than assumed to be two.
+    if (lexiconVagueQuantity(t)) ambiguities.push('quantity_unclear');
 
     // Negations first so "anything except X, Y please" resolves to Y (A29).
     const negated: string[] = [];
@@ -124,10 +132,12 @@ export class FixtureExtractor implements Extractor {
     ev('dateExpression', dateExpression);
     let resolvedLocalDate: string | null = null;
     if (dateExpression) {
-      const md = resolveMonthDay(dateExpression, input.receivedAt);
+      // A span is checked before a single date: "Oct 1-7" names a week, not the 1st.
+      const window = dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York');
+      const md = window ? null : resolveMonthDay(dateExpression, input.receivedAt);
       if (md) resolvedLocalDate = md;
-      else if (dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York')) {
-        // A named month or week narrows the search without picking a day; the resolver uses the window.
+      else if (window) {
+        // A named month, week or span narrows the search without picking a day; the resolver uses the window.
       } else {
         const r = resolveRelativeDate(dateExpression, input.receivedAt, input.venueTimeZone);
         if (r.kind === 'resolved') {
@@ -148,7 +158,8 @@ export class FixtureExtractor implements Extractor {
         break;
       }
     }
-    const together = /\b(together|next to each other|adjacent|side by side)\b/i.test(t) ? true : /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i.test(t) ? false : null;
+    // The negation is checked first: "we don't need to sit together" contains "together".
+    const together = /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i.test(t) ? false : /\b(together|next to each other|adjacent|side by side)\b/i.test(t) ? true : null;
     ev('togetherRequired', together === null ? null : (/\b(together|next to each other|adjacent|side by side|split|separate)\b/i.exec(t)?.[0] ?? null));
     const accessibility = /\b(wheelchair|accessible|ada)\b/i.exec(t);
     const performerOrTeam = ent ? ent.entity.name : null;
@@ -161,6 +172,9 @@ export class FixtureExtractor implements Extractor {
     const risk: RequestExtraction['waitRiskTolerance'] = /\b(happy to (wait|gamble|risk)|fine (to )?wait(ing)?|willing to (wait|risk)|ok(ay)? (to )?wait)\b/i.test(t) ? 'high' : /\b(don'?t want to risk|rather not risk|lock (it|them) in|secure (them|it) now)\b/i.test(t) ? 'low' : null;
     const forSelf = /\b(for (my|a) (friend|dad|mom|mother|father|sister|brother|boss|colleague|client)|as a gift|gift for)\b/i.test(t) ? false : /\b(for (me|us|myself)|my (wife|husband|partner|kids|family) and (i|me))\b/i.test(t) ? true : null;
     const countryStatement = findResidenceStatement(t);
+    const categoryHint = categoryHintFrom(t);
+    // "What's on" with nothing specific named is a browse: answer with options instead of asking which event.
+    if (intent === 'new_search' && !ent && (BROWSE_ASK_TEST(t) || categoryHint)) intent = 'browse';
 
     return EXTRACTION_SCHEMA.parse({
       intent,
@@ -187,6 +201,7 @@ export class FixtureExtractor implements Extractor {
       forSelf,
       negatedEntities: negated,
       countryStatement,
+      categoryHint,
     });
   }
 }
@@ -206,7 +221,8 @@ export function missingMandatoryFields(x: RequestExtraction, opts: { eventResolv
  * "Dua Lipa" survive: the brief keeps whatever the customer typed, and only the email is tidied.
  */
 export function titleCaseName(name: string): string {
-  return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1));
+  // A matchup's separator stays lower case: "Rangers vs Lightning", not "Rangers Vs Lightning".
+  return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1)).replace(/\b(Vs|Versus|Against)\b/g, (w) => w.toLowerCase());
 }
 
 export function clarificationQuestions(missing: string[], known: RequestExtraction): string[] {

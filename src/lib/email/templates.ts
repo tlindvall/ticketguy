@@ -1,5 +1,5 @@
 import { isSlotName, renderAuthored, type SlotName, type TemplateOverrides, type TemplateValue } from './custom-templates';
-import { renderSignature, type SignatureKind } from './signature';
+import { renderSignature, type BrandSignature, type SignatureKind } from './signature';
 
 /**
  * Bounded email templates (API_AND_DATA_CONTRACTS §6). Text + HTML, escaped user text, no invented availability.
@@ -42,13 +42,13 @@ function authoringVars(slot: SlotName, v: Record<string, TemplateValue>): Record
 export function renderTemplate(
   name: string,
   vars: Record<string, unknown>,
-  ctx: { appUrl: string; postalAddress: string | null; overrides?: TemplateOverrides; signature?: SignatureKind },
+  ctx: { appUrl: string; postalAddress: string | null; overrides?: TemplateOverrides; signature?: SignatureKind; brand?: BrandSignature },
 ): { text: string; html: string } {
   const v = vars as Record<string, string | string[] | boolean | number | null | undefined>;
   const slot: SlotName | null = isSlotName(name) ? name : null;
   const override = slot ? ctx.overrides?.[slot] : undefined;
   const disclosure = disclosureFor(name);
-  const defaultSig = renderSignature(ctx.signature ?? 'short', ctx.appUrl);
+  const defaultSig = renderSignature(ctx.signature ?? 'short', ctx.appUrl, ctx.brand);
   if (slot && override) {
     const body = renderAuthored(override.body, authoringVars(slot, v));
     const sig = override.signature ? renderAuthored(override.signature, {}) : defaultSig;
@@ -66,8 +66,9 @@ export function renderTemplate(
   switch (name) {
     case 'acknowledgment': {
       const known = (v.knownFacts as string[]) ?? [];
-      const paras = [`Got it — we're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', v.countryUnconfirmed ? `One quick check: we serve US customers only — reply if you're not in the US.` : '', `We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.`].filter(Boolean);
-      const html = [`<p>Got it — we're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', v.countryUnconfirmed ? `<p>One quick check: we serve US customers only — reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.</p>`].filter(Boolean);
+      const assumed = (v.assumptions as string[] | undefined) ?? [];
+      const paras = [`Got it — we're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', ...assumed, v.countryUnconfirmed ? `One quick check: we serve US customers only — reply if you're not in the US.` : '', `We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.`].filter(Boolean);
+      const html = [`<p>Got it — we're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', ...assumed.map(para), v.countryUnconfirmed ? `<p>One quick check: we serve US customers only — reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.</p>`].filter(Boolean);
       return wrap(paras, html);
     }
     case 'clarification': {
@@ -79,10 +80,32 @@ export function renderTemplate(
         v.acknowledgement ? String(v.acknowledgement) : 'Thanks for getting in touch.',
         v.eventNote ? String(v.eventNote) : '',
         ...qs,
+        ...((v.assumptions as string[] | undefined) ?? []),
         v.countryCheck ? COUNTRY_CHECK_LINE : '',
         'Just reply and I’ll narrow it down.',
       ].filter(Boolean);
       return wrap(paras, paras.map(para));
+    }
+    case 'browse_options': {
+      // "What's on?" gets what is on: a short list, then one easy next step. Nothing is asked up front —
+      // quantity and budget only matter once the customer has picked something.
+      const options = (v.options as string[]) ?? [];
+      const more = Number(v.moreCount ?? 0);
+      const lead = [
+        'Hey,',
+        String(v.headline ?? ''),
+        v.assumption ? String(v.assumption) : '',
+      ].filter(Boolean);
+      const tail = options.length
+        ? [
+            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — tell me an artist, venue or kind of music and I'll narrow it down.` : '',
+            'Reply with the one you want and how many tickets, and I’ll check the prices.',
+          ]
+        : [String(v.emptyNote ?? ''), 'Want me to look at different dates, or is there an artist you have in mind?'];
+      const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
+      const text = [...lead, ...(options.length ? [list(options)] : []), ...end];
+      const html = [...lead.map(para), ...(options.length ? [htmlList(options)] : []), ...end.map(para)];
+      return wrap(text, html);
     }
     case 'unsupported':
       return wrap([String(v.reason ?? ''), `We're sorry we can't help with this one yet.`], [`<p>${esc(String(v.reason ?? ''))}</p>`, `<p>We're sorry we can't help with this one yet.</p>`]);

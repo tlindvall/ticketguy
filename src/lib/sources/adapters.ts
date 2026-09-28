@@ -114,7 +114,10 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
   async discoverEvents(q: DiscoveryQuery): Promise<{ status: SourceStatus; events: DiscoveredEvent[] }> {
     if (!this.enabled) return { status: 'access_not_approved', events: [] };
     if (!this.apiKey) return { status: 'not_configured', events: [] };
-    const params = new URLSearchParams({ apikey: this.apiKey, keyword: q.keyword, countryCode: 'US', size: String(q.size ?? 20), sort: 'date,asc' });
+    const params = new URLSearchParams({ apikey: this.apiKey, countryCode: 'US', size: String(q.size ?? 20), sort: 'date,asc' });
+    // A browse ("what's on") asks by classification and place, with no keyword at all.
+    if (q.keyword.trim()) params.set('keyword', q.keyword);
+    if (q.classificationName) params.set('classificationName', q.classificationName);
     if (q.city) params.set('city', q.city);
     if (q.stateCode) params.set('stateCode', q.stateCode);
     if (q.startDateTime) params.set('startDateTime', q.startDateTime);
@@ -140,7 +143,7 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
   }
 }
 
-export type DiscoveryQuery = { keyword: string; city?: string | null; stateCode?: string | null; startDateTime?: string | null; endDateTime?: string | null; size?: number };
+export type DiscoveryQuery = { keyword: string; classificationName?: string | null; city?: string | null; stateCode?: string | null; startDateTime?: string | null; endDateTime?: string | null; size?: number };
 
 export type DiscoveredAttraction = { providerId: string; name: string; url: string | null; segment: string | null; genre: string | null; subGenre: string | null };
 export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null };

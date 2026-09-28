@@ -29,6 +29,13 @@
       "when": 1790305152748,
       "tag": "0003_catalog_discovery",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790621756890,
+      "tag": "0004_email_brand_signature",
+      "breakpoints": true
     }
   ]
 }

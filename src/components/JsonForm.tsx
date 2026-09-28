@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-type Field = { name: string; label: string; type?: 'text' | 'number' | 'checkbox' | 'textarea' | 'datetime'; required?: boolean; placeholder?: string; defaultValue?: string | number | boolean };
+type Field = { name: string; label: string; type?: 'text' | 'number' | 'checkbox' | 'textarea' | 'datetime' | 'select'; required?: boolean; placeholder?: string; defaultValue?: string | number | boolean; options?: Array<{ value: string; label: string }> };
 
 /** Minimal accessible form that posts typed JSON to an admin API route. */
 /** `extra` is merged into the payload; `nullableCheckboxes` lists checkbox names sent as null when unchecked (tri-state). */
@@ -35,6 +35,10 @@ export function JsonForm({ url, fields, submitLabel, extra, nullableCheckboxes }
           <span className="block font-medium">{f.label}</span>
           {f.type === 'checkbox' ? (
             <input name={f.name} type="checkbox" defaultChecked={!!f.defaultValue} className="mt-1" />
+          ) : f.type === 'select' ? (
+            <select name={f.name} className="tg-input" required={f.required} defaultValue={f.defaultValue as string | undefined}>
+              {(f.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
           ) : f.type === 'textarea' ? (
             <textarea name={f.name} className="tg-input" rows={3} required={f.required} placeholder={f.placeholder} defaultValue={f.defaultValue as string | undefined} />
           ) : (

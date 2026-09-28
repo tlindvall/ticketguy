@@ -97,43 +97,41 @@ describe('end-to-end fixture flow', () => {
     expect(await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, req!.id))).toHaveLength(0);
   });
 
-  it('A01/A05: budget basis clarification, then a correction increments the revision and invalidates prior work', async () => {
+  it('A01/A05: a bare budget is read as the total and said so; a correction increments the revision and invalidates prior work', async () => {
     const c = makeConcierge(h);
     const first = await c.ingestInbound(inbound({ text: 'Two tickets for the New York Rangers on Oct 3, budget $300.', from: 'carol@customer.example', rfcMessageId: '<carol-1@customer.example>' }));
     await drain(c);
     const reqId = (first as { requestId: string }).requestId;
     let [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, reqId));
-    expect(req!.state).toBe('needs_clarification');
-    const [clar] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, reqId));
-    expect(clar!.bodyText).toContain('per ticket or for everyone combined');
-    // Reply in thread: "$300 total for both" → whole-party 30000, never 60000 (A01).
-    await c.ingestInbound(inbound({ text: 'Sorry — $300 total for both of us, together please.', from: 'carol@customer.example', inReplyTo: '<carol-1@customer.example>', references: '<carol-1@customer.example>' }));
-    await drain(c);
-    [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, reqId));
-    expect(req!.currentRevision).toBe(2);
+    // No round trip to ask "per ticket or combined?": the reply says how it was read, and research goes ahead.
     expect(req!.state).toBe('awaiting_review');
+    expect(req!.currentRevision).toBe(1);
+    const [ack] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, reqId));
+    expect(ack!.bodyText).toContain("I've read $300 as the total for both — tell me if you meant per ticket.");
+    expect(ack!.bodyText).not.toContain('per ticket or for everyone combined');
     const versions = await h.db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, reqId));
-    expect(versions.find((v) => v.revision === 2)!.brief).toMatchObject({ budgetCents: 30000, budgetBasis: 'whole_party', quantity: 2 });
-    const [rec2] = await h.db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, reqId), eq(t.recommendations.revision, 2)));
-    expect(rec2!.bodyText).toContain('$240 total ($120 each)');
-    expect(rec2!.bodyText).not.toContain('$150'); // obstructed-view cheaper listing excluded (A07)
+    // $300 for two is 30000 whole-party, never 60000 (A01).
+    expect(versions.find((v) => v.revision === 1)!.brief).toMatchObject({ budgetCents: 30000, budgetBasis: 'whole_party', quantity: 2 });
+    const [rec1] = await h.db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, reqId), eq(t.recommendations.revision, 1)));
+    expect(rec1!.bodyText).toContain('$240 total ($120 each)');
+    expect(rec1!.bodyText).not.toContain('$150'); // obstructed-view cheaper listing excluded (A07)
     // A10: same section/row on two fixture sources suppresses the unique-count claim.
-    expect(rec2!.bodyText).not.toMatch(/qualifying listing/);
-    // Correction after draft: "actually we are 4" → revision 3, old recommendation invalidated (A05).
+    expect(rec1!.bodyText).not.toMatch(/qualifying listing/);
+    // Correction after draft: "actually we are 4" → revision 2, old recommendation invalidated (A05).
     await c.ingestInbound(inbound({ text: 'Actually make that four tickets, still $300 total.', from: 'carol@customer.example', inReplyTo: '<carol-1@customer.example>' }));
     await drain(c);
     [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, reqId));
-    expect(req!.currentRevision).toBe(3);
-    const [old] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.id, rec2!.id));
+    expect(req!.currentRevision).toBe(2);
+    const [old] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.id, rec1!.id));
     expect(old!.reviewStatus).toBe('invalidated');
     // Approving the stale draft is rejected with 409.
-    expect(await c.approveRecommendation({ recommendationId: rec2!.id, reviewerUserId: 's', expectedRevision: 2, draftHash: rec2!.draftHash, note: null })).toMatchObject({ ok: false, status: 409 });
-    // Revision 3: no 4-seat fixture inventory → honest no-result path (no invented listings).
-    const [rec3] = await h.db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, reqId), eq(t.recommendations.revision, 3)));
-    expect(rec3!.bodyText).toContain('could not verify a suitable option');
-    expect(rec3!.bodyText).not.toContain('Best verified option');
-    const [advice3] = await h.db.select().from(t.adviceRuns).where(and(eq(t.adviceRuns.requestId, reqId), eq(t.adviceRuns.revision, 3)));
-    expect(advice3!.decision).toBe('insufficient_evidence');
+    expect(await c.approveRecommendation({ recommendationId: rec1!.id, reviewerUserId: 's', expectedRevision: 1, draftHash: rec1!.draftHash, note: null })).toMatchObject({ ok: false, status: 409 });
+    // Revision 2: no 4-seat fixture inventory → honest no-result path (no invented listings).
+    const [rec2] = await h.db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, reqId), eq(t.recommendations.revision, 2)));
+    expect(rec2!.bodyText).toContain('could not verify a suitable option');
+    expect(rec2!.bodyText).not.toContain('Best verified option');
+    const [advice2] = await h.db.select().from(t.adviceRuns).where(and(eq(t.adviceRuns.requestId, reqId), eq(t.adviceRuns.revision, 2)));
+    expect(advice2!.decision).toBe('insufficient_evidence');
   });
 
   it('A20/A04: a stranger replying with a copied Message-ID gets a fresh conversation with no history; quoted instructions are ignored', async () => {

@@ -148,7 +148,79 @@ export function weekWindowFor(expression: string, receivedAt: Date, timeZone: st
   return { from: day(toFriday), to: day((dow === 0 ? 0 : thisSunday) + 7) };
 }
 
-/** Any span a date phrase names without naming a day: a month or a week. */
+const MONTH_RE = '(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+const monthIndex = (word: string) => MONTH_NAMES.findIndex((n) => n.startsWith(word.toLowerCase().slice(0, 3))) + 1;
+/** A named month in the reference year, or the next one when it has already passed (the monthWindowFor rule). */
+const yearFor = (month: number, receivedAt: Date, explicit?: string) => (explicit ? Number(explicit) : month < receivedAt.getUTCMonth() + 1 ? receivedAt.getUTCFullYear() + 1 : receivedAt.getUTCFullYear());
+const lastDayOf = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+/**
+ * Part of a month, a day range, or a short run of weeks — the ways people actually say when they are free:
+ * "the first week of October" (also "on"/"in", a common slip), "early/mid/late October", "the end of October",
+ * "Oct 1-7", "1st to 7th October", "the next few weeks", "this/next month". Returns the inclusive local-date
+ * window, or null. Checked before the whole-month rule, because "the first week in October" also contains
+ * "in October" and would otherwise widen to the whole month.
+ */
+export function spanWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
+  const e = expression.trim().toLowerCase();
+  const now = localDateParts(receivedAt, timeZone);
+  const today = toIsoDate(now.y, now.m, now.d);
+  const plus = (days: number) => {
+    const t = addDaysToCalendar(now.y, now.m, now.d, days);
+    return toIsoDate(t.y, t.m, t.d);
+  };
+
+  const week = new RegExp(`\\b(first|1st|second|2nd|third|3rd|fourth|4th|last|final)\\s+week\\s+(?:of|on|in)\\s+${MONTH_RE}(?:\\s+(\\d{4}))?`).exec(e);
+  if (week) {
+    const month = monthIndex(week[2]!);
+    const year = yearFor(month, receivedAt, week[3]);
+    const last = lastDayOf(year, month);
+    const n = { first: 0, '1st': 0, second: 1, '2nd': 1, third: 2, '3rd': 2, fourth: 3, '4th': 3 }[week[1]! as 'first'];
+    if (n === undefined) return { from: toIsoDate(year, month, last - 6), to: toIsoDate(year, month, last) };
+    return { from: toIsoDate(year, month, 1 + n * 7), to: toIsoDate(year, month, Math.min(7 + n * 7, last)) };
+  }
+
+  const part = new RegExp(`\\b(early|beginning of|start of|mid|middle of|late|end of)\\s*-?\\s*${MONTH_RE}(?:\\s+(\\d{4}))?`).exec(e);
+  if (part) {
+    const month = monthIndex(part[2]!);
+    const year = yearFor(month, receivedAt, part[3]);
+    const last = lastDayOf(year, month);
+    const which = part[1]!;
+    const [a, b] = /early|beginning|start/.test(which) ? [1, 10] : /mid|middle/.test(which) ? [11, 20] : [21, last];
+    return { from: toIsoDate(year, month, a), to: toIsoDate(year, month, b) };
+  }
+
+  const DAY = '(\\d{1,2})(?:st|nd|rd|th)?';
+  const TO = '\\s*(?:-|–|—|to|through|thru|until)\\s*';
+  const rangeMonthFirst = new RegExp(`\\b${MONTH_RE}\\s+${DAY}${TO}(?:${MONTH_RE}\\s+)?${DAY}\\b`).exec(e);
+  const rangeDayFirst = new RegExp(`\\b${DAY}${TO}${DAY}\\s+(?:of\\s+)?${MONTH_RE}`).exec(e);
+  if (rangeMonthFirst || rangeDayFirst) {
+    const [m1, d1, m2, d2] = rangeMonthFirst ? [rangeMonthFirst[1]!, rangeMonthFirst[2]!, rangeMonthFirst[3] ?? rangeMonthFirst[1]!, rangeMonthFirst[4]!] : [rangeDayFirst![3]!, rangeDayFirst![1]!, rangeDayFirst![3]!, rangeDayFirst![2]!];
+    const month1 = monthIndex(m1);
+    const month2 = monthIndex(m2);
+    const year1 = yearFor(month1, receivedAt);
+    const year2 = month2 < month1 ? year1 + 1 : year1;
+    const from = toIsoDate(year1, month1, Math.min(Number(d1), lastDayOf(year1, month1)));
+    const to = toIsoDate(year2, month2, Math.min(Number(d2), lastDayOf(year2, month2)));
+    if (from <= to) return { from, to };
+  }
+
+  if (/\b(?:next|coming)\s+(?:few|couple(?:\s+of)?)\s+weeks\b/.test(e)) return { from: today, to: plus(21) };
+  const nWeeks = /\b(?:next|coming)\s+(\d|two|three|four)\s+weeks\b/.exec(e);
+  if (nWeeks) {
+    const n = ({ two: 2, three: 3, four: 4 } as Record<string, number>)[nWeeks[1]!] ?? Number(nWeeks[1]);
+    return { from: today, to: plus(7 * n) };
+  }
+  if (/\bthis\s+month\b/.test(e)) return { from: today, to: toIsoDate(now.y, now.m, lastDayOf(now.y, now.m)) };
+  if (/\bnext\s+month\b/.test(e)) {
+    const y = now.m === 12 ? now.y + 1 : now.y;
+    const m = now.m === 12 ? 1 : now.m + 1;
+    return { from: toIsoDate(y, m, 1), to: toIsoDate(y, m, lastDayOf(y, m)) };
+  }
+  return null;
+}
+
+/** Any span a date phrase names without naming a day: part of a month, a range, a month or a week. */
 export function dateWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
-  return monthWindowFor(expression, receivedAt) ?? weekWindowFor(expression, receivedAt, timeZone);
+  return spanWindowFor(expression, receivedAt, timeZone) ?? monthWindowFor(expression, receivedAt) ?? weekWindowFor(expression, receivedAt, timeZone);
 }
