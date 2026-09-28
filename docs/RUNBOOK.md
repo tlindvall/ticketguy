@@ -87,3 +87,19 @@ Defaults: raw text/attachments 30 days (`messages.purge_at`, `attachments.purge_
 3. Identify affected intents (`/admin/operations` → sends by state; `uncertain` list).
 4. Fix, verify with the fixture suite and a staging send to the test allowlist (`EMAIL_TEST_RECIPIENT_ALLOWLIST`).
 5. Resume switch; write the incident note in `audit_log` via a kill-switch reason.
+
+## Requests waiting on a person
+
+A request lands in `manual_attention` when three rounds of questions don't settle it, or when the model can't
+read the message (a refusal, malformed output, or the AI budget running out). Two things happen:
+
+- **The customer** gets one reply per request: "this one needs a person, so I've passed it to the team",
+  with the staffed hours (`STAFFED_HOURS_*`).
+- **Staff** get one email per request revision, sent to `STAFF_ALERT_ADDRESSES`, or to every
+  `STAFF_EMAIL_ALLOWLIST` address when that is empty. It carries the reason and a link to the request, and
+  never the customer's words. It is skipped, with an audit row, when sending is off, `all_outbound` is
+  stopped, or someone already moved the request on.
+
+The inbox shows a red banner while any request is waiting. Requests that were stuck before alerts existed:
+run `pnpm tsx scripts/alert-stuck-requests.ts` to list them, and add `--apply` to alert staff. Their
+customers are not emailed, because a holding note days later is worse than a person's reply.

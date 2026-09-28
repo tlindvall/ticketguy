@@ -45,6 +45,9 @@ export async function runOutboxBatch(limit: number): Promise<{ processed: number
         case 'email.send_requested':
           await c.dispatchSend(p.sendIntentId!);
           break;
+        case 'staff.alert':
+          await c.alertStaff({ requestId: p.requestId!, revision: Number(ev.payload.revision) });
+          break;
         case 'recommendation.review_ready':
         case 'advice.prepare':
         case 'watch.evaluate':
