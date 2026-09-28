@@ -102,7 +102,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     const claimTexts = p.claimIds.map((id) => claimsById.get(id)!);
     const text = [p.prose.trim(), ...claimTexts.map((c) => c.text)].filter(Boolean).join(' ');
     lines.push(text);
-    const htmlClaims = claimTexts.map((c) => (c.url ? `${esc(c.text)} <a href="${esc(c.url)}">View this offer</a>` : esc(c.text)));
+    const htmlClaims = claimTexts.map((c) => (c.url ? `${esc(c.text)} <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : esc(c.text)));
     html.push(`<p>${[esc(p.prose.trim()), ...htmlClaims].filter(Boolean).join(' ')}</p>`);
   }
   // Always append the coverage footer and observation caveat from the packet (never model-authored).
@@ -112,7 +112,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(`<p><small>${esc(coverage.text)}</small></p>`);
   }
   for (const c of packet.claimRecords.filter((c) => c.url && used.has(c.id))) {
-    lines.push(`Link: ${c.url}`);
+    lines.push(`${c.linkLabel ?? 'Link'}: ${c.url}`);
   }
   if (opts.affiliateDisclosure) {
     lines.push(opts.affiliateDisclosure);
@@ -132,9 +132,9 @@ export function renderEvidenceOnly(packet: AdvicePacket): { textBody: string; ht
     buy_now: 'Given your priorities, securing the option below is reasonable.',
     wait_and_recheck: 'Given your priorities, a bounded wait is reasonable — see the recheck point below.',
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
-    insufficient_evidence: 'We could not verify a suitable option yet; details below.',
+    insufficient_evidence: 'Here’s what I can tell you so far.',
   };
-  const text = [decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\nLink: ${c.url}` : ''))].join('\n\n');
-  const html = [`<p>${esc(decisionLine[packet.decision])}</p>`, ...visible.map((c) => `<p>${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">View this offer</a>` : ''}</p>`)].join('\n');
+  const text = [decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : ''))].join('\n\n');
+  const html = [`<p>${esc(decisionLine[packet.decision])}</p>`, ...visible.map((c) => `<p>${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}</p>`)].join('\n');
   return { textBody: text, htmlBody: html };
 }

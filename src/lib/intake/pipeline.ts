@@ -384,7 +384,8 @@ export class Concierge {
     // advice is for resale only (official prices are fixed or rise), so no research runs; the customer is
     // pointed at the sale, told resale can be cheaper for events that are not sold out, and "compare" opens
     // the resale comparison. No prices are quoted, so this goes without review (DECISION_LOG #36).
-    const official = merged.resaleAsked || merged.intent === 'watch_request' || merged.submittedUrls.length ? null : await this.officialSale(resolution.event, now);
+    // A price to judge ("is $106 a good deal?") gets the full answer, which includes the official sale.
+    const official = merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length ? null : await this.officialSale(resolution.event, now);
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
       await this.queueSend({
@@ -990,7 +991,14 @@ export class Concierge {
     const policy = decide({ now, eventStartAt: event.localStartAt, offers: { bestEligibleTotalCents: best?.comparableTotalCents ?? null, bestEligibleObservationId: best?.offer.id ?? null, eligibleCount: cmp.eligible.length, needsReviewCount: cmp.needsReview.length, alternativeAvailable: alternatives.length > 0 || cmp.needsReview.length > 0, deliveryFeasible: best ? (best.offer.deliveryMethod ? true : null) : null, safeDeliveryBufferMinutes: null }, benchmark, trend, priorities, monitoringCoverageAvailable: monitoringCoverage, staffedUntil: null });
 
     const isFixtureRun = allOffers.some((o) => o.collectionMode === 'fixture') || this.env.APP_MODE === 'fixture';
-    const packet = buildPacket({ requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // What we know without listings: the official sale if it is open, the provider's face value, and the
+    // price the customer asked about (per ticket; a total is divided by the party size).
+    const official = await this.officialSale(event, now);
+    const faceValue = event.faceMinCents != null && event.faceMaxCents != null ? { minCents: event.faceMinCents, maxCents: event.faceMaxCents } : null;
+    const quote = brief.quotedPriceCents != null
+      ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null }
+      : null;
+    const packet = buildPacket({ official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 

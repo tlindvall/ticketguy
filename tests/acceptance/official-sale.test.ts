@@ -127,6 +127,25 @@ describe('still on general sale: point at the official sale', () => {
     expect(send!.bodyText).toContain("Events that aren't sold out often go for less on resale.");
   });
 
+  it('"is $106 a good deal?" is answered against face value and the official sale, not with a list of our integrations', async () => {
+    await h.db.update(t.events).set({ faceMinCents: 5500, faceMaxCents: 9500 }).where(eq(t.events.id, ids.open));
+    const c = makeConcierge(h);
+    const r = await c.ingestInbound(inbound({ text: 'Is $106 for the Testers Oct 30 a good deal?', from: 'quote@customer.example', subject: 'Price check' }));
+    await interpretAll(c);
+    const requestId = (r as { requestId: string }).requestId;
+    const [v] = await h.db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, requestId));
+    expect((v!.brief as { quotedPriceCents: number; budgetCents: number | null }).quotedPriceCents).toBe(10600);
+    expect((v!.brief as { budgetCents: number | null }).budgetCents).toBeNull(); // a price they saw is not their budget
+    expect(await stateOf(requestId)).toBe('researching'); // the full answer, not the bare official-sale pointer
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const body = rec!.bodyText;
+    expect(body).toContain('You mentioned $106 (I’ve taken that as per ticket). That’s a little above the face value Ticketmaster lists ($55–$95 a ticket before fees); fees alone can add that much, so it may well be the official price all-in.');
+    expect(body).toContain('still on general sale on Ticketmaster');
+    expect(body).toContain(`Buy on Ticketmaster: ${URL_OPEN}`);
+    for (const noise of ['not integrated', 'packet', 'check primary', 'marketplaces directly', 'Sources checked']) expect(body, noise).not.toContain(noise);
+  });
+
   it('goes straight to the comparison when resale is asked about up front', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: '2 Testers tickets Oct 30 — is resale cheaper?', from: 'resale@customer.example', subject: 'Testers' }));

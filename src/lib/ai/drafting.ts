@@ -22,9 +22,13 @@ export class FixtureDrafter implements Drafter {
       buy_now: `For ${groupWord}, I would be comfortable taking the option below.`,
       wait_and_recheck: `For ${groupWord}, a bounded wait is reasonable — with a clear point to decide.`,
       consider_alternative: `Nothing qualifying fits inside your budget right now; here is the closest verified alternative.`,
-      insufficient_evidence: `We could not verify a suitable option yet; here is exactly what we checked.`,
+      insufficient_evidence: ids.has('C_QUOTE') ? 'Here’s what I can tell you about that price.' : 'Here’s what I can tell you so far.',
     };
     const paragraphs: ResponseBlocks['paragraphs'] = [];
+    // The customer's own question comes first, then where to buy.
+    const about = ['C_QUOTE', 'C_FACE'].filter((id) => ids.has(id));
+    if (about.length) paragraphs.push({ claimIds: about, prose: '' });
+    if (ids.has('C_OFFICIAL')) paragraphs.push({ claimIds: ['C_OFFICIAL'], prose: '' });
     if (ids.has('C_BEST')) paragraphs.push({ claimIds: ['C_BEST'], prose: 'Best verified option for your group:' });
     else if (ids.has('C_ALT1')) paragraphs.push({ claimIds: ['C_ALT1'], prose: 'Closest verified option:' });
     const context: string[] = [];
@@ -44,7 +48,7 @@ export class FixtureDrafter implements Drafter {
       buy_now: ctx.mustAttend ? 'Since attending together matters more than the last few dollars, I would secure this rather than risk losing it.' : 'This is a reasonable buy on the evidence we have; reply if you want us to keep looking instead.',
       wait_and_recheck: 'Waiting carries the risk that these options disappear; if that would be a problem, buy now instead.',
       consider_alternative: 'Reply if you want us to watch for something inside your budget, or if a different date or section would work.',
-      insufficient_evidence: 'Reply with any extra detail and we will look again.',
+      insufficient_evidence: 'If you send me the listing or tell me where you saw it, I can take a closer look.',
     };
     return { decision: packet.decision, opening: opening[packet.decision], paragraphs, closing: closing[packet.decision] };
   }

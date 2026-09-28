@@ -354,6 +354,9 @@ export const events = pgTable(
     saleStatus: text('sale_status'),
     publicSaleStartAt: ts('public_sale_start_at'),
     publicSaleEndAt: ts('public_sale_end_at'),
+    /** The provider's published face-value range per ticket, before fees; a reference for a quoted price, never an offer. */
+    faceMinCents: integer('face_min_cents'),
+    faceMaxCents: integer('face_max_cents'),
     verifiedSourceId: text('verified_source_id'),
     isFixture: boolean('is_fixture').notNull().default(false),
     createdAt: createdAt(),

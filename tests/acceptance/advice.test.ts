@@ -241,8 +241,8 @@ describe('A63 response validation', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.textBody).toContain('$425 total ($85 each)');
-      expect(r.textBody).toContain('Sources checked: fixture-source');
-      expect(r.textBody).toContain('stubhub (not integrated)');
+      expect(r.textBody).toContain('Checked: fixture-source');
+      expect(r.textBody).not.toContain('not integrated'); // our integrations are staff business, listed in the review console, not the email
     }
   });
   it('blocks invented numbers, prohibited phrases, unknown claims, scope changes and conflicting decisions even when other claims are valid', () => {

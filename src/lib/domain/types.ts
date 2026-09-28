@@ -145,6 +145,9 @@ export const RequestExtractionSchema = z
     wantsMore: z.boolean().nullable().default(null),
     /** The customer wants resale looked at or prices compared ("compare", "is resale cheaper?", "best price"). Null when not said. */
     resaleAsked: z.boolean().nullable().default(null),
+    /** A price the customer saw or was offered and is asking about ("is $106 a good deal?"). Not their budget. */
+    quotedPriceCents: z.number().int().nonnegative().nullable().default(null),
+    quotedPriceBasis: z.enum(['per_ticket', 'whole_party']).nullable().default(null),
   })
   .strict();
 export type RequestExtraction = z.infer<typeof RequestExtractionSchema>;
