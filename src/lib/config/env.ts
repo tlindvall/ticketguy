@@ -58,6 +58,33 @@ const csvDefault = (dflt: string) =>
  * `key=value` pairs, comma separated (e.g. `watch_alert=alerts@x.com,marketing=deals@x.com`).
  * Keys and values are lowercased; a malformed entry is a configuration error, never a silent skip.
  */
+/**
+ * Affiliate deep-link formats per seller, as JSON: {"Ticketmaster": "https://…?u={url}"}. `{url}` is replaced
+ * by the encoded seller URL. Empty means plain links. Each must be https and contain {url}.
+ */
+const affiliateTemplates = z
+  .string()
+  .optional()
+  .transform((v, ctx) => {
+    if (!v?.trim()) return {} as Record<string, string>;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'AFFILIATE_LINK_TEMPLATES must be JSON: {"Ticketmaster": "https://…{url}"}' });
+      return z.NEVER;
+    }
+    const out: Record<string, string> = {};
+    for (const [seller, tpl] of Object.entries((parsed ?? {}) as Record<string, unknown>)) {
+      if (typeof tpl !== 'string' || !tpl.startsWith('https://') || !tpl.includes('{url}')) {
+        ctx.addIssue({ code: 'custom', message: `AFFILIATE_LINK_TEMPLATES["${seller}"] must be an https URL containing {url}` });
+        return z.NEVER;
+      }
+      out[seller] = tpl;
+    }
+    return out;
+  });
+
 const csvPairs = z
   .string()
   .optional()
@@ -129,6 +156,7 @@ const rawSchema = z.object({
   MARKETING_FROM_ADDRESS: z.string().email().default(`deals@${MARKETING_SUBDOMAIN}`),
   /** Per-message-class From overrides, e.g. `watch_alert=alerts@ticketguy.now`. Empty = one From for everything. */
   MESSAGE_CLASS_FROM_ADDRESSES: csvPairs,
+  AFFILIATE_LINK_TEMPLATES: affiliateTemplates,
   /** From addresses knowingly not receivable. Listing one is an explicit decision to drop replies to it. */
   UNMONITORED_FROM_ADDRESSES: csv,
   BUSINESS_POSTAL_ADDRESS: z.string().optional(),

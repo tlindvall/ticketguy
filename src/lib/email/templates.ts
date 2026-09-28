@@ -1,5 +1,6 @@
 import { isSlotName, renderAuthored, type SlotName, type TemplateOverrides, type TemplateValue } from './custom-templates';
 import { renderSignature, type BrandSignature, type SignatureKind } from './signature';
+import { AFFILIATE_DISCLOSURE } from './links';
 
 /**
  * Bounded email templates (API_AND_DATA_CONTRACTS §6). Text + HTML, escaped user text, no invented availability.
@@ -27,6 +28,35 @@ const BODY_OPEN = '<!doctype html><html><body style="margin:0;padding:0;"><div s
 const BODY_CLOSE = '</div></body></html>';
 const disclosureHtml = (text: string) => `<p style="margin:16px 0 0;font-size:11px;line-height:17px;color:#666;">${esc(text)}</p>`;
 const para = (text: string) => `<p style="margin:0 0 18px;">${esc(text)}</p>`;
+
+type Pick = { line: string; title: string; reason: string; eventUrl: string | null; links: Array<{ label: string; url: string }> };
+
+/** A link styled as a button; the primary one is filled. Links only ever point where their label says. */
+function button(label: string, url: string, primary: boolean): string {
+  const style = primary
+    ? 'display:inline-block;padding:9px 16px;border-radius:8px;background:#202124;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;'
+    : 'display:inline-block;padding:8px 15px;border-radius:8px;border:1px solid #c7c7c7;color:#202124;text-decoration:none;font-weight:600;font-size:14px;';
+  return `<a href="${esc(url)}" style="${style}">${esc(label)}</a>`;
+}
+
+/** One pick as a card: the title (linked to the event page), when and where, why it fits, and its links. */
+function pickHtml(p: Pick): string {
+  const [when, ...rest] = p.line.split(' — ');
+  const title = p.eventUrl ? `<a href="${esc(p.eventUrl)}" style="color:#202124;text-decoration:none;">${esc(p.title)}</a>` : esc(p.title);
+  const where = rest.join(' — ').replace(p.title, '').replace(/^\s*at\s*/, '');
+  return [
+    '<div style="margin:0 0 14px;padding:14px 16px;border:1px solid #e3e3e3;border-radius:12px;">',
+    `<div style="font-weight:700;font-size:16px;margin:0 0 2px;">${title}</div>`,
+    `<div style="color:#5f6368;font-size:14px;margin:0 0 8px;">${esc(when ?? '')}${where ? ` · ${esc(where)}` : ''}</div>`,
+    p.reason ? `<div style="margin:0 0 10px;">${esc(p.reason)}</div>` : '',
+    p.links.length ? `<div>${p.links.map((l, i) => button(l.label, l.url, i === p.links.length - 1)).join(' ')}</div>` : '',
+    '</div>',
+  ].join('');
+}
+
+function pickText(p: Pick): string {
+  return [`• ${p.line}`, p.reason ? `  ${p.reason}` : '', ...p.links.map((l) => `  ${l.label}: ${l.url}`)].filter(Boolean).join('\n');
+}
 
 /** The eligibility question, asked once, on its own line rather than as one of the request questions. */
 /** A notice, not a question: nothing to answer unless it doesn't apply. The customer's own words set their country. */
@@ -87,9 +117,10 @@ export function renderTemplate(
       return wrap(paras, paras.map(para));
     }
     case 'browse_options': {
-      // "What's on?" gets what is on: a short list, then one easy next step. Nothing is asked up front —
-      // quantity and budget only matter once the customer has picked something.
+      // "What's on?" gets a few picks, each with why it fits and where to go next, then one easy next step.
+      // Nothing is asked up front — quantity and budget only matter once the customer has picked something.
       const options = (v.options as string[]) ?? [];
+      const picks = (vars.picks as Pick[] | undefined) ?? options.map((line) => ({ line, title: line, reason: '', eventUrl: null, links: [] }));
       const more = Number(v.moreCount ?? 0);
       const lead = [
         'Hey,',
@@ -98,31 +129,36 @@ export function renderTemplate(
       ].filter(Boolean);
       const tail = options.length
         ? [
-            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
+            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — reply "more" to see them, or tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
             v.single
               ? 'Want me to check prices? Just tell me how many tickets.'
               : v.quantity ? `Reply with the one you want, and I’ll check prices for ${String(v.quantity)} tickets.` : 'Reply with the one you want and how many tickets, and I’ll check the prices.',
           ]
         : [String(v.emptyNote ?? ''), `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
-      const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
-      const text = [...lead, ...(options.length ? [list(options)] : []), ...end];
-      const html = [...lead.map(para), ...(options.length ? [htmlList(options)] : []), ...end.map(para)];
+      const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
+      const text = [...lead, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...end];
+      const html = [...lead.map(para), ...picks.map(pickHtml), ...end.map(para)];
       return wrap(text, html);
     }
     case 'official_sale': {
-      // Pointed at the official sale, with no prices: buy/wait is for resale, and resale is one reply away.
+      // One clear recommendation and a direct link to buy. No prices: buy/wait is for resale, and resale is
+      // one reply away.
       const notes = (v.notes as string[] | undefined) ?? [];
       const n = v.quantity ? Number(v.quantity) : null;
       const kind = v.sportsGame ? 'Games' : 'Events';
-      const paras = [
-        'Hey,',
-        `${String(v.eventLabel)} is still on general sale on ${String(v.seller)}, so that's the place to start${n ? ` for your ${n} tickets` : ''}.`,
+      const explore = vars.explore as { label: string; url: string } | null | undefined;
+      const seller = String(v.seller);
+      const lead = `${String(v.eventLabel)} is still on general sale on ${seller} — that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+      const tail = [
         ...notes,
         `${kind} that aren't sold out often go for less on resale. Want me to compare? Just reply "compare".`,
         v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '',
+        v.affiliate ? AFFILIATE_DISCLOSURE : '',
       ].filter(Boolean);
-      const text = [paras[0]!, paras[1]!, `${String(v.seller)}: ${String(v.url)}`, ...paras.slice(2)];
-      const html = [para(paras[0]!), para(paras[1]!), `<p><a href="${esc(String(v.url))}">Open the sale on ${esc(String(v.seller))}</a></p>`, ...paras.slice(2).map(para)];
+      const text = ['Hey,', lead, `Buy tickets on ${seller}: ${String(v.url)}`, ...(explore ? [`${explore.label}: ${explore.url}`] : []), ...tail];
+      const buttons = `<p style="margin:0 0 18px;">${button(`Buy tickets on ${seller}`, String(v.url), true)}${explore ? ` ${button(explore.label, explore.url, false)}` : ''}</p>`;
+      const title = v.eventUrl ? `<a href="${esc(String(v.eventUrl))}" style="color:#202124;">${esc(String(v.eventTitle ?? v.eventLabel))}</a>` : esc(String(v.eventTitle ?? v.eventLabel));
+      const html = [para('Hey,'), `<p style="margin:0 0 18px;">${esc(lead).replace(esc(String(v.eventTitle ?? '')), title)}</p>`, buttons, ...tail.map(para)];
       return wrap(text, html);
     }
     case 'holding': {

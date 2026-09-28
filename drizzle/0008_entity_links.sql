@@ -1,0 +1,1 @@
+ALTER TABLE "entities" ADD COLUMN "links" jsonb DEFAULT '{}'::jsonb NOT NULL;

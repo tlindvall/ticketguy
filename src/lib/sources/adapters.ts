@@ -145,7 +145,23 @@ export class TicketmasterDiscoveryAdapter implements TicketSourceAdapter {
 
 export type DiscoveryQuery = { keyword: string; classificationName?: string | null; city?: string | null; stateCode?: string | null; startDateTime?: string | null; endDateTime?: string | null; size?: number };
 
-export type DiscoveredAttraction = { providerId: string; name: string; url: string | null; segment: string | null; genre: string | null; subGenre: string | null };
+/** A performer's or team's own links as the provider lists them: listen (Spotify, Apple Music), watch (YouTube), official (homepage). */
+export type EntityLinks = { listen?: string; watch?: string; official?: string };
+export type DiscoveredAttraction = { providerId: string; name: string; url: string | null; segment: string | null; genre: string | null; subGenre: string | null; links?: EntityLinks };
+
+/** The first https URL the provider lists under each kind of external link; nothing is searched for or built. */
+export function attractionLinks(a: Record<string, unknown>): EntityLinks {
+  const ext = (a.externalLinks ?? {}) as Record<string, Array<{ url?: unknown }> | undefined>;
+  const first = (...keys: string[]) => {
+    for (const k of keys) for (const entry of ext[k] ?? []) {
+      const u = typeof entry?.url === 'string' ? entry.url : null;
+      if (u && /^https:\/\/[^\s]+$/.test(u)) return u;
+    }
+    return undefined;
+  };
+  const out: EntityLinks = { listen: first('spotify', 'itunes'), watch: first('youtube'), official: first('homepage') };
+  return Object.fromEntries(Object.entries(out).filter(([, v]) => v)) as EntityLinks;
+}
 export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null };
 export type DiscoveredEvent = {
   providerEventId: string;
@@ -194,12 +210,12 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
       }
     : null;
   const attractions: DiscoveredAttraction[] = (embedded.attractions ?? [])
-    .map((a) => {
+    .map((a): DiscoveredAttraction | null => {
       const aid = str(a.id);
       const aname = str(a.name);
       if (!aid || !aname) return null;
       const ac = (Array.isArray(a.classifications) ? (a.classifications as Array<Record<string, unknown>>) : [])[0] ?? {};
-      return { providerId: aid, name: aname, url: str(a.url), segment: nameOf(ac.segment), genre: nameOf(ac.genre), subGenre: nameOf(ac.subGenre) };
+      return { providerId: aid, name: aname, url: str(a.url), segment: nameOf(ac.segment), genre: nameOf(ac.genre), subGenre: nameOf(ac.subGenre), links: attractionLinks(a) };
     })
     .filter((a): a is DiscoveredAttraction => a !== null);
   return {

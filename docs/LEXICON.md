@@ -24,7 +24,7 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |
 |---|---|---|---|---|---|
-| Show the rest of a list already sent. A number in the phrase ("the other 7") counts the list, not tickets. **model** | “the other 7”, “the rest”, “what else is there”, “show me more”, “any others”, “more options” | `wantsMore=true` | any | browse | “can you give me the other 7” |
+| Show the rest of a list already sent. A number in the phrase ("the other 7") counts the list, not tickets. **model** | “more”, “the other 7”, “the rest”, “what else is there”, “show me more”, “any others”, “more options” | `wantsMore=true` | any | browse | “can you give me the other 7” |
 
 ## Resale and comparing
 

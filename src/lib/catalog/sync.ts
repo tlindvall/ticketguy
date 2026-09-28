@@ -190,17 +190,19 @@ async function upsertEntity(db: DbOrTx, a: DiscoveredAttraction): Promise<string
   const aliases = kind === 'team' ? teamAliases(a.name) : [];
   const league = leagueFor(a);
   const byExternal = await db.select({ id: t.entities.id, aliases: t.entities.aliases }).from(t.entities).where(sql`${t.entities.externalIds} ->> ${DISCOVERY_SOURCE_ID} = ${a.providerId}`);
+  // Links are only ever added or refreshed from the provider, never cleared by a response that omits them.
+  const links = a.links && Object.keys(a.links).length ? { links: a.links } : {};
   if (byExternal[0]) {
-    await db.update(t.entities).set({ name: a.name, aliases: [...new Set([...byExternal[0].aliases, ...aliases])], league }).where(eq(t.entities.id, byExternal[0].id));
+    await db.update(t.entities).set({ name: a.name, aliases: [...new Set([...byExternal[0].aliases, ...aliases])], league, ...links }).where(eq(t.entities.id, byExternal[0].id));
     return byExternal[0].id;
   }
   const slug = slugify(a.name);
   const bySlug = await db.select({ id: t.entities.id, aliases: t.entities.aliases, externalIds: t.entities.externalIds }).from(t.entities).where(eq(t.entities.slug, slug));
   if (bySlug[0]) {
-    await db.update(t.entities).set({ externalIds: { ...bySlug[0].externalIds, [DISCOVERY_SOURCE_ID]: a.providerId }, aliases: [...new Set([...bySlug[0].aliases, ...aliases])], league: league ?? undefined }).where(eq(t.entities.id, bySlug[0].id));
+    await db.update(t.entities).set({ externalIds: { ...bySlug[0].externalIds, [DISCOVERY_SOURCE_ID]: a.providerId }, aliases: [...new Set([...bySlug[0].aliases, ...aliases])], league: league ?? undefined, ...links }).where(eq(t.entities.id, bySlug[0].id));
     return bySlug[0].id;
   }
-  const [row] = await db.insert(t.entities).values({ kind, name: a.name, slug, aliases, league, homeVenueId: null, externalIds: { [DISCOVERY_SOURCE_ID]: a.providerId } }).returning({ id: t.entities.id });
+  const [row] = await db.insert(t.entities).values({ kind, name: a.name, slug, aliases, league, homeVenueId: null, externalIds: { [DISCOVERY_SOURCE_ID]: a.providerId }, ...links }).returning({ id: t.entities.id });
   return row!.id;
 }
 

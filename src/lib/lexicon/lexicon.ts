@@ -83,12 +83,15 @@ export const LEXICON: LexiconEntry[] = [
     field: 'wantsMore',
     value: true,
     meaning: 'Show the rest of a list already sent. A number in the phrase ("the other 7") counts the list, not tickets.',
-    phrases: ['the other 7', 'the rest', 'what else is there', 'show me more', 'any others', 'more options'],
-    pattern: /\b(the (?:other|remaining) (?:\d+|few|ones|shows|games|options)|the rest(?: of (?:them|the list))?|(?:show|give|send|list) (?:me )?(?:the )?(?:rest|more|others)|what else(?: is (?:there|on))?|any (?:more|others)|more options|the others)\b/i,
+    phrases: ['more', 'the other 7', 'the rest', 'what else is there', 'show me more', 'any others', 'more options'],
+    pattern: /^\s*more(?: please)?[.!]*\s*$|\b(the (?:other|remaining) (?:\d+|few|ones|shows|games|options)|the rest(?: of (?:them|the list))?|(?:show|give|send|list) (?:me )?(?:the )?(?:rest|more|others)|what else(?: is (?:there|on))?|any (?:more|others)|more options|the others)\b/i,
     categories: ['any'],
     requestTypes: ['browse'],
     teachModel: true,
-    examples: [{ text: 'can you give me the other 7', expect: { wantsMore: true, quantity: null } }],
+    examples: [
+      { text: 'can you give me the other 7', expect: { wantsMore: true, quantity: null } },
+      { text: 'more', expect: { wantsMore: true } },
+    ],
   },
 
   {
