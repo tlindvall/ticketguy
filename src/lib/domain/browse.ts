@@ -1,3 +1,4 @@
+import { lexiconBrowseAsk, lexiconCategory } from '@/lib/lexicon/lexicon';
 /**
  * "What gigs are on in New York the first week of October?" is not a request for one event; it asks what the
  * options are. Browsing answers with a short list of real scheduled events for a kind of event, a place and
@@ -99,25 +100,11 @@ export function spanLabel(from: string, to: string): string {
   return sameMonth ? `${fmt(from, { month: 'short', day: 'numeric' })}–${fmt(to, { day: 'numeric' })}` : `${fmt(from, { month: 'short', day: 'numeric' })} – ${fmt(to, { month: 'short', day: 'numeric' })}`;
 }
 
-/** Phrases that ask what is on rather than for a named event. */
-export const BROWSE_ASK = /\b(what(?:'s| is)? on|what(?:'s| is) happening|what (?:options|choices) (?:do i|are there)|what can (?:i|we) (?:see|go to)|what should (?:i|we) (?:see|go to)|any (?:good )?(?:shows|gigs|concerts|games)|anything (?:good|fun) (?:on|happening)|recommend(?:ations?)?|suggest(?:ions?)?|things to (?:do|see))\b/i;
-
-/**
- * The kind of event from the customer's own words. First match wins, so the more specific sport names are
- * checked before "game". "Show" alone is left unread: it is a concert, a musical or a comedy set.
- */
-const HINT_WORDS: Array<[RegExp, CategoryHint]> = [
-  [/\b(nhl|hockey)\b/i, 'nhl'],
-  [/\b(wnba)\b/i, 'wnba'],
-  [/\b(nba|basketball)\b/i, 'nba'],
-  [/\b(mlb|baseball)\b/i, 'mlb'],
-  [/\b(gigs?|concerts?|live music|music|bands?|dj sets?|festivals?)\b/i, 'concert'],
-  [/\b(broadway|musicals?|theat(?:er|re)|plays?)\b/i, 'theater'],
-  [/\b(comedy|stand-?up|comedians?)\b/i, 'comedy'],
-  [/\b(sports?|games?|matches)\b/i, 'sports'],
-];
+/** Phrases that ask what is on, and the kind-of-event words, live in the lexicon (src/lib/lexicon). */
+export function BROWSE_ASK_TEST(text: string): boolean {
+  return lexiconBrowseAsk(text);
+}
 
 export function categoryHintFrom(text: string): CategoryHint | null {
-  for (const [re, hint] of HINT_WORDS) if (re.test(text)) return hint;
-  return null;
+  return lexiconCategory(text);
 }

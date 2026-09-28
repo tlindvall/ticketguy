@@ -3,7 +3,8 @@ import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/ty
 import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
-import { BROWSE_ASK, categoryHintFrom } from '@/lib/domain/browse';
+import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
+import { lexiconQuantity, lexiconVagueQuantity } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -38,7 +39,10 @@ function parseQuantity(t: string): { value: number | null; quote: string | null 
   const m = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a|single|pair|couple)\s*(?:of\s+us|people|tickets?|seats?|tix|adults?|friends?)\b/i.exec(t) ?? /\b(?:party|group|family|household|crew)\s+of\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(t) ?? /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:together)\b/i.exec(t);
   if (!m) {
     const couple = COUPLE.exec(t);
-    return couple ? { value: 2, quote: couple[0] } : { value: null, quote: null };
+    if (couple) return { value: 2, quote: couple[0] };
+    // "just me", "me and my son", "the two of us" — the lexicon's party phrases.
+    const phrase = lexiconQuantity(t);
+    return phrase ? { value: phrase.value, quote: phrase.quote } : { value: null, quote: null };
   }
   const raw = m[1]!.toLowerCase();
   const v = NUM_WORDS[raw] ?? Number(raw);
@@ -112,7 +116,7 @@ export class FixtureExtractor implements Extractor {
     ev('budgetCents', budget.quote);
     if (budget.cents !== null && budget.basis === null) ambiguities.push('budget_basis_unknown');
     // "A few" or "some" tickets is a real doubt about the number, so it is asked rather than assumed to be two.
-    if (/\b(a few|few|some|several|a bunch of|a group of|a handful of)\s+(?:\w+\s+)?(tickets?|seats?)\b/i.test(t)) ambiguities.push('quantity_unclear');
+    if (lexiconVagueQuantity(t)) ambiguities.push('quantity_unclear');
 
     // Negations first so "anything except X, Y please" resolves to Y (A29).
     const negated: string[] = [];
@@ -154,7 +158,8 @@ export class FixtureExtractor implements Extractor {
         break;
       }
     }
-    const together = /\b(together|next to each other|adjacent|side by side)\b/i.test(t) ? true : /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i.test(t) ? false : null;
+    // The negation is checked first: "we don't need to sit together" contains "together".
+    const together = /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i.test(t) ? false : /\b(together|next to each other|adjacent|side by side)\b/i.test(t) ? true : null;
     ev('togetherRequired', together === null ? null : (/\b(together|next to each other|adjacent|side by side|split|separate)\b/i.exec(t)?.[0] ?? null));
     const accessibility = /\b(wheelchair|accessible|ada)\b/i.exec(t);
     const performerOrTeam = ent ? ent.entity.name : null;
@@ -169,7 +174,7 @@ export class FixtureExtractor implements Extractor {
     const countryStatement = findResidenceStatement(t);
     const categoryHint = categoryHintFrom(t);
     // "What's on" with nothing specific named is a browse: answer with options instead of asking which event.
-    if (intent === 'new_search' && !ent && (BROWSE_ASK.test(t) || categoryHint)) intent = 'browse';
+    if (intent === 'new_search' && !ent && (BROWSE_ASK_TEST(t) || categoryHint)) intent = 'browse';
 
     return EXTRACTION_SCHEMA.parse({
       intent,

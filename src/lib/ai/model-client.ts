@@ -1,3 +1,4 @@
+import { modelPhrasebook } from '@/lib/lexicon/lexicon';
 import type { z } from 'zod';
 import { EXTRACTION_SCHEMA, type ExtractionInput, type Extractor } from './extraction';
 import type { RequestExtraction } from '@/lib/domain/types';
@@ -57,7 +58,8 @@ intent is "browse" when the customer asks what is on or what their options are w
 performerOrTeam is ONE team or artist. For a game named as a matchup ("Rangers vs Lightning", "Knicks v Celtics"), put the first-named team in performerOrTeam and the whole matchup in eventName.
 countryStatement is the customer's own words about where they live or are based (for example "I'm in Brooklyn", "we're coming from the UK", "not in the US"), copied verbatim; null when they say nothing about it. The event's city or venue is not where they live, and "visiting New York" or "in town for the weekend" is not residence either.
 Leave quantity null when no number is given; add "quantity_unclear" only when the customer signals doubt ("a few", "some", "a group of us") — an unstated quantity is not a doubt.
-ambiguities may only contain values from the schema's list. Use performer_ambiguous when the name names more than one real team or artist (for example "Rangers", which is both an NHL and an MLB team), and event_location_unknown when no city or venue is given and more than one could be meant.`;
+ambiguities may only contain values from the schema's list. Use performer_ambiguous when the name names more than one real team or artist (for example "Rangers", which is both an NHL and an MLB team), and event_location_unknown when no city or venue is given and more than one could be meant.
+${modelPhrasebook()}`;
 
 export const DRAFT_INSTRUCTIONS = `You write the connective prose of a short, candid, independent email about live-event tickets.
 You may only reference facts by claim ID from the provided packet. Your prose must not contain any digits, currency symbols, percentages or URLs — the server renders all numbers and links.
