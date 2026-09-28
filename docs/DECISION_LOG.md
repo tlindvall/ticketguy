@@ -472,3 +472,29 @@ A quoted price takes the full answer path rather than the bare official-sale poi
   source that should have answered and failed is still named.
 - The drafting prompt forbids telling the customer to check other sites themselves, and forbids
   "packet", "claims", "sources" and "coverage".
+
+## 42. Price checks without listings send themselves; every category is covered unless blocked
+
+**Price checks.** The owner exempted one more class from the pilot's review rule. An answer that offers no
+listing (no verified offer) but does answer a quoted price (C_QUOTE) goes out without a person approving it.
+- Nothing in it needs judgement. Every fact is server-rendered from the provider's face value and the official
+  sale (#41), and the model only supplies connective prose that the renderer validates.
+- It is recorded as a recommendation with `reviewStatus = auto_sent` (reviewer `system:price-check`), audited
+  as `recommendation.auto_sent`, and sent as `no_result` with the `raw_auto` template. That template carries
+  the automated footer, not the reviewed one.
+- The sign-off says "AI-assisted", not "AI-assisted, human-reviewed". A message says "human-reviewed" only
+  when a person approved it.
+- As soon as a listing is offered, the draft is a buy recommendation again and waits for approval.
+- Known wrinkle: the acknowledgment ("Got it — checking your options") still goes out first, and the answer
+  follows seconds later. It is left in on purpose. At the moment of acknowledging we don't yet know whether
+  research will find listings and hold the answer for review.
+
+**Categories.** Coverage is now everything the provider lists, minus a short blocklist.
+- The blocklist is `BLOCKED_CATEGORIES`, default `high_school,conventions,attractions,theme_parks,cinema`.
+  These are not live events a ticket concierge adds value on, or they are events we must not market to
+  (high school).
+- A request's category hint narrows the search (NFL → `nfl`, theater → `broadway, touring_theater,
+  classical`); no hint searches all categories.
+- `PILOT_SUPPORTED_CATEGORIES` is superseded and ignored. It still parses, so an old setting doesn't break
+  startup. Keeping a curated allowlist meant every new category was refused until someone noticed (theater,
+  NFL, soccer), and each refusal is a lost customer.

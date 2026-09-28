@@ -195,7 +195,10 @@ const rawSchema = z.object({
   CATALOG_SEED_KEYWORDS: csvDefault('new york rangers,new york knicks,new york islanders,new jersey devils,brooklyn nets,new york yankees,new york mets,new york liberty,new york giants,new york jets'),
   LIVE_INVENTORY_ENABLED: explicitBoolean,
 
-  PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb,nfl,broadway,touring_theater,comedy'),
+  /** Superseded by BLOCKED_CATEGORIES (everything is covered unless blocked); kept so an old setting still parses. */
+  PILOT_SUPPORTED_CATEGORIES: z.string().default(''),
+  /** Categories we do not answer for: ones Ticketmaster is not the ticket for, or where "a ticket" means something else. */
+  BLOCKED_CATEGORIES: z.string().default('high_school,conventions,attractions,theme_parks,cinema'),
   PILOT_SUPPORTED_MARKETS: z.string().default('new-york'),
   /** The market assumed, and said, when a request names no place and the customer has never named one. */
   DEFAULT_MARKET: z.string().default('new-york'),
@@ -220,8 +223,8 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
   aiRequestSoftBudgetUsd: number;
   aiRequestHardBudgetUsd: number;
   aiGlobalDailyBudgetUsd: number;
-  pilotSupportedCategories: string[];
   pilotSupportedMarkets: string[];
+  blockedCategories: string[];
 };
 
 /**
@@ -338,7 +341,7 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     aiRequestSoftBudgetUsd: soft,
     aiRequestHardBudgetUsd: hard,
     aiGlobalDailyBudgetUsd: e.AI_GLOBAL_DAILY_BUDGET_USD ?? 10,
-    pilotSupportedCategories: e.PILOT_SUPPORTED_CATEGORIES.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    blockedCategories: e.BLOCKED_CATEGORIES.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     pilotSupportedMarkets: e.PILOT_SUPPORTED_MARKETS.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   };
 }

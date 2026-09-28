@@ -19,16 +19,17 @@ export const CATEGORY_HINTS = ['concert', 'sports', 'nhl', 'nba', 'mlb', 'wnba',
 export type CategoryHint = (typeof CATEGORY_HINTS)[number];
 
 /** Catalog categories (catalog/sync categoryFor) each hint covers. */
+const SPORTS = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'minor_league', 'ncaa_regular', 'ncaa_championship', 'combat', 'motorsport', 'tennis_golf', 'emerging_sports'];
 const CATALOG: Record<CategoryHint, string[]> = {
   concert: ['concert', 'festival', 'electronic_nightlife'],
-  sports: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'],
+  sports: SPORTS,
   nhl: ['nhl'],
   nba: ['nba'],
   mlb: ['mlb'],
   wnba: ['wnba'],
   nfl: ['nfl'],
   soccer: ['soccer'],
-  theater: ['broadway', 'touring_theater'],
+  theater: ['broadway', 'touring_theater', 'classical'],
   comedy: ['comedy'],
 };
 
@@ -60,13 +61,16 @@ const LABEL: Record<CategoryHint, string> = {
 };
 
 /**
- * The catalog categories a hint covers that the pilot actually serves. Empty means the customer asked for
- * something outside the pilot (theater, comedy) and is told so rather than shown events we cannot advise on.
+ * The catalog categories a hint covers, minus the ones we do not cover (`BLOCKED_CATEGORIES`). Everything the
+ * provider lists is covered by default (DECISION_LOG #42); with no hint, that is every category.
  */
-export function pilotCategoriesFor(hint: CategoryHint | null, pilotCategories: string[]): string[] {
-  const wanted = hint ? CATALOG[hint] : ['concert', 'festival', 'electronic_nightlife', 'nhl', 'nba', 'mlb', 'wnba', 'nfl'];
-  return wanted.filter((c) => pilotCategories.includes(c) || (pilotCategories.includes('concert') && (c === 'festival' || c === 'electronic_nightlife')));
+export function pilotCategoriesFor(hint: CategoryHint | null, blocked: string[], all: readonly string[] = ALL_CATEGORIES): string[] {
+  const wanted = hint ? CATALOG[hint] : all;
+  return wanted.filter((c) => !blocked.includes(c));
 }
+
+/** Every catalog category the routing matrix knows (src/lib/sources/routing.ts). */
+export const ALL_CATEGORIES: readonly string[] = [...new Set([...Object.values(CATALOG).flat(), 'family', 'club_concert', 'fairs_community', 'conventions', 'las_vegas', 'attractions', 'theme_parks', 'cinema', 'high_school'])];
 
 export function providerClassificationFor(hint: CategoryHint | null): string | null {
   return hint ? PROVIDER[hint] : null;
@@ -133,19 +137,6 @@ export function pickReason(e: { name: string; category: string; genre: string | 
   }
   const sub = e.genre?.split(' / ')[1] ?? e.genre?.split(' / ')[0] ?? null;
   return sub ? `${sub.charAt(0).toUpperCase()}${sub.slice(1)}.` : null;
-}
-
-/** The pilot's categories in words, for telling a customer what is covered. */
-export function pilotCoverageLabel(pilotCategories: string[]): string {
-  const leagues = ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].filter((c) => pilotCategories.includes(c)).map((c) => c.toUpperCase());
-  const parts = [
-    pilotCategories.includes('concert') ? 'concerts' : null,
-    leagues.length ? `${leagues.length > 1 ? `${leagues.slice(0, -1).join(', ')} and ${leagues.at(-1)}` : leagues[0]} games` : null,
-    pilotCategories.includes('broadway') || pilotCategories.includes('touring_theater') ? 'theater' : null,
-    pilotCategories.includes('comedy') ? 'comedy' : null,
-  ].filter((x): x is string => !!x);
-  if (parts.length <= 2) return parts.join(' and ') || 'a few kinds of event';
-  return `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }
 
 /**

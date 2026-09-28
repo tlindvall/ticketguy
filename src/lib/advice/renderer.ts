@@ -63,7 +63,12 @@ function checkProse(label: string, prose: string, errors: string[]): void {
   }
 }
 
-export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null } = {}): ValidationResult {
+/** The sign-off says what is true of the message: "human-reviewed" only when a person approved it. */
+function signOff(reviewed: boolean): string {
+  return reviewed ? '— Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.' : '— Ticket Guy (AI-assisted). Buying happens with the seller; we never hold tickets or payments.';
+}
+
+export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean } = {}): ValidationResult {
   const parsed = ResponseBlocksSchema.safeParse(blocks);
   if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) };
   const b = parsed.data;
@@ -120,13 +125,13 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   }
   lines.push(b.closing.trim());
   html.push(`<p>${esc(b.closing.trim())}</p>`);
-  lines.push('— Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.');
-  html.push(`<p><small>— Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.</small></p>`);
+  lines.push(signOff(opts.reviewed !== false));
+  html.push(`<p><small>${esc(signOff(opts.reviewed !== false))}</small></p>`);
   return { ok: true, textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
 }
 
 /** Safe evidence-only fallback when generation fails repeatedly (no model prose at all). */
-export function renderEvidenceOnly(packet: AdvicePacket): { textBody: string; htmlBody: string } {
+export function renderEvidenceOnly(packet: AdvicePacket, opts: { reviewed?: boolean } = {}): { textBody: string; htmlBody: string } {
   const visible: ClaimRecord[] = packet.claimRecords.filter((c) => c.customerVisible);
   const decisionLine: Record<AdvicePacket['decision'], string> = {
     buy_now: 'Given your priorities, securing the option below is reasonable.',
@@ -134,7 +139,7 @@ export function renderEvidenceOnly(packet: AdvicePacket): { textBody: string; ht
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
-  const text = [decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : ''))].join('\n\n');
-  const html = [`<p>${esc(decisionLine[packet.decision])}</p>`, ...visible.map((c) => `<p>${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}</p>`)].join('\n');
+  const text = [decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : '')), signOff(opts.reviewed !== false)].join('\n\n');
+  const html = [`<p>${esc(decisionLine[packet.decision])}</p>`, ...visible.map((c) => `<p>${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}</p>`), `<p><small>${esc(signOff(opts.reviewed !== false))}</small></p>`].join('\n');
   return { textBody: text, htmlBody: html };
 }

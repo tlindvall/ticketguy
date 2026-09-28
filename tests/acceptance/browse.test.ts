@@ -137,7 +137,8 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const theater = await ask(c, 'Any good Broadway musicals on next week?', 'bway@customer.example');
     expect((await lastSend(theater)).bodyText).toContain('Theater in New York'); // covered now
     const soccer = await ask(c, 'Any soccer on next week?', 'soccer@customer.example');
-    expect((await lastSend(soccer)).bodyText).toContain("Soccer isn't something I cover yet. For now I only cover concerts, NHL, NBA, MLB and NFL games, theater and comedy.");
+    expect((await lastSend(soccer)).bodyText).toContain('Soccer in New York'); // everything the provider lists is covered unless blocked
+    expect((await lastSend(soccer)).bodyText).not.toContain("isn't something I cover");
   });
 
   it('"LA" is the metro: Inglewood and Anaheim count, San Diego does not', async () => {

@@ -179,7 +179,9 @@ export function renderTemplate(
       return wrap([line, `Link: ${String(v.url)}`, `Prices can change before checkout. Reply "stop" to end this watch.`], [`<p>${esc(line)}</p>`, `<p><a href="${esc(String(v.url))}">View this offer</a></p>`, `<p>Prices can change before checkout. Reply "stop" to end this watch.</p>`]);
     }
     case 'raw':
-      // The advice renderer signs its own body, so no second signature here.
+    case 'raw_auto':
+      // The advice renderer signs its own body, so no second signature here. 'raw_auto' is the same body sent
+      // without review (a price check with no listings of ours), so it carries the automated disclosure.
       return { text: `${String(v.text)}\n\n${disclosure}`, html: `${BODY_OPEN}${String(v.html)}${disclosureHtml(disclosure)}${BODY_CLOSE}` };
     default:
       throw new Error(`unknown template ${name}`);
