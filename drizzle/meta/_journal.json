@@ -71,6 +71,13 @@
       "when": 1790636531670,
       "tag": "0009_venue_coordinates",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790638750355,
+      "tag": "0010_event_face_value",
+      "breakpoints": true
     }
   ]
 }

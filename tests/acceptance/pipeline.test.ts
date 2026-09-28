@@ -52,8 +52,8 @@ describe('end-to-end fixture flow', () => {
     expect(rec!.bodyText).toContain('comparable past events');
     expect(rec!.bodyText).toMatch(/fallen from \$475 to \$425/);
     expect(rec!.bodyText).toContain('cheapest single seat we verified is $35');
-    expect(rec!.bodyText).toContain('Sources checked:');
-    expect(rec!.bodyText).toContain('stubhub (not integrated)');
+    expect(rec!.bodyText).toContain('Checked: ');
+    expect(rec!.bodyText).not.toContain('not integrated'); // staff see coverage in the console; the customer sees what was checked
     expect(rec!.reviewNote).toContain('FIXTURE DATA');
     const [advice] = await h.db.select().from(t.adviceRuns).where(eq(t.adviceRuns.requestId, req!.id));
     expect(advice!.decision).toBe('buy_now');
@@ -128,7 +128,7 @@ describe('end-to-end fixture flow', () => {
     expect(await c.approveRecommendation({ recommendationId: rec1!.id, reviewerUserId: 's', expectedRevision: 1, draftHash: rec1!.draftHash, note: null })).toMatchObject({ ok: false, status: 409 });
     // Revision 2: no 4-seat fixture inventory → honest no-result path (no invented listings).
     const [rec2] = await h.db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, reqId), eq(t.recommendations.revision, 2)));
-    expect(rec2!.bodyText).toContain('could not verify a suitable option');
+    expect(rec2!.bodyText).toContain('Here’s what I can tell you so far.');
     expect(rec2!.bodyText).not.toContain('Best verified option');
     const [advice2] = await h.db.select().from(t.adviceRuns).where(and(eq(t.adviceRuns.requestId, reqId), eq(t.adviceRuns.revision, 2)));
     expect(advice2!.decision).toBe('insufficient_evidence');

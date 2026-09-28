@@ -32,6 +32,12 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 |---|---|---|---|---|---|
 | Look at resale or compare prices. Without it, an event still on general sale is answered with the official sale link. **model** | “compare”, “is resale cheaper?”, “StubHub”, “best price”, “cheapest”, “secondary market” | `resaleAsked=true` | any | find | “compare” |
 
+## A price they saw
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| A price they saw and want judged ("is $106 a good deal?"). It is not their budget, and it is compared with face value. **model** | “is $106 a good deal?”, “is $80 a good price”, “worth it at $150?”, “is $200 too much”, “fair price” | `quotedPriceCents` | any | find | “Is $106 for father john misty a good deal?” |
+
 ## What kind of event (no performer or team named)
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |
@@ -43,8 +49,8 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 | American football. In a US product "football" is the NFL (the Giants and Jets at MetLife); college football reads the same. **model** _Checked before "a game", so a football game is never every sport._ | “football”, “American football”, “NFL”, “a football game” | `categoryHint="nfl"` | nfl | browse, find | “I want to see an american football game in or near new york the second week of october” |
 | Soccer. **model** | “soccer”, “MLS”, “NWSL”, “a soccer match” | `categoryHint="soccer"` | soccer | browse, find | “Any soccer on next weekend?” |
 | Live music of any kind. **model** | “gig”, “gigs”, “concert”, “live music”, “music”, “a band”, “a DJ set”, “festival” | `categoryHint="concert"` | concert | browse, find | “Any good gigs in Brooklyn in early October?” |
-| Broadway and plays — outside the pilot, so the customer is told plainly. **model** | “Broadway”, “a musical”, “a play”, “theater”, “theatre” | `categoryHint="theater"` | theater | browse, find | “Any good Broadway musicals on next week?” |
-| Stand-up — outside the pilot. | “comedy”, “stand-up”, “a comedian” | `categoryHint="comedy"` | comedy | browse, find | “Any stand-up shows this weekend?” |
+| Broadway, touring musicals and plays. **model** | “Broadway”, “a musical”, “a play”, “theater”, “theatre” | `categoryHint="theater"` | theater | browse, find | “Any good Broadway musicals on next week?” |
+| Stand-up and comedy shows. | “comedy”, “stand-up”, “a comedian” | `categoryHint="comedy"` | comedy | browse, find | “Any stand-up shows this weekend?” |
 | A game of any sport. Checked last, so "a hockey game" stays hockey. **model** _"Show" on its own is deliberately unread: it is a concert, a musical or a comedy set._ | “a game”, “sports”, “a match” | `categoryHint="sports"` | sports | browse, find | “What games are on this weekend?” |
 
 ## What kind of music

@@ -20,7 +20,7 @@ export type LexiconCategory = CategoryHint | 'any';
 export type LexiconEntry = {
   id: string;
   /** What the phrase sets. */
-  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
+  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'quotedPriceCents' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
   /** The meaning, in words, for people. */
   meaning: string;
   /** The value it sets (for fields with a fixed value). */
@@ -108,6 +108,18 @@ export const LEXICON: LexiconEntry[] = [
       { text: 'compare', expect: { resaleAsked: true } },
       { text: 'Rangers Oct 3, 2 tickets — is resale cheaper than Ticketmaster?', expect: { resaleAsked: true } },
     ],
+  },
+
+  {
+    id: 'price.check',
+    field: 'quotedPriceCents',
+    meaning: 'A price they saw and want judged ("is $106 a good deal?"). It is not their budget, and it is compared with face value.',
+    phrases: ['is $106 a good deal?', 'is $80 a good price', 'worth it at $150?', 'is $200 too much', 'fair price'],
+    pattern: /\b(good (?:deal|price)|fair (?:deal|price)|worth it|too much|overpriced|rip-?off|reasonable (?:price)?|a steal|decent price)\b/i,
+    categories: ['any'],
+    requestTypes: ['find'],
+    teachModel: true,
+    examples: [{ text: 'Is $106 for father john misty a good deal?', expect: { quotedPriceCents: 10600, budgetCents: null } }],
   },
 
   // ── What kind of event (no performer or team named) ──────────────────────────────────────────────────
@@ -202,7 +214,7 @@ export const LEXICON: LexiconEntry[] = [
     id: 'category.theater',
     field: 'categoryHint',
     value: 'theater',
-    meaning: 'Broadway and plays — outside the pilot, so the customer is told plainly.',
+    meaning: 'Broadway, touring musicals and plays.',
     phrases: ['Broadway', 'a musical', 'a play', 'theater', 'theatre'],
     pattern: /\b(broadway|musicals?|theat(?:er|re)|plays?)\b/i,
     categories: ['theater'],
@@ -214,7 +226,7 @@ export const LEXICON: LexiconEntry[] = [
     id: 'category.comedy',
     field: 'categoryHint',
     value: 'comedy',
-    meaning: 'Stand-up — outside the pilot.',
+    meaning: 'Stand-up and comedy shows.',
     phrases: ['comedy', 'stand-up', 'a comedian'],
     pattern: /\b(comedy|stand-?up|comedians?)\b/i,
     categories: ['comedy'],
@@ -514,6 +526,11 @@ export function lexiconGenre(text: string): { value: string; quote: string } | n
 
 export function lexiconResaleAsked(text: string): boolean {
   return entriesFor('resaleAsked').some((e) => e.pattern.test(text));
+}
+
+/** A question about whether a price they saw is good. The amount itself is read like a budget amount. */
+export function lexiconPriceCheck(text: string): boolean {
+  return /\$\s?\d/.test(text) && entriesFor('quotedPriceCents').some((e) => e.pattern.test(text));
 }
 
 export function lexiconWantsMore(text: string): boolean {

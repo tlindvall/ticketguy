@@ -183,6 +183,9 @@ export type DiscoveredEvent = {
   /** The provider's general (public) sale window, when it gives one. Presales are not the general sale. */
   publicSaleStart: string | null;
   publicSaleEnd: string | null;
+  /** The provider's published face-value range per ticket in USD cents, before fees. A reference, never an offer (A12). */
+  faceMinCents: number | null;
+  faceMaxCents: number | null;
   segment: string | null;
   genre: string | null;
   subGenre: string | null;
@@ -191,6 +194,19 @@ export type DiscoveredEvent = {
 };
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
+
+/**
+ * The standard-ticket face-value range in USD, when the provider publishes one. Kept to judge a price a
+ * customer quotes; it is never shown as something to buy at (A12).
+ */
+function faceValueOf(ranges: unknown): { faceMinCents: number | null; faceMaxCents: number | null } {
+  const list = Array.isArray(ranges) ? (ranges as Array<{ type?: unknown; currency?: unknown; min?: unknown; max?: unknown }>) : [];
+  const r = list.find((x) => x.currency === 'USD' && (x.type === 'standard' || x.type === undefined)) ?? list.find((x) => x.currency === 'USD');
+  const min = Number(r?.min);
+  const max = Number(r?.max);
+  if (!r || !Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max < min) return { faceMinCents: null, faceMaxCents: null };
+  return { faceMinCents: Math.round(min * 100), faceMaxCents: Math.round(max * 100) };
+}
 
 /** The provider sends coordinates as strings; anything that is not a real latitude/longitude pair is dropped. */
 function coordsOf(loc: unknown): { latitude: number; longitude: number } | Record<string, never> {
@@ -244,6 +260,7 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
     statusCode: (str(dates.status?.code) ?? 'unknown').toLowerCase(),
     publicSaleStart: str((e.sales as { public?: { startDateTime?: unknown } } | undefined)?.public?.startDateTime),
     publicSaleEnd: str((e.sales as { public?: { endDateTime?: unknown } } | undefined)?.public?.endDateTime),
+    ...faceValueOf(e.priceRanges),
     segment: nameOf(classification.segment),
     genre: nameOf(classification.genre),
     subGenre: nameOf(classification.subGenre),

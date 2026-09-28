@@ -135,7 +135,9 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const london = await ask(c, 'What concerts are on in London next week?', 'ldn@customer.example');
     expect((await lastSend(london)).bodyText).toContain('For now I only cover events in the US.');
     const theater = await ask(c, 'Any good Broadway musicals on next week?', 'bway@customer.example');
-    expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA, MLB and NFL games.');
+    expect((await lastSend(theater)).bodyText).toContain('Theater in New York'); // covered now
+    const soccer = await ask(c, 'Any soccer on next week?', 'soccer@customer.example');
+    expect((await lastSend(soccer)).bodyText).toContain("Soccer isn't something I cover yet. For now I only cover concerts, NHL, NBA, MLB and NFL games, theater and comedy.");
   });
 
   it('"LA" is the metro: Inglewood and Anaheim count, San Diego does not', async () => {
@@ -155,6 +157,19 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).toContain('Anaheim Act at Honda Center');
     expect(body).not.toContain('San Diego Act');
     expect(body).not.toContain('Jack White');
+  });
+
+  it('a show that runs all week is one pick with its other dates, and the email says so', async () => {
+    const THEATRE = '10000000-0000-4000-8000-0000000000f4';
+    await h.db.insert(t.venues).values({ id: THEATRE, name: 'Richard Rodgers Theatre', city: 'New York', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    const perf = (name: string, at: string) => ({ name, category: 'broadway', genre: 'theatre / musical', venueId: THEATRE, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([
+      perf('Hamilton', '2026-10-06T23:00:00Z'), perf('Hamilton', '2026-10-07T23:00:00Z'), perf('Hamilton', '2026-10-08T23:00:00Z'), perf('Hamilton', '2026-10-10T18:00:00Z'), perf('Hamilton', '2026-10-10T23:00:00Z'),
+    ]);
+    const body = (await lastSend(await ask(makeConcierge(h), 'Any Broadway musicals Oct 6-10?', 'hamilton@customer.example'))).bodyText;
+    expect(body.match(/Hamilton at Richard Rodgers Theatre/g)).toHaveLength(1);
+    expect(body).toContain('• Tue, Oct 6 — Hamilton at Richard Rodgers Theatre. Musical. Also 3 more performances through Sat, Oct 10.');
+    expect(body).not.toContain("gone ahead with it"); // one show over five nights is not one match: the night is theirs to pick
   });
 
   it('with no place named, looks where the customer asked last time, and says so', async () => {

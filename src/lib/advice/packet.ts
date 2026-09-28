@@ -9,7 +9,7 @@ import type { Evaluated } from '@/lib/domain/comparison';
  * Typed evidence packet (API_AND_DATA_CONTRACTS §10). Every fact the customer sees is a server-rendered
  * claim with an ID, scope and allowed wording. The model may only reference claim IDs.
  */
-export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time';
+export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale';
 
 export type ClaimRecord = {
   id: string;
@@ -23,6 +23,8 @@ export type ClaimRecord = {
   /** Whether the claim may appear in customer-facing output (licensing / adequacy). */
   customerVisible: boolean;
   url?: string | null;
+  /** What the link says ("Buy on Ticketmaster"); "View this offer" when not set. */
+  linkLabel?: string | null;
 };
 
 export type AdvicePacket = {
@@ -79,12 +81,85 @@ export type BuildPacketArgs = {
   basketKey: string;
   watchConsentReference: string | null;
   isFixture: boolean;
+  /** The official general sale when it is open now (DECISION_LOG #36). */
+  official?: { seller: string; url: string } | null;
+  /** The provider's published face-value range per ticket, before fees. A reference, never an offer. */
+  faceValue?: { minCents: number; maxCents: number } | null;
+  /** A price the customer saw and asked about, per ticket; `assumedPerTicket` when they did not say. */
+  quote?: { perTicketCents: number; assumedPerTicket: boolean } | null;
 };
+
+/**
+ * What a quoted price is next to the provider's face value. Face value is before fees, so a little above it
+ * can still be the official price all-in; well above it is a resale markup.
+ */
+export function quoteVerdict(perTicketCents: number, face: { minCents: number; maxCents: number }): 'below' | 'within' | 'fees' | 'markup' {
+  if (perTicketCents < face.minCents) return 'below';
+  if (perTicketCents <= face.maxCents) return 'within';
+  if (perTicketCents <= Math.round(face.maxCents * 1.35)) return 'fees';
+  return 'markup';
+}
 
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const claims: ClaimRecord[] = [];
   const obs = a.observedAt.toISOString();
   const q = a.quantity;
+  const noMarket = a.sourcesChecked.length === 0;
+
+  // The customer's own question first: the price they saw, against what the provider publishes.
+  if (a.quote) {
+    const price = `${formatUsd(a.quote.perTicketCents)}${a.quote.assumedPerTicket ? ' (I’ve taken that as per ticket)' : ' a ticket'}`;
+    const face = a.faceValue;
+    const range = face ? `${formatUsd(face.minCents)}–${formatUsd(face.maxCents)} a ticket before fees` : null;
+    const verdictText = face
+      ? {
+          below: `That’s below the face value Ticketmaster lists (${range}), so it’s a good price if the seats suit you.`,
+          within: `That’s within the face value Ticketmaster lists (${range}), so it isn’t marked up.`,
+          fees: `That’s a little above the face value Ticketmaster lists (${range}); fees alone can add that much, so it may well be the official price all-in.`,
+          markup: `That’s well above the face value Ticketmaster lists (${range}), so you’d be paying a resale markup.`,
+        }[quoteVerdict(a.quote.perTicketCents, face)]
+      : a.official
+        ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value — but if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
+        : `I can’t see what sellers are charging for this show yet, so I can’t say whether that’s low or high.`;
+    claims.push({
+      id: 'C_QUOTE',
+      kind: 'quoted_price',
+      text: `You mentioned ${price}. ${verdictText}`,
+      values: { perTicketCents: a.quote.perTicketCents, faceMinCents: face?.minCents ?? null, faceMaxCents: face?.maxCents ?? null },
+      scope: { quantity: q, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: obs },
+      evidenceIds: [],
+      methodVersion: 'quote-1.0',
+      limitations: ['face_value_is_before_fees', 'not_a_listing'],
+      customerVisible: true,
+    });
+  } else if (a.faceValue) {
+    claims.push({
+      id: 'C_FACE',
+      kind: 'face_value',
+      text: `Ticketmaster lists face value for this show at ${formatUsd(a.faceValue.minCents)}–${formatUsd(a.faceValue.maxCents)} a ticket before fees.`,
+      values: { minCents: a.faceValue.minCents, maxCents: a.faceValue.maxCents },
+      scope: { quantity: null, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['face_value_is_before_fees', 'not_a_listing'],
+      customerVisible: true,
+    });
+  }
+  if (a.official) {
+    claims.push({
+      id: 'C_OFFICIAL',
+      kind: 'official_sale',
+      text: `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.`,
+      values: { seller: a.official.seller },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['sale_window_not_inventory'],
+      customerVisible: true,
+      url: a.official.url,
+      linkLabel: `Buy on ${a.official.seller}`,
+    });
+  }
 
   if (a.best && a.best.comparableTotalCents !== null) {
     const total = a.best.comparableTotalCents;
@@ -144,7 +219,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: [...a.benchmark.adequacyReasons, 'asking_prices_not_sales'],
       customerVisible: a.benchmark.customerDisplayAllowed,
     });
-  } else {
+  } else if (!noMarket) {
     claims.push({
       id: 'C_NOHIST',
       kind: 'missing_history',
@@ -187,7 +262,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       });
     }
   }
-  if (a.independentOptionCount !== null) {
+  if (a.independentOptionCount !== null && !noMarket) {
     claims.push({
       id: 'C_COUNT',
       kind: 'option_count',
@@ -200,11 +275,18 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // What we checked, in the customer's terms. Sources we have no integration with are our business, not
+  // theirs: they are listed for staff in the review console, never in the email. A source that should have
+  // answered and failed (a timeout) is named, because it changes what the reply covers.
+  const INTERNAL = ['not_integrated', 'not_supported', 'access_not_approved', 'not_configured', 'manual_only'];
+  const failed = a.sourcesUnavailable.filter((s) => !INTERNAL.includes(s.status)).map((s) => s.sourceId);
   const unavailable = a.sourcesUnavailable.map((s) => `${s.sourceId} (${s.status.replace(/_/g, ' ')})`);
   claims.push({
     id: 'C_COVERAGE',
     kind: 'coverage',
-    text: `Sources checked: ${a.sourcesChecked.length ? a.sourcesChecked.join(', ') : 'none'}.${unavailable.length ? ` Not checked or unavailable: ${unavailable.join(', ')}.` : ''} Prices can change before checkout.`,
+    text: noMarket
+      ? `I can’t see live resale listings for this show yet, so this doesn’t compare other sellers’ prices.`
+      : `Checked: ${a.sourcesChecked.join(', ')}.${failed.length ? ` Couldn’t reach: ${failed.join(', ')}.` : ''} Prices can change before checkout.`,
     values: { checked: a.sourcesChecked.length, unavailable: unavailable.length },
     scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
     evidenceIds: [],

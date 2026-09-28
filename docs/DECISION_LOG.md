@@ -416,3 +416,59 @@ metro's list. New York keeps its borough narrowing ("staying in Brooklyn").
   LA, that probably includes Crypto.com Arena. Browse doesn't show their events until an AXS or similar
   source exists.
 - The daily pre-warm still seeds only the New York teams. Other markets fill on demand.
+
+## 40. Theater and comedy are covered; a run of dates is one pick
+
+A Broadway request was answered "Theater isn't something I cover yet", for the same reason football was
+(#33): a pilot default, not a limit. The owner had already set the structure: comedy is its own category,
+and Broadway belongs under Theater & Shows.
+
+**`broadway`, `touring_theater` and `comedy` join the default pilot categories.** Soccer remains outside
+the pilot and says so.
+
+**A run is one pick.** A show that plays many nights at one venue (a Broadway run, a two-night stand, a
+series) is listed once, at its first date, with "Also 3 more performances through Sat, Oct 10". Runs are
+formed before paging, so a show already sent doesn't come back as its next night. A run is never treated
+as the single match that goes straight to prices: which night is still the customer's to pick.
+
+**Category advice on the buying email** (the owner's per-category rules):
+- Comedy: "Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page
+  before you go."
+- Broadway: "TodayTix and the TKTS booth sometimes have cheaper seats for the same week."
+
+The comedy note states the practice only; it claims nothing about this venue's minimum.
+
+**Known gap: most Broadway houses don't sell on Ticketmaster.** Shubert theatres sell through Telecharge,
+and others through Broadway Direct, so Ticketmaster Discovery covers only part of Broadway. Touring
+theater and comedy are much better covered.
+
+## 41. "Is $106 a good deal?" is answered; our integrations are not the customer's business
+
+The customer asked "Is $106 for Father John Misty a good deal?". The draft queued for review:
+- ignored the $106 (the model read it as a budget);
+- listed 27 sources as "not integrated";
+- said "I can't make a useful buy-or-wait call from this packet";
+- ended with "check primary and major resale marketplaces directly", which hands the research back to the
+  customer (#37).
+
+**A price they saw is `quotedPriceCents` (with `quotedPriceBasis`), not a budget.** The lexicon and the
+model are both taught the phrasings ("good deal", "worth it", "too much").
+
+**We answer with what we do know, even without listings.** There are three new server-rendered claims:
+- **C_QUOTE** puts their price against the provider's published face value. Face value is now stored
+  from Discovery `priceRanges` (migration 0010): before fees, and never offered as a price to buy at
+  (A12). The verdict is below face value, within it, a little above (fees can account for that), or
+  well above (a resale markup).
+- **C_FACE** gives the face-value range when no price was quoted.
+- **C_OFFICIAL** says the official general sale is open, with a "Buy on Ticketmaster" link.
+
+A quoted price takes the full answer path rather than the bare official-sale pointer (#36).
+
+**The customer never sees our plumbing.**
+- With no listing source checked, the coverage line is "I can't see live resale listings for this show
+  yet, so this doesn't compare other sellers' prices."
+- The "no history" and "0 qualifying listings" lines are dropped when there was no market to compare.
+- Sources we have no integration with are listed for staff in the review console, not in the email. A
+  source that should have answered and failed is still named.
+- The drafting prompt forbids telling the customer to check other sites themselves, and forbids
+  "packet", "claims", "sources" and "coverage".

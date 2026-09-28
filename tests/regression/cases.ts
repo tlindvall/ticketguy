@@ -67,8 +67,9 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'browse.genre_borough', type: 'browse', text: 'Any indie rock gigs in Brooklyn next week?', brief: { categoryHint: 'concert', genreHint: 'rock', city: 'Brooklyn', intent: 'browse' } },
   { id: 'browse.more', type: 'browse', text: 'can you give me the other 7', brief: { wantsMore: true }, reply: { notContains: ['7 tickets', 'seven tickets'] } },
   { id: 'find.resale_asked', type: 'find', text: 'Rangers Oct 3, 2 tickets — is resale cheaper than Ticketmaster?', brief: { resaleAsked: true, quantity: 2 } },
-  { id: 'browse.theater', type: 'browse', text: 'Any Broadway shows next week?', brief: { categoryHint: 'theater' }, reply: { state: 'unsupported', contains: ['For now I only cover concerts and NHL, NBA, MLB and NFL games'] } },
-  { id: 'browse.comedy', type: 'browse', text: 'Any stand-up comedy this weekend?', brief: { categoryHint: 'comedy' }, reply: { state: 'unsupported' } },
+  { id: 'find.price_check', type: 'find', text: 'Is $106 for the Rangers on Oct 3 a good deal?', brief: { quotedPriceCents: 10600, budgetCents: null }, reply: { notContains: ['not integrated', 'marketplaces directly'] } },
+  { id: 'browse.theater', type: 'browse', text: 'Any Broadway shows next week?', brief: { categoryHint: 'theater' }, reply: { state: 'needs_clarification', contains: ['Theater in New York'], notContains: ["isn't something I cover"] } },
+  { id: 'browse.comedy', type: 'browse', text: 'Any stand-up comedy this weekend?', brief: { categoryHint: 'comedy' }, reply: { state: 'needs_clarification', contains: ['Comedy in New York'], notContains: ["isn't something I cover"] } },
   { id: 'browse.other_city', type: 'browse', text: 'What concerts are on in Chicago next month?', reply: { contains: ['Live music in Chicago'], notContains: ['New York area'] } },
   { id: 'browse.outside_us', type: 'browse', text: 'What concerts are on in London next month?', reply: { state: 'unsupported', contains: ['only cover events in the US'] } },
 

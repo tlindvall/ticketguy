@@ -195,7 +195,7 @@ const rawSchema = z.object({
   CATALOG_SEED_KEYWORDS: csvDefault('new york rangers,new york knicks,new york islanders,new jersey devils,brooklyn nets,new york yankees,new york mets,new york liberty,new york giants,new york jets'),
   LIVE_INVENTORY_ENABLED: explicitBoolean,
 
-  PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb,nfl'),
+  PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb,nfl,broadway,touring_theater,comedy'),
   PILOT_SUPPORTED_MARKETS: z.string().default('new-york'),
   /** The market assumed, and said, when a request names no place and the customer has never named one. */
   DEFAULT_MARKET: z.string().default('new-york'),

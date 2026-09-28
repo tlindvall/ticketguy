@@ -128,6 +128,8 @@ const baseExtraction: RequestExtraction = {
       genreHint: null,
       wantsMore: null,
       resaleAsked: null,
+      quotedPriceCents: null,
+      quotedPriceBasis: null,
 };
 
 describe('A28/A29 interests', () => {
