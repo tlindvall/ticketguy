@@ -451,7 +451,10 @@ export class Concierge {
       if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
       // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else.
       if (opponent) cands = cands.filter(({ e }) => isAgainst(e.name, opponent));
-      if (x.resolvedLocalDate) {
+      // A span the customer named ("Oct 1-7", "first week of October") wins over a single date the extractor
+      // may have pinned from it: the words are the evidence, and the 1st is not "the first week".
+      const spanNamed = !!x.dateExpression && rows.some(({ v }) => dateWindowFor(x.dateExpression!, now, v.timezone) !== null);
+      if (x.resolvedLocalDate && !spanNamed) {
         cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
       } else if (x.dateExpression) {
         // A month or week named without a day still rules events out. Ignoring "next week" offered a November

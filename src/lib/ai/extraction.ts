@@ -67,7 +67,8 @@ function findEntity(t: string, known: ExtractionInput['knownEntities']): { entit
   return best ? { entity: best.entity, quote: best.quote } : null;
 }
 
-const DATE_EXPR = /\b((?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|(?:sometime |later )?(?:this|next) week(?:end)?|(?:this|the) weekend|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
+// Spans first: "Oct 1-7" must not be read as the single date Oct 1, nor "the first week in October" as the month.
+const DATE_EXPR = /\b((?:the )?(?:first|1st|second|2nd|third|3rd|fourth|4th|last|final) week (?:of|on|in) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:early|beginning of|start of|mid|middle of|late|end of)\s*-?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|to|through|thru)\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? )?\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|to|through|thru)\s*\d{1,2}(?:st|nd|rd|th)? (?:of )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|(?:next|coming) (?:few|couple(?: of)?|\d|two|three|four) weeks|(?:this|next) month|(?:sometime )?(?:in|during|for) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?: \d{4})?|(?:sometime |later )?(?:this|next) week(?:end)?|(?:this|the) weekend|tonight|today|tomorrow(?: night)?|day after tomorrow|in \d{1,2} days?|(?:this |next )?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)\b/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 function resolveMonthDay(expr: string, receivedAt: Date): string | null {
@@ -124,10 +125,12 @@ export class FixtureExtractor implements Extractor {
     ev('dateExpression', dateExpression);
     let resolvedLocalDate: string | null = null;
     if (dateExpression) {
-      const md = resolveMonthDay(dateExpression, input.receivedAt);
+      // A span is checked before a single date: "Oct 1-7" names a week, not the 1st.
+      const window = dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York');
+      const md = window ? null : resolveMonthDay(dateExpression, input.receivedAt);
       if (md) resolvedLocalDate = md;
-      else if (dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York')) {
-        // A named month or week narrows the search without picking a day; the resolver uses the window.
+      else if (window) {
+        // A named month, week or span narrows the search without picking a day; the resolver uses the window.
       } else {
         const r = resolveRelativeDate(dateExpression, input.receivedAt, input.venueTimeZone);
         if (r.kind === 'resolved') {
