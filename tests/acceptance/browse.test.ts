@@ -119,7 +119,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const requestId = await ask(c, 'Any gigs in New York the last week of November?', 'empty@customer.example');
     const body = (await lastSend(requestId)).bodyText;
     expect(body).toContain("I don't have any live music in New York on file for Nov 24–30.");
-    expect(body).toContain('Want me to look at different dates, or is there an artist you have in mind?');
+    expect(body).toContain('Want me to look at different dates, or is there an artist or a kind of music you have in mind?');
     expect(body).not.toContain('official listings'); // no provider was asked, so no claim that it was
   });
 
@@ -129,6 +129,75 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect((await lastSend(chicago)).bodyText).toContain('For now I only cover events in the New York area.');
     const theater = await ask(c, 'Any good Broadway musicals on next week?', 'bway@customer.example');
     expect((await lastSend(theater)).bodyText).toContain('For now I only cover concerts and NHL, NBA and MLB games in New York.');
+  });
+
+  it('reads "american football" as football, not every sport, and says it is not covered yet', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'I want to see an american football game in or near new york the second week of october. Anything interesting? We need 4 tickets.', 'nfl@customer.example', { subject: 'American football' });
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
+    expect(req!.state).toBe('unsupported');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain("Football isn't something I cover yet. For now I only cover concerts and NHL, NBA and MLB games in New York.");
+    expect(body).not.toContain('Games in New York');
+  });
+
+  it('shows one line per game when the provider lists premium and package versions of it', async () => {
+    const STADIUM = '10000000-0000-4000-8000-0000000000c3';
+    await h.db.insert(t.venues).values({ id: STADIUM, name: 'Yankee Stadium', city: 'Bronx', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    const game = (name: string, at = '2026-10-08T23:08:00Z') => ({ name, category: 'mlb', venueId: STADIUM, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([
+      game('Pinstripe Pass * 2026 NY Yankees Division Series Home Game 2'),
+      game('2026 NY Yankees Division Series Home Game 2 * Premium Seating *'),
+      game('2026 NY Yankees Division Series Home Game 2'),
+      game('2026 NY Yankees Division Series Home Game 3', '2026-10-09T23:08:00Z'),
+    ]);
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any baseball in New York Oct 8-9?', 'mlb@customer.example');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain('• Thu, Oct 8 — 2026 NY Yankees Division Series Home Game 2 at Yankee Stadium');
+    expect(body).toContain('• Fri, Oct 9 — 2026 NY Yankees Division Series Home Game 3 at Yankee Stadium');
+    expect(body).not.toContain('Premium Seating');
+    expect(body).not.toContain('Pinstripe Pass');
+  });
+
+  it('suggests a team, not an artist, when no games are on file', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any basketball games in New York the last week of November?', 'nba-empty@customer.example');
+    expect((await lastSend(requestId)).bodyText).toContain('Want me to look at different dates, or is there a team you have in mind?');
+  });
+
+  it('narrows the list when the reply names a kind of music and a borough', async () => {
+    const PIANOS = '10000000-0000-4000-8000-0000000000c4';
+    await h.db.insert(t.venues).values({ id: PIANOS, name: 'Union Pool', city: 'Brooklyn', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    const show = (name: string, venueId: string, at: string, genre: string | null) => ({ name, category: 'concert', genre, venueId, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([
+      show('The Walkmen', PIANOS, '2026-10-03T01:00:00Z', 'rock / indie rock'),
+      show('Big Thief', BROOKLYN_STEEL, '2026-10-04T00:30:00Z', 'alternative / alternative rock'),
+      show('Brooklyn Jazz Trio', PIANOS, '2026-10-05T00:30:00Z', 'jazz'),
+      show('Manhattan Indie Night', FX.venues.msg, '2026-10-03T00:30:00Z', 'rock'),
+    ]);
+    const c = makeConcierge(h);
+    const first = inbound({ text: "I'm coming to New York and want to see some music gigs during the first week on october. What options do I have?", from: 'indie@customer.example', subject: 'Gigs' });
+    const r = await c.ingestInbound(first);
+    await interpretAll(h, c);
+    await c.ingestInbound(inbound({ text: 'I like indie rock and roll. We are staying in brooklyn.', from: 'indie@customer.example', subject: 'Re: Gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await interpretAll(h, c);
+    const body = (await lastSend((r as { requestId: string }).requestId)).bodyText;
+    expect(body).toContain('Rock and indie in Brooklyn, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain('The Walkmen at Union Pool');
+    expect(body).toContain('Big Thief at Brooklyn Steel');
+    expect(body).not.toContain('Jazz Trio'); // Brooklyn, but not the music asked for
+    expect(body).not.toContain('Manhattan Indie Night'); // the music, but not Brooklyn
+    expect(body).not.toContain('Jack White');
+    expect(body).toContain("I've kept it to Brooklyn venues — say if you'd go further.");
+  });
+
+  it('says so, and shows what is on, when nothing on file is the music asked for', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any reggaeton gigs in Brooklyn the first week of October?', 'latin@customer.example');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain('Live music in Brooklyn, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain("I couldn't find any Latin music listed for those dates, so here's everything that's on.");
   });
 
   it('asks the provider by classification and place, with no keyword', async () => {

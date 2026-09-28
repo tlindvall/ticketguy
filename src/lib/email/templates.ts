@@ -98,10 +98,10 @@ export function renderTemplate(
       ].filter(Boolean);
       const tail = options.length
         ? [
-            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — tell me an artist, venue or kind of music and I'll narrow it down.` : '',
+            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
             'Reply with the one you want and how many tickets, and I’ll check the prices.',
           ]
-        : [String(v.emptyNote ?? ''), 'Want me to look at different dates, or is there an artist you have in mind?'];
+        : [String(v.emptyNote ?? ''), `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
       const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
       const text = [...lead, ...(options.length ? [list(options)] : []), ...end];
       const html = [...lead.map(para), ...(options.length ? [htmlList(options)] : []), ...end.map(para)];

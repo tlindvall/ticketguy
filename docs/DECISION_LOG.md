@@ -219,3 +219,31 @@ that turns out wrong is caught before advice goes out, not after.
 **Browse.** A request that names no performer or team is not a malformed search; it asks what the
 options are. It now gets up to five real scheduled New York-area events for the span named, or the
 next two weeks, and says so. Quantity and budget wait until the customer picks one.
+
+## 33. A browse list narrows by what the reply says, and a borough is a preference
+
+Two live browse emails failed:
+- "An american football game… the second week of October" listed baseball and basketball.
+- "I like indie rock and roll. We are staying in Brooklyn" returned the same list as before, word for word.
+
+The brief had no way to hold either fact. "Football" was not a kind of event, so the one word left
+was "game", which means every sport. The kind of music, and a borough inside the market, were read
+and then dropped.
+
+**Football and soccer are their own categories.** Both are outside the pilot, so the customer is
+told plainly what is covered. Turning NFL on is a config change (`PILOT_SUPPORTED_CATEGORIES`), and
+MetLife is now among the cities the provider is asked about.
+
+**Kind of music is `genreHint`.** It stores the customer's words, which match a genre family in
+the lexicon. The catalog now stores the provider's genre and sub-genre. The list is filtered by
+family, and the provider is also asked for that genre by name, so a busy week's first hundred shows
+can't crowd it out. When nothing on file matches, the reply says so and shows everything that's on.
+It doesn't send an empty list, because genre tags are uneven.
+
+**A borough keeps the list to its venues and says so** ("say if you'd go further"). It falls back
+to the whole market when nothing is on there. In event resolution, a borough no longer excludes
+the market's other venues: "Knicks, we're staying in Brooklyn" still means Madison Square Garden.
+
+**One listing per show.** When listings share a venue and a start time, they are the same show if
+either name is contained in the other or they share a performer. The provider's Premium Seating
+and Pinstripe Pass copies of a game therefore collapse into the plain listing.

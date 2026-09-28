@@ -333,6 +333,7 @@ export const events = pgTable(
     name: text('name').notNull(),
     category: text('category').notNull(), // concert | nhl | nba | mlb | ...
     subtype: text('subtype'), // preseason | regular_season | playoffs | matinee | ...
+    genre: text('genre'), // provider genre / sub-genre, lowercase ("rock / indie rock"); null when not given
     venueId: uuid('venue_id')
       .notNull()
       .references(() => venues.id),
