@@ -35,6 +35,22 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 | Stand-up — outside the pilot. | “comedy”, “stand-up”, “a comedian” | `categoryHint="comedy"` | comedy | browse, find | “Any stand-up shows this weekend?” |
 | A game of any sport. Checked last, so "a hockey game" stays hockey. **model** _"Show" on its own is deliberately unread: it is a concert, a musical or a comedy set._ | “a game”, “sports”, “a match” | `categoryHint="sports"` | sports | browse, find | “What games are on this weekend?” |
 
+## What kind of music
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| Rock, indie, alternative and punk — one family, because the provider files indie bands under either Rock or Alternative. **model** | “indie”, “indie rock”, “rock and roll”, “alternative”, “punk” | `genreHint="rock"` | concert | browse, find | “I like indie rock and roll. We are staying in brooklyn.” |
+| Jazz. **model** | “jazz”, “a jazz club”, “swing” | `genreHint="jazz"` | concert | browse, find | “Any jazz in the city this weekend?” |
+| Hip-hop and rap. **model** | “hip-hop”, “hip hop”, “rap” | `genreHint="hip-hop"` | concert | browse, find | “Looking for a hip hop show next week” |
+| Electronic and dance music. **model** | “electronic”, “EDM”, “techno”, “house music”, “a DJ” | `genreHint="electronic"` | concert | browse, find | “Any techno parties in Brooklyn next weekend?” |
+| Pop. | “pop”, “a pop concert” | `genreHint="pop"` | concert | browse, find | “We want a pop concert in October” |
+| Country, Americana and bluegrass. "Country" on its own is not read: it is usually about where someone lives. | “country music”, “Americana”, “bluegrass” | `genreHint="country"` | concert | browse, find | “Any country music shows next month?” |
+| R&B, soul and funk. | “R&B”, “soul”, “funk” | `genreHint="r&b"` | concert | browse, find | “Something R&B next weekend?” |
+| Metal and hardcore. | “metal”, “heavy metal”, “hardcore” | `genreHint="metal"` | concert | browse, find | “Any metal gigs in early November?” |
+| Folk and singer-songwriters. | “folk”, “singer-songwriter”, “acoustic” | `genreHint="folk"` | concert | browse, find | “Looking for a folk gig next week” |
+| Latin: reggaeton, salsa, bachata. | “latin”, “reggaeton”, “salsa” | `genreHint="latin"` | concert | browse, find | “Any reggaeton concerts in October?” |
+| Blues. | “blues” | `genreHint="blues"` | concert | browse, find | “Any blues bands on this weekend?” |
+
 ## How many
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |

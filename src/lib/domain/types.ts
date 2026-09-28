@@ -139,6 +139,8 @@ export const RequestExtractionSchema = z
     countryStatement: z.string().nullable().default(null),
     /** The kind of event asked about when no performer or team is named ("gigs", "a hockey game"). */
     categoryHint: z.enum(CATEGORY_HINTS).nullable().default(null),
+    /** The kind of music named ("indie rock", "jazz"); narrows a list of concerts. Null when not said. */
+    genreHint: z.string().nullable().default(null),
   })
   .strict();
 export type RequestExtraction = z.infer<typeof RequestExtractionSchema>;

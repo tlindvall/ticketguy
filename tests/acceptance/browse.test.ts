@@ -119,7 +119,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const requestId = await ask(c, 'Any gigs in New York the last week of November?', 'empty@customer.example');
     const body = (await lastSend(requestId)).bodyText;
     expect(body).toContain("I don't have any live music in New York on file for Nov 24–30.");
-    expect(body).toContain('Want me to look at different dates, or is there an artist you have in mind?');
+    expect(body).toContain('Want me to look at different dates, or is there an artist or a kind of music you have in mind?');
     expect(body).not.toContain('official listings'); // no provider was asked, so no claim that it was
   });
 
@@ -164,6 +164,40 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any basketball games in New York the last week of November?', 'nba-empty@customer.example');
     expect((await lastSend(requestId)).bodyText).toContain('Want me to look at different dates, or is there a team you have in mind?');
+  });
+
+  it('narrows the list when the reply names a kind of music and a borough', async () => {
+    const PIANOS = '10000000-0000-4000-8000-0000000000c4';
+    await h.db.insert(t.venues).values({ id: PIANOS, name: 'Union Pool', city: 'Brooklyn', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    const show = (name: string, venueId: string, at: string, genre: string | null) => ({ name, category: 'concert', genre, venueId, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([
+      show('The Walkmen', PIANOS, '2026-10-03T01:00:00Z', 'rock / indie rock'),
+      show('Big Thief', BROOKLYN_STEEL, '2026-10-04T00:30:00Z', 'alternative / alternative rock'),
+      show('Brooklyn Jazz Trio', PIANOS, '2026-10-05T00:30:00Z', 'jazz'),
+      show('Manhattan Indie Night', FX.venues.msg, '2026-10-03T00:30:00Z', 'rock'),
+    ]);
+    const c = makeConcierge(h);
+    const first = inbound({ text: "I'm coming to New York and want to see some music gigs during the first week on october. What options do I have?", from: 'indie@customer.example', subject: 'Gigs' });
+    const r = await c.ingestInbound(first);
+    await interpretAll(h, c);
+    await c.ingestInbound(inbound({ text: 'I like indie rock and roll. We are staying in brooklyn.', from: 'indie@customer.example', subject: 'Re: Gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await interpretAll(h, c);
+    const body = (await lastSend((r as { requestId: string }).requestId)).bodyText;
+    expect(body).toContain('Rock and indie in Brooklyn, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain('The Walkmen at Union Pool');
+    expect(body).toContain('Big Thief at Brooklyn Steel');
+    expect(body).not.toContain('Jazz Trio'); // Brooklyn, but not the music asked for
+    expect(body).not.toContain('Manhattan Indie Night'); // the music, but not Brooklyn
+    expect(body).not.toContain('Jack White');
+    expect(body).toContain("I've kept it to Brooklyn venues — say if you'd go further.");
+  });
+
+  it('says so, and shows what is on, when nothing on file is the music asked for', async () => {
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'Any reggaeton gigs in Brooklyn the first week of October?', 'latin@customer.example');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain('Live music in Brooklyn, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain("I couldn't find any Latin music listed for those dates, so here's everything that's on.");
   });
 
   it('asks the provider by classification and place, with no keyword', async () => {

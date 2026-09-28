@@ -105,6 +105,17 @@ export function subtypeFor(e: { name: string; timeTba: boolean }): string | null
  */
 export const NON_GAME_PATTERN = /\b(alumni|fan\s?fest|fanfest|watch party|viewing party|open practice|practice|skills (?:competition|challenge)|clinic|camp|draft party|gala|luncheon|autograph)\b/i;
 
+/**
+ * The provider's genre and sub-genre, lowercased ("rock / indie rock"), from the event's classification or,
+ * when that is blank, its first performer's. "Undefined" and "Other" are the provider's way of saying none.
+ */
+export function genreFor(e: Pick<DiscoveredEvent, 'genre' | 'subGenre' | 'attractions'>): string | null {
+  const real = (v: string | null | undefined) => (v && !/^(undefined|other)$/i.test(v.trim()) ? v.trim().toLowerCase() : null);
+  const a = e.attractions[0];
+  const parts = [real(e.genre) ?? real(a?.genre), real(e.subGenre) ?? real(a?.subGenre)].filter((x): x is string => !!x);
+  return parts.length ? [...new Set(parts)].join(' / ') : null;
+}
+
 export function isNonGameName(name: string): boolean {
   return NON_GAME_PATTERN.test(name);
 }
@@ -222,15 +233,16 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
 
   const category = categoryFor(e);
   const subtype = subtypeFor(e);
+  const genre = genreFor(e);
   const status = statusFor(e.statusCode);
 
   const existing = await db.select({ eventId: t.eventSourceMappings.eventId }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
   if (existing[0]) {
-    await db.update(t.events).set({ name: e.name, category, subtype, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
+    await db.update(t.events).set({ name: e.name, category, subtype, genre, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
     await db.update(t.eventSourceMappings).set({ authoritativeUrl: e.url, verifiedAt: new Date() }).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
     return { eventId: existing[0].eventId, entityIds };
   }
-  const [row] = await db.insert(t.events).values({ name: e.name, category, subtype, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
+  const [row] = await db.insert(t.events).values({ name: e.name, category, subtype, genre, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
   await db.insert(t.eventSourceMappings).values({ eventId: row!.id, sourceId: DISCOVERY_SOURCE_ID, sourceEventId: e.providerEventId, authoritativeUrl: e.url, role: 'discovery', confidence: 'provider_id', verifiedAt: new Date() }).onConflictDoNothing();
   return { eventId: row!.id, entityIds };
 }

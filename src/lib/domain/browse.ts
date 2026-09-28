@@ -1,4 +1,4 @@
-import { lexiconBrowseAsk, lexiconCategory } from '@/lib/lexicon/lexicon';
+import { lexiconBrowseAsk, lexiconCategory, lexiconGenre } from '@/lib/lexicon/lexicon';
 /**
  * "What gigs are on in New York the first week of October?" is not a request for one event; it asks what the
  * options are. Browsing answers with a short list of real scheduled events for a kind of event, a place and
@@ -81,7 +81,7 @@ const SPORT_HINTS: readonly CategoryHint[] = ['sports', 'nhl', 'nba', 'mlb', 'wn
 /** What the customer can name to narrow a list (`narrowBy`) or to try instead of it (`askFor`): a team for games, an artist for music. */
 export function narrowByFor(hint: CategoryHint | null): { narrowBy: string; askFor: string } {
   if (hint && SPORT_HINTS.includes(hint)) return { narrowBy: 'a team or a day', askFor: 'a team' };
-  if (hint === 'concert') return { narrowBy: 'an artist, venue or kind of music', askFor: 'an artist' };
+  if (hint === 'concert') return { narrowBy: 'an artist, venue or kind of music', askFor: 'an artist or a kind of music' };
   return { narrowBy: 'an artist, team or venue', askFor: 'an artist or team' };
 }
 
@@ -123,6 +123,55 @@ export const NEW_YORK_AREA = {
   providerCities: ['New York', 'Brooklyn', 'Bronx', 'Flushing', 'Newark', 'Elmont', 'East Rutherford'],
   venueCities: ['new york', 'brooklyn', 'queens', 'bronx', 'the bronx', 'flushing', 'long island city', 'staten island', 'elmont', 'uniondale', 'newark', 'east rutherford', 'hoboken', 'jersey city'],
 };
+
+/**
+ * A part of the market the customer named ("we're staying in Brooklyn"). The list is kept to its venues when
+ * any are on, and says so; Manhattan is the venues the provider files under New York.
+ */
+export type MarketArea = { label: string; venueCities: string[]; providerCities: string[] };
+const AREAS: Array<[RegExp, MarketArea]> = [
+  [/\bbrooklyn\b/i, { label: 'Brooklyn', venueCities: ['brooklyn'], providerCities: ['Brooklyn'] }],
+  [/\bmanhattan\b/i, { label: 'Manhattan', venueCities: ['new york'], providerCities: ['New York'] }],
+  [/\b(queens|flushing|long island city)\b/i, { label: 'Queens', venueCities: ['queens', 'flushing', 'long island city'], providerCities: ['Flushing'] }],
+  [/\b(the )?bronx\b/i, { label: 'the Bronx', venueCities: ['bronx', 'the bronx'], providerCities: ['Bronx'] }],
+  [/\b(jersey city|hoboken|newark)\b/i, { label: 'New Jersey', venueCities: ['jersey city', 'hoboken', 'newark', 'east rutherford'], providerCities: ['Newark', 'East Rutherford'] }],
+];
+
+export function areaFor(city: string | null | undefined): MarketArea | null {
+  if (!city) return null;
+  return AREAS.find(([re]) => re.test(city))?.[1] ?? null;
+}
+
+/**
+ * A kind of music (the lexicon's genre families) matched against the provider's genre and sub-genre, which the
+ * catalog stores lowercased as "rock / indie rock". `provider` is how the provider spells the genres, asked for
+ * by name so a busy week's first hundred shows do not crowd them out.
+ */
+const GENRES: Record<string, { label: string; words: string; match: string[]; provider: string[] }> = {
+  rock: { label: 'Rock and indie', words: 'rock or indie', match: ['rock', 'alternative', 'indie', 'punk'], provider: ['Rock', 'Alternative'] },
+  jazz: { label: 'Jazz', words: 'jazz', match: ['jazz'], provider: ['Jazz'] },
+  'hip-hop': { label: 'Hip-hop', words: 'hip-hop', match: ['hip-hop', 'hip hop', 'rap'], provider: ['Hip-Hop/Rap'] },
+  electronic: { label: 'Electronic', words: 'electronic music', match: ['electronic', 'dance', 'techno', 'house'], provider: ['Dance/Electronic'] },
+  pop: { label: 'Pop', words: 'pop', match: ['pop'], provider: ['Pop'] },
+  country: { label: 'Country', words: 'country', match: ['country', 'americana', 'bluegrass'], provider: ['Country'] },
+  'r&b': { label: 'R&B and soul', words: 'R&B or soul', match: ['r&b', 'soul', 'funk'], provider: ['R&B'] },
+  metal: { label: 'Metal', words: 'metal', match: ['metal', 'hardcore'], provider: ['Metal'] },
+  folk: { label: 'Folk', words: 'folk', match: ['folk', 'singer-songwriter'], provider: ['Folk'] },
+  latin: { label: 'Latin', words: 'Latin music', match: ['latin', 'reggaeton', 'salsa'], provider: ['Latin'] },
+  blues: { label: 'Blues', words: 'blues', match: ['blues'], provider: ['Blues'] },
+};
+export type GenreFamily = { key: string; label: string; words: string; match: string[]; provider: string[] };
+
+/** The family a customer's words for music name ("indie rock and roll" → rock), or null. */
+export function genreFamilyFor(words: string | null | undefined): GenreFamily | null {
+  if (!words) return null;
+  const key = GENRES[words.toLowerCase()] ? words.toLowerCase() : lexiconGenre(words)?.value;
+  return key && GENRES[key] ? { key, ...GENRES[key] } : null;
+}
+
+export function genreMatches(family: GenreFamily, eventGenre: string | null | undefined): boolean {
+  return !!eventGenre && family.match.some((m) => eventGenre.includes(m));
+}
 
 const NY_WORDS = /\b(new york|nyc|ny|manhattan|brooklyn|queens|bronx|staten island|long island|jersey city|hoboken|newark)\b/i;
 

@@ -20,7 +20,7 @@ export type LexiconCategory = CategoryHint | 'any';
 export type LexiconEntry = {
   id: string;
   /** What the phrase sets. */
-  field: 'intent' | 'categoryHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
+  field: 'intent' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
   /** The meaning, in words, for people. */
   meaning: string;
   /** The value it sets (for fields with a fixed value). */
@@ -203,6 +203,133 @@ export const LEXICON: LexiconEntry[] = [
     note: '"Show" on its own is deliberately unread: it is a concert, a musical or a comedy set.',
   },
 
+  // ── What kind of music (narrows a list of concerts) ─────────────────────────────────────────────────
+  {
+    id: 'genre.rock',
+    field: 'genreHint',
+    value: 'rock',
+    meaning: 'Rock, indie, alternative and punk — one family, because the provider files indie bands under either Rock or Alternative.',
+    phrases: ['indie', 'indie rock', 'rock and roll', 'alternative', 'punk'],
+    pattern: /\b(indie|rock(?:\s*(?:and|&|'?n'?)\s*roll)?|alt(?:ernative|[- ]rock)|punk|grunge|garage rock|emo)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    teachModel: true,
+    examples: [{ text: 'I like indie rock and roll. We are staying in brooklyn.', expect: { genreHint: 'rock' } }],
+  },
+  {
+    id: 'genre.jazz',
+    field: 'genreHint',
+    value: 'jazz',
+    meaning: 'Jazz.',
+    phrases: ['jazz', 'a jazz club', 'swing'],
+    pattern: /\b(jazz|swing|bebop)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    teachModel: true,
+    examples: [{ text: 'Any jazz in the city this weekend?', expect: { genreHint: 'jazz', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.hiphop',
+    field: 'genreHint',
+    value: 'hip-hop',
+    meaning: 'Hip-hop and rap.',
+    phrases: ['hip-hop', 'hip hop', 'rap'],
+    pattern: /\b(hip[- ]?hop|rap)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    teachModel: true,
+    examples: [{ text: 'Looking for a hip hop show next week', expect: { genreHint: 'hip-hop', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.electronic',
+    field: 'genreHint',
+    value: 'electronic',
+    meaning: 'Electronic and dance music.',
+    phrases: ['electronic', 'EDM', 'techno', 'house music', 'a DJ'],
+    pattern: /\b(electronic|edm|techno|house music|dance music)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    teachModel: true,
+    examples: [{ text: 'Any techno parties in Brooklyn next weekend?', expect: { genreHint: 'electronic', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.pop',
+    field: 'genreHint',
+    value: 'pop',
+    meaning: 'Pop.',
+    phrases: ['pop', 'a pop concert'],
+    pattern: /\bpop\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'We want a pop concert in October', expect: { genreHint: 'pop', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.country',
+    field: 'genreHint',
+    value: 'country',
+    meaning: 'Country, Americana and bluegrass. "Country" on its own is not read: it is usually about where someone lives.',
+    phrases: ['country music', 'Americana', 'bluegrass'],
+    pattern: /\b(country (?:music|singers?|bands?|shows?|concerts?)|americana|bluegrass)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'Any country music shows next month?', expect: { genreHint: 'country', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.rnb',
+    field: 'genreHint',
+    value: 'r&b',
+    meaning: 'R&B, soul and funk.',
+    phrases: ['R&B', 'soul', 'funk'],
+    pattern: /(\br&b\b|\brnb\b|\br and b\b|\bsoul (?:music|shows?)\b|\bfunk\b)/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'Something R&B next weekend?', expect: { genreHint: 'r&b', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.metal',
+    field: 'genreHint',
+    value: 'metal',
+    meaning: 'Metal and hardcore.',
+    phrases: ['metal', 'heavy metal', 'hardcore'],
+    pattern: /\b(metal|hardcore)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'Any metal gigs in early November?', expect: { genreHint: 'metal', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.folk',
+    field: 'genreHint',
+    value: 'folk',
+    meaning: 'Folk and singer-songwriters.',
+    phrases: ['folk', 'singer-songwriter', 'acoustic'],
+    pattern: /\b(folk|singer[- ]songwriters?|acoustic)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'Looking for a folk gig next week', expect: { genreHint: 'folk', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.latin',
+    field: 'genreHint',
+    value: 'latin',
+    meaning: 'Latin: reggaeton, salsa, bachata.',
+    phrases: ['latin', 'reggaeton', 'salsa'],
+    pattern: /\b(latin|reggaeton|salsa|bachata)\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'Any reggaeton concerts in October?', expect: { genreHint: 'latin', categoryHint: 'concert' } }],
+  },
+  {
+    id: 'genre.blues',
+    field: 'genreHint',
+    value: 'blues',
+    meaning: 'Blues.',
+    phrases: ['blues'],
+    pattern: /\bblues\b/i,
+    categories: ['concert'],
+    requestTypes: ['browse', 'find'],
+    examples: [{ text: 'Any blues bands on this weekend?', expect: { genreHint: 'blues', categoryHint: 'concert' } }],
+  },
+
   // ── How many ─────────────────────────────────────────────────────────────────────────────────────────
   {
     id: 'quantity.just_me',
@@ -341,6 +468,15 @@ export function entriesFor(field: LexiconEntry['field']): LexiconEntry[] {
 /** The first category entry whose pattern matches, in table order (so "hockey game" is hockey, not "a game"). */
 export function lexiconCategory(text: string): CategoryHint | null {
   for (const e of entriesFor('categoryHint')) if (e.pattern.test(text)) return e.value as CategoryHint;
+  return null;
+}
+
+/** The kind of music named ("indie rock and roll" is rock), as the family key the browse list filters by. */
+export function lexiconGenre(text: string): { value: string; quote: string } | null {
+  for (const e of entriesFor('genreHint')) {
+    const m = e.pattern.exec(text);
+    if (m) return { value: String(e.value), quote: m[0] };
+  }
   return null;
 }
 

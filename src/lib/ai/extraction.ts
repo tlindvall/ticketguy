@@ -4,7 +4,7 @@ import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
-import { lexiconQuantity, lexiconVagueQuantity } from '@/lib/lexicon/lexicon';
+import { lexiconGenre, lexiconQuantity, lexiconVagueQuantity } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -100,7 +100,8 @@ function resolveMonthDay(expr: string, receivedAt: Date): string | null {
 }
 
 const CITIES: Array<[RegExp, string, string]> = [
-  [/\b(new york|nyc|manhattan|brooklyn|msg|madison square garden|barclays)\b/i, 'New York', 'NY'],
+  [/\b(brooklyn|barclays)\b/i, 'Brooklyn', 'NY'],
+  [/\b(new york|nyc|manhattan|msg|madison square garden)\b/i, 'New York', 'NY'],
   [/\b(los angeles|la\b|inglewood)\b/i, 'Los Angeles', 'CA'],
   [/\b(chicago)\b/i, 'Chicago', 'IL'],
   [/\b(boston)\b/i, 'Boston', 'MA'],
@@ -190,7 +191,10 @@ export class FixtureExtractor implements Extractor {
     const risk: RequestExtraction['waitRiskTolerance'] = /\b(happy to (wait|gamble|risk)|fine (to )?wait(ing)?|willing to (wait|risk)|ok(ay)? (to )?wait)\b/i.test(t) ? 'high' : /\b(don'?t want to risk|rather not risk|lock (it|them) in|secure (them|it) now)\b/i.test(t) ? 'low' : null;
     const forSelf = /\b(for (my|a) (friend|dad|mom|mother|father|sister|brother|boss|colleague|client)|as a gift|gift for)\b/i.test(t) ? false : /\b(for (me|us|myself)|my (wife|husband|partner|kids|family) and (i|me))\b/i.test(t) ? true : null;
     const countryStatement = findResidenceStatement(t);
-    const categoryHint = categoryHintFrom(t);
+    // A kind of music is only read when nobody is named: "Kid Rock" is an artist, not a genre.
+    const genre = ent ? null : lexiconGenre(t);
+    if (genre) ev('genreHint', genre.quote);
+    const categoryHint = categoryHintFrom(t) ?? (genre ? 'concert' : null);
     // "What's on" with nothing specific named is a browse: answer with options instead of asking which event.
     if (intent === 'new_search' && !ent && (BROWSE_ASK_TEST(t) || categoryHint)) intent = 'browse';
 
@@ -220,6 +224,7 @@ export class FixtureExtractor implements Extractor {
       negatedEntities: negated,
       countryStatement,
       categoryHint,
+      genreHint: genre?.value ?? null,
     });
   }
 }

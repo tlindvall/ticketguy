@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
+import { areaFor, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
+import { genreFor } from '@/lib/catalog/sync';
 import { lexiconCategory } from '@/lib/lexicon/lexicon';
 
 const at = new Date('2026-10-08T23:08:00Z');
@@ -35,5 +36,30 @@ describe('football and soccer are their own kinds of event', () => {
     expect(pilotCoverageLabel(['concert', 'nhl', 'nba', 'mlb', 'nfl'])).toBe('concerts and NHL, NBA, MLB and NFL games');
     expect(narrowByFor('nfl').askFor).toBe('a team');
     expect(narrowByFor('concert').narrowBy).toBe('an artist, venue or kind of music');
+  });
+});
+
+describe('kind of music and borough', () => {
+  it('reads the customer\'s words for music as a family the provider genres match', () => {
+    const rock = genreFamilyFor('I like indie rock and roll')!;
+    expect(rock.key).toBe('rock');
+    expect(genreMatches(rock, 'alternative / alternative rock')).toBe(true);
+    expect(genreMatches(rock, 'jazz')).toBe(false);
+    expect(genreMatches(rock, null)).toBe(false);
+    expect(genreFamilyFor('jazz')!.label).toBe('Jazz');
+    expect(genreFamilyFor('something fun')).toBeNull();
+  });
+
+  it('stores the provider genre, falling back to the performer and ignoring "Undefined"', () => {
+    expect(genreFor({ genre: 'Rock', subGenre: 'Indie Rock', attractions: [] })).toBe('rock / indie rock');
+    expect(genreFor({ genre: 'Undefined', subGenre: null, attractions: [{ providerId: 'a', name: 'x', url: null, segment: 'Music', genre: 'Jazz', subGenre: 'Undefined' }] })).toBe('jazz');
+    expect(genreFor({ genre: null, subGenre: null, attractions: [] })).toBeNull();
+  });
+
+  it('knows the boroughs and treats New York as the whole market', () => {
+    expect(areaFor('Brooklyn')!.label).toBe('Brooklyn');
+    expect(areaFor('we are staying in brooklyn')!.venueCities).toEqual(['brooklyn']);
+    expect(areaFor('New York')).toBeNull();
+    expect(areaFor(null)).toBeNull();
   });
 });
