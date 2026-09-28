@@ -111,6 +111,8 @@ export class FixtureExtractor implements Extractor {
     const budget = parseBudget(t);
     ev('budgetCents', budget.quote);
     if (budget.cents !== null && budget.basis === null) ambiguities.push('budget_basis_unknown');
+    // "A few" or "some" tickets is a real doubt about the number, so it is asked rather than assumed to be two.
+    if (/\b(a few|few|some|several|a bunch of|a group of|a handful of)\s+(?:\w+\s+)?(tickets?|seats?)\b/i.test(t)) ambiguities.push('quantity_unclear');
 
     // Negations first so "anything except X, Y please" resolves to Y (A29).
     const negated: string[] = [];

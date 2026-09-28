@@ -108,14 +108,26 @@ describe('the clarification email', () => {
     expect(second!.bodyText).not.toContain('outside the US');
   });
 
-  it('asks what the extractor was unsure of: a budget with no basis reaches the email as a question', async () => {
+  it('assumes instead of asking: a bare budget is the total and an unstated quantity is two, each said once', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: 'Two tickets for the Knicks on October 24, around $300.', from: 'jo@customer.example', subject: 'Knicks' }));
     await interpretAll(h, c);
     const requestId = (r as { requestId: string }).requestId;
     const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId));
-    expect(intent!.messageClass).toBe('clarification');
-    expect(intent!.bodyText).toContain('Is your budget of $300 per ticket or for everyone combined?');
+    expect(intent!.bodyText).not.toContain('per ticket or for everyone combined');
+    expect(intent!.bodyText).toContain("I've read $300 as the total for both — tell me if you meant per ticket.");
+
+    const q = await c.ingestInbound(inbound({ text: 'Rangers tickets on Oct 3 please.', from: 'noqty@customer.example', subject: 'Rangers' }));
+    await interpretAll(h, c);
+    const [qi] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, (q as { requestId: string }).requestId));
+    expect(qi!.bodyText).not.toContain('How many tickets do you need');
+    expect(qi!.bodyText).toContain("I've assumed two tickets — just tell me if you need a different number.");
+
+    // Real doubt is still asked, not papered over.
+    const few = await c.ingestInbound(inbound({ text: 'A few tickets for the Rangers on Oct 3.', from: 'few@customer.example', subject: 'Rangers' }));
+    await interpretAll(h, c);
+    const [fi] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, (few as { requestId: string }).requestId));
+    expect(fi!.bodyText).not.toContain("I've assumed two tickets");
   });
 
   it('names up to three games when they are all home games, and asks for a date beyond that', async () => {

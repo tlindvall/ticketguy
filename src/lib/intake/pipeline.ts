@@ -258,7 +258,7 @@ export class Concierge {
     }
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
-    const merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
 
     // Intents with side effects but no research.
     if (extraction.intent === 'marketing_opt_out') {
@@ -300,6 +300,12 @@ export class Concierge {
     // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
     // instead of asking which event, how many tickets and which date.
     if (isBrowseRequest(merged)) return this.browse({ req, msg, contact: contact!, merged, revision });
+
+    // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
+    // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
+    const { brief: withDefaults, assumed } = applyDefaults(merged);
+    merged = withDefaults;
+    const assumptions = assumptionLines(assumed, merged);
 
     // Event resolution.
     const resolution = await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
@@ -351,14 +357,14 @@ export class Concierge {
       const eventNote = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, countryCheck, knownFacts }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, assumptions, countryCheck, knownFacts }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
     if (resolution.kind !== 'resolved') throw new Error('unreachable');
     await this.transition(req.id, 'researching', 'brief_complete');
     if (revision === 1) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged), eventLabel: resolution.label, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1175,4 +1181,37 @@ function observationToOffer(obs: typeof t.offerObservations.$inferSelect, off: t
     availability: obs.availability as Offer['availability'],
     seatClass: ev.seatClass ?? null,
   };
+}
+
+/** Tickets assumed when the customer does not say: the most common party, and cheap to correct. */
+export const DEFAULT_QUANTITY = 2;
+
+/**
+ * Fills the two gaps that used to cost a round trip. Nothing is filled when the customer signalled doubt
+ * ("a few tickets" sets quantity_unclear), and a stated value is never replaced. Returns what was assumed
+ * so the reply can say it; the stored brief carries the value, so a later "actually four" overrides it.
+ */
+export function applyDefaults(x: RequestExtraction): { brief: RequestExtraction; assumed: Array<'quantity' | 'budget_basis'> } {
+  const assumed: Array<'quantity' | 'budget_basis'> = [];
+  let brief = x;
+  if (brief.quantity === null && !brief.ambiguities.includes('quantity_unclear')) {
+    brief = { ...brief, quantity: DEFAULT_QUANTITY };
+    assumed.push('quantity');
+  }
+  if (brief.budgetCents !== null && brief.budgetBasis === null) {
+    brief = { ...brief, budgetBasis: 'whole_party', ambiguities: brief.ambiguities.filter((a) => a !== 'budget_basis_unknown') };
+    // One ticket has no difference between each and total, so there is nothing to say.
+    if ((brief.quantity ?? 1) > 1) assumed.push('budget_basis');
+  }
+  return { brief, assumed };
+}
+
+export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: RequestExtraction): string[] {
+  const lines: string[] = [];
+  if (assumed.includes('quantity')) lines.push(`I've assumed ${QTY_WORDS[DEFAULT_QUANTITY]?.toLowerCase() ?? DEFAULT_QUANTITY} tickets — just tell me if you need a different number.`);
+  if (assumed.includes('budget_basis') && x.budgetCents !== null) {
+    const n = x.quantity ?? DEFAULT_QUANTITY;
+    lines.push(`I've read ${formatUsd(x.budgetCents)} as the total for ${n === 2 ? 'both' : `all ${n}`} — tell me if you meant per ticket.`);
+  }
+  return lines;
 }
