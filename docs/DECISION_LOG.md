@@ -257,3 +257,20 @@ the market's other venues: "Knicks, we're staying in Brooklyn" still means Madis
 **One listing per show.** When listings share a venue and a start time, they are the same show if
 either name is contained in the other or they share a performer. The provider's Premium Seating
 and Pinstripe Pass copies of a game therefore collapse into the plain listing.
+
+## 34. One match is the answer, and a number already given is not asked again
+
+"An american football game… the second week of October. We need 4 tickets." got a one-item list, then
+"Reply with the one you want and how many tickets". Both halves of that are wrong: there was nothing to
+choose between, and the number was in the email.
+
+- **One match plus a quantity** goes straight on as an ordinary request. The reply is the usual
+  acknowledgement and the price check starts, with one line saying why: "That's the only football game in
+  New York for Oct 8–14, so I've gone ahead with it — tell me if you had something else in mind." This is
+  assume-and-say (#32) applied to the event.
+- **One match without a quantity** is shown as the one option ("there's one on"), and only the number is
+  asked. A customer asking "what's on?" has not said they're buying, so prices wait.
+- **Several matches with a quantity** ask only which one: "Reply with the one you want, and I'll check
+  prices for 4 tickets."
+- **Fallbacks never count as a match.** A borough or genre fallback, or the next-weeks list, always shows
+  options, because it isn't what was asked for.

@@ -99,7 +99,9 @@ export function renderTemplate(
       const tail = options.length
         ? [
             more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
-            'Reply with the one you want and how many tickets, and I’ll check the prices.',
+            v.single
+              ? 'Want me to check prices? Just tell me how many tickets.'
+              : v.quantity ? `Reply with the one you want, and I’ll check prices for ${String(v.quantity)} tickets.` : 'Reply with the one you want and how many tickets, and I’ll check the prices.',
           ]
         : [String(v.emptyNote ?? ''), `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
       const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : ''].filter(Boolean);

@@ -13,7 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { NEW_YORK_AREA, areaFor, browseLabel, genreFamilyFor, genreMatches, inPilotVenueCity, isBrowseRequest, isPilotMarket, narrowByFor, oneListingPerShow, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { NEW_YORK_AREA, areaFor, browseLabel, genreFamilyFor, genreMatches, inPilotVenueCity, isBrowseRequest, isPilotMarket, narrowByFor, oneListingPerShow, oneOfLabel, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -302,16 +302,25 @@ export class Concierge {
 
     // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
     // instead of asking which event, how many tickets and which date.
-    if (isBrowseRequest(merged)) return this.browse({ req, msg, contact: contact!, merged, revision });
+    let picked: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
+    let pickNote: string | null = null;
+    if (isBrowseRequest(merged)) {
+      const b = await this.browse({ req, msg, contact: contact!, merged, revision });
+      if (!('pick' in b)) return b;
+      picked = b.pick;
+      pickNote = b.note;
+    }
 
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
     const { brief: withDefaults, assumed } = applyDefaults(merged);
     merged = withDefaults;
-    const assumptions = assumptionLines(assumed, merged);
+    const assumptions = [...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
-    // Event resolution.
-    const resolution = await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
+    // Event resolution (a browse that found exactly one event has already resolved it).
+    const resolution: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
+      ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
+      : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
     const eventResolved = resolution.kind === 'resolved';
     const missing = missingMandatoryFields(merged, { eventResolved });
     // "next week" is a window the resolver now reads; a model that still flags it as an unsupported date
@@ -366,7 +375,8 @@ export class Concierge {
 
     if (resolution.kind !== 'resolved') throw new Error('unreachable');
     await this.transition(req.id, 'researching', 'brief_complete');
-    if (revision === 1) {
+    // A browse that settled on its only match is answered here too, whichever revision it came on.
+    if (revision === 1 || picked) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
@@ -479,20 +489,25 @@ export class Concierge {
    * named (the next two weeks when none was, and the reply says so). The request waits for the customer to
    * pick one; their reply names it, and the ordinary resolution takes over from there.
    */
-  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number }): Promise<{ state: string; revision: number; extraction: RequestExtraction }> {
+  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string }> {
     const { req, msg, contact, merged, revision } = a;
     const now = this.now();
     const tz = 'America/New_York';
     const count = req.clarificationCount + 1;
-    await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
-    await this.db.update(t.requests).set({ currentRevision: revision, eventId: null, mode: 'find_options', updatedAt: now }).where(eq(t.requests.id, req.id));
-    if (revision > 1) await this.invalidateForRevision(req.id, revision);
+    // Recorded once the outcome is known: a single match goes on as an ordinary request, which records its own.
+    const recordVersion = async () => {
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: revision, eventId: null, mode: 'find_options', updatedAt: now }).where(eq(t.requests.id, req.id));
+      if (revision > 1) await this.invalidateForRevision(req.id, revision);
+    };
     if (count > 3) {
+      await recordVersion();
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.parkForStaff({ req, revision, reason: 'clarification_limit_reached', contact, msg });
       return { state: 'manual_attention', revision, extraction: merged };
     }
     const unsupported = async (reason: string, why: string) => {
+      await recordVersion();
       await this.transition(req.id, 'unsupported', why);
       await this.queueSend({ messageClass: 'no_result', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, 'Not covered yet'), template: 'unsupported', vars: { reason }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'unsupported', revision, extraction: merged };
@@ -568,6 +583,15 @@ export class Concierge {
     const { events, all, placed, areaKept, genreKept } = found;
     const providerChecked = within.providerChecked;
 
+    // One game in the window is the answer, not a menu of one. When they have said how many tickets, they are
+    // buying: it goes straight on to prices as an ordinary request, and the reply says why. Without a number
+    // it is shown as the one option, and only the number is asked.
+    const single = !after && events.length === 1 && genreKept && areaKept;
+    if (single && merged.quantity !== null) {
+      const only = events[0]!;
+      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? NEW_YORK_AREA.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
+    }
+    await recordVersion();
     const shown = events.slice(0, after?.events.length ? 3 : 5);
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
@@ -575,7 +599,7 @@ export class Concierge {
     const span = spanLabel(win.from, win.to);
     const headline = after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
-      : `${label} in ${place}, ${span}${options.length ? ' — here’s what’s on:' : '.'}`;
+      : `${label} in ${place}, ${span}${single ? ' — there’s one on:' : options.length ? ' — here’s what’s on:' : '.'}`;
     const assumptions = [assumedWindow ? 'the next two weeks' : null, merged.city ? null : NEW_YORK_AREA.label].filter(Boolean);
     const notes = [
       assumptions.length ? `I've looked at ${assumptions.join(', in ')} — tell me if you had something else in mind.` : null,
@@ -592,7 +616,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { headline, options, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
+      vars: { headline, options, quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };

@@ -109,7 +109,9 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any hockey games coming up?', 'hockey@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toMatch(/^Hey,\n\nHockey in New York, Sep 22 – Oct 5 — here’s what’s on:/);
+    expect(body).toMatch(/^Hey,\n\nHockey in New York, Sep 22 – Oct 5 — there’s one on:/);
+    expect(body).toContain('Want me to check prices? Just tell me how many tickets.'); // one option is not "the one you want"
+    expect(body).not.toContain('Reply with the one you want');
     expect(body).toContain("I've looked at the next two weeks, in New York — tell me if you had something else in mind.");
     expect(body).toContain('New York Rangers vs. New York Islanders (preseason) at Madison Square Garden');
   });
@@ -142,14 +144,17 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     ]);
     const c = makeConcierge(h);
     const requestId = await ask(c, 'I want to see an american football game in or near new york the second week of october. Anything interesting? We need 4 tickets.', 'nfl@customer.example', { subject: 'American football' });
+    // One game that week is the answer, not a menu of one: it goes on to prices for the four tickets asked for.
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
-    expect(req!.state).toBe('needs_clarification');
+    expect(req!.state).toBe('researching');
+    const [event] = await h.db.select().from(t.events).where(eq(t.events.id, req!.eventId!));
+    expect(event!.name).toBe('New York Giants vs. Philadelphia Eagles');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('Football in New York, Oct 8–14 — here’s what’s on:');
-    expect(body).toContain('• Sun, Oct 11 — New York Giants vs. Philadelphia Eagles at MetLife Stadium');
-    expect(body).not.toContain('Parking');
-    expect(body).not.toContain('Jets'); // outside the week asked for
-    expect(body).not.toContain('Yankees');
+    expect(body).toContain('checking options for New York Giants vs. Philadelphia Eagles — MetLife Stadium');
+    expect(body).toContain('Tickets: 4');
+    expect(body).toContain("That's the only football game in New York for Oct 8–14, so I've gone ahead with it — tell me if you had something else in mind.");
+    expect(body).not.toContain('how many tickets');
+    expect(body).not.toContain('Reply with the one you want');
     expect(body).not.toContain("isn't something I cover");
   });
 
@@ -178,6 +183,11 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).toContain('• Fri, Oct 9 — 2026 NY Yankees Division Series Home Game 3 at Yankee Stadium');
     expect(body).not.toContain('Premium Seating');
     expect(body).not.toContain('Pinstripe Pass');
+    expect(body).toContain('Reply with the one you want and how many tickets');
+    const withCount = await ask(makeConcierge(h), 'Any baseball in New York Oct 8-9? We need 3 tickets.', 'mlb3@customer.example');
+    const counted = (await lastSend(withCount)).bodyText;
+    expect(counted).toContain('Reply with the one you want, and I’ll check prices for 3 tickets.'); // the number they gave is not asked again
+    expect(counted).not.toContain('how many tickets');
   });
 
   it('suggests a team, not an artist, when no games are on file', async () => {
