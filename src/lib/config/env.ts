@@ -164,10 +164,10 @@ const rawSchema = z.object({
    * resolves from the local catalog and the provider is only asked about names we have not seen. Comma
    * separated; the default is the NYC pilot. Empty disables the pre-warm without disabling discovery.
    */
-  CATALOG_SEED_KEYWORDS: csvDefault('new york rangers,new york knicks,new york islanders,new jersey devils,brooklyn nets,new york yankees,new york mets,new york liberty'),
+  CATALOG_SEED_KEYWORDS: csvDefault('new york rangers,new york knicks,new york islanders,new jersey devils,brooklyn nets,new york yankees,new york mets,new york liberty,new york giants,new york jets'),
   LIVE_INVENTORY_ENABLED: explicitBoolean,
 
-  PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb'),
+  PILOT_SUPPORTED_CATEGORIES: z.string().default('concert,nhl,nba,mlb,nfl'),
   PILOT_SUPPORTED_MARKETS: z.string().default('new-york'),
   STAFFED_HOURS_TIMEZONE: z.string().default('America/New_York'),
   STAFFED_HOURS_START: z.coerce.number().int().min(0).max(23).default(9),

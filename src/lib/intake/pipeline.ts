@@ -519,51 +519,63 @@ export class Concierge {
     const area = areaFor(merged.city);
     const genre = merged.categoryHint === 'concert' || merged.categoryHint === null ? genreFamilyFor(merged.genreHint) : null;
 
-    // Ask the provider about the window once per city (fresh results are reused), then read the catalog. A kind
+    // Ask the provider about a window once per city (fresh results are reused), then read the catalog. A kind
     // of music is also asked for by name, so a busy week's first hundred shows do not crowd it out.
-    let providerChecked = false;
     const discovery = await this.discoveryAvailability();
-    if (discovery && win.from <= win.to) {
-      const cities = area?.providerCities ?? NEW_YORK_AREA.providerCities;
-      const asks = [
-        ...cities.map((city) => ({ city, classificationName: providerClassificationFor(merged.categoryHint) })),
-        ...(genre ? (area?.providerCities ?? ['New York', 'Brooklyn']).flatMap((city) => genre.provider.map((g) => ({ city, classificationName: g }))) : []),
-      ];
-      for (const q of asks) {
-        const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: '', classificationName: q.classificationName, city: q.city, startDateTime: `${win.from}T00:00:00Z`, endDateTime: `${day(win.to, 1)}T12:00:00Z`, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
-        await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: `browse:${q.city.toLowerCase()}`, diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win, classification: q.classificationName } });
-        if (sync.status === 'success' || sync.status === 'skipped_fresh') providerChecked = true;
+    const lookIn = async (w: { from: string; to: string }) => {
+      let providerChecked = false;
+      if (discovery && w.from <= w.to) {
+        const cities = area?.providerCities ?? NEW_YORK_AREA.providerCities;
+        const asks = [
+          ...cities.map((city) => ({ city, classificationName: providerClassificationFor(merged.categoryHint) })),
+          ...(genre ? (area?.providerCities ?? ['New York', 'Brooklyn']).flatMap((city) => genre.provider.map((g) => ({ city, classificationName: g }))) : []),
+        ];
+        for (const q of asks) {
+          const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: '', classificationName: q.classificationName, city: q.city, startDateTime: `${w.from}T00:00:00Z`, endDateTime: `${day(w.to, 1)}T12:00:00Z`, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
+          await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: `browse:${q.city.toLowerCase()}`, diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: w, classification: q.classificationName } });
+          if (sync.status === 'success' || sync.status === 'skipped_fresh') providerChecked = true;
+        }
       }
-    }
-    const rows = win.from <= win.to
-      ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.category, categories), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(`${day(win.to, 2)}T00:00:00Z`)))).orderBy(asc(t.events.localStartAt)).limit(2000)
-      : [];
-    const seen = new Set<string>();
-    const inWindow = rows.filter(({ e, v }) => {
-      if (!inPilotVenueCity(v.city)) return false;
-      if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
-      if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
-      const d = eventLocalDate(e.localStartAt, v.timezone);
-      if (d < win!.from || d > win!.to) return false;
-      const key = `${e.name.toLowerCase()}|${d}|${v.id}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    // The provider lists VIP, premium and package versions of one show as separate events; one line per show.
-    const all = oneListingPerShow(inWindow, ({ e, v }) => ({ name: e.name, venueId: v.id, startAt: e.localStartAt, entityId: e.primaryEntityId }));
-    const inArea = area ? all.filter(({ v }) => area.venueCities.includes((v.city ?? '').trim().toLowerCase())) : all;
-    const areaKept = !area || inArea.length > 0;
-    const placed = areaKept ? inArea : all;
-    const ofGenre = genre ? placed.filter(({ e }) => genreMatches(genre, e.genre)) : placed;
-    const genreKept = !genre || ofGenre.length > 0;
-    const events = genreKept ? ofGenre : placed;
+      const rows = w.from <= w.to
+        ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.category, categories), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(`${day(w.to, 2)}T00:00:00Z`)))).orderBy(asc(t.events.localStartAt)).limit(2000)
+        : [];
+      const seen = new Set<string>();
+      const inWindow = rows.filter(({ e, v }) => {
+        if (!inPilotVenueCity(v.city)) return false;
+        if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
+        if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
+        const d = eventLocalDate(e.localStartAt, v.timezone);
+        if (d < w.from || d > w.to) return false;
+        const key = `${e.name.toLowerCase()}|${d}|${v.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      // The provider lists VIP, premium and package versions of one show as separate events; one line per show.
+      const all = oneListingPerShow(inWindow, ({ e, v }) => ({ name: e.name, venueId: v.id, startAt: e.localStartAt, entityId: e.primaryEntityId }));
+      const inArea = area ? all.filter(({ v }) => area.venueCities.includes((v.city ?? '').trim().toLowerCase())) : all;
+      const areaKept = !area || inArea.length > 0;
+      const placed = areaKept ? inArea : all;
+      const ofGenre = genre ? placed.filter(({ e }) => genreMatches(genre, e.genre)) : placed;
+      const genreKept = !genre || ofGenre.length > 0;
+      return { providerChecked, all, placed, areaKept, genreKept, events: genreKept ? ofGenre : placed };
+    };
+    // Nothing in the window is not a dead end: a team that plays at home every other week, or a quiet week,
+    // gets the next few after it (six weeks on), said as such.
+    const within = await lookIn(win);
+    const after = within.events.length ? null : await lookIn({ from: day(win.to, 1), to: day(win.to, 42) });
+    const found = after?.events.length ? after : within;
+    const { events, all, placed, areaKept, genreKept } = found;
+    const providerChecked = within.providerChecked;
 
-    const shown = events.slice(0, 5);
+    const shown = events.slice(0, after?.events.length ? 3 : 5);
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
     const place = area && areaKept ? area.label : NEW_YORK_AREA.label;
     const span = spanLabel(win.from, win.to);
+    const headline = after?.events.length
+      ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
+      : `${label} in ${place}, ${span}${options.length ? ' — here’s what’s on:' : '.'}`;
     const assumptions = [assumedWindow ? 'the next two weeks' : null, merged.city ? null : NEW_YORK_AREA.label].filter(Boolean);
     const notes = [
       assumptions.length ? `I've looked at ${assumptions.join(', in ')} — tell me if you had something else in mind.` : null,
@@ -580,7 +592,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { headline: `${label} in ${place}, ${span}${options.length ? ' — here’s what’s on:' : '.'}`, options, moreCount: events.length - shown.length, ...narrowByFor(merged.categoryHint), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
+      vars: { headline, options, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };

@@ -64,7 +64,7 @@ const LABEL: Record<CategoryHint, string> = {
  * something outside the pilot (theater, comedy) and is told so rather than shown events we cannot advise on.
  */
 export function pilotCategoriesFor(hint: CategoryHint | null, pilotCategories: string[]): string[] {
-  const wanted = hint ? CATALOG[hint] : ['concert', 'festival', 'electronic_nightlife', 'nhl', 'nba', 'mlb', 'wnba'];
+  const wanted = hint ? CATALOG[hint] : ['concert', 'festival', 'electronic_nightlife', 'nhl', 'nba', 'mlb', 'wnba', 'nfl'];
   return wanted.filter((c) => pilotCategories.includes(c) || (pilotCategories.includes('concert') && (c === 'festival' || c === 'electronic_nightlife')));
 }
 
@@ -147,20 +147,20 @@ export function areaFor(city: string | null | undefined): MarketArea | null {
  * catalog stores lowercased as "rock / indie rock". `provider` is how the provider spells the genres, asked for
  * by name so a busy week's first hundred shows do not crowd them out.
  */
-const GENRES: Record<string, { label: string; words: string; match: string[]; provider: string[] }> = {
-  rock: { label: 'Rock and indie', words: 'rock or indie', match: ['rock', 'alternative', 'indie', 'punk'], provider: ['Rock', 'Alternative'] },
+const GENRES: Record<string, { label: string; words: string; match: string[]; sub?: string[]; provider: string[] }> = {
+  rock: { label: 'Rock and indie', words: 'rock or indie', match: ['rock', 'alternative'], sub: ['indie', 'punk'], provider: ['Rock', 'Alternative'] },
   jazz: { label: 'Jazz', words: 'jazz', match: ['jazz'], provider: ['Jazz'] },
   'hip-hop': { label: 'Hip-hop', words: 'hip-hop', match: ['hip-hop', 'hip hop', 'rap'], provider: ['Hip-Hop/Rap'] },
-  electronic: { label: 'Electronic', words: 'electronic music', match: ['electronic', 'dance', 'techno', 'house'], provider: ['Dance/Electronic'] },
+  electronic: { label: 'Electronic', words: 'electronic music', match: ['electronic', 'dance'], sub: ['techno', 'house'], provider: ['Dance/Electronic'] },
   pop: { label: 'Pop', words: 'pop', match: ['pop'], provider: ['Pop'] },
-  country: { label: 'Country', words: 'country', match: ['country', 'americana', 'bluegrass'], provider: ['Country'] },
-  'r&b': { label: 'R&B and soul', words: 'R&B or soul', match: ['r&b', 'soul', 'funk'], provider: ['R&B'] },
-  metal: { label: 'Metal', words: 'metal', match: ['metal', 'hardcore'], provider: ['Metal'] },
-  folk: { label: 'Folk', words: 'folk', match: ['folk', 'singer-songwriter'], provider: ['Folk'] },
-  latin: { label: 'Latin', words: 'Latin music', match: ['latin', 'reggaeton', 'salsa'], provider: ['Latin'] },
+  country: { label: 'Country', words: 'country', match: ['country'], sub: ['americana', 'bluegrass'], provider: ['Country'] },
+  'r&b': { label: 'R&B and soul', words: 'R&B or soul', match: ['r&b'], sub: ['soul', 'funk'], provider: ['R&B'] },
+  metal: { label: 'Metal', words: 'metal', match: ['metal'], sub: ['hardcore'], provider: ['Metal'] },
+  folk: { label: 'Folk', words: 'folk', match: ['folk'], sub: ['singer-songwriter'], provider: ['Folk'] },
+  latin: { label: 'Latin', words: 'Latin music', match: ['latin'], sub: ['reggaeton', 'salsa'], provider: ['Latin'] },
   blues: { label: 'Blues', words: 'blues', match: ['blues'], provider: ['Blues'] },
 };
-export type GenreFamily = { key: string; label: string; words: string; match: string[]; provider: string[] };
+export type GenreFamily = { key: string; label: string; words: string; match: string[]; sub?: string[]; provider: string[] };
 
 /** The family a customer's words for music name ("indie rock and roll" → rock), or null. */
 export function genreFamilyFor(words: string | null | undefined): GenreFamily | null {
@@ -169,8 +169,14 @@ export function genreFamilyFor(words: string | null | undefined): GenreFamily | 
   return key && GENRES[key] ? { key, ...GENRES[key] } : null;
 }
 
+/**
+ * The main genre decides; a sub-genre only counts for the words that are distinctive in it. "Pop / pop rock"
+ * is pop, not rock, and "rock / indie rock" and "other / punk" are both rock.
+ */
 export function genreMatches(family: GenreFamily, eventGenre: string | null | undefined): boolean {
-  return !!eventGenre && family.match.some((m) => eventGenre.includes(m));
+  if (!eventGenre) return false;
+  const [main = '', sub = ''] = eventGenre.split(' / ');
+  return family.match.some((m) => main.includes(m)) || (family.sub ?? []).some((m) => sub.includes(m));
 }
 
 const NY_WORDS = /\b(new york|nyc|ny|manhattan|brooklyn|queens|bronx|staten island|long island|jersey city|hoboken|newark)\b/i;
