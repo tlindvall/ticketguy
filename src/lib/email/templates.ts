@@ -31,31 +31,26 @@ const para = (text: string) => `<p style="margin:0 0 18px;">${esc(text)}</p>`;
 
 type Pick = { line: string; title: string; reason: string; eventUrl: string | null; links: Array<{ label: string; url: string }> };
 
-/** A link styled as a button; the primary one is filled. Links only ever point where their label says. */
-function button(label: string, url: string, primary: boolean): string {
-  const style = primary
-    ? 'display:inline-block;padding:9px 16px;border-radius:8px;background:#202124;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;'
-    : 'display:inline-block;padding:8px 15px;border-radius:8px;border:1px solid #c7c7c7;color:#202124;text-decoration:none;font-weight:600;font-size:14px;';
-  return `<a href="${esc(url)}" style="${style}">${esc(label)}</a>`;
+/** An inline link, the way a person writes one in an email: underlined text, no buttons or boxes. */
+function link(label: string, url: string, bold = false): string {
+  return `<a href="${esc(url)}" style="color:#142438;text-decoration:underline;${bold ? 'font-weight:700;' : ''}">${esc(label)}</a>`;
 }
 
-/** One pick as a card: the title (linked to the event page), when and where, why it fits, and its links. */
+/**
+ * One pick as a line of an ordinary list: the date, the title linked to its event page, the venue, a few words
+ * on why, then its links inline ("Listen · Tickets").
+ */
 function pickHtml(p: Pick): string {
   const [when, ...rest] = p.line.split(' — ');
-  const title = p.eventUrl ? `<a href="${esc(p.eventUrl)}" style="color:#202124;text-decoration:none;">${esc(p.title)}</a>` : esc(p.title);
-  const where = rest.join(' — ').replace(p.title, '').replace(/^\s*at\s*/, '');
-  return [
-    '<div style="margin:0 0 14px;padding:14px 16px;border:1px solid #e3e3e3;border-radius:12px;">',
-    `<div style="font-weight:700;font-size:16px;margin:0 0 2px;">${title}</div>`,
-    `<div style="color:#5f6368;font-size:14px;margin:0 0 8px;">${esc(when ?? '')}${where ? ` · ${esc(where)}` : ''}</div>`,
-    p.reason ? `<div style="margin:0 0 10px;">${esc(p.reason)}</div>` : '',
-    p.links.length ? `<div>${p.links.map((l, i) => button(l.label, l.url, i === p.links.length - 1)).join(' ')}</div>` : '',
-    '</div>',
-  ].join('');
+  const after = rest.join(' — ');
+  const i = after.indexOf(p.title);
+  const titled = i >= 0 ? `${esc(after.slice(0, i))}${p.eventUrl ? link(p.title, p.eventUrl, true) : `<strong>${esc(p.title)}</strong>`}${esc(after.slice(i + p.title.length))}` : esc(after);
+  const links = p.links.map((l) => link(l.label, l.url)).join(' · ');
+  return `<li style="margin:0 0 10px;">${esc(when ?? '')} — ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
 }
 
 function pickText(p: Pick): string {
-  return [`• ${p.line}`, p.reason ? `  ${p.reason}` : '', ...p.links.map((l) => `  ${l.label}: ${l.url}`)].filter(Boolean).join('\n');
+  return [`• ${p.line}.${p.reason ? ` ${p.reason}` : ''}`, ...p.links.map((l) => `  ${l.label}: ${l.url}`)].join('\n');
 }
 
 /** The eligibility question, asked once, on its own line rather than as one of the request questions. */
@@ -137,28 +132,31 @@ export function renderTemplate(
         : [String(v.emptyNote ?? ''), `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
       const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
       const text = [...lead, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...end];
-      const html = [...lead.map(para), ...picks.map(pickHtml), ...end.map(para)];
+      const html = [...lead.map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...end.map(para)];
       return wrap(text, html);
     }
     case 'official_sale': {
-      // One clear recommendation and a direct link to buy. No prices: buy/wait is for resale, and resale is
-      // one reply away.
+      // One clear recommendation and a direct link to buy, written as a sentence. No prices: buy/wait is for
+      // resale, and resale is one reply away.
       const notes = (v.notes as string[] | undefined) ?? [];
       const n = v.quantity ? Number(v.quantity) : null;
       const kind = v.sportsGame ? 'Games' : 'Events';
-      const explore = vars.explore as { label: string; url: string } | null | undefined;
       const seller = String(v.seller);
-      const lead = `${String(v.eventLabel)} is still on general sale on ${seller} — that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+      const title = String(v.eventTitle ?? v.eventLabel);
+      const where = [v.eventWhen ? String(v.eventWhen) : '', v.venueName ? `at ${String(v.venueName)}` : ''].filter(Boolean).join(' ');
+      const rest = ` is still on general sale on ${seller} — that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+      const lead = `${title}${where ? ` (${where})` : ''}${rest}`;
       const tail = [
         ...notes,
         `${kind} that aren't sold out often go for less on resale. Want me to compare? Just reply "compare".`,
         v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '',
         v.affiliate ? AFFILIATE_DISCLOSURE : '',
       ].filter(Boolean);
-      const text = ['Hey,', lead, `Buy tickets on ${seller}: ${String(v.url)}`, ...(explore ? [`${explore.label}: ${explore.url}`] : []), ...tail];
-      const buttons = `<p style="margin:0 0 18px;">${button(`Buy tickets on ${seller}`, String(v.url), true)}${explore ? ` ${button(explore.label, explore.url, false)}` : ''}</p>`;
-      const title = v.eventUrl ? `<a href="${esc(String(v.eventUrl))}" style="color:#202124;">${esc(String(v.eventTitle ?? v.eventLabel))}</a>` : esc(String(v.eventTitle ?? v.eventLabel));
-      const html = [para('Hey,'), `<p style="margin:0 0 18px;">${esc(lead).replace(esc(String(v.eventTitle ?? '')), title)}</p>`, buttons, ...tail.map(para)];
+      const text = ['Hey,', lead, `Buy tickets on ${seller}: ${String(v.url)}`, ...tail];
+      // The seller's name is the link to buy; the event title links to the event's page.
+      const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
+      const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)} —`, `on ${link(seller, String(v.url), true)} —`)}`;
+      const html = [para('Hey,'), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...tail.map(para)];
       return wrap(text, html);
     }
     case 'holding': {

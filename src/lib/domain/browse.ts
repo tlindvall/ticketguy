@@ -120,23 +120,19 @@ export function genreFitScore(eventGenre: string | null | undefined, words: stri
 const SPORT_CATEGORIES = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'];
 
 /**
- * Why a pick fits, in one line, from facts on file only: the kind of music or the matchup, the day and the
- * venue. Nothing is claimed that the catalog does not hold (no "sold out soon", no "great seats").
+ * Why a pick fits, in a few words the date-and-venue line does not already say: the kind of music, or the
+ * matchup. From facts on file only (no "sold out soon", no "great seats"); null when nothing is on file.
  */
-export function pickReason(e: { name: string; category: string; genre: string | null; isHome: boolean | null; localStartAt: Date; subtype: string | null }, v: { name: string; timezone: string }): string {
-  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'long' }).format(e.localStartAt);
-  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', hourCycle: 'h23' }).format(e.localStartAt));
-  const when = e.subtype === 'time_tba' ? weekday : `a ${weekday} ${hour >= 17 ? 'night' : 'afternoon'}`;
+export function pickReason(e: { name: string; category: string; genre: string | null; isHome: boolean | null }): string | null {
   if (SPORT_CATEGORIES.includes(e.category)) {
     const m = /\s(?:vs\.?|v\.?|versus)\s(.+)$/i.exec(e.name.replace(/\s*\(.*?\)\s*$/, ''));
     const opponent = m?.[1]?.trim();
     // "against the Boston Celtics", but "against Boston" when the listing names only the city.
     const against = opponent ? ` against ${opponent.split(/\s+/).length > 1 ? 'the ' : ''}${opponent}` : '';
-    return `${e.isHome ? 'A home game' : 'A game'}${against} on ${when}.`;
+    return e.isHome || against ? `${e.isHome ? 'Home game' : 'Game'}${against}.` : null;
   }
   const sub = e.genre?.split(' / ')[1] ?? e.genre?.split(' / ')[0] ?? null;
-  const kind = sub ? sub.charAt(0).toUpperCase() + sub.slice(1) : 'Live';
-  return `${kind} on ${when} at ${v.name}.`;
+  return sub ? `${sub.charAt(0).toUpperCase()}${sub.slice(1)}.` : null;
 }
 
 /** The pilot's categories in words, for telling a customer what is covered. */
