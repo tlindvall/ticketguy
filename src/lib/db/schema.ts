@@ -325,6 +325,8 @@ export const entities = pgTable('entities', {
   homeVenueId: uuid('home_venue_id').references(() => venues.id),
   /** Provider ids this performer/team is known by, e.g. { ticketmaster: 'K8vZ9171o-7' }. */
   externalIds: jsonb('external_ids').$type<Record<string, string>>().notNull().default({}),
+  /** Its own links as the provider lists them: listen (Spotify/Apple Music), watch (YouTube), official (homepage). */
+  links: jsonb('links').$type<{ listen?: string; watch?: string; official?: string }>().notNull().default({}),
   createdAt: createdAt(),
 });
 

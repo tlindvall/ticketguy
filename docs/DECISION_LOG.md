@@ -333,3 +333,33 @@ seats remain, and it quotes no price: event price ranges are never offers (API_A
 the same reason this reply goes out without review. The owner decided this explicitly: it is a pointer
 to the official seller, not a market recommendation. Every reply that carries prices or buy/wait advice
 still goes through review.
+
+## 37. Links go where the customer wants to go; picks, not lists; commission never picks
+
+The owner's link rules, as built:
+
+| Link | Destination |
+|---|---|
+| Event title | The official event page. Our own event brief replaces it only once a brief exists and adds something; none exist yet, and none are built ahead of demand. |
+| Listen / Watch / Team page / Official site | The performer's or team's own links, **as the provider lists them** (`entities.links`, from Ticketmaster attraction `externalLinks`). Nothing is searched for or constructed. With no link on file, there is no button. |
+| Event & tickets / Buy tickets | The seller's page for that exact event, through an affiliate link when one is configured for that seller (`AFFILIATE_LINK_TEMPLATES`). |
+| Compare / full shortlist | Not linked yet. There is no shortlist page, and "reply 'compare'" stands in for it. No empty internal pages. |
+
+**Discovery emails show up to three picks**, not the first five by date:
+- Picks are the best fit (a sub-genre naming what was asked), spread across different days, shown in date
+  order.
+- Each carries one line on why it fits, built from facts on file only (the kind of music or the matchup,
+  the day, the venue), plus at most two links.
+- "More" pages through the rest, and paging doesn't count toward the clarification limit.
+
+**Buying emails give one recommendation and a direct seller button.** Today that means the official-sale
+reply; resale recommendations follow once a resale source is live.
+
+**Commission never picks.** Affiliate wrapping runs after the pick or recommendation is chosen and never
+feeds back into it. A test proves the same event is recommended with and without an affiliate format.
+
+**Disclosure goes on every email with a paid link.** Any email carrying an affiliate link says: "Some
+ticket links pay Ticket Guy a small commission. It never changes what we recommend." This is what an FTC
+material-connection disclosure requires.
+
+The owner sets a format per seller only after reading that program's terms on email use.

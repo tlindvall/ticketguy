@@ -76,7 +76,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(req!.state).toBe('needs_clarification');
     const send = await lastSend(requestId);
     const body = send.bodyText;
-    expect(body).toContain('Live music in New York, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain('Live music in New York, Oct 1–7 — here are my two picks:');
     expect(body).toContain('• Fri, Oct 2 — Jack White at Madison Square Garden');
     expect(body).toContain('• Mon, Oct 5 — Phoebe Bridgers at Brooklyn Steel');
     expect(body.match(/Jack White at/g)).toHaveLength(1); // duplicate, parking and next week's show left out
@@ -213,7 +213,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     await c.ingestInbound(inbound({ text: 'I like indie rock and roll. We are staying in brooklyn.', from: 'indie@customer.example', subject: 'Re: Gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
     await interpretAll(h, c);
     const body = (await lastSend((r as { requestId: string }).requestId)).bodyText;
-    expect(body).toContain('Rock and indie in Brooklyn, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain('Rock and indie in Brooklyn, Oct 1–7 — here are my two picks:');
     expect(body).toContain('The Walkmen at Union Pool');
     expect(body).toContain('Big Thief at Brooklyn Steel');
     expect(body).not.toContain('Jazz Trio'); // Brooklyn, but not the music asked for
@@ -227,11 +227,11 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any reggaeton gigs in Brooklyn the first week of October?', 'latin@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('Live music in Brooklyn, Oct 1–7 — here’s what’s on:');
+    expect(body).toContain('Live music in Brooklyn, Oct 1–7 — here are my three picks:');
     expect(body).toContain("I couldn't find any Latin music listed for those dates, so here's everything that's on.");
   });
 
-  it('"the other 2" lists the rest, and then says that is everything', async () => {
+  it('"more" pages through the rest, three at a time, and then says that is everything', async () => {
     const HALL = '10000000-0000-4000-8000-0000000000c6';
     await h.db.insert(t.venues).values({ id: HALL, name: 'Music Hall of Williamsburg', city: 'Brooklyn', state: 'NY', country: 'US', timezone: 'America/New_York' });
     const names = ['Act One', 'Act Two', 'Act Three', 'Act Four', 'Act Five', 'Act Six', 'Act Seven'];
@@ -241,20 +241,26 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const r = await c.ingestInbound(first);
     await interpretAll(h, c);
     const requestId = (r as { requestId: string }).requestId;
+    const listed = (body: string) => names.filter((n) => body.includes(`${n} at`));
     const one = (await lastSend(requestId)).bodyText;
-    expect(one).toContain('There are 2 more in that window');
-    const firstFive = names.filter((n) => one.includes(`${n} at`));
-    expect(firstFive).toHaveLength(5);
+    expect(one).toContain('here are my three picks:');
+    expect(one).toContain('There are 4 more in that window — reply "more" to see them');
+    const page1 = listed(one);
+    expect(page1).toHaveLength(3);
     const reply = (text: string) => c.ingestInbound(inbound({ text, from: 'more@customer.example', subject: 'Re: Brooklyn gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
-    await reply('can you give me the other 2');
+    await reply('can you give me the other 4');
     await interpretAll(h, c);
     const two = (await lastSend(requestId)).bodyText;
     expect(two).toContain('More live music in Brooklyn, Oct 10–11:');
-    const rest = names.filter((n) => two.includes(`${n} at`));
-    expect(rest).toHaveLength(2);
-    expect(rest.some((n) => firstFive.includes(n))).toBe(false); // none of the first five again
-    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
-    expect(req!.clarificationCount).toBe(2);
+    const page2 = listed(two);
+    expect(page2).toHaveLength(3);
+    expect(page2.some((n) => page1.includes(n))).toBe(false); // nothing from the first page again
+    expect(two).toContain('There is 1 more in that window');
+    await reply('more');
+    await interpretAll(h, c);
+    const page3 = listed((await lastSend(requestId)).bodyText);
+    expect(page3).toHaveLength(1);
+    expect([...page1, ...page2, ...page3].sort()).toEqual([...names].sort());
     await reply('any others?');
     await interpretAll(h, c);
     expect((await lastSend(requestId)).bodyText).toContain("That's everything I have for live music in Brooklyn, Oct 10–11.");

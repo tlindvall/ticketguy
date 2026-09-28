@@ -13,7 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { NEW_YORK_AREA, areaFor, browseLabel, genreFamilyFor, genreMatches, inPilotVenueCity, isBrowseRequest, isPilotMarket, narrowByFor, oneListingPerShow, oneOfLabel, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { NEW_YORK_AREA, areaFor, browseLabel, genreFamilyFor, genreMatches, inPilotVenueCity, isBrowseRequest, isPilotMarket, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -25,6 +25,7 @@ import { classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppr
 import { sourcePlan } from '@/lib/sources/routing';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
+import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -388,7 +389,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { eventLabel: resolution.label, seller: official.seller, url: official.url, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : [])], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, explore: official.explore, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : [])], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
       });
@@ -413,13 +414,37 @@ export class Concierge {
    * window has started and not ended, and the event is still ahead. "On sale" is the provider's word for the
    * window; it is not a promise that seats remain, and the reply never says it is.
    */
-  private async officialSale(event: typeof t.events.$inferSelect, now: Date): Promise<{ url: string; seller: string } | null> {
+  private async officialSale(event: typeof t.events.$inferSelect, now: Date): Promise<{ url: string; buyUrl: string; affiliate: boolean; seller: string; explore: EmailLink | null } | null> {
     if (event.saleStatus !== 'onsale' || !event.publicSaleStartAt || event.publicSaleStartAt > now) return null;
     if (event.publicSaleEndAt && event.publicSaleEndAt <= now) return null;
     if (event.localStartAt <= now) return null;
     const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
     const seller = officialSellerFor(m?.url ?? null);
-    return seller ? { url: m!.url!, seller } : null;
+    if (!seller) return null;
+    const buy = sellerLink(m!.url!, seller, this.env.AFFILIATE_LINK_TEMPLATES);
+    const [ent] = event.primaryEntityId ? await this.db.select({ links: t.entities.links, kind: t.entities.kind }).from(t.entities).where(eq(t.entities.id, event.primaryEntityId)) : [];
+    return { url: m!.url!, buyUrl: buy.url, affiliate: buy.affiliate, seller, explore: exploreLink(ent?.links, ent?.kind ?? null) };
+  }
+
+  /**
+   * The picks as the email shows them: the line, why it fits, and at most two links — something to listen
+   * to or explore, and the event's own ticket page (affiliate-wrapped after the picks were chosen).
+   */
+  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, lines: string[]): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean }>> {
+    if (!shown.length) return [];
+    const ids = shown.map(({ e }) => e.id);
+    const maps = await this.db.select({ eventId: t.eventSourceMappings.eventId, url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(inArray(t.eventSourceMappings.eventId, ids), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
+    const entityIds = shown.map(({ e }) => e.primaryEntityId).filter((x): x is string => !!x);
+    const ents = entityIds.length ? await this.db.select({ id: t.entities.id, links: t.entities.links, kind: t.entities.kind }).from(t.entities).where(inArray(t.entities.id, entityIds)) : [];
+    return shown.map(({ e, v }, i) => {
+      const url = maps.find((m) => m.eventId === e.id)?.url ?? null;
+      const seller = officialSellerFor(url);
+      const tickets = url && seller ? sellerLink(url, seller, this.env.AFFILIATE_LINK_TEMPLATES) : null;
+      const ent = ents.find((x) => x.id === e.primaryEntityId);
+      const explore = exploreLink(ent?.links, ent?.kind ?? null);
+      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Event & tickets', url: tickets.url }] : [])];
+      return { line: lines[i]!, title: e.name, reason: pickReason(e, v), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
+    });
   }
 
   private async runExtractor(input: Parameters<Extractor['extract']>[0], req: { id: string; currentRevision: number }): Promise<RequestExtraction> {
@@ -531,7 +556,9 @@ export class Concierge {
     const more = a.more === true;
     const now = this.now();
     const tz = 'America/New_York';
-    const count = req.clarificationCount + 1;
+    // Paging through a list is the customer steering, not a question we failed to settle: it does not count
+    // towards the limit that hands a request to a person.
+    const count = req.clarificationCount + (more ? 0 : 1);
     // Recorded once the outcome is known: a single match goes on as an ordinary request, which records its own.
     const recordVersion = async () => {
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
@@ -633,8 +660,11 @@ export class Concierge {
       return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? NEW_YORK_AREA.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
     }
     await recordVersion();
-    const shown = events.slice(0, after?.events.length ? 3 : 5);
+    // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
+    const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
+    const shown = choosePicks(events, 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint) }));
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
+    const picks = await this.picksFor(shown, options);
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
     const place = area && areaKept ? area.label : NEW_YORK_AREA.label;
     const span = spanLabel(win.from, win.to);
@@ -642,7 +672,7 @@ export class Concierge {
       ? (options.length ? `More ${label.toLowerCase()} in ${place}, ${span}:` : `That's everything I have for ${label.toLowerCase()} in ${place}, ${span}.`)
       : after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
-      : `${label} in ${place}, ${span}${single ? ' — there’s one on:' : options.length ? ' — here’s what’s on:' : '.'}`;
+      : `${label} in ${place}, ${span}${single ? ' — there’s one on:' : options.length ? ` — here are my ${options.length === 3 ? 'three' : 'two'} picks:` : '.'}`;
     const assumptions = [assumedWindow ? 'the next two weeks' : null, merged.city ? null : NEW_YORK_AREA.label].filter(Boolean);
     const notes = [
       assumptions.length ? `I've looked at ${assumptions.join(', in ')} — tell me if you had something else in mind.` : null,
@@ -661,7 +691,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { headline, options, quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
+      vars: { headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };

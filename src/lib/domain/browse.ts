@@ -92,6 +92,53 @@ export function oneOfLabel(hint: CategoryHint | null, genre: GenreFamily | null)
   return genre ? `${genre.words} show` : 'show';
 }
 
+/**
+ * Three picks rather than the first five by date: the ones that fit the ask best, spread across different
+ * days, shown in date order. `score` is how well each fits (a sub-genre that names what they asked for).
+ */
+export function choosePicks<T>(items: T[], n: number, of: (t: T) => { day: string; score: number }): T[] {
+  const ranked = items.map((it, i) => ({ it, i, ...of(it) })).sort((a, b) => b.score - a.score || a.i - b.i);
+  const out: typeof ranked = [];
+  const days = new Set<string>();
+  for (const r of ranked) {
+    if (out.length >= n || days.has(r.day)) continue;
+    out.push(r);
+    days.add(r.day);
+  }
+  for (const r of ranked) if (out.length < n && !out.includes(r)) out.push(r);
+  return out.sort((a, b) => a.i - b.i).map((r) => r.it);
+}
+
+/** How well an event's genre fits the customer's words: a shared word with the sub-genre ("indie") counts. */
+export function genreFitScore(eventGenre: string | null | undefined, words: string | null | undefined): number {
+  if (!eventGenre || !words) return 0;
+  const sub = eventGenre.split(' / ')[1] ?? '';
+  const asked = words.toLowerCase().split(/[^a-z&-]+/).filter((w) => w.length > 2 && !['and', 'the', 'roll', 'music'].includes(w));
+  return asked.some((w) => sub.includes(w)) ? 1 : 0;
+}
+
+const SPORT_CATEGORIES = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'];
+
+/**
+ * Why a pick fits, in one line, from facts on file only: the kind of music or the matchup, the day and the
+ * venue. Nothing is claimed that the catalog does not hold (no "sold out soon", no "great seats").
+ */
+export function pickReason(e: { name: string; category: string; genre: string | null; isHome: boolean | null; localStartAt: Date; subtype: string | null }, v: { name: string; timezone: string }): string {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'long' }).format(e.localStartAt);
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', hourCycle: 'h23' }).format(e.localStartAt));
+  const when = e.subtype === 'time_tba' ? weekday : `a ${weekday} ${hour >= 17 ? 'night' : 'afternoon'}`;
+  if (SPORT_CATEGORIES.includes(e.category)) {
+    const m = /\s(?:vs\.?|v\.?|versus)\s(.+)$/i.exec(e.name.replace(/\s*\(.*?\)\s*$/, ''));
+    const opponent = m?.[1]?.trim();
+    // "against the Boston Celtics", but "against Boston" when the listing names only the city.
+    const against = opponent ? ` against ${opponent.split(/\s+/).length > 1 ? 'the ' : ''}${opponent}` : '';
+    return `${e.isHome ? 'A home game' : 'A game'}${against} on ${when}.`;
+  }
+  const sub = e.genre?.split(' / ')[1] ?? e.genre?.split(' / ')[0] ?? null;
+  const kind = sub ? sub.charAt(0).toUpperCase() + sub.slice(1) : 'Live';
+  return `${kind} on ${when} at ${v.name}.`;
+}
+
 /** The pilot's categories in words, for telling a customer what is covered. */
 export function pilotCoverageLabel(pilotCategories: string[]): string {
   const leagues = ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].filter((c) => pilotCategories.includes(c)).map((c) => c.toUpperCase());

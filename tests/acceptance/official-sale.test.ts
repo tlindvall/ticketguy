@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import type { DbHandle } from '@/lib/db';
 import * as t from '@/lib/db/schema';
-import { openTestDb, makeConcierge, inbound } from '../harness';
+import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
+import { AFFILIATE_DISCLOSURE } from '@/lib/email/links';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { officialSellerFor } from '@/lib/intake/pipeline';
 import { FIXTURE_NOW } from '@/lib/fixtures';
@@ -64,8 +65,8 @@ describe('still on general sale: point at the official sale', () => {
     const [send] = await sendsFor(requestId);
     expect(send!.messageClass).toBe('acknowledgment'); // no prices, so no review gate
     expect(send!.bodyText).toContain('Metro Testers vs. Boston — Test Garden, New York');
-    expect(send!.bodyText).toContain('is still on general sale on Ticketmaster, so that\'s the place to start for your 4 tickets.');
-    expect(send!.bodyText).toContain(`Ticketmaster: ${URL_OPEN}`);
+    expect(send!.bodyText).toContain("is still on general sale on Ticketmaster — that's where I'd buy your 4 tickets.");
+    expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: ${URL_OPEN}`);
     expect(send!.bodyText).toContain('Games that aren\'t sold out often go for less on resale. Want me to compare? Just reply "compare".');
     expect(send!.bodyText).not.toMatch(/\$\d/); // never a price
 
@@ -75,6 +76,41 @@ describe('still on general sale: point at the official sale', () => {
     expect(await stateOf(requestId)).toBe('researching');
     expect(await researchQueued(requestId)).toBe(1);
     expect((await sendsFor(requestId)).map((s) => s.bodyText).join('\n')).toContain('checking options for Metro Testers vs. Boston');
+  });
+
+  it('uses the affiliate link when one is configured, says so, and recommends exactly the same thing', async () => {
+    const env = testEnv({ AFFILIATE_LINK_TEMPLATES: JSON.stringify({ Ticketmaster: 'https://aff.example/c/1?u={url}' }) });
+    const r = await makeConcierge(h, { env }).ingestInbound(inbound({ text: '4 Testers tickets Oct 30', from: 'affiliate@customer.example', subject: 'Testers' }));
+    await interpretAll(makeConcierge(h, { env }));
+    const requestId = (r as { requestId: string }).requestId;
+    const [send] = await sendsFor(requestId);
+    expect(send!.bodyText).toContain('Metro Testers vs. Boston'); // the same event as without the affiliate format
+    expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: https://aff.example/c/1?u=${encodeURIComponent(URL_OPEN)}`);
+    expect(send!.bodyText).toContain(AFFILIATE_DISCLOSURE);
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
+    expect(req!.eventId).toBe(ids.open);
+  });
+
+  it('adds the performer\'s own link when the provider listed one', async () => {
+    await h.db.update(t.entities).set({ links: { official: 'https://www.metro-testers.example' } }).where(eq(t.entities.id, TEAM));
+    const c = makeConcierge(h);
+    const r = await c.ingestInbound(inbound({ text: '2 Testers tickets Oct 30', from: 'teampage@customer.example', subject: 'Testers' }));
+    await interpretAll(c);
+    const [send] = await sendsFor((r as { requestId: string }).requestId);
+    expect(send!.bodyText).toContain('Team page: https://www.metro-testers.example');
+    expect(send!.bodyText).not.toContain(AFFILIATE_DISCLOSURE);
+  });
+
+  it('a discovery email links each pick to its own page and the event\'s ticket page, not to our site', async () => {
+    const c = makeConcierge(h);
+    const r = await c.ingestInbound(inbound({ text: 'Any basketball games in New York Oct 29-31?', from: 'browse-links@customer.example', subject: 'Hoops' }));
+    await interpretAll(c);
+    const [send] = await sendsFor((r as { requestId: string }).requestId);
+    expect(send!.bodyText).toContain('• Fri, Oct 30 — Metro Testers vs. Boston at Test Garden');
+    expect(send!.bodyText).toContain('A home game against Boston on a Friday night.');
+    expect(send!.bodyText).toContain('Team page: https://www.metro-testers.example');
+    expect(send!.bodyText).toContain(`Event & tickets: ${URL_OPEN}`);
+    expect(send!.bodyHtml).toContain(`href="${URL_OPEN}"`);
   });
 
   it('goes straight to the comparison when resale is asked about up front', async () => {
