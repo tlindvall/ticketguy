@@ -1053,6 +1053,20 @@ export const emailSignatures = pgTable(
   (t) => [uniqueIndex('email_signatures_name_uq').on(t.name), uniqueIndex('email_signatures_default_uq').on(t.isDefault).where(sql`is_default`)],
 );
 
+/**
+ * The brand signature on every automatic email: shown in full on the first message in a conversation and as
+ * the short sign-off after. One row ('brand'); no row means the built-in values in email/signature.ts.
+ */
+export const emailBrandSignature = pgTable('email_brand_signature', {
+  key: text('key').primaryKey(),
+  displayName: text('display_name').notNull(),
+  tagline: text('tagline').notNull(),
+  shortSignoff: text('short_signoff').notNull(),
+  logo: text('logo').notNull(), // 'badge' | 'mark' | 'none'
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const emailTemplates = pgTable(
   'email_templates',
   {

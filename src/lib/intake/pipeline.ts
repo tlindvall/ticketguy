@@ -33,7 +33,7 @@ import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
 import { renderTemplate } from '@/lib/email/templates';
-import { loadActiveTemplates } from '@/lib/email/template-store';
+import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, WATCH_MAX_ACTIVE_PER_CONTACT } from '@/lib/domain/watches';
@@ -873,12 +873,12 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean }> {
     // Loaded per send, never cached: staff copy must take effect at the next send, like the kill switches.
-    const overrides = await loadActiveTemplates(this.db);
+    const [overrides, brand] = await Promise.all([loadActiveTemplates(this.db), loadBrandSignature(this.db)]);
     // The full signature introduces us once per conversation; after that a thread signs "— Ticket Guy".
     // Blocked and suppressed intents never reached the customer, so they do not count as the introduction.
     const [prior] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, a.conversationId), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
     const signature = (prior?.n ?? 0) === 0 ? 'full' : 'short';
-    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature });
+    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature, brand });
     const headers: Record<string, string> = { 'Reply-To': this.env.CONCIERGE_FROM_ADDRESS };
     if (a.inReplyTo) {
       headers['In-Reply-To'] = a.inReplyTo;

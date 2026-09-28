@@ -4,7 +4,9 @@ import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
 import { TemplateEditor } from '@/components/TemplateEditor';
 import { SLOTS, STARTER_BODY } from '@/lib/email/custom-templates';
-import { listSignatures, listTemplates, loadActiveTemplates } from '@/lib/email/template-store';
+import { listSignatures, listTemplates, loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
+import { BUILT_IN_BRAND, renderSignature } from '@/lib/email/signature';
+import { env } from '@/lib/config/env';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +17,11 @@ export const dynamic = 'force-dynamic';
 export default async function Templates() {
   const staff = await guardPage();
   const { db } = await getDb();
-  const [active, all, signatures] = await Promise.all([loadActiveTemplates(db), listTemplates(db), listSignatures(db)]);
+  const [active, all, signatures, brand] = await Promise.all([loadActiveTemplates(db), listTemplates(db), listSignatures(db), loadBrandSignature(db)]);
+  const appUrl = env().APP_URL;
+  const fullSig = renderSignature('full', appUrl, brand);
+  const shortSig = renderSignature('short', appUrl, brand);
+  const brandIsBuiltIn = JSON.stringify(brand) === JSON.stringify(BUILT_IN_BRAND);
   const canEdit = staff.role === 'admin';
   const sigOptions = signatures.map((s) => ({ id: s.id, name: `${s.name}${s.isDefault ? ' (default)' : ''}`, body: s.bodyText }));
 
@@ -53,8 +59,45 @@ export default async function Templates() {
       </section>
 
       <section>
-        <h2 className="font-semibold">Signatures</h2>
-        <p className="text-sm text-gray-600">Plain text, appended above the compliance footer. A signature used by any saved version cannot be deleted.</p>
+        <h2 className="font-semibold">Brand signature</h2>
+        <p className="max-w-3xl text-sm text-gray-600">
+          On every automatic email. The first message in a conversation carries the full signature; every later
+          one in the same thread ends with the short sign-off. A template with its own signature (below) replaces
+          both. {brandIsBuiltIn ? 'Currently the built-in signature.' : 'Currently edited by staff.'}
+        </p>
+        <div className="mt-2 grid gap-4 sm:grid-cols-2">
+          <div className="rounded border border-gray-200 bg-white p-3">
+            <p className="text-xs font-medium uppercase text-gray-500">First message</p>
+            {/* Rendered from our own escaped template, exactly as it is sent. */}
+            <div dangerouslySetInnerHTML={{ __html: fullSig.html }} />
+          </div>
+          <div className="rounded border border-gray-200 bg-white p-3">
+            <p className="text-xs font-medium uppercase text-gray-500">Later messages in the thread</p>
+            <div dangerouslySetInnerHTML={{ __html: shortSig.html }} />
+          </div>
+        </div>
+        {canEdit ? (
+          <div className="mt-3 rounded border border-gray-200 p-3">
+            <h3 className="text-sm font-medium">Edit the brand signature</h3>
+            <JsonForm
+              url="/api/admin/signatures"
+              submitLabel="Save brand signature"
+              extra={{ action: 'brand_save' }}
+              fields={[
+                { name: 'displayName', label: 'Name', required: true, defaultValue: brand.displayName },
+                { name: 'logo', label: 'Logo', type: 'select', defaultValue: brand.logo, options: [{ value: 'badge', label: 'Round badge' }, { value: 'mark', label: 'Ticket mark' }, { value: 'none', label: 'No logo' }] },
+                { name: 'tagline', label: 'Tagline (optional)', defaultValue: brand.tagline },
+                { name: 'shortSignoff', label: 'Short sign-off', required: true, defaultValue: brand.shortSignoff },
+              ]}
+            />
+            {!brandIsBuiltIn ? <div className="mt-2"><ActionButton url="/api/admin/signatures" body={{ action: 'brand_reset' }} label="Reset to built-in" confirm="Reset the brand signature to the built-in one?" /></div> : null}
+          </div>
+        ) : null}
+      </section>
+
+      <section>
+        <h2 className="font-semibold">Template signatures</h2>
+        <p className="text-sm text-gray-600">Plain text, chosen per template version, and used instead of the brand signature on that template. Appended above the compliance footer. A signature used by any saved version cannot be deleted.</p>
         <table className="tg-table mt-2">
           <thead><tr><th>Name</th><th>Text</th><th>Default</th><th></th></tr></thead>
           <tbody>
@@ -65,7 +108,7 @@ export default async function Templates() {
                 <td>{s.isDefault ? 'yes' : ''}</td>
                 <td>{canEdit ? <ActionButton url="/api/admin/signatures" body={{ action: 'delete', id: s.id }} label="Delete" confirm={`Delete signature "${s.name}"?`} /> : null}</td>
               </tr>
-            )) : <tr><td colSpan={4} className="text-sm text-gray-600">None yet — emails use the default &ldquo;&mdash; Ticket Guy&rdquo; sign-off.</td></tr>}
+            )) : <tr><td colSpan={4} className="text-sm text-gray-600">None yet — every email uses the brand signature above.</td></tr>}
           </tbody>
         </table>
         {canEdit ? (

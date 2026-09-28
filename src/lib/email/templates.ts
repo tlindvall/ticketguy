@@ -1,5 +1,5 @@
 import { isSlotName, renderAuthored, type SlotName, type TemplateOverrides, type TemplateValue } from './custom-templates';
-import { renderSignature, type SignatureKind } from './signature';
+import { renderSignature, type BrandSignature, type SignatureKind } from './signature';
 
 /**
  * Bounded email templates (API_AND_DATA_CONTRACTS §6). Text + HTML, escaped user text, no invented availability.
@@ -42,13 +42,13 @@ function authoringVars(slot: SlotName, v: Record<string, TemplateValue>): Record
 export function renderTemplate(
   name: string,
   vars: Record<string, unknown>,
-  ctx: { appUrl: string; postalAddress: string | null; overrides?: TemplateOverrides; signature?: SignatureKind },
+  ctx: { appUrl: string; postalAddress: string | null; overrides?: TemplateOverrides; signature?: SignatureKind; brand?: BrandSignature },
 ): { text: string; html: string } {
   const v = vars as Record<string, string | string[] | boolean | number | null | undefined>;
   const slot: SlotName | null = isSlotName(name) ? name : null;
   const override = slot ? ctx.overrides?.[slot] : undefined;
   const disclosure = disclosureFor(name);
-  const defaultSig = renderSignature(ctx.signature ?? 'short', ctx.appUrl);
+  const defaultSig = renderSignature(ctx.signature ?? 'short', ctx.appUrl, ctx.brand);
   if (slot && override) {
     const body = renderAuthored(override.body, authoringVars(slot, v));
     const sig = override.signature ? renderAuthored(override.signature, {}) : defaultSig;

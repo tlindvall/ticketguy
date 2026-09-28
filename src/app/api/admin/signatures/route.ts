@@ -3,13 +3,15 @@ import { getDb } from '@/lib/db';
 import { adminRoute } from '@/lib/admin/api';
 import { audit } from '@/lib/util/audit';
 import { MAX_SIGNATURE_LENGTH } from '@/lib/email/custom-templates';
-import { TemplateValidationError, deleteSignature, saveSignature } from '@/lib/email/template-store';
+import { TemplateValidationError, deleteSignature, resetBrandSignature, saveBrandSignature, saveSignature } from '@/lib/email/template-store';
 
 export const dynamic = 'force-dynamic';
 
 const Body = z.discriminatedUnion('action', [
   z.object({ action: z.literal('save'), id: z.string().uuid().nullable().default(null), name: z.string().min(1).max(80), body: z.string().min(1).max(MAX_SIGNATURE_LENGTH), isDefault: z.boolean().default(false) }),
   z.object({ action: z.literal('delete'), id: z.string().uuid() }),
+  z.object({ action: z.literal('brand_save'), displayName: z.string().max(80), tagline: z.string().max(160).nullable().default(''), shortSignoff: z.string().max(80), logo: z.enum(['badge', 'mark', 'none']) }),
+  z.object({ action: z.literal('brand_reset') }),
 ]);
 
 /** Signatures are appended above the compliance footer; the footer itself is never editable. */
@@ -17,6 +19,16 @@ export async function POST(req: Request) {
   return adminRoute(req, { role: 'admin', body: Body }, async ({ staff, body }) => {
     const { db } = await getDb();
     try {
+      if (body.action === 'brand_save') {
+        await saveBrandSignature(db, { displayName: body.displayName, tagline: body.tagline ?? '', shortSignoff: body.shortSignoff, logo: body.logo, staffUserId: staff.userId });
+        await audit(db, { actor: staff.userId, action: 'email_brand_signature.saved', entityKind: 'email_brand_signature', entityId: 'brand', diff: { displayName: body.displayName, tagline: body.tagline, shortSignoff: body.shortSignoff, logo: body.logo } });
+        return Response.json({ ok: true });
+      }
+      if (body.action === 'brand_reset') {
+        await resetBrandSignature(db);
+        await audit(db, { actor: staff.userId, action: 'email_brand_signature.reset', entityKind: 'email_brand_signature', entityId: 'brand', diff: {} });
+        return Response.json({ ok: true });
+      }
       if (body.action === 'save') {
         const r = await saveSignature(db, { id: body.id, name: body.name, body: body.body, isDefault: body.isDefault, staffUserId: staff.userId });
         await audit(db, { actor: staff.userId, action: 'email_signature.saved', entityKind: 'email_signature', entityId: r.id, diff: { name: body.name, isDefault: body.isDefault } });
