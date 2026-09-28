@@ -344,6 +344,10 @@ export const events = pgTable(
     isHome: boolean('is_home'),
     localStartAt: ts('local_start_at').notNull(), // stored as instant; render in venue timezone
     status: text('status').notNull().default('scheduled'),
+    /** The provider's own sale code (onsale | offsale | …) and general-sale window; null when not from a provider. */
+    saleStatus: text('sale_status'),
+    publicSaleStartAt: ts('public_sale_start_at'),
+    publicSaleEndAt: ts('public_sale_end_at'),
     verifiedSourceId: text('verified_source_id'),
     isFixture: boolean('is_fixture').notNull().default(false),
     createdAt: createdAt(),

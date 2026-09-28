@@ -109,6 +109,22 @@ export function renderTemplate(
       const html = [...lead.map(para), ...(options.length ? [htmlList(options)] : []), ...end.map(para)];
       return wrap(text, html);
     }
+    case 'official_sale': {
+      // Pointed at the official sale, with no prices: buy/wait is for resale, and resale is one reply away.
+      const notes = (v.notes as string[] | undefined) ?? [];
+      const n = v.quantity ? Number(v.quantity) : null;
+      const kind = v.sportsGame ? 'Games' : 'Events';
+      const paras = [
+        'Hey,',
+        `${String(v.eventLabel)} is still on general sale on ${String(v.seller)}, so that's the place to start${n ? ` for your ${n} tickets` : ''}.`,
+        ...notes,
+        `${kind} that aren't sold out often go for less on resale. Want me to compare? Just reply "compare".`,
+        v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '',
+      ].filter(Boolean);
+      const text = [paras[0]!, paras[1]!, `${String(v.seller)}: ${String(v.url)}`, ...paras.slice(2)];
+      const html = [para(paras[0]!), para(paras[1]!), `<p><a href="${esc(String(v.url))}">Open the sale on ${esc(String(v.seller))}</a></p>`, ...paras.slice(2).map(para)];
+      return wrap(text, html);
+    }
     case 'holding': {
       // Sent when only a person can move the request; it promises a person, never a time or a result.
       const paras = [

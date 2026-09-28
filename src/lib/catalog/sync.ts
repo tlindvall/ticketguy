@@ -239,15 +239,16 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
   const category = categoryFor(e);
   const subtype = subtypeFor(e);
   const genre = genreFor(e);
+  const sale = { saleStatus: e.statusCode === 'unknown' ? null : e.statusCode, publicSaleStartAt: e.publicSaleStart ? new Date(e.publicSaleStart) : null, publicSaleEndAt: e.publicSaleEnd ? new Date(e.publicSaleEnd) : null };
   const status = statusFor(e.statusCode);
 
   const existing = await db.select({ eventId: t.eventSourceMappings.eventId }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
   if (existing[0]) {
-    await db.update(t.events).set({ name: e.name, category, subtype, genre, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
+    await db.update(t.events).set({ name: e.name, category, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
     await db.update(t.eventSourceMappings).set({ authoritativeUrl: e.url, verifiedAt: new Date() }).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
     return { eventId: existing[0].eventId, entityIds };
   }
-  const [row] = await db.insert(t.events).values({ name: e.name, category, subtype, genre, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
+  const [row] = await db.insert(t.events).values({ name: e.name, category, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
   await db.insert(t.eventSourceMappings).values({ eventId: row!.id, sourceId: DISCOVERY_SOURCE_ID, sourceEventId: e.providerEventId, authoritativeUrl: e.url, role: 'discovery', confidence: 'provider_id', verifiedAt: new Date() }).onConflictDoNothing();
   return { eventId: row!.id, entityIds };
 }

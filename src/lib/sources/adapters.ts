@@ -159,6 +159,9 @@ export type DiscoveredEvent = {
   timezone: string | null;
   /** Provider sale status code, lower-cased: onsale | offsale | cancelled | postponed | rescheduled | unknown. */
   statusCode: string;
+  /** The provider's general (public) sale window, when it gives one. Presales are not the general sale. */
+  publicSaleStart: string | null;
+  publicSaleEnd: string | null;
   segment: string | null;
   genre: string | null;
   subGenre: string | null;
@@ -209,6 +212,8 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
     timeTba: start.timeTBA === true || start.noSpecificTime === true,
     timezone: str(dates.timezone) ?? venue?.timezone ?? null,
     statusCode: (str(dates.status?.code) ?? 'unknown').toLowerCase(),
+    publicSaleStart: str((e.sales as { public?: { startDateTime?: unknown } } | undefined)?.public?.startDateTime),
+    publicSaleEnd: str((e.sales as { public?: { endDateTime?: unknown } } | undefined)?.public?.endDateTime),
     segment: nameOf(classification.segment),
     genre: nameOf(classification.genre),
     subGenre: nameOf(classification.subGenre),

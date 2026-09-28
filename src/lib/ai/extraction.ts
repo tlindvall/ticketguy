@@ -4,7 +4,7 @@ import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
-import { lexiconGenre, lexiconQuantity, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
+import { lexiconGenre, lexiconQuantity, lexiconResaleAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -229,6 +229,7 @@ export class FixtureExtractor implements Extractor {
       categoryHint,
       genreHint: genre?.value ?? null,
       wantsMore: lexiconWantsMore(t) ? true : null,
+      resaleAsked: lexiconResaleAsked(t) ? true : null,
     });
   }
 }

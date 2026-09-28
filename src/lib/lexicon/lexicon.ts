@@ -20,7 +20,7 @@ export type LexiconCategory = CategoryHint | 'any';
 export type LexiconEntry = {
   id: string;
   /** What the phrase sets. */
-  field: 'intent' | 'wantsMore' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
+  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
   /** The meaning, in words, for people. */
   meaning: string;
   /** The value it sets (for fields with a fixed value). */
@@ -89,6 +89,22 @@ export const LEXICON: LexiconEntry[] = [
     requestTypes: ['browse'],
     teachModel: true,
     examples: [{ text: 'can you give me the other 7', expect: { wantsMore: true, quantity: null } }],
+  },
+
+  {
+    id: 'resale.compare',
+    field: 'resaleAsked',
+    value: true,
+    meaning: 'Look at resale or compare prices. Without it, an event still on general sale is answered with the official sale link.',
+    phrases: ['compare', 'is resale cheaper?', 'StubHub', 'best price', 'cheapest', 'secondary market'],
+    pattern: /\b(compare|comparison|resale|re-?sell(?:ers?|ing)?|secondary(?: market)?|stub ?hub|seat ?geek|vivid ?seats|ticket ?evolution|best (?:price|deal)|cheapest|better (?:price|deal)|second[- ]hand)\b/i,
+    categories: ['any'],
+    requestTypes: ['find'],
+    teachModel: true,
+    examples: [
+      { text: 'compare', expect: { resaleAsked: true } },
+      { text: 'Rangers Oct 3, 2 tickets — is resale cheaper than Ticketmaster?', expect: { resaleAsked: true } },
+    ],
   },
 
   // ── What kind of event (no performer or team named) ──────────────────────────────────────────────────
@@ -491,6 +507,10 @@ export function lexiconGenre(text: string): { value: string; quote: string } | n
     if (m) return { value: String(e.value), quote: m[0] };
   }
   return null;
+}
+
+export function lexiconResaleAsked(text: string): boolean {
+  return entriesFor('resaleAsked').some((e) => e.pattern.test(text));
 }
 
 export function lexiconWantsMore(text: string): boolean {
