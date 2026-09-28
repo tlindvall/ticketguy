@@ -363,3 +363,23 @@ ticket links pay Ticket Guy a small commission. It never changes what we recomme
 material-connection disclosure requires.
 
 The owner sets a format per seller only after reading that program's terms on email use.
+
+## 38. Links are words in sentences, not buttons or cards
+
+The owner's review of the first live picks email: "hyperlink, not sections and buttons". Cards and filled
+buttons made a reply from a person read like a marketing newsletter.
+
+**Picks are an ordinary list.** Each line reads "Tue, Oct 6 — **Michael Ward** at Brooklyn Bowl.
+Progressive rock. Listen · Tickets":
+- the title links to the event's page;
+- the other links sit inline at the end of the line.
+
+**The reason is only what the line doesn't already say.** That means the kind of music, or the matchup. The
+first version repeated the day and the venue.
+
+**The buying email is one sentence with the seller's name as the link.** It reads "… is still on general
+sale on **Ticketmaster** — that's where I'd buy your 4 tickets." Dates are written the way people write them
+("Sun, Oct 11 at 1pm"), not as "1:00 PM EDT". The team or act's own link is left out of this email: it
+carries one recommendation and one place to buy.
+
+The plain-text part keeps each URL on its own line, because plain-text mail clients show no links.

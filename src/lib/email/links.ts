@@ -27,6 +27,6 @@ export function exploreLink(links: EntityLinks | null | undefined, kind: string 
   if (kind === 'team') return links.official ? { label: 'Team page', url: links.official } : null;
   if (links.listen) return { label: 'Listen', url: links.listen };
   if (links.watch) return { label: 'Watch', url: links.watch };
-  if (links.official) return { label: 'Official site', url: links.official };
+  if (links.official) return { label: 'Website', url: links.official };
   return null;
 }

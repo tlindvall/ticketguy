@@ -64,8 +64,7 @@ describe('still on general sale: point at the official sale', () => {
     expect(await researchQueued(requestId)).toBe(0);
     const [send] = await sendsFor(requestId);
     expect(send!.messageClass).toBe('acknowledgment'); // no prices, so no review gate
-    expect(send!.bodyText).toContain('Metro Testers vs. Boston — Test Garden, New York');
-    expect(send!.bodyText).toContain("is still on general sale on Ticketmaster — that's where I'd buy your 4 tickets.");
+    expect(send!.bodyText).toContain("Metro Testers vs. Boston (Fri, Oct 30 at 7:30pm at Test Garden) is still on general sale on Ticketmaster — that's where I'd buy your 4 tickets.");
     expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: ${URL_OPEN}`);
     expect(send!.bodyText).toContain('Games that aren\'t sold out often go for less on resale. Want me to compare? Just reply "compare".');
     expect(send!.bodyText).not.toMatch(/\$\d/); // never a price
@@ -91,13 +90,14 @@ describe('still on general sale: point at the official sale', () => {
     expect(req!.eventId).toBe(ids.open);
   });
 
-  it('adds the performer\'s own link when the provider listed one', async () => {
+  it('keeps the buying email to one recommendation and one seller link, even when the team has a page', async () => {
     await h.db.update(t.entities).set({ links: { official: 'https://www.metro-testers.example' } }).where(eq(t.entities.id, TEAM));
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: '2 Testers tickets Oct 30', from: 'teampage@customer.example', subject: 'Testers' }));
     await interpretAll(c);
     const [send] = await sendsFor((r as { requestId: string }).requestId);
-    expect(send!.bodyText).toContain('Team page: https://www.metro-testers.example');
+    expect(send!.bodyText).not.toContain('metro-testers.example');
+    expect(send!.bodyHtml.match(/<a href=/g)?.length).toBe(3); // the event page, the seller, and the signature's own link
     expect(send!.bodyText).not.toContain(AFFILIATE_DISCLOSURE);
   });
 
@@ -106,10 +106,9 @@ describe('still on general sale: point at the official sale', () => {
     const r = await c.ingestInbound(inbound({ text: 'Any basketball games in New York Oct 29-31?', from: 'browse-links@customer.example', subject: 'Hoops' }));
     await interpretAll(c);
     const [send] = await sendsFor((r as { requestId: string }).requestId);
-    expect(send!.bodyText).toContain('• Fri, Oct 30 — Metro Testers vs. Boston at Test Garden');
-    expect(send!.bodyText).toContain('A home game against Boston on a Friday night.');
+        expect(send!.bodyText).toContain('• Fri, Oct 30 — Metro Testers vs. Boston at Test Garden. Home game against Boston.');
     expect(send!.bodyText).toContain('Team page: https://www.metro-testers.example');
-    expect(send!.bodyText).toContain(`Event & tickets: ${URL_OPEN}`);
+    expect(send!.bodyText).toContain(`Tickets: ${URL_OPEN}`);
     expect(send!.bodyHtml).toContain(`href="${URL_OPEN}"`);
   });
 

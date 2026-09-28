@@ -3,6 +3,7 @@ import { AFFILIATE_DISCLOSURE, exploreLink, sellerLink } from '@/lib/email/links
 import { attractionLinks } from '@/lib/sources/adapters';
 import { choosePicks, genreFitScore, pickReason } from '@/lib/domain/browse';
 import { renderTemplate } from '@/lib/email/templates';
+import { shortWhen } from '@/lib/intake/pipeline';
 
 describe('links go where the customer wants to go', () => {
   it('takes only the https links the provider lists, one per kind', () => {
@@ -43,33 +44,45 @@ describe('picks', () => {
     expect(genreFitScore(null, 'indie')).toBe(0);
   });
 
-  it('says why it fits from facts on file only', () => {
-    const v = { name: 'Brooklyn Steel', timezone: 'America/New_York' };
-    expect(pickReason({ name: 'Big Thief', category: 'concert', genre: 'rock / indie rock', isHome: null, localStartAt: new Date('2026-10-04T00:30:00Z'), subtype: null }, v)).toBe('Indie rock on a Saturday night at Brooklyn Steel.');
-    expect(pickReason({ name: 'New York Knicks vs. Boston Celtics', category: 'nba', genre: 'basketball / nba', isHome: true, localStartAt: new Date('2026-10-24T23:30:00Z'), subtype: null }, { name: 'MSG', timezone: 'America/New_York' })).toBe('A home game against the Boston Celtics on a Saturday night.');
+  it('says why it fits in a few words the date line does not already say', () => {
+    expect(pickReason({ name: 'Big Thief', category: 'concert', genre: 'rock / indie rock', isHome: null })).toBe('Indie rock.');
+    expect(pickReason({ name: 'New York Knicks vs. Boston Celtics', category: 'nba', genre: 'basketball / nba', isHome: true })).toBe('Home game against the Boston Celtics.');
+    expect(pickReason({ name: 'Somebody', category: 'concert', genre: null, isHome: null })).toBeNull();
   });
 });
 
 describe('the emails', () => {
   const ctx = { appUrl: 'https://ticketguy.now', postalAddress: null };
-  const pick = { line: 'Sat, Oct 3 — Big Thief at Brooklyn Steel', title: 'Big Thief', reason: 'Indie rock on a Saturday night at Brooklyn Steel.', eventUrl: 'https://www.ticketmaster.com/e/1', links: [{ label: 'Listen', url: 'https://open.spotify.com/a' }, { label: 'Event & tickets', url: 'https://www.ticketmaster.com/e/1' }] };
+  const pick = { line: 'Sat, Oct 3 — Big Thief at Brooklyn Steel', title: 'Big Thief', reason: 'Indie rock.', eventUrl: 'https://www.ticketmaster.com/e/1', links: [{ label: 'Listen', url: 'https://open.spotify.com/a' }, { label: 'Tickets', url: 'https://www.ticketmaster.com/e/1' }] };
 
   it('a discovery email is picks with why and two links, and the disclosure only when a link pays us', () => {
     const plain = renderTemplate('browse_options', { headline: 'Rock and indie in Brooklyn, Oct 1–7 — here are my two picks:', options: [pick.line], picks: [pick], moreCount: 0 }, ctx);
-    expect(plain.text).toContain('• Sat, Oct 3 — Big Thief at Brooklyn Steel\n  Indie rock on a Saturday night at Brooklyn Steel.\n  Listen: https://open.spotify.com/a\n  Event & tickets: https://www.ticketmaster.com/e/1');
-    expect(plain.html).toContain('href="https://www.ticketmaster.com/e/1"');
+    expect(plain.text).toContain('• Sat, Oct 3 — Big Thief at Brooklyn Steel. Indie rock.\n  Listen: https://open.spotify.com/a\n  Tickets: https://www.ticketmaster.com/e/1');
+    // Inline links in an ordinary list: the title links to its page, then "Listen · Tickets". No cards or buttons.
+    expect(plain.html).toContain('<li style="margin:0 0 10px;">Sat, Oct 3 — <a href="https://www.ticketmaster.com/e/1"');
+    expect(plain.html).toContain('>Big Thief</a> at Brooklyn Steel. Indie rock. <a href="https://open.spotify.com/a"');
+    expect(plain.html).toContain('>Listen</a> · <a href="https://www.ticketmaster.com/e/1"');
+    expect(plain.html).not.toMatch(/border-radius|display:inline-block|<div style="margin:0 0 14px;padding/);
     expect(plain.text).not.toContain(AFFILIATE_DISCLOSURE);
     const paid = renderTemplate('browse_options', { headline: 'x', options: [pick.line], picks: [pick], affiliate: true, moreCount: 0 }, ctx);
     expect(paid.text).toContain(AFFILIATE_DISCLOSURE);
   });
 
-  it('a buying email is one recommendation and a direct link to buy, never a link to our own site for it', () => {
-    const r = renderTemplate('official_sale', { eventLabel: 'Big Thief — Brooklyn Steel — Sat, Oct 3', eventTitle: 'Big Thief', seller: 'Ticketmaster', url: 'https://www.ticketmaster.com/e/1', eventUrl: 'https://www.ticketmaster.com/e/1', quantity: 2, explore: { label: 'Listen', url: 'https://open.spotify.com/a' } }, ctx);
-    expect(r.text).toContain("that's where I'd buy your 2 tickets.");
+  it('a buying email is one recommendation and a direct link to buy, written as a sentence', () => {
+    const r = renderTemplate('official_sale', { eventLabel: 'x', eventTitle: 'Big Thief', eventWhen: 'Sat, Oct 3 at 8pm', venueName: 'Brooklyn Steel', seller: 'Ticketmaster', url: 'https://www.ticketmaster.com/e/1', eventUrl: 'https://www.ticketmaster.com/e/1', quantity: 2 }, ctx);
+    expect(r.text).toContain("Big Thief (Sat, Oct 3 at 8pm at Brooklyn Steel) is still on general sale on Ticketmaster — that's where I'd buy your 2 tickets.");
     expect(r.text).toContain('Buy tickets on Ticketmaster: https://www.ticketmaster.com/e/1');
-    expect(r.text).toContain('Listen: https://open.spotify.com/a');
-    expect(r.html).toContain('>Buy tickets on Ticketmaster</a>');
+    expect(r.html).toContain('>Ticketmaster</a> — that');
+    expect(r.html).not.toMatch(/border-radius|display:inline-block/);
     const body = r.text.split('\n\n—')[0]!; // before the sign-off
     expect(body).not.toContain('ticketguy.now');
+  });
+});
+
+describe('dates the way a person writes them', () => {
+  it('says "Sun, Oct 11 at 1pm", or just the day when the time is not set', () => {
+    expect(shortWhen(new Date('2026-10-11T17:00:00Z'), 'America/New_York', false)).toBe('Sun, Oct 11 at 1pm');
+    expect(shortWhen(new Date('2026-10-11T23:30:00Z'), 'America/New_York', false)).toBe('Sun, Oct 11 at 7:30pm');
+    expect(shortWhen(new Date('2026-10-11T16:00:00Z'), 'America/New_York', true)).toBe('Sun, Oct 11');
   });
 });

@@ -389,7 +389,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, explore: official.explore, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : [])], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : [])], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
       });
@@ -414,7 +414,7 @@ export class Concierge {
    * window has started and not ended, and the event is still ahead. "On sale" is the provider's word for the
    * window; it is not a promise that seats remain, and the reply never says it is.
    */
-  private async officialSale(event: typeof t.events.$inferSelect, now: Date): Promise<{ url: string; buyUrl: string; affiliate: boolean; seller: string; explore: EmailLink | null } | null> {
+  private async officialSale(event: typeof t.events.$inferSelect, now: Date): Promise<{ url: string; buyUrl: string; affiliate: boolean; seller: string } | null> {
     if (event.saleStatus !== 'onsale' || !event.publicSaleStartAt || event.publicSaleStartAt > now) return null;
     if (event.publicSaleEndAt && event.publicSaleEndAt <= now) return null;
     if (event.localStartAt <= now) return null;
@@ -422,28 +422,27 @@ export class Concierge {
     const seller = officialSellerFor(m?.url ?? null);
     if (!seller) return null;
     const buy = sellerLink(m!.url!, seller, this.env.AFFILIATE_LINK_TEMPLATES);
-    const [ent] = event.primaryEntityId ? await this.db.select({ links: t.entities.links, kind: t.entities.kind }).from(t.entities).where(eq(t.entities.id, event.primaryEntityId)) : [];
-    return { url: m!.url!, buyUrl: buy.url, affiliate: buy.affiliate, seller, explore: exploreLink(ent?.links, ent?.kind ?? null) };
+    return { url: m!.url!, buyUrl: buy.url, affiliate: buy.affiliate, seller };
   }
 
   /**
    * The picks as the email shows them: the line, why it fits, and at most two links — something to listen
    * to or explore, and the event's own ticket page (affiliate-wrapped after the picks were chosen).
    */
-  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, lines: string[]): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean }>> {
+  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect }>, lines: string[]): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean }>> {
     if (!shown.length) return [];
     const ids = shown.map(({ e }) => e.id);
     const maps = await this.db.select({ eventId: t.eventSourceMappings.eventId, url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(inArray(t.eventSourceMappings.eventId, ids), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
     const entityIds = shown.map(({ e }) => e.primaryEntityId).filter((x): x is string => !!x);
     const ents = entityIds.length ? await this.db.select({ id: t.entities.id, links: t.entities.links, kind: t.entities.kind }).from(t.entities).where(inArray(t.entities.id, entityIds)) : [];
-    return shown.map(({ e, v }, i) => {
+    return shown.map(({ e }, i) => {
       const url = maps.find((m) => m.eventId === e.id)?.url ?? null;
       const seller = officialSellerFor(url);
       const tickets = url && seller ? sellerLink(url, seller, this.env.AFFILIATE_LINK_TEMPLATES) : null;
       const ent = ents.find((x) => x.id === e.primaryEntityId);
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
-      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Event & tickets', url: tickets.url }] : [])];
-      return { line: lines[i]!, title: e.name, reason: pickReason(e, v), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
+      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Tickets', url: tickets.url }] : [])];
+      return { line: lines[i]!, title: e.name, reason: pickReason(e) ?? '', eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
     });
   }
 
@@ -1354,6 +1353,17 @@ export function officialSellerFor(url: string | null): string | null {
   }
   const sellers: Array<[string, string]> = [['ticketmaster.com', 'Ticketmaster'], ['livenation.com', 'Live Nation'], ['ticketweb.com', 'TicketWeb'], ['universe.com', 'Universe'], ['frontgatetickets.com', 'Front Gate Tickets']];
   return sellers.find(([d]) => host === d || host.endsWith(`.${d}`))?.[1] ?? null;
+}
+
+/** "Sun, Oct 11 at 1pm" — how a person writes a date and time in an email; the day alone when the time is TBA. */
+export function shortWhen(at: Date, tz: string, timeTba: boolean): string {
+  const day = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' }).format(at);
+  if (timeTba) return day;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(at);
+  const hour = parts.find((p) => p.type === 'hour')?.value ?? '';
+  const minute = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  const ampm = (parts.find((p) => p.type === 'dayPeriod')?.value ?? '').toLowerCase();
+  return `${day} at ${hour}${minute === '00' ? '' : `:${minute}`}${ampm}`;
 }
 
 /** Model ambiguities that a resolved event answers: which team by that name, and which city. */
