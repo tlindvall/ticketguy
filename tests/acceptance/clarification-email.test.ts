@@ -81,8 +81,9 @@ describe('the clarification email', () => {
     expect(body).not.toContain('Could you tell us');
     expect(body).not.toMatch(/which date "next week" means/i);
     // Residency: asked once, on its own line, not as one of the request questions.
-    expect(body).toContain('One more thing, since we can only help US-based customers for now: are you based in the US?');
-    expect(body.match(/based in the US/g)).toHaveLength(1);
+    expect(body).toContain("Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.");
+    expect(body.match(/outside the US/g)).toHaveLength(1);
+    expect(body).not.toContain('are you based in the US?');
     expect(body).toContain('Just reply and I’ll narrow it down.');
     // First message in the conversation: the full signature, and an honest disclosure.
     expect(body).toContain('Ticket Guy\nYour second opinion before you buy.\nhttps://ticketguy.now');
@@ -104,7 +105,7 @@ describe('the clarification email', () => {
     const [second] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.id, follow.id));
     expect(second!.bodyText).toContain('— Ticket Guy');
     expect(second!.bodyText).not.toContain('Your second opinion before you buy.');
-    expect(second!.bodyText).not.toContain('based in the US');
+    expect(second!.bodyText).not.toContain('outside the US');
   });
 
   it('asks what the extractor was unsure of: a budget with no basis reaches the email as a question', async () => {

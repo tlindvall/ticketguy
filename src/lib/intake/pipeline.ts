@@ -11,6 +11,7 @@ import { inspectImage, selectProcessableImages } from '@/lib/media/image-validat
 import { createMediaStore } from '@/lib/media/storage';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
+import { classifyResidence } from '@/lib/domain/country';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -279,8 +280,10 @@ export class Concierge {
 
     // New revision.
     const revision = priorVersion ? req.currentRevision + 1 : 1;
-    if (extraction.countryStatement) {
-      const isUs = /\b(us|usa|united states|america)\b/i.test(extraction.countryStatement);
+    // Only a statement that names a place counts; "I'm in a hurry" or an unrecognised place changes nothing.
+    const residence = classifyResidence(extraction.countryStatement);
+    if (residence) {
+      const isUs = residence === 'US';
       await this.db.update(t.contacts).set({ countryConfirmed: isUs ? 'US' : 'NON_US' }).where(eq(t.contacts.id, contact!.id));
       await this.db.update(t.requests).set({ countryConfirmed: isUs ? 'US' : 'NON_US' }).where(eq(t.requests.id, req.id));
       if (!isUs) {

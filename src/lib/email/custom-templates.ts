@@ -240,7 +240,7 @@ We'll reply in this thread once a person has reviewed the comparison. No purchas
 
 {{questions}}
 
-{{countryCheck}}One more thing, since we can only help US-based customers for now: are you based in the US?
+{{countryCheck}}Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.
 
 Just reply and I’ll narrow it down.`,
   unsupported: `{{reason}}

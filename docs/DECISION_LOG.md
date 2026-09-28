@@ -180,3 +180,20 @@ Separately, the deployment had the schema and no reference data: `preDeployComma
 An operator therefore had no kill switches to flip and an empty sources page. The pre-deploy step now runs
 both. `seedRegistry` is idempotent and `scripts/seed.ts` refuses the fixture world unless
 `APP_MODE=fixture`, so this only ever loads reference data.
+
+## 31. Residency is a notice, and only the customer's words set it
+
+The first clarification asked "are you based in the US?" as a question. For the pilot's customers the
+answer is nearly always yes, so it read as a chore. It is now a notice that needs no reply: "Ticket Guy is
+for US-based fans for now, so if you're outside the US, just let me know." The acknowledgment already used
+this opt-out form. This departs from ENGINEERING_SPEC §1's "ask for a simple country confirmation"; the owner
+chose to reduce friction. What the spec protects still holds: residence is never inferred from the event,
+venue or email domain, and a recommendation for an unconfirmed customer still carries "customer country
+unconfirmed" for the reviewer.
+
+Reading residence had a defect that did real harm. Any "I'm in …" phrase was taken as a country statement,
+and anything that didn't say "US" was recorded as NON_US. So "I'm in a hurry" or "I'm in Brooklyn" closed a
+US customer's request with "Ticket Guy is US-only for now". `src/lib/domain/country.ts` now requires the
+words after "I'm in / I live in / from / based in" to be a recognised place. It reads NYC-area places and US
+states as US, doesn't treat a trip ("visiting", "for the weekend") as residence, and returns NON_US only for
+a named non-US place or an explicit "not in the US". Anything else changes nothing.

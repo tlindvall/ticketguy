@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/types';
 import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
+import { findResidenceStatement } from '@/lib/domain/country';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -159,7 +160,7 @@ export class FixtureExtractor implements Extractor {
         : null;
     const risk: RequestExtraction['waitRiskTolerance'] = /\b(happy to (wait|gamble|risk)|fine (to )?wait(ing)?|willing to (wait|risk)|ok(ay)? (to )?wait)\b/i.test(t) ? 'high' : /\b(don'?t want to risk|rather not risk|lock (it|them) in|secure (them|it) now)\b/i.test(t) ? 'low' : null;
     const forSelf = /\b(for (my|a) (friend|dad|mom|mother|father|sister|brother|boss|colleague|client)|as a gift|gift for)\b/i.test(t) ? false : /\b(for (me|us|myself)|my (wife|husband|partner|kids|family) and (i|me))\b/i.test(t) ? true : null;
-    const countryStatement = /\b(i(?:'m| am) (?:in|from|based in) (?:the )?(us|usa|united states|uk|canada|[a-z]+))\b/i.exec(t)?.[0] ?? null;
+    const countryStatement = findResidenceStatement(t);
 
     return EXTRACTION_SCHEMA.parse({
       intent,
