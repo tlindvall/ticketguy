@@ -69,7 +69,8 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'find.resale_asked', type: 'find', text: 'Rangers Oct 3, 2 tickets — is resale cheaper than Ticketmaster?', brief: { resaleAsked: true, quantity: 2 } },
   { id: 'browse.theater', type: 'browse', text: 'Any Broadway shows next week?', brief: { categoryHint: 'theater' }, reply: { state: 'unsupported', contains: ['For now I only cover concerts and NHL, NBA, MLB and NFL games'] } },
   { id: 'browse.comedy', type: 'browse', text: 'Any stand-up comedy this weekend?', brief: { categoryHint: 'comedy' }, reply: { state: 'unsupported' } },
-  { id: 'browse.other_city', type: 'browse', text: 'What concerts are on in Chicago next month?', reply: { state: 'unsupported', contains: ['New York area'] } },
+  { id: 'browse.other_city', type: 'browse', text: 'What concerts are on in Chicago next month?', reply: { contains: ['Live music in Chicago'], notContains: ['New York area'] } },
+  { id: 'browse.outside_us', type: 'browse', text: 'What concerts are on in London next month?', reply: { state: 'unsupported', contains: ['only cover events in the US'] } },
 
   // ── Where the customer lives ─────────────────────────────────────────────────────────────────────────
   { id: 'residence.hurry', type: 'find', text: "I'm in a hurry — two Rangers tickets Oct 3, $300 total.", reply: { contains: ['New York Rangers vs. New York Islanders'], notContains: ['US-only'] } },

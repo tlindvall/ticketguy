@@ -383,3 +383,36 @@ sale on **Ticketmaster** — that's where I'd buy your 4 tickets." Dates are wri
 carries one recommendation and one place to buy.
 
 The plain-text part keeps each URL on its own line, because plain-text mail clients show no links.
+
+## 39. National: any US market, found by metro
+
+"Why just New York? I asked for LA." The pilot market was a handoff default, not a technical limit:
+Ticketmaster Discovery covers the US, and so do the parts that work today (browse picks and the
+official-sale reply). The owner decided to cover the US.
+
+**A market is a metro, not a city.** `src/lib/domain/markets.ts` lists about 40 US metros, each with:
+- a centre, a radius (35–50 miles) and a timezone;
+- how people name it ("LA", "Philly", "the Bay Area");
+- its venue cities, as a fallback;
+- how its teams are named.
+
+**Finding events:**
+- A named metro is searched by the provider's geo search (geohash and radius), so "LA" includes
+  Inglewood, Anaheim and Pasadena.
+- A US town with no metro ("Boise") is searched by name.
+- A place outside the US is told plainly that we cover the US only.
+
+**Which venues count:** a venue is in the market when it is within the radius. Venues now store the
+provider's coordinates (migration 0009). A venue with no coordinates counts when its city is on the
+metro's list. New York keeps its borough narrowing ("staying in Brooklyn").
+
+**When no place is named:** the market is the one the customer last asked about, else `DEFAULT_MARKET`
+(New York). The reply says which it assumed.
+
+**Shared nicknames:** "the local team" is local to that market, so "Kings" in LA is the LA Kings.
+
+**Known gaps:**
+- Venues that sell through AXS or another primary seller outside Ticketmaster aren't in Discovery. For
+  LA, that probably includes Crypto.com Arena. Browse doesn't show their events until an AXS or similar
+  source exists.
+- The daily pre-warm still seeds only the New York teams. Other markets fill on demand.
