@@ -261,7 +261,9 @@ export async function syncFromDiscovery(
   q: DiscoveryQuery & { trigger: SyncTrigger; dailyCallLimit?: number | null; now?: Date; force?: boolean },
 ): Promise<SyncOutcome> {
   const now = q.now ?? new Date();
-  const keyword = normalizeKeyword(q.keyword);
+  // A browse has no keyword; its freshness is tracked per classification so one sync serves the next asker.
+  // The window is part of that key: a fresh sync of October says nothing about November.
+  const keyword = normalizeKeyword(q.keyword) || (q.classificationName ? `classification:${q.classificationName.toLowerCase()}:${q.startDateTime ?? ''}..${q.endDateTime ?? ''}` : '');
   const city = q.city ?? null;
   const record = async (status: SyncOutcome['status'], eventCount: number) => {
     await db.insert(t.catalogSyncs).values({ sourceId: DISCOVERY_SOURCE_ID, keywordNormalized: keyword, city, windowFrom: q.startDateTime ?? null, windowTo: q.endDateTime ?? null, status, eventCount, trigger: q.trigger, syncedAt: now });
@@ -274,7 +276,7 @@ export async function syncFromDiscovery(
     return { status: 'skipped_budget', eventsSeen: 0, eventsUpserted: 0, entityIds: [] };
   }
 
-  const res = await adapter.discoverEvents({ keyword: q.keyword, city, stateCode: q.stateCode ?? null, startDateTime: q.startDateTime ?? null, endDateTime: q.endDateTime ?? null, size: q.size });
+  const res = await adapter.discoverEvents({ keyword: q.keyword, classificationName: q.classificationName ?? null, city, stateCode: q.stateCode ?? null, startDateTime: q.startDateTime ?? null, endDateTime: q.endDateTime ?? null, size: q.size });
   if (res.status !== 'success') {
     await record(res.status, 0);
     return { status: res.status, eventsSeen: 0, eventsUpserted: 0, entityIds: [] };

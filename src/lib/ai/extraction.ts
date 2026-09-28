@@ -3,6 +3,7 @@ import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/ty
 import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
+import { BROWSE_ASK, categoryHintFrom } from '@/lib/domain/browse';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -164,6 +165,9 @@ export class FixtureExtractor implements Extractor {
     const risk: RequestExtraction['waitRiskTolerance'] = /\b(happy to (wait|gamble|risk)|fine (to )?wait(ing)?|willing to (wait|risk)|ok(ay)? (to )?wait)\b/i.test(t) ? 'high' : /\b(don'?t want to risk|rather not risk|lock (it|them) in|secure (them|it) now)\b/i.test(t) ? 'low' : null;
     const forSelf = /\b(for (my|a) (friend|dad|mom|mother|father|sister|brother|boss|colleague|client)|as a gift|gift for)\b/i.test(t) ? false : /\b(for (me|us|myself)|my (wife|husband|partner|kids|family) and (i|me))\b/i.test(t) ? true : null;
     const countryStatement = findResidenceStatement(t);
+    const categoryHint = categoryHintFrom(t);
+    // "What's on" with nothing specific named is a browse: answer with options instead of asking which event.
+    if (intent === 'new_search' && !ent && (BROWSE_ASK.test(t) || categoryHint)) intent = 'browse';
 
     return EXTRACTION_SCHEMA.parse({
       intent,
@@ -190,6 +194,7 @@ export class FixtureExtractor implements Extractor {
       forSelf,
       negatedEntities: negated,
       countryStatement,
+      categoryHint,
     });
   }
 }

@@ -13,6 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
+import { NEW_YORK_AREA, browseLabel, inPilotVenueCity, isBrowseRequest, isPilotMarket, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -296,6 +297,10 @@ export class Concierge {
       }
     }
 
+    // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
+    // instead of asking which event, how many tickets and which date.
+    if (isBrowseRequest(merged)) return this.browse({ req, msg, contact: contact!, merged, revision });
+
     // Event resolution.
     const resolution = await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
     const eventResolved = resolution.kind === 'resolved';
@@ -400,6 +405,91 @@ export class Concierge {
     await this.db.insert(t.requestTransitions).values({ requestId, fromState: r?.state ?? null, toState, revision: r?.rev ?? 1, actor, reason });
   }
 
+  /**
+   * A browse reply: up to five real scheduled events of the kind asked for, in the pilot market and the span
+   * named (the next two weeks when none was, and the reply says so). The request waits for the customer to
+   * pick one; their reply names it, and the ordinary resolution takes over from there.
+   */
+  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number }): Promise<{ state: string; revision: number; extraction: RequestExtraction }> {
+    const { req, msg, contact, merged, revision } = a;
+    const now = this.now();
+    const tz = 'America/New_York';
+    const count = req.clarificationCount + 1;
+    await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
+    await this.db.update(t.requests).set({ currentRevision: revision, eventId: null, mode: 'find_options', updatedAt: now }).where(eq(t.requests.id, req.id));
+    if (revision > 1) await this.invalidateForRevision(req.id, revision);
+    if (count > 3) {
+      await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
+      await this.transition(req.id, 'manual_attention', 'clarification_limit_reached');
+      return { state: 'manual_attention', revision, extraction: merged };
+    }
+    const unsupported = async (reason: string, why: string) => {
+      await this.transition(req.id, 'unsupported', why);
+      await this.queueSend({ messageClass: 'no_result', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, 'Not covered yet'), template: 'unsupported', vars: { reason }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      return { state: 'unsupported', revision, extraction: merged };
+    };
+    if (!isPilotMarket(merged.city)) return unsupported(`For now I only cover events in the ${NEW_YORK_AREA.label} area.`, 'browse_outside_market');
+    const categories = pilotCategoriesFor(merged.categoryHint, this.env.pilotSupportedCategories);
+    if (!categories.length) return unsupported(`For now I only cover concerts and NHL, NBA and MLB games in ${NEW_YORK_AREA.label}.`, 'browse_category_not_in_pilot');
+
+    const day = (iso: string, delta: number) => {
+      const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+      const dt = new Date(Date.UTC(y, m - 1, d + delta));
+      return toIsoDate(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+    };
+    const today = eventLocalDate(now, tz);
+    let win = merged.dateExpression ? dateWindowFor(merged.dateExpression, msg.receivedAt, tz) : null;
+    if (!win && merged.resolvedLocalDate) win = { from: merged.resolvedLocalDate, to: merged.resolvedLocalDate };
+    const assumedWindow = !win;
+    win ??= { from: today, to: day(today, 13) };
+    if (win.from < today) win = { from: today, to: win.to };
+
+    // Ask the provider about the window once per city (fresh results are reused), then read the catalog.
+    let providerChecked = false;
+    const discovery = await this.discoveryAvailability();
+    if (discovery && win.from <= win.to) {
+      for (const city of NEW_YORK_AREA.providerCities) {
+        const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: '', classificationName: providerClassificationFor(merged.categoryHint), city, startDateTime: `${win.from}T00:00:00Z`, endDateTime: `${day(win.to, 1)}T12:00:00Z`, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
+        await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: `browse:${city.toLowerCase()}`, diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
+        if (sync.status === 'success' || sync.status === 'skipped_fresh') providerChecked = true;
+      }
+    }
+    const rows = win.from <= win.to
+      ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.category, categories), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(`${day(win.to, 2)}T00:00:00Z`)))).orderBy(asc(t.events.localStartAt)).limit(300)
+      : [];
+    const seen = new Set<string>();
+    const events = rows.filter(({ e, v }) => {
+      if (!inPilotVenueCity(v.city)) return false;
+      if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
+      if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba'].includes(e.category)) return false;
+      const d = eventLocalDate(e.localStartAt, v.timezone);
+      if (d < win!.from || d > win!.to) return false;
+      // The provider lists VIP and package variants as separate events; one line per show is enough.
+      const key = `${e.name.toLowerCase()}|${d}|${v.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const shown = events.slice(0, 5);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
+    const label = browseLabel(merged.categoryHint);
+    const span = spanLabel(win.from, win.to);
+    const assumptions = [assumedWindow ? 'the next two weeks' : null, merged.city ? null : NEW_YORK_AREA.label].filter(Boolean);
+    const assumption = assumptions.length ? `I've looked at ${assumptions.join(', in ')} — tell me if you had something else in mind.` : null;
+    const emptyNote = providerChecked
+      ? `I checked the official listings and couldn't find any ${label.toLowerCase()} in ${NEW_YORK_AREA.label} for ${span}.`
+      : `I don't have any ${label.toLowerCase()} in ${NEW_YORK_AREA.label} on file for ${span}.`;
+    await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
+    await this.transition(req.id, 'needs_clarification', 'browse_options');
+    await this.queueSend({
+      messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
+      subject: reSubject(msg.subject, `${label} in ${NEW_YORK_AREA.label}, ${span}`), template: 'browse_options',
+      vars: { headline: `${label} in ${NEW_YORK_AREA.label}, ${span}${options.length ? ' — here’s what’s on:' : '.'}`, options, moreCount: events.length - shown.length, assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
+      inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
+    });
+    return { state: 'needs_clarification', revision, extraction: merged };
+  }
+
   /** A05: a new revision invalidates prior approvals/recommendations and pauses watches bound to older revisions. */
   private async invalidateForRevision(requestId: string, newRevision: number): Promise<void> {
     await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated' }).where(and(eq(t.recommendations.requestId, requestId), inArray(t.recommendations.reviewStatus, ['pending', 'approved']), sql`${t.recommendations.revision} < ${newRevision}`));
@@ -468,7 +558,15 @@ export class Concierge {
         });
       }
       if (x.city) cands = cands.filter(({ v }) => (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
-      return cands;
+      // The provider lists one show more than once (package and presale variants under the same name); one
+      // show at one venue on one day is one candidate, or the customer is asked to choose between twins.
+      const seen = new Set<string>();
+      return cands.filter(({ e, v }) => {
+        const key = `${e.name.toLowerCase()}|${eventLocalDate(e.localStartAt, v.timezone)}|${v.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     };
 
     // Events per matched entity, filtered the same way, so a nickname shared by two teams is settled by the
@@ -985,8 +1083,11 @@ export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtract
   const away = cands.filter((c) => c.isHome === false);
   if (home.length && away.length) return `Are you looking for a home game at ${home[0]!.venueName}, or are away games an option? Send a date or ticket link if you have one.`;
   if (cands.length <= 3) {
-    const games = cands.map((c) => `${c.when} (${c.name})`);
-    return `Which game: ${games.slice(0, -1).join(', ')} or ${games[games.length - 1]}?`;
+    // A team plays a game against someone; an artist plays a show somewhere. "Which game: Fri, Oct 2 (Jack White)"
+    // named the performer the customer had just named and called a concert a game.
+    const isGame = cands.some((c) => c.league);
+    const opts = cands.map((c) => (isGame ? `${c.when} (${c.name})` : `${c.when} at ${c.venueName}`));
+    return `Which ${isGame ? 'game' : 'show'}: ${opts.slice(0, -1).join(', ')} or ${opts[opts.length - 1]}?`;
   }
   return 'Which date are you looking at? Send a date or ticket link if you have one.';
 }

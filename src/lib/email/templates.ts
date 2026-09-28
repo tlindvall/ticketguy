@@ -84,6 +84,27 @@ export function renderTemplate(
       ].filter(Boolean);
       return wrap(paras, paras.map(para));
     }
+    case 'browse_options': {
+      // "What's on?" gets what is on: a short list, then one easy next step. Nothing is asked up front —
+      // quantity and budget only matter once the customer has picked something.
+      const options = (v.options as string[]) ?? [];
+      const more = Number(v.moreCount ?? 0);
+      const lead = [
+        'Hey,',
+        String(v.headline ?? ''),
+        v.assumption ? String(v.assumption) : '',
+      ].filter(Boolean);
+      const tail = options.length
+        ? [
+            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — tell me an artist, venue or kind of music and I'll narrow it down.` : '',
+            'Reply with the one you want and how many tickets, and I’ll check the prices.',
+          ]
+        : [String(v.emptyNote ?? ''), 'Want me to look at different dates, or is there an artist you have in mind?'];
+      const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
+      const text = [...lead, ...(options.length ? [list(options)] : []), ...end];
+      const html = [...lead.map(para), ...(options.length ? [htmlList(options)] : []), ...end.map(para)];
+      return wrap(text, html);
+    }
     case 'unsupported':
       return wrap([String(v.reason ?? ''), `We're sorry we can't help with this one yet.`], [`<p>${esc(String(v.reason ?? ''))}</p>`, `<p>We're sorry we can't help with this one yet.</p>`]);
     case 'deletion_verification':
