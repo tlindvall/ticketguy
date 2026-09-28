@@ -206,7 +206,8 @@ export function missingMandatoryFields(x: RequestExtraction, opts: { eventResolv
  * "Dua Lipa" survive: the brief keeps whatever the customer typed, and only the email is tidied.
  */
 export function titleCaseName(name: string): string {
-  return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1));
+  // A matchup's separator stays lower case: "Rangers vs Lightning", not "Rangers Vs Lightning".
+  return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1)).replace(/\b(Vs|Versus|Against)\b/g, (w) => w.toLowerCase());
 }
 
 export function clarificationQuestions(missing: string[], known: RequestExtraction): string[] {

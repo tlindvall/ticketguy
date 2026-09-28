@@ -152,6 +152,42 @@ describe('the clarification email', () => {
     expect(acknowledgementLine(brief({ performerOrTeam: 'Knicks', quantity: 1, budgetCents: 15000, budgetBasis: 'per_ticket' }))).toBe('One Knicks ticket, up to $150 each—got it.');
     expect(acknowledgementLine(brief({ performerOrTeam: 'Dua Lipa', quantity: 12, togetherRequired: true }))).toBe('12 Dua Lipa tickets together—got it.');
     expect(acknowledgementLine(brief({ quantity: null }))).toBe('Thanks for getting in touch.');
+    // A game reads as a game, with the matchup's "vs" left lower case.
+    expect(acknowledgementLine(brief({ performerOrTeam: 'new york rangers vs tampa bay lightning', quantity: 2, togetherRequired: true, dateExpression: 'oct 1st', budgetCents: 40000, budgetBasis: 'whole_party' }))).toBe(
+      'Two tickets together for New York Rangers vs Tampa Bay Lightning oct 1st, up to $400 total—got it.',
+    );
+  });
+
+  // The first real "Rangers vs Lightning" request came back "no scheduled event": the extractor put the whole
+  // matchup in the team field and no team has that name, although the Rangers' games were on file.
+  it('resolves a matchup to the game against that opponent', async () => {
+    const c = makeConcierge(h);
+    const full = await c.resolveEvent(brief({ performerOrTeam: 'New York Rangers vs New York Islanders' }));
+    expect(full.kind).toBe('resolved');
+    if (full.kind === 'resolved') expect(full.event.name).toContain('Islanders');
+
+    // The opponent settles it even when the date alone would not, and a nickname or city is enough.
+    const away = await c.resolveEvent(brief({ performerOrTeam: 'Rangers vs Bruins', dateExpression: 'in October' }));
+    expect(away.kind).toBe('resolved');
+    if (away.kind === 'resolved') expect(away.event.name).toBe('New York Rangers at Boston Bruins');
+
+    // The matchup in the event name, with the team alone in the team field, narrows the same way.
+    const split = await c.resolveEvent(brief({ performerOrTeam: 'Rangers', eventName: 'Rangers vs. Boston' }));
+    expect(split.kind).toBe('resolved');
+    if (split.kind === 'resolved') expect(split.event.name).toBe('New York Rangers at Boston Bruins');
+
+    // Named second, the known team still resolves.
+    const reversed = await c.resolveEvent(brief({ performerOrTeam: 'Tampa Bay Lightning vs New York Rangers' }));
+    expect(reversed.kind).toBe('no_match'); // a known team, but no game against the Lightning on file
+    if (reversed.kind === 'no_match') expect(reversed.reason).toBe('no_scheduled_event');
+    const islanders = await c.resolveEvent(brief({ performerOrTeam: 'Islanders @ Rangers' }));
+    expect(islanders.kind).toBe('resolved');
+    if (islanders.kind === 'resolved') expect(islanders.event.name).toContain('Islanders');
+
+    // A named opponent is a hard filter: no game against them is "none on file", never a different game.
+    const none = await c.resolveEvent(brief({ performerOrTeam: 'New York Rangers vs Tampa Bay Lightning', dateExpression: 'in October' }));
+    expect(none.kind).toBe('no_match');
+    if (none.kind === 'no_match') expect(none.reason).toBe('no_scheduled_event');
   });
 });
 

@@ -12,6 +12,7 @@ import { createMediaStore } from '@/lib/media/storage';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
+import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -436,16 +437,20 @@ export class Concierge {
 
   async resolveEvent(x: RequestExtraction): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
-    const entities = await this.matchEntities(x.performerOrTeam);
-    // Not on file at all is a different fact from on file with nothing scheduled, and the customer is told
-    // which: claiming we searched listings we do not have is a claim about our own diligence.
-    if (entities.length === 0) return { kind: 'no_match', reason: 'unknown_performer' };
+    // A matchup ("Rangers vs Lightning") is tried side by side: the side we know is the team, the other side
+    // narrows its games. The first-named side goes first because it is usually the home team.
+    const matchup = splitMatchup(x.performerOrTeam);
+    const attempts = matchup
+      ? [{ name: matchup.first, opponent: matchup.second }, { name: matchup.second, opponent: matchup.first }]
+      : [{ name: x.performerOrTeam, opponent: opponentFor(x.performerOrTeam, x.eventName) }];
     const now = this.now();
 
     const asked = [x.performerOrTeam, x.eventName, x.dateExpression].filter(Boolean).join(' ');
-    const windowFilter = (rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, isTeam: boolean) => {
+    const windowFilter = (rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, isTeam: boolean, opponent: string | null) => {
       let cands = rows.filter(({ e }) => !e.subtype || !NON_ADMISSION_SUBTYPES.includes(e.subtype)); // parking and packages are not "tickets to the game"
       if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
+      // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else.
+      if (opponent) cands = cands.filter(({ e }) => isAgainst(e.name, opponent));
       if (x.resolvedLocalDate) {
         cands = cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate);
       } else if (x.dateExpression) {
@@ -464,12 +469,23 @@ export class Concierge {
     };
 
     // Events per matched entity, filtered the same way, so a nickname shared by two teams is settled by the
-    // window and city when it can be and surfaced as a choice when it cannot.
-    const perEntity: Array<{ entity: typeof t.entities.$inferSelect; cands: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }> }> = [];
-    for (const entity of entities) {
-      const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
-      perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team') });
+    // window, city or opponent when it can be and surfaced as a choice when it cannot.
+    let perEntity: Array<{ entity: typeof t.entities.$inferSelect; cands: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }> }> = [];
+    let sawEntity = false;
+    for (const attempt of attempts) {
+      const entities = await this.matchEntities(attempt.name);
+      if (!entities.length) continue;
+      sawEntity = true;
+      perEntity = [];
+      for (const entity of entities) {
+        const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+        perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team', attempt.opponent) });
+      }
+      if (perEntity.some((p) => p.cands.length > 0)) break;
     }
+    // Not on file at all is a different fact from on file with nothing scheduled, and the customer is told
+    // which: claiming we searched listings we do not have is a claim about our own diligence.
+    if (!sawEntity) return { kind: 'no_match', reason: 'unknown_performer' };
     const withEvents = perEntity.filter((p) => p.cands.length > 0);
     if (withEvents.length === 0) return { kind: 'no_match', reason: 'no_scheduled_event' };
     if (withEvents.length > 1) {
@@ -529,7 +545,8 @@ export class Concierge {
     const discovery = await this.discoveryAvailability();
     if (!discovery) return local;
     const win = this.discoveryWindow(x, ctx);
-    const keyword = x.performerOrTeam ?? x.eventName ?? '';
+    // For a matchup the provider is asked about one team; its schedule includes the game against the other.
+    const keyword = splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam ?? x.eventName ?? '';
     const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword, city: x.city, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now() });
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
     if (sync.status !== 'success' && sync.status !== 'skipped_fresh') return local; // provider trouble: say what we have, not what we could not check
@@ -980,9 +997,12 @@ export function acknowledgementLine(x: RequestExtraction): string {
   if (!who && !n) return 'Thanks for getting in touch.';
   const count = n ? (QTY_WORDS[n] ?? String(n)) : null;
   const noun = n === 1 ? 'ticket' : 'tickets';
-  let line = [count, who, noun].filter(Boolean).join(' ');
+  // "Two Rangers tickets" reads naturally; "Two Rangers vs Lightning tickets" does not, so a game takes "for".
+  const isGame = !!who && splitMatchup(who) !== null;
+  let line = isGame ? [count, noun].filter(Boolean).join(' ') : [count, who, noun].filter(Boolean).join(' ');
   line = line[0]!.toUpperCase() + line.slice(1);
   if (x.togetherRequired) line += ' together';
+  if (isGame) line += ` for ${who}`;
   if (x.dateExpression && !/^\d{4}-\d{2}-\d{2}$/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
   return `${line}—got it.`;
