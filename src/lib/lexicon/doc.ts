@@ -3,6 +3,7 @@ import { LEXICON, type LexiconEntry } from './lexicon';
 const SECTIONS: Array<[LexiconEntry['field'][], string]> = [
   [['intent'], 'What kind of request'],
   [['wantsMore'], 'More of a list'],
+  [['resaleAsked'], 'Resale and comparing'],
   [['categoryHint'], 'What kind of event (no performer or team named)'],
   [['genreHint'], 'What kind of music'],
   [['quantity', 'quantity_unclear'], 'How many'],

@@ -26,6 +26,12 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 |---|---|---|---|---|---|
 | Show the rest of a list already sent. A number in the phrase ("the other 7") counts the list, not tickets. **model** | “the other 7”, “the rest”, “what else is there”, “show me more”, “any others”, “more options” | `wantsMore=true` | any | browse | “can you give me the other 7” |
 
+## Resale and comparing
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| Look at resale or compare prices. Without it, an event still on general sale is answered with the official sale link. **model** | “compare”, “is resale cheaper?”, “StubHub”, “best price”, “cheapest”, “secondary market” | `resaleAsked=true` | any | find | “compare” |
+
 ## What kind of event (no performer or team named)
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |

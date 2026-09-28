@@ -143,6 +143,8 @@ export const RequestExtractionSchema = z
     genreHint: z.string().nullable().default(null),
     /** This message asks to see more of a list already sent ("the other 7", "what else is there"). Never carried to later messages. */
     wantsMore: z.boolean().nullable().default(null),
+    /** The customer wants resale looked at or prices compared ("compare", "is resale cheaper?", "best price"). Null when not said. */
+    resaleAsked: z.boolean().nullable().default(null),
   })
   .strict();
 export type RequestExtraction = z.infer<typeof RequestExtractionSchema>;

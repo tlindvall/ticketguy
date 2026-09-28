@@ -35,7 +35,7 @@ export default async function Inbox({ searchParams }: { searchParams: Promise<{ 
       ) : null}
       <p className="mt-1 text-sm text-gray-600">{rows.length} open request(s). Sorted by review priority, then waiting age.</p>
       <div className="mt-3 flex flex-wrap gap-2 text-xs">
-        {['', 'awaiting_review', 'manual_attention', 'needs_clarification', 'researching', 'monitoring', 'closed', 'unsupported'].map((s) => (
+        {['', 'awaiting_review', 'manual_attention', 'needs_clarification', 'researching', 'monitoring', 'referred', 'closed', 'unsupported'].map((s) => (
           <Link key={s} href={s ? `/admin/inbox?state=${s}` : '/admin/inbox'} className={`tg-badge ${state === s || (!state && !s) ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{s || 'open'}</Link>
         ))}
       </div>

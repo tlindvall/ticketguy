@@ -303,3 +303,33 @@ nothing remembered what had been shown. Now:
 - The request remembers what browse listed (`requests.browse_shown`, migration 0006). The next page leaves
   those out.
 - The reply says "That's everything I have…" when the list runs out.
+
+## 36. Still on general sale: point at the official sale; buy/wait is resale-only
+
+The owner's rule has two parts:
+- "Wait or buy now is just for resale."
+- An event that still has tickets through the main ticketing page gets that page, unless the customer asks
+  about resale. If the event isn't sold out, resale may well be cheaper.
+
+Both parts are kept.
+- **Official prices get no buy/wait advice.** They are fixed, or they rise with dynamic pricing, so there
+  is no "wait for the drop".
+- **An official sale that is open now is the answer.** "Open now" means all of:
+  - the provider says `onsale`;
+  - the public sale window has started and not ended (`events.sale_status`, `public_sale_start_at`,
+    `public_sale_end_at`, migration 0007);
+  - the event is still ahead;
+  - the provider's own link is on an https host we know.
+
+  The customer gets that link, one line saying events that aren't sold out often go for less on resale,
+  and "reply 'compare'". No research runs. The request state is `referred`, which stays open, so the reply
+  threads.
+- **"compare" (or "resale", "StubHub", "best price", "cheapest") sets `resaleAsked`.** That runs the
+  resale comparison and buy/wait advice. So does asking about resale up front, a pasted listing, or a
+  watch.
+
+"On sale" is the provider's word for the sale window, not a count of seats left. The reply never claims
+seats remain, and it quotes no price: event price ranges are never offers (API_AND_DATA_CONTRACTS). For
+the same reason this reply goes out without review. The owner decided this explicitly: it is a pointer
+to the official seller, not a market recommendation. Every reply that carries prices or buy/wait advice
+still goes through review.

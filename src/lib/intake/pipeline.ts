@@ -202,7 +202,7 @@ export class Concierge {
       }
 
       // Request: attach to the conversation's latest open request, or create one.
-      const openStates = ['received', 'interpreting', 'needs_clarification', 'resolving_event', 'researching', 'awaiting_review', 'recommendation_sent', 'monitoring', 'manual_attention'];
+      const openStates = ['received', 'interpreting', 'needs_clarification', 'resolving_event', 'researching', 'awaiting_review', 'recommendation_sent', 'monitoring', 'manual_attention', 'referred'];
       const [existingReq] = await tx.select().from(t.requests).where(and(eq(t.requests.conversationId, conversationId), inArray(t.requests.state, openStates))).orderBy(desc(t.requests.createdAt)).limit(1);
       let requestId: string;
       if (existingReq) {
@@ -377,15 +377,49 @@ export class Concierge {
     }
 
     if (resolution.kind !== 'resolved') throw new Error('unreachable');
+
+    // Still on general sale at the official seller, and resale not asked about: that is the answer. Buy/wait
+    // advice is for resale only (official prices are fixed or rise), so no research runs; the customer is
+    // pointed at the sale, told resale can be cheaper for events that are not sold out, and "compare" opens
+    // the resale comparison. No prices are quoted, so this goes without review (DECISION_LOG #36).
+    const official = merged.resaleAsked || merged.intent === 'watch_request' || merged.submittedUrls.length ? null : await this.officialSale(resolution.event, now);
+    if (official) {
+      await this.transition(req.id, 'referred', 'official_sale_open');
+      await this.queueSend({
+        messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
+        subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
+        vars: { eventLabel: resolution.label, seller: official.seller, url: official.url, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : [])], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
+        dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
+      });
+      return { state: 'referred', revision, extraction: merged };
+    }
+
+    const cameFromReferral = req.state === 'referred';
     await this.transition(req.id, 'researching', 'brief_complete');
-    // A browse that settled on its only match is answered here too, whichever revision it came on.
-    if (revision === 1 || picked) {
+    // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
+    // a "compare" after the official-sale reply.
+    if (revision === 1 || picked || cameFromReferral) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
     if (merged.intent === 'watch_request') await this.maybeCreateWatch({ requestId: req.id, revision, contactId: contact!.id, eventId: resolution.event.id, eventStartAt: resolution.event.localStartAt, brief: merged, consentMessageId: msg.id });
     return { state: 'researching', revision, extraction: merged };
+  }
+
+  /**
+   * The official seller's page when its general sale is open now: the provider says "onsale", the public sale
+   * window has started and not ended, and the event is still ahead. "On sale" is the provider's word for the
+   * window; it is not a promise that seats remain, and the reply never says it is.
+   */
+  private async officialSale(event: typeof t.events.$inferSelect, now: Date): Promise<{ url: string; seller: string } | null> {
+    if (event.saleStatus !== 'onsale' || !event.publicSaleStartAt || event.publicSaleStartAt > now) return null;
+    if (event.publicSaleEndAt && event.publicSaleEndAt <= now) return null;
+    if (event.localStartAt <= now) return null;
+    const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
+    const seller = officialSellerFor(m?.url ?? null);
+    return seller ? { url: m!.url!, seller } : null;
   }
 
   private async runExtractor(input: Parameters<Extractor['extract']>[0], req: { id: string; currentRevision: number }): Promise<RequestExtraction> {
@@ -1272,6 +1306,24 @@ export function acknowledgementLine(x: RequestExtraction): string {
 export function eventLabel(e: { name: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }): string {
   const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
   return `${e.name} — ${v.name}${v.city ? `, ${v.city}` : ''} — ${when}`;
+}
+
+/**
+ * The seller behind an official event link, by host. Only the provider's own sale pages count: an https link
+ * on a host we know, never an arbitrary URL passed through.
+ */
+export function officialSellerFor(url: string | null): string | null {
+  if (!url) return null;
+  let host: string;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return null;
+    host = u.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const sellers: Array<[string, string]> = [['ticketmaster.com', 'Ticketmaster'], ['livenation.com', 'Live Nation'], ['ticketweb.com', 'TicketWeb'], ['universe.com', 'Universe'], ['frontgatetickets.com', 'Front Gate Tickets']];
+  return sellers.find(([d]) => host === d || host.endsWith(`.${d}`))?.[1] ?? null;
 }
 
 /** Model ambiguities that a resolved event answers: which team by that name, and which city. */
