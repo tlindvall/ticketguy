@@ -60,7 +60,7 @@ describe('not playing where they asked: the nearest shows elsewhere', () => {
     const first = inbound({ text: 'Two Metallica tickets soon in NY', from, subject: 'Metallica' });
     const r = (await c.ingestInbound(first)) as { requestId: string };
     await interpretAll(h, c);
-    let sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
+    const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     const ask = sends.find((s) => s.messageClass === 'clarification')!;
     expect(ask.bodyText).toContain('Metallica isn’t playing in New York');
     expect(ask.bodyText).not.toContain('couldn\'t find a scheduled');
