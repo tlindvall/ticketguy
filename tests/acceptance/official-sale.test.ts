@@ -74,7 +74,7 @@ describe('still on general sale: point at the official sale', () => {
     await interpretAll(c);
     expect(await stateOf(requestId)).toBe('researching');
     expect(await researchQueued(requestId)).toBe(1);
-    expect((await sendsFor(requestId)).map((s) => s.bodyText).join('\n')).toContain('checking options for Metro Testers vs. Boston');
+    expect((await sendsFor(requestId)).map((s) => s.bodyText).join('\n')).toContain('Game: Metro Testers vs. Boston');
   });
 
   it('uses the affiliate link when one is configured, says so, and recommends exactly the same thing', async () => {

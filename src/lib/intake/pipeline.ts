@@ -428,7 +428,7 @@ export class Concierge {
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
     // a "compare" after the official-sale reply.
     if (revision === 1 || picked || cameFromReferral) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged, { eventResolved: true }), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1696,6 +1696,25 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  * What we understood, one line each. Once the event is resolved the email already names it exactly, so the
  * customer's own looser wording ("Miami Dolphins in Miami (in october)") is left out rather than repeated.
  */
+/**
+ * What the acknowledgment says we understood, as a person would jot it down: the game or show, when, where,
+ * how many, the budget, and the question they asked. Every line is something they told us or we found.
+ */
+export function acknowledgedFacts(e: { name: string; category: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }, x: RequestExtraction, text: string): string[] {
+  const sports = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(e.category);
+  const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
+  const out = [`${sports ? 'Game' : 'Show'}: ${e.name}`, `When: ${when}`, `Where: ${v.name}${v.city ? `, ${v.city}` : ''}`];
+  if (x.quantity) out.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
+  if (x.budgetCents !== null && x.budgetBasis) out.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'a ticket'}`);
+  const question = x.quotedPriceCents != null
+    ? `whether ${formatUsd(x.quotedPriceCents)} is a good price`
+    : /\b(buy now|hold off|wait (?:until|till|for|closer)|should i (?:buy|wait)|good time to buy|now or later|buy or wait)\b/i.test(text)
+      ? 'whether to buy now or hold off'
+      : x.resaleAsked ? 'whether resale is cheaper' : null;
+  if (question) out.push(`You asked: ${question}`);
+  return out;
+}
+
 export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {
   const parts: string[] = [];
   if (x.performerOrTeam && !opts.eventResolved) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);

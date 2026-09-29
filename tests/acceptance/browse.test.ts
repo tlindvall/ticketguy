@@ -199,7 +199,8 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const [event] = await h.db.select().from(t.events).where(eq(t.events.id, req!.eventId!));
     expect(event!.name).toBe('New York Giants vs. Philadelphia Eagles');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('checking options for New York Giants vs. Philadelphia Eagles at MetLife Stadium');
+    expect(body).toContain('Game: New York Giants vs. Philadelphia Eagles');
+    expect(body).toContain('Where: MetLife Stadium');
     expect(body).toContain('Tickets: 4');
     expect(body).toContain("That's the only football game in New York for Oct 8 to 14, so I've gone ahead with it. Tell me if you had something else in mind.");
     expect(body).not.toContain('how many tickets');
