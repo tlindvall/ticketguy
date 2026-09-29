@@ -1,4 +1,6 @@
 import { lexiconBrowseAsk, lexiconCategory, lexiconGenre } from '@/lib/lexicon/lexicon';
+import { neighbourhoodFor } from './neighbourhoods';
+import { milesBetween } from './markets';
 /**
  * "What gigs are on in New York the first week of October?" is not a request for one event; it asks what the
  * options are. Browsing answers with a short list of real scheduled events for a kind of event, a place and
@@ -198,7 +200,15 @@ export function oneListingPerShow<T>(rows: T[], of: (r: T) => { name: string; ve
  * any are on, and says so; Manhattan is the venues the provider files under New York. Other markets are
  * whole metros (src/lib/domain/markets.ts).
  */
-export type MarketArea = { label: string; venueCities: string[]; providerCities: string[] };
+export type MarketArea = {
+  label: string;
+  venueCities: string[];
+  providerCities: string[];
+  /** A neighbourhood: venues are kept by distance from its centre, and the list widens to `parent` when none are on. */
+  centre?: { lat: number; lng: number; radiusMiles: number };
+  parent?: MarketArea;
+  independentScene?: boolean;
+};
 const AREAS: Array<[RegExp, MarketArea]> = [
   [/\bbrooklyn\b/i, { label: 'Brooklyn', venueCities: ['brooklyn'], providerCities: ['Brooklyn'] }],
   [/\bmanhattan\b/i, { label: 'Manhattan', venueCities: ['new york'], providerCities: ['New York'] }],
@@ -209,7 +219,22 @@ const AREAS: Array<[RegExp, MarketArea]> = [
 
 export function areaFor(city: string | null | undefined): MarketArea | null {
   if (!city) return null;
+  // The most specific first: "Bushwick, Brooklyn" is Bushwick.
+  const hood = neighbourhoodFor(city);
+  if (hood?.centre && hood.marketId === 'new-york') {
+    const parent = AREAS.find(([, a]) => a.label === hood.borough)?.[1];
+    return { label: hood.label, venueCities: parent?.venueCities ?? [], providerCities: parent?.providerCities ?? [], centre: hood.centre, parent, independentScene: hood.independentScene };
+  }
   return AREAS.find(([re]) => re.test(city))?.[1] ?? null;
+}
+
+/** Whether a venue is in the area: by distance for a neighbourhood (when the venue has coordinates), else by its city. */
+export function venueInArea(area: MarketArea, v: { city: string | null; latitude?: number | null; longitude?: number | null }): boolean {
+  if (area.centre) {
+    if (v.latitude != null && v.longitude != null) return milesBetween(area.centre.lat, area.centre.lng, v.latitude, v.longitude) <= area.centre.radiusMiles;
+    return false;
+  }
+  return area.venueCities.includes((v.city ?? '').trim().toLowerCase());
 }
 
 /**

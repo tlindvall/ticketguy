@@ -50,6 +50,11 @@ function pickHtml(p: Pick): string {
   return `<li style="margin:0 0 10px;">${esc(when ?? '')}: ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
 }
 
+/** The Resident Advisor pointer for electronic music: a sentence and a plain link to the city's RA page. */
+type Ra = { lead: string; label: string; url: string };
+const raText = (r: Ra) => `${r.lead} ${r.label}: ${r.url}`;
+const raHtml = (r: Ra) => `<p style="margin:0 0 18px;">${esc(r.lead)} ${link(r.label, r.url)}</p>`;
+
 function pickText(p: Pick): string {
   return [`• ${p.line}.${p.reason ? ` ${p.reason}` : ''}`, ...p.links.map((l) => `  ${l.label}: ${l.url}`)].join('\n');
 }
@@ -116,7 +121,11 @@ function renderBody(
         v.countryCheck ? COUNTRY_CHECK_LINE : '',
         'Just reply and I’ll narrow it down.',
       ].filter(Boolean);
-      return wrap(paras, paras.map(para));
+      const ra = vars.ra as Ra | null | undefined;
+      if (!ra) return wrap(paras, paras.map(para));
+      // After the note that we couldn't find it, before the questions.
+      const at = v.eventNote ? 3 : 2;
+      return wrap([...paras.slice(0, at), raText(ra), ...paras.slice(at)], [...paras.slice(0, at).map(para), raHtml(ra), ...paras.slice(at).map(para)]);
     }
     case 'browse_options': {
       // "What's on?" gets a few picks, each with why it fits and where to go next, then one easy next step.
@@ -138,8 +147,9 @@ function renderBody(
           ]
         : [String(v.emptyNote ?? ''), `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
       const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
-      const text = [...lead, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...end];
-      const html = [...lead.map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...end.map(para)];
+      const ra = vars.ra as Ra | null | undefined;
+      const text = [...lead, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...(ra ? [raText(ra)] : []), ...end];
+      const html = [...lead.map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...(ra ? [raHtml(ra)] : []), ...end.map(para)];
       return wrap(text, html);
     }
     case 'event_alert_set': {

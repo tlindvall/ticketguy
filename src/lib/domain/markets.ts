@@ -1,3 +1,4 @@
+import { neighbourhoodFor } from './neighbourhoods';
 /**
  * The US markets Ticket Guy answers for. A market is a metro, not a city: "LA" is Inglewood, Anaheim and
  * Pasadena too, so events are found by distance from the metro's centre (the provider's geo search) and a
@@ -88,6 +89,9 @@ export function marketFor(place: string | null | undefined, state?: string | nul
   if (!place?.trim() || isOutsideUs(place)) return null;
   const known = MARKETS.find((x) => x.match.test(place));
   if (known) return known;
+  // A neighbourhood is part of a metro, not a town of its own: "Bushwick" is New York, not a city called Bushwick.
+  const hood = neighbourhoodFor(place);
+  if (hood) return marketById(hood.marketId);
   const city = place.trim();
   return { id: `city:${city.toLowerCase()}${state ? `,${state.toLowerCase()}` : ''}`, label: city.replace(/\b\w/g, (c) => c.toUpperCase()), lat: null, lng: null, radiusMiles: 0, timezone: 'America/New_York', match: /$^/, cities: [city.toLowerCase()], teamNames: new RegExp(`^${city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i') };
 }

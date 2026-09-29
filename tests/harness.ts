@@ -4,7 +4,7 @@ import { seedRegistry, seedFixtures } from '@/lib/db/seed';
 import { parseEnv, type Env } from '@/lib/config/env';
 import { SERVICE_DOMAIN } from '@/lib/config/brand';
 import { Concierge, type EmailProvider } from '@/lib/intake/pipeline';
-import { FixtureExtractor } from '@/lib/ai/extraction';
+import { FixtureExtractor, type Extractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
 import { FIXTURE_OFFERS, FIXTURE_NOW } from '@/lib/fixtures';
 import type { NormalizedInbound } from '@/lib/intake/contract';
@@ -37,8 +37,8 @@ export function testEnv(over: Record<string, string> = {}): Env {
   return parseEnv({ NODE_ENV: 'test', APP_MODE: 'fixture', ...over });
 }
 
-export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date } = {}) {
-  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS });
+export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor } = {}) {
+  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS });
 }
 
 let seq = 0;

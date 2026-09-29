@@ -627,3 +627,22 @@ at least that many tickets, their median, and how many such listings there are (
   Groups have no past-game "typical" and are not in the shadow scorecard yet.
 - **Same licence gates.** Staff see it with tracking; advice and customer display still need SeatData's
   written OK.
+
+## 46. Neighbourhoods are part of their city; Resident Advisor is where electronic replies point
+
+**The bug.** "What about some of the cooler venues in like bushwick" got "I checked the official listings and
+couldn't find any live music in Bushwick". An unrecognised place became a town of that name: the provider was
+asked for events in a city called Bushwick (its venues are filed under Brooklyn), and venues were kept by that
+city name. Every neighbourhood anywhere failed the same way, and the reply claimed a check that proved nothing.
+
+**The fix.** `src/lib/domain/neighbourhoods.ts` lists the neighbourhoods people name, each with its market.
+New York's also have a centre and radius and a borough: the provider is asked around the centre, venues are kept
+by distance (their city only says "Brooklyn"), and the list widens to the borough, then the city, when nothing
+is on, saying so. A place we still don't know, with nothing found, is asked about ("Which city is it in or
+near?") instead of reported as empty. A browse reply with one result says so rather than "two picks".
+
+**Resident Advisor.** Club nights and small venues mostly sell on DICE, Eventbrite and RA, which we can't read
+(RA has no public API). Electronic-music browse replies, "we can't find that act" replies for electronic
+requests, and neighbourhoods with an independent scene and few official listings link to RA's events page for
+the city. Only pages that have been opened and checked are listed (`RA_EVENT_PAGES`, New York for now): a plain
+link, not an offer and not an affiliate link.

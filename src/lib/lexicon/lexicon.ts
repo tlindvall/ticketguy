@@ -310,12 +310,15 @@ export const LEXICON: LexiconEntry[] = [
     field: 'genreHint',
     value: 'electronic',
     meaning: 'Electronic and dance music.',
-    phrases: ['electronic', 'EDM', 'techno', 'house music', 'a DJ'],
-    pattern: /\b(electronic|edm|techno|house music|dance music)\b/i,
+    phrases: ['electronic', 'EDM', 'techno', 'house music', 'a DJ', 'DJ set', 'rave', 'club night', 'drum and bass', 'deep house'],
+    pattern: /\b(electronic|edm|techno|house music|dance music|deep house|tech house|a dj|dj sets?|raves?|club nights?|drum (?:and|&|n) bass|dnb|trance|dubstep)\b/i,
     categories: ['concert'],
     requestTypes: ['browse', 'find'],
     teachModel: true,
-    examples: [{ text: 'Any techno parties in Brooklyn next weekend?', expect: { genreHint: 'electronic', categoryHint: 'concert' } }],
+    examples: [
+      { text: 'Any techno parties in Brooklyn next weekend?', expect: { genreHint: 'electronic', categoryHint: 'concert' } },
+      { text: 'Looking for a good DJ set in Bushwick this Saturday', expect: { genreHint: 'electronic', categoryHint: 'concert' } },
+    ],
   },
   {
     id: 'genre.pop',
