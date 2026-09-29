@@ -102,7 +102,7 @@ export default async function Market() {
       <section>
         <h2 className="text-lg font-semibold">What we follow</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Every upcoming event a customer asks about{e.MARKET_TRACK_ENTITIES.length ? `, and every game of: ${e.MARKET_TRACK_ENTITIES.join(', ')}` : ''}. One check per event serves every customer following it; checks run daily beyond a week, twice a day in the last week and every 6 hours in the last two days; a customer's request refreshes its event on the spot. Each check is a paid SeatData request.
+          Every upcoming event a customer asks about{e.MARKET_TRACK_ENTITIES.length ? `, and every game of: ${e.MARKET_TRACK_ENTITIES.join(', ')}` : ''}. One check per event serves every customer following it; checks run daily beyond a week, twice a day in the last week and every 6 hours in the last two days; a customer&rsquo;s request refreshes its event on the spot. Each check is a paid SeatData request.
           {' '}{byState.map((s) => `${TRACK_STATE[s.state] ?? s.state}: ${s.n}`).join(' · ') || 'Nothing yet.'}
         </p>
         <p className="mt-1 text-sm text-gray-600">Our own history: {own?.points ?? 0} market points on tracked events · {history?.events ?? 0} past comparable games ({history?.points ?? 0} points).</p>
