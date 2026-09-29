@@ -126,17 +126,25 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   const lines: string[] = [];
   const html: string[] = [];
   // The customer's link is acknowledged first, in the server's words, and stands in for the model's opening.
+  // Recommendation first: for a listing they showed us, the server's verdict; then the link it went by. The
+  // model's opening is used only when neither exists.
   const link = claimsById.get('C_LINK');
-  const opening = link?.customerVisible ? link.text : b.opening.trim();
-  lines.push(GREETING, opening);
-  html.push(P(GREETING), P(esc(opening)));
+  const verdict = claimsById.get('C_VERDICT');
+  const openers = [verdict, link].filter((c): c is ClaimRecord => !!c?.customerVisible).map((c) => c.text);
+  lines.push(GREETING);
+  html.push(P(GREETING));
+  for (const o of openers.length ? openers : [b.opening.trim()]) {
+    lines.push(o);
+    html.push(P(esc(o)));
+  }
   // What the market means for them (C_READ) goes straight after the market figures, whether or not the model
   // placed it; C_LINK is never repeated in a paragraph.
   const read = claimsById.get('C_READ');
   // What their listing shows and the catches in it are placed by the server, straight after the answer.
   const subject = claimsById.get('C_SUBJECT');
   const catches = claimsById.get('C_CATCHES');
-  const SERVER_PLACED = new Set(['C_LINK', 'C_SUBJECT', 'C_CATCHES']);
+  const alternatives = [claimsById.get('C_ALTERNATIVES'), claimsById.get('C_VERIFIED')].filter((c): c is ClaimRecord => !!c?.customerVisible);
+  const SERVER_PLACED = new Set(['C_LINK', 'C_VERDICT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED']);
   const paragraphs = b.paragraphs
     .map((p) => ({ ...p, claimIds: p.claimIds.filter((id) => !SERVER_PLACED.has(id) && !(read && id === 'C_READ')) }))
     .flatMap((p) => (read?.customerVisible && p.claimIds.includes('C_MARKET') ? [p, { claimIds: ['C_READ'], prose: '' }] : [p]))
@@ -150,6 +158,10 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
       const items = catches.text.split('\n').filter(Boolean);
       lines.push(CATCHES_LEAD, items.map((i) => `- ${i}`).join('\n'));
       html.push(P(esc(CATCHES_LEAD)), `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i)}</li>`).join('')}</ul>`);
+    }
+    for (const c of alternatives) {
+      lines.push(c.text);
+      html.push(P(esc(c.text)));
     }
   };
   let placed = false;
@@ -203,8 +215,8 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
-  const link = visible.find((c) => c.id === 'C_LINK');
-  const rest = visible.filter((c) => c.id !== 'C_LINK').map((c) => (c.id === 'C_CATCHES' ? { ...c, text: `${CATCHES_LEAD}\n${c.text.split('\n').map((i) => `- ${i}`).join('\n')}` } : c));
+  const link = visible.find((c) => c.id === 'C_VERDICT') ?? visible.find((c) => c.id === 'C_LINK');
+  const rest = visible.filter((c) => c !== link).map((c) => (c.id === 'C_CATCHES' ? { ...c, text: `${CATCHES_LEAD}\n${c.text.split('\n').map((i) => `- ${i}`).join('\n')}` } : c));
   const lead = link ? link.text : decisionLine[packet.decision];
   const asks = packet.followUps ?? [];
   const text = [GREETING, lead, ...rest.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : '')), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : [])].join('\n\n');

@@ -256,6 +256,25 @@ describe('resale market tracking', () => {
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
   });
 
+  // "Look for better options": the listing they send is set against the market's current listings for their
+  // group. Cheaper seats in their section or area are named as market data (before fees, no link, not their
+  // seats); a listing in their own section and row is never offered back, since it may be the same seats.
+  it('a pasted listing gets a recommendation first, its catches, and cheaper listings for the group', async () => {
+    const read = { kind: 'ticket_listing' as const, sensitiveContent: false, seller: 'StubHub', eventName: 'Metro Testers vs. Boston', eventDate: '2026-10-30', venue: null, city: null, quantity: 4, priceText: '$210 each incl. fees', priceDollars: 210, priceBasis: 'per_ticket' as const, feeBasis: 'all_in' as const, totalDollars: null, section: '112', row: '5', seatNumbers: ['1', '2', '3', '4'], seatsTogether: true, restrictions: [], deliveryText: 'Mobile transfer', deliveryBy: '2026-10-29', includedBenefits: [], confidence: 'high' as const, unreadable: [] };
+    const c = new Concierge({ db: h.db, env: env(), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: null, marketFetch: fetchImpl, listingReader: { name: 'fake', read: async () => read } });
+    const requestId = await ask(c, '4 Testers tickets Oct 30. Found this: Sec 112 Row 5, seats 1-4, $210 each incl fees. Good?', 'alts@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const body = rec!.bodyText;
+    expect(body.startsWith('Hey,\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
+    expect(body).toContain('The listing you pasted shows 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
+    expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket (about $620 for all four), in your section. These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. They aren’t your seats, and I haven’t checked they’re still for sale.');
+    expect(body).toContain('I haven’t found a verified alternative I can link you to yet, with a checked all-in price.');
+    // Recommendation first, the market figures after it, and nothing called a good deal.
+    expect(body.indexOf('Before you buy it')).toBeLessThan(body.indexOf('Cheaper listings'));
+    expect(body).not.toMatch(/good deal/i);
+  });
+
   it('a failed listings read is logged and the stats poll still runs', async () => {
     const saved = groupListings;
     groupListings = () => new Response('{"error":"boom"}', { status: 500 });
