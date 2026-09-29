@@ -68,6 +68,18 @@ function signOff(reviewed: boolean): string {
   return reviewed ? '— Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.' : '— Ticket Guy (AI-assisted). Buying happens with the seller; we never hold tickets or payments.';
 }
 
+const words = (s: string) => new Set(s.toLowerCase().replace(/[’']/g, '').match(/[a-z]+/g) ?? []);
+
+/** Prose that repeats a claim: most of its words are the claim's own (a short lead-in like "Where to buy:" never is). */
+export function restates(prose: string, claim: string): boolean {
+  const p = words(prose);
+  if (p.size < 6) return false;
+  const c = words(claim);
+  let shared = 0;
+  for (const w of p) if (c.has(w)) shared += 1;
+  return shared / p.size >= 0.7;
+}
+
 export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean } = {}): ValidationResult {
   const parsed = ResponseBlocksSchema.safeParse(blocks);
   if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) };
@@ -105,10 +117,13 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   html.push(`<p>${esc(b.opening.trim())}</p>`);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.map((id) => claimsById.get(id)!);
-    const text = [p.prose.trim(), ...claimTexts.map((c) => c.text)].filter(Boolean).join(' ');
+    // The model sometimes paraphrases the claim it cites ("I can't see live resale listings…" twice in a row).
+    // The claim is the server's wording, so a lead-in that says the same thing is dropped.
+    const prose = claimTexts.some((c) => restates(p.prose, c.text)) ? '' : p.prose.trim();
+    const text = [prose, ...claimTexts.map((c) => c.text)].filter(Boolean).join(' ');
     lines.push(text);
     const htmlClaims = claimTexts.map((c) => (c.url ? `${esc(c.text)} <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : esc(c.text)));
-    html.push(`<p>${[esc(p.prose.trim()), ...htmlClaims].filter(Boolean).join(' ')}</p>`);
+    html.push(`<p>${[esc(prose), ...htmlClaims].filter(Boolean).join(' ')}</p>`);
   }
   // Always append the coverage footer and observation caveat from the packet (never model-authored).
   const coverage = claimsById.get('C_COVERAGE');
