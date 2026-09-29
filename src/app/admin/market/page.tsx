@@ -67,7 +67,7 @@ export default async function Market() {
       <section className="rounded-lg border border-gray-200 p-4">
         <h2 className="text-lg font-semibold">Licence</h2>
         <p className="mt-1 text-sm">
-          Status <span className={`tg-badge ${lic.status === 'approved' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{lic.status}</span> · API key {e.SEATDATA_API_KEY ? <span className="tg-badge tg-badge-ok">set</span> : <span className="tg-badge tg-badge-warn">not set</span>} · calls today {calls?.n ?? 0} of {e.SEATDATA_DAILY_CALL_LIMIT}
+          Status <span className={`tg-badge ${lic.status === 'approved' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{lic.status}</span> · API key {e.SEATDATA_API_KEY ? <span className="tg-badge tg-badge-ok">set</span> : <span className="tg-badge tg-badge-warn">not set</span>} · calls today {calls?.n ?? 0} of {e.SEATDATA_DAILY_CALL_LIMIT} (about ${((calls?.n ?? 0) * 0.04).toFixed(2)} at SeatData’s pay-as-you-go $0.04 a request; searches may be free)
         </p>
         <ul className="mt-2 space-y-1 text-sm">
           {Object.entries(USE_LABEL).map(([k, label]) => (
@@ -102,7 +102,7 @@ export default async function Market() {
       <section>
         <h2 className="text-lg font-semibold">What we follow</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Every upcoming event a customer asks about{e.MARKET_TRACK_ENTITIES.length ? `, and every game of: ${e.MARKET_TRACK_ENTITIES.join(', ')}` : ''}. One check per event serves every customer following it; checks run daily far out and hourly on the last day.
+          Every upcoming event a customer asks about{e.MARKET_TRACK_ENTITIES.length ? `, and every game of: ${e.MARKET_TRACK_ENTITIES.join(', ')}` : ''}. One check per event serves every customer following it; checks run daily beyond a week, twice a day in the last week and every 6 hours in the last two days; a customer's request refreshes its event on the spot. Each check is a paid SeatData request.
           {' '}{byState.map((s) => `${TRACK_STATE[s.state] ?? s.state}: ${s.n}`).join(' · ') || 'Nothing yet.'}
         </p>
         <p className="mt-1 text-sm text-gray-600">Our own history: {own?.points ?? 0} market points on tracked events · {history?.events ?? 0} past comparable games ({history?.points ?? 0} points).</p>

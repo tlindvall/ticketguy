@@ -63,10 +63,11 @@ describe('market series', () => {
     expect(typicalAtLead(five, lead)).toMatchObject({ events: 5, medianCents: 8000, p25Cents: 7000, p75Cents: 9000 });
   });
 
-  it('polls daily far out, hourly on the last day, and twice as often after a big move', () => {
+  it('polls daily beyond a week, twice a day in the last week, every 6 hours in the last two days, twice as often after a big move', () => {
     expect(pollIntervalMinutes(40 * 24 * 60, null)).toBe(24 * 60);
-    expect(pollIntervalMinutes(10 * 24 * 60, null)).toBe(12 * 60);
-    expect(pollIntervalMinutes(10 * 24 * 60, -0.15)).toBe(6 * 60);
-    expect(pollIntervalMinutes(12 * 60, null)).toBe(60);
+    expect(pollIntervalMinutes(4 * 24 * 60, null)).toBe(12 * 60);
+    expect(pollIntervalMinutes(4 * 24 * 60, -0.15)).toBe(6 * 60);
+    expect(pollIntervalMinutes(12 * 60, null)).toBe(6 * 60);
+    expect(pollIntervalMinutes(12 * 60, 0.2)).toBe(3 * 60);
   });
 });
