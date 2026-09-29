@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { areaFor, categoryBuyingNote, collapseRuns, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCoverageLabel } from '@/lib/domain/browse';
+import { areaFor, categoryBuyingNote, collapseRuns, genreFamilyFor, genreMatches, narrowByFor, oneListingPerShow, pilotCategoriesFor } from '@/lib/domain/browse';
 import { genreFor, subtypeFor } from '@/lib/catalog/sync';
 import { isLocalTeam, mergeExtraction } from '@/lib/intake/pipeline';
 import { marketById } from '@/lib/domain/markets';
@@ -35,10 +35,12 @@ describe('football and soccer are their own kinds of event', () => {
     expect(lexiconCategory('what games are on?')).toBe('sports');
   });
 
-  it('names the pilot coverage and the right thing to narrow by', () => {
-    expect(pilotCoverageLabel(['concert', 'nhl', 'nba', 'mlb'])).toBe('concerts and NHL, NBA and MLB games');
-    expect(pilotCoverageLabel(['concert', 'nhl', 'nba', 'mlb', 'nfl'])).toBe('concerts and NHL, NBA, MLB and NFL games');
-    expect(pilotCoverageLabel(['concert', 'nhl', 'broadway', 'comedy'])).toBe('concerts, NHL games, theater and comedy');
+  it('covers everything the provider lists unless blocked, and names the right thing to narrow by', () => {
+    // Everything is covered unless blocked: soccer and college games are sports, cinema stays out.
+    expect(pilotCategoriesFor('soccer', ['cinema'])).toEqual(['soccer']);
+    expect(pilotCategoriesFor('sports', ['cinema'])).toContain('ncaa_regular');
+    expect(pilotCategoriesFor(null, ['cinema', 'conventions'])).not.toContain('cinema');
+    expect(pilotCategoriesFor(null, ['cinema'])).toContain('family');
     expect(narrowByFor('nfl').askFor).toBe('a team');
     expect(narrowByFor('concert').narrowBy).toBe('an artist, venue or kind of music');
   });

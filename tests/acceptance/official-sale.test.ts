@@ -144,6 +144,15 @@ describe('still on general sale: point at the official sale', () => {
     expect(body).toContain('still on general sale on Ticketmaster');
     expect(body).toContain(`Buy on Ticketmaster: ${URL_OPEN}`);
     for (const noise of ['not integrated', 'packet', 'check primary', 'marketplaces directly', 'Sources checked']) expect(body, noise).not.toContain(noise);
+    // No listing was offered, so nothing needs a person's judgement: it goes out without review, and says so.
+    expect(rec!.reviewStatus).toBe('auto_sent');
+    expect(body).not.toContain('human-reviewed');
+    const sends = await sendsFor(requestId);
+    const answer = sends.filter((s) => s.messageClass === 'no_result');
+    expect(answer).toHaveLength(1);
+    expect(answer[0]!.bodyText).toContain('You mentioned $106');
+    expect(answer[0]!.approvalId).toBeNull();
+    expect(await stateOf(requestId)).toBe('recommendation_sent');
   });
 
   it('goes straight to the comparison when resale is asked about up front', async () => {
@@ -153,6 +162,12 @@ describe('still on general sale: point at the official sale', () => {
     const requestId = (r as { requestId: string }).requestId;
     expect(await stateOf(requestId)).toBe('researching');
     expect(await researchQueued(requestId)).toBe(1);
+    // The acknowledgment names the resolved game once, and promises no comparison it may not be able to make.
+    const ack = (await sendsFor(requestId)).find((s) => s.messageClass === 'acknowledgment')!.bodyText;
+    expect(ack).toContain('Metro Testers vs. Boston');
+    expect(ack).not.toContain('Event:');
+    expect(ack).not.toContain('reviewed the comparison');
+    expect(ack).toContain('Tickets: 2');
   });
 
   it('does not point at a sale that has not opened or has closed', async () => {

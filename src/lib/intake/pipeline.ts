@@ -13,7 +13,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { areaFor, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, pilotCoverageLabel, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { areaFor, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -403,7 +403,7 @@ export class Concierge {
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
     // a "compare" after the official-sale reply.
     if (revision === 1 || picked || cameFromReferral) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged, { eventResolved: true }), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -604,8 +604,8 @@ export class Concierge {
     if (!placed_) return unsupported('For now I only cover events in the US.', 'browse_outside_us');
     const { market, assumed: assumedPlace } = placed_;
     const tz = market.timezone;
-    const categories = pilotCategoriesFor(merged.categoryHint, this.env.pilotSupportedCategories);
-    const coverage = `For now I only cover ${pilotCoverageLabel(this.env.pilotSupportedCategories)}.`;
+    const categories = pilotCategoriesFor(merged.categoryHint, this.env.blockedCategories);
+    const coverage = 'For now I cover concerts, sports, theater, comedy and family shows.';
     if (!categories.length) return unsupported(merged.categoryHint && merged.categoryHint !== 'sports' ? `${browseLabel(merged.categoryHint)} isn't something I cover yet. ${coverage}` : coverage, 'browse_category_not_in_pilot');
 
     const day = (iso: string, delta: number) => {
@@ -1002,6 +1002,11 @@ export class Concierge {
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 
+    // A price check with no listings of ours goes out without review (owner's decision, DECISION_LOG #42):
+    // it compares the customer's own number with the provider's published face value and names the official
+    // sale, and recommends no listing. Anything carrying a verified offer still waits for a person.
+    const autoSend = packet.verifiedOfferObservationIds.length === 0 && quote !== null;
+    const renderOpts = { reviewed: !autoSend };
     // Draft via drafter (fixture or model) with bounded retries → evidence-only fallback.
     let body: { textBody: string; htmlBody: string } | null = null;
     let draftNote: string | null = null;
@@ -1024,12 +1029,12 @@ export class Concierge {
           }
           const usage = (this.deps.drafter as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
           if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
-          const v = validateAndRender(packet, blocks);
+          const v = validateAndRender(packet, blocks, renderOpts);
           if (v.ok) body = { textBody: v.textBody, htmlBody: v.htmlBody };
           else draftNote = `draft rejected: ${v.errors.join('; ')}`;
         } else {
           const blocks = await this.deps.drafter.draft(packet, { quantity, mustAttend: brief.mustAttend, waitRiskTolerance: brief.waitRiskTolerance, togetherRequired: brief.togetherRequired });
-          const v = validateAndRender(packet, blocks);
+          const v = validateAndRender(packet, blocks, renderOpts);
           if (v.ok) body = { textBody: v.textBody, htmlBody: v.htmlBody };
           else draftNote = `draft rejected: ${v.errors.join('; ')}`;
         }
@@ -1038,13 +1043,21 @@ export class Concierge {
         if (e instanceof BudgetExceededError) break;
       }
     }
-    if (!body) body = renderEvidenceOnly(packet);
+    if (!body) body = renderEvidenceOnly(packet, renderOpts);
 
     const isNoResult = !best && alternatives.length === 0;
     const subject = isNoResult ? `Ticket Guy: what we found for ${eventLabel(event, venue)}` : `Ticket Guy: ${quantity} for ${event.name}`;
     const draftHash = sha(body.textBody + body.htmlBody);
     const [rec] = await this.db.insert(t.recommendations).values({ requestId: req.id, revision: args.revision, draftHash, chosenObservationIds: packet.verifiedOfferObservationIds, adviceRunId: adviceRun!.id, computedSavingsCents: null, bodyText: body.textBody, bodyHtml: body.htmlBody, subject, reviewStatus: 'pending', reviewNote: [draftNote, isFixtureRun ? 'FIXTURE DATA — cannot be sent' : null, contact?.countryConfirmed ? null : 'customer country unconfirmed'].filter(Boolean).join(' | ') || null, expiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.recommendations.id });
     await this.db.update(t.researchRuns).set({ status: 'completed', completedAt: now }).where(eq(t.researchRuns.id, runId));
+    if (autoSend) {
+      const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+      await this.db.update(t.recommendations).set({ reviewStatus: 'auto_sent', reviewerUserId: 'system:price-check' }).where(eq(t.recommendations.id, rec!.id));
+      await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: args.revision, recipient: contact!.emailOriginal, subject: reSubject(lastInbound?.subject ?? null, subject), template: 'raw_auto', vars: { text: body.textBody, html: body.htmlBody }, inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `rec:${rec!.id}:${draftHash}` });
+      await audit(this.db, { actor: 'system', action: 'recommendation.auto_sent', entityKind: 'recommendation', entityId: rec!.id, revision: args.revision, diff: { reason: 'price_check_without_listings' } });
+      await this.transition(req.id, 'recommendation_sent', 'price_check_auto_sent');
+      return { recommendationId: rec!.id, state: 'recommendation_sent' };
+    }
     await this.transition(req.id, 'awaiting_review', isNoResult ? 'no_verified_result_pending_review' : 'draft_ready');
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'recommendation.review_ready', eventKey: `review:${rec!.id}`, entityId: rec!.id, revision: args.revision, payload: { recommendationId: rec!.id, requestId: req.id }, now }));
     return { recommendationId: rec!.id, state: 'awaiting_review' };
@@ -1462,9 +1475,13 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
   return out;
 }
 
-export function describeKnown(x: RequestExtraction): string[] {
+/**
+ * What we understood, one line each. Once the event is resolved the email already names it exactly, so the
+ * customer's own looser wording ("Miami Dolphins in Miami (in october)") is left out rather than repeated.
+ */
+export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {
   const parts: string[] = [];
-  if (x.performerOrTeam) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);
+  if (x.performerOrTeam && !opts.eventResolved) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);
   if (x.quantity) parts.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
   if (x.budgetCents !== null && x.budgetBasis) parts.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'per ticket'}`);
   return parts;

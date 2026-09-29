@@ -8,10 +8,11 @@ import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
 import { formatUsd } from '@/lib/domain/money';
 import type { AdvicePacket } from '@/lib/advice/packet';
-import { newIdempotencyKey } from '@/lib/util/clock';
+import { newIdempotencyKey, nowMs } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
 import { researchLinksFor, type ResearchLink } from '@/lib/catalog/research-links';
 import { eventLocalDate } from '@/lib/domain/dates';
+import { ago, briefLines, type Tone, reasonText, sendClassLabel, sendStateInfo, stateInfo, toneClass, whenLocal, whenStaff } from '@/lib/admin/labels';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,166 +54,215 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const requiredLinks = researchLinks.filter((l) => l.role === 'required');
   const conditionalLinks = researchLinks.filter((l) => l.role === 'conditional');
   const brief = versions[0]?.brief as Record<string, unknown> | undefined;
+  const now = nowMs();
+  const s = stateInfo(req.state);
+  const [lastMove] = [...transitions].reverse();
+  const why = reasonText(lastMove?.reason, req.state);
+  const pending = recs.find((r) => r.reviewStatus === 'pending' && r.revision === req.currentRevision);
+  const earlierDrafts = recs.filter((r) => r !== pending);
+  const firstSubject = messages.find((m) => m.direction === 'inbound' && m.subject)?.subject;
+  const offers = [...observations, ...manual];
+  // Checking sellers by hand is the job when nothing was found automatically, or a person has the request.
+  const handCheckOpen = req.state === 'manual_attention' || (req.state === 'awaiting_review' && offers.length === 0);
+  const eventUrl = event ? (officialUrls.ticketmaster ?? Object.values(officialUrls)[0]) : undefined;
+  const lines = brief ? briefLines(brief) : [];
+  // The conversation is what was actually sent and received, plus our emails that are queued or were held
+  // back (those never become messages), so a reviewer sees every reply the customer got or is about to get.
+  const sentIds = new Set(messages.map((m) => m.providerEmailId).filter(Boolean));
+  const timeline = [
+    ...messages.map((m) => ({ key: m.id, mine: m.direction === 'outbound', who: m.direction === 'outbound' ? 'Ticket Guy' : m.fromAddress, at: m.receivedAt, text: m.sanitizedText ?? '', status: null as null | [string, Tone], auto: m.autoSubmitted, messageId: m.id })),
+    ...intents.filter((i) => !i.providerMessageId || !sentIds.has(i.providerMessageId)).map((i) => ({ key: i.id, mine: true, who: `Ticket Guy · ${sendClassLabel(i.messageClass)}`, at: i.createdAt, text: i.bodyText, status: sendStateInfo(i.state), auto: false, messageId: null as string | null })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
   return (
-    <main className="space-y-8">
-      <header>
-        <p className="text-xs text-gray-500"><Link href="/admin/inbox">Inbox</Link> / request {id.slice(0, 8)}</p>
-        <h1 className="text-xl font-bold">
-          {event ? event.e.name : 'Event unresolved'} <span className="tg-badge tg-badge-muted">{req.state}</span> <span className="tg-badge tg-badge-muted">rev {req.currentRevision}</span>
-        </h1>
+    <main className="space-y-6">
+      <p className="text-sm"><Link className="text-gray-600 hover:underline" href="/admin/inbox">&larr; All requests</Link></p>
+
+      <header className="space-y-2">
+        <h1 className="text-2xl font-bold">{event ? event.e.name : (typeof brief?.performerOrTeam === 'string' && brief.performerOrTeam) || firstSubject || 'New request'}</h1>
         <p className="text-sm text-gray-600">
-          {event ? `${event.v.name}, ${event.v.city} · ${event.e.localStartAt.toISOString()} (${event.v.timezone})` : 'No canonical event attached; no offers can be compared.'} · contact <Link className="underline" href={`/admin/contacts/${contact!.id}`}>{contact!.emailOriginal}</Link> · country {contact!.countryConfirmed ?? <span className="tg-badge tg-badge-warn">unconfirmed</span>} · AI spend ${spendUsd.toFixed(3)}
+          From <Link className="underline" href={`/admin/contacts/${contact!.id}`}>{contact!.emailOriginal}</Link> · started {ago(req.createdAt.getTime(), now)} · last change {ago(req.updatedAt.getTime(), now)}
+          {!contact!.countryConfirmed ? <> · <span className="tg-badge tg-badge-warn">US not confirmed</span></> : null}
         </p>
+        {pending ? null : <div className={`rounded-lg border p-3 ${s.tone === 'danger' ? 'border-rose-300 bg-rose-50' : s.tone === 'warn' ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-gray-50'}`}>
+          <p className="text-sm"><span className={`tg-badge ${toneClass[s.tone]}`}>{s.label}</span> <span className="ml-1">{s.next}</span></p>
+          {why ? <p className="mt-1 text-sm text-gray-700"><strong>Why:</strong> {why}</p> : null}
+        </div>}
       </header>
 
-      <section>
-        <h2 className="font-semibold">Buying brief (revision {versions[0]?.revision ?? '—'})</h2>
-        {brief ? (
-          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
-            {['intent', 'performerOrTeam', 'city', 'dateExpression', 'resolvedLocalDate', 'quantity', 'budgetCents', 'budgetBasis', 'togetherRequired', 'mustAttend', 'waitRiskTolerance', 'decisionDeadline', 'splitGroupAllowed', 'forSelf', 'accessibilityNeeds', 'seatingPreference'].map((k) => (
-              <div key={k}><dt className="text-gray-500">{k}</dt><dd>{k === 'budgetCents' && typeof brief[k] === 'number' ? formatUsd(brief[k] as number) : String(brief[k] ?? '—')}</dd></div>
-            ))}
-          </dl>
-        ) : <p className="text-sm text-gray-600">Not interpreted yet.</p>}
-        {versions[0]?.unresolvedFields.length ? <p className="mt-2 text-sm"><span className="tg-badge tg-badge-warn">unresolved</span> {versions[0].unresolvedFields.join(', ')}</p> : null}
-      </section>
-
-      <section>
-        <h2 className="font-semibold">Conversation</h2>
-        <ul className="mt-2 space-y-2">
-          {messages.map((m) => (
-            <li key={m.id} className={`rounded border p-2 text-sm ${m.direction === 'inbound' ? 'border-gray-200' : 'border-teal-200 bg-teal-50'}`}>
-              <div className="text-xs text-gray-500">{m.direction} · {m.fromAddress} · {m.receivedAt.toISOString()} {m.autoSubmitted ? <span className="tg-badge tg-badge-warn">auto-response</span> : null}</div>
-              <pre className="mt-1 whitespace-pre-wrap font-sans">{m.sanitizedText}</pre>
-              {attachments.filter((a) => a.messageId === m.id).map((a) => (
-                <div key={a.id} className="mt-1 text-xs">attachment {a.filename ?? a.id.slice(0, 8)} · <span className={`tg-badge ${a.validationState === 'accepted' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{a.validationState}</span> {a.validationReason ?? ''} {a.mediaId ? <a className="underline" href={`/api/admin/media/${a.mediaId}`}>download</a> : null}</div>
-              ))}
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section>
-        <h2 className="font-semibold">Source coverage {latestRun ? <span className="tg-badge tg-badge-muted">{latestRun.mode} run · {latestRun.status}</span> : null}</h2>
-        {checks.length ? (
-          <table className="tg-table mt-2">
-            <thead><tr><th>Source</th><th>Status</th><th>Results</th><th>Observed</th><th>Limitations</th></tr></thead>
-            <tbody>{checks.map((k) => <tr key={k.id}><td>{k.sourceId}</td><td><span className={`tg-badge ${k.status === 'success' ? 'tg-badge-ok' : k.status === 'no_matching_inventory' ? 'tg-badge-muted' : 'tg-badge-warn'}`}>{k.status}</span></td><td>{k.resultCount}</td><td>{k.observedAt.toISOString().slice(11, 19)}</td><td className="text-xs text-gray-600">{k.limitations.join('; ')}</td></tr>)}</tbody>
-          </table>
-        ) : <p className="text-sm text-gray-600">No research run yet.</p>}
-        {req.eventId ? <div className="mt-2"><ActionButton url={`/api/admin/requests/${id}/research`} body={{ expectedRevision: req.currentRevision, idempotencyKey: newIdempotencyKey() }} label="Re-run research" /></div> : null}
-        {researchLinks.length ? (
-          <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-3">
-            <h3 className="text-sm font-semibold text-amber-900">Manual research — {requiredLinks.length} required source{requiredLinks.length === 1 ? '' : 's'} with no approved adapter{conditionalLinks.length ? `, ${conditionalLinks.length} conditional for this category` : ''}</h3>
-            <p className="mt-1 text-xs text-amber-900">These open the seller&rsquo;s own site for you to check by hand. Nothing is fetched by the system. Record what you find with the manual-observation form below, with the exact listing URL and every fee you saw. A <em>routing reference</em> tells you who the seller of record is; a <em>context rule</em> is a policy (rush, lottery, presale) to note in the advice, not a price.</p>
-            <ResearchLinkList links={requiredLinks} />
-            {conditionalLinks.length ? (
-              <>
-                <h4 className="mt-3 text-xs font-semibold uppercase tracking-wide text-amber-900">Conditional for this category — check when the route&rsquo;s note applies</h4>
-                <ResearchLinkList links={conditionalLinks} />
-              </>
-            ) : null}
+      {pending ? (
+        <section className="rounded-lg border-2 border-amber-300 p-4">
+          <h2 className="text-lg font-semibold">Reply waiting for your approval</h2>
+          <p className="mt-1 text-sm text-gray-600">This is exactly what the customer will get. Approving sends it now.</p>
+          <div className="mt-3 rounded-md border border-gray-200 bg-white">
+            <p className="border-b border-gray-200 px-3 py-2 text-sm"><span className="text-gray-500">Subject:</span> {pending.subject}</p>
+            <pre className="whitespace-pre-wrap px-3 py-3 font-sans text-sm leading-relaxed">{pending.bodyText}</pre>
           </div>
-        ) : null}
-      </section>
-
-      <section>
-        <h2 className="font-semibold">Offer observations</h2>
-        <table className="tg-table mt-2">
-          <thead><tr><th>Source</th><th>Qty</th><th>Section/Row</th><th>Together</th><th>Total</th><th>Completeness</th><th>Restrictions</th><th>Method</th><th>Fetched</th></tr></thead>
-          <tbody>
-            {[...observations, ...manual].map(({ o, off }) => (
-              <tr key={o.id}>
-                <td>{off.sourceId}</td><td>{o.quantity}</td><td>{o.section ?? '—'}/{o.rowLabel ?? '—'}</td>
-                <td>{o.seatsTogether === null ? <span className="tg-badge tg-badge-warn">unknown</span> : o.seatsTogether ? 'yes' : 'no'}</td>
-                <td>{o.payableTotalCents === null ? <span className="tg-badge tg-badge-warn">unknown</span> : formatUsd(o.payableTotalCents)}</td>
-                <td><span className={`tg-badge ${o.priceCompleteness === 'verified_total' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{o.priceCompleteness}</span></td>
-                <td className="text-xs">{o.restrictions.join(', ') || '—'}</td>
-                <td><span className={`tg-badge ${o.verificationMethod === 'fixture' ? 'tg-badge-danger' : 'tg-badge-muted'}`}>{o.verificationMethod}</span></td>
-                <td>{o.fetchedAt.toISOString().slice(11, 19)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {req.eventId ? (
-          <details className="mt-3">
-            <summary className="cursor-pointer text-sm font-medium">Add manual evidence (staff-checked offer)</summary>
-            <div className="mt-2">
-              <JsonForm url={`/api/admin/requests/${id}/manual-offers`} submitLabel="Record manual observation" fields={[{ name: 'sourceId', label: 'Registry source id', required: true, placeholder: 'stubhub' }, { name: 'sourceUrl', label: 'Listing URL (https)', required: true }, { name: 'observedAt', label: 'Observed at', type: 'datetime', required: true }, { name: 'quantity', label: 'Quantity', type: 'number', required: true, defaultValue: Number(brief?.quantity ?? 2) }, { name: 'section', label: 'Section' }, { name: 'row', label: 'Row' }, { name: 'seatClass', label: 'Seat class (upper/lower/floor…)' }, { name: 'baseTotalCents', label: 'Base total (cents)', type: 'number' }, { name: 'payableTotalCents', label: 'Payable total incl. fees (cents)', type: 'number' }, { name: 'seatsTogether', label: 'Seats together verified', type: 'checkbox' }, { name: 'feesKnown', label: 'All mandatory fees known', type: 'checkbox' }, { name: 'taxKnown', label: 'Tax known', type: 'checkbox' }, { name: 'deliveryMethod', label: 'Delivery method' }, { name: 'evidenceNote', label: 'Evidence note (what you saw, exact selection)', type: 'textarea', required: true }]} extra={{ restrictions: [] }} nullableCheckboxes={['seatsTogether']} />
-            </div>
-          </details>
-        ) : null}
-      </section>
-
-      {advice[0] ? (
-        <section>
-          <h2 className="font-semibold">Advice run <span className="tg-badge tg-badge-muted">{advice[0].policyVersion}</span></h2>
-          <p className="mt-1 text-sm">Decision <strong>{advice[0].decision}</strong> · reasons: {advice[0].reasonCodes.join(', ')} · abstentions: {advice[0].abstentions.join(', ') || 'none'}</p>
-          <div className="mt-2 grid gap-3 text-sm sm:grid-cols-2">
-            <div className="rounded border border-gray-200 p-2">
-              <h3 className="font-medium">Historical benchmark {bench ? <span className={`tg-badge ${bench.adequacy === 'sufficient' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{bench.adequacy}</span> : <span className="tg-badge tg-badge-warn">history unavailable</span>}</h3>
-              {bench ? <p className="text-xs text-gray-700">{bench.independentEventCount} independent events · median {bench.medianCents !== null ? formatUsd(bench.medianCents) : '—'} · P25 {bench.p25Cents !== null ? formatUsd(bench.p25Cents) : '—'} · P75 {bench.p75Cents !== null ? formatUsd(bench.p75Cents) : '—'} · {bench.methodVersion} · exclusions {bench.exclusions.length} · {bench.adequacyReasons.join('; ')}</p> : null}
-            </div>
-            <div className="rounded border border-gray-200 p-2">
-              <h3 className="font-medium">Trend {trend ? <span className={`tg-badge ${trend.adequacy === 'sufficient' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{trend.direction}</span> : <span className="tg-badge tg-badge-warn">no observations</span>}</h3>
-              {trend ? <p className="text-xs text-gray-700">sources {trend.sourceIntersection.join(', ')} · flags {trend.qualityFlags.join(', ') || 'none'} · {trend.methodVersion}</p> : null}
-            </div>
+          {pending.reviewNote ? <p className="mt-2 text-sm text-rose-900"><strong>Note:</strong> {pending.reviewNote}</p> : null}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <ActionButton url={`/api/admin/recommendations/${pending.id}/approve`} body={{ expectedRevision: req.currentRevision, draftHash: pending.draftHash, note: null }} label="Approve and send" variant="primary" confirm="Send this reply to the customer now?" />
+            {offers.length ? <ActionButton url={`/api/admin/recommendations/${pending.id}/revalidate`} label="Re-check the listing first" /> : null}
+            <span className="text-xs text-gray-500">Not right? Check sellers by hand below and add what you find, then re-run the check.</span>
           </div>
-          {packet ? (
-            <details className="mt-2 text-sm"><summary className="cursor-pointer font-medium">Claim packet ({packet.claimRecords.length} claims, hash {advice[0].packetHash.slice(0, 12)})</summary>
-              <ul className="mt-1 space-y-1">{packet.claimRecords.map((c) => <li key={c.id}><code>{c.id}</code> {c.customerVisible ? '' : <span className="tg-badge tg-badge-warn">not customer-visible</span>} {c.text} <span className="text-xs text-gray-500">[{c.limitations.join(', ')}]</span></li>)}</ul>
-            </details>
-          ) : null}
         </section>
       ) : null}
 
-      <section>
-        <h2 className="font-semibold">Recommendation drafts</h2>
-        {recs.map((r) => (
-          <div key={r.id} className="mt-2 rounded border border-gray-200 p-3">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className={`tg-badge ${r.reviewStatus === 'pending' ? 'tg-badge-warn' : r.reviewStatus === 'approved' || r.reviewStatus === 'sent' ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{r.reviewStatus}</span>
-              <span>rev {r.revision}</span><span>hash {r.draftHash.slice(0, 12)}</span><span>created {r.createdAt.toISOString().slice(0, 16)}</span>
-              {r.reviewNote ? <span className="tg-badge tg-badge-danger">{r.reviewNote}</span> : null}
-            </div>
-            <p className="mt-2 text-sm font-medium">Subject: {r.subject}</p>
-            <pre className="mt-1 whitespace-pre-wrap rounded bg-gray-50 p-2 text-sm">{r.bodyText}</pre>
-            {r.reviewStatus === 'pending' && r.revision === req.currentRevision ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                <ActionButton url={`/api/admin/recommendations/${r.id}/revalidate`} label="Revalidate offers" />
-                <ActionButton url={`/api/admin/recommendations/${r.id}/approve`} body={{ expectedRevision: req.currentRevision, draftHash: r.draftHash, note: null }} label="Approve and queue send" variant="primary" confirm="Approve this exact draft for the current revision?" />
-              </div>
-            ) : null}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <section className="lg:col-span-2">
+          <h2 className="text-lg font-semibold">Conversation</h2>
+          <ol className="mt-2 space-y-3">
+            {timeline.map((m) => (
+              <li key={m.key} className={`rounded-lg border p-3 text-sm ${m.mine ? 'ml-6 border-teal-200 bg-teal-50' : 'mr-6 border-gray-200 bg-white'}`}>
+                <p className="text-xs text-gray-500">
+                  <strong className="text-gray-800">{m.who}</strong> · {whenStaff(m.at)}
+                  {m.status ? <> · <span className={`tg-badge ${toneClass[m.status[1]]}`}>{m.status[0]}</span></> : null}
+                  {m.auto ? <> · <span className="tg-badge tg-badge-warn">auto-reply</span></> : null}
+                </p>
+                <pre className="mt-1 whitespace-pre-wrap font-sans">{m.text}</pre>
+                {m.messageId ? attachments.filter((a) => a.messageId === m.messageId).map((a) => (
+                  <p key={a.id} className="mt-1 text-xs">Attachment: {a.filename ?? 'file'} {a.validationState !== 'accepted' ? <span className="tg-badge tg-badge-warn">{a.validationState}</span> : null} {a.mediaId ? <a className="underline" href={`/api/admin/media/${a.mediaId}`}>download</a> : null}</p>
+                )) : null}
+              </li>
+            ))}
+          </ol>
+          {!timeline.length ? <p className="mt-2 text-sm text-gray-500">No messages.</p> : null}
+        </section>
+
+        <aside className="space-y-4">
+          <div className="rounded-lg border border-gray-200 p-3">
+            <h2 className="font-semibold">What they want</h2>
+            {lines.length ? (
+              <dl className="mt-2 space-y-1 text-sm">
+                {lines.map(([k, v]) => (
+                  <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">{k}</dt><dd>{v}</dd></div>
+                ))}
+              </dl>
+            ) : <p className="mt-1 text-sm text-gray-500">Not read yet.</p>}
           </div>
-        ))}
-        {!recs.length ? <p className="text-sm text-gray-600">No drafts yet.</p> : null}
-      </section>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <h2 className="font-semibold">Event</h2>
+            {event ? (
+              <div className="mt-1 space-y-0.5 text-sm">
+                <p>{event.e.name}</p>
+                <p className="text-gray-600">{whenLocal(event.e.localStartAt, event.v.timezone)}</p>
+                <p className="text-gray-600">{event.v.name}, {event.v.city}</p>
+                {event.e.faceMinCents != null && event.e.faceMaxCents != null ? <p className="text-gray-600">Face value {formatUsd(event.e.faceMinCents)}–{formatUsd(event.e.faceMaxCents)} before fees</p> : null}
+                {eventUrl ? <p><a className="text-blue-700 underline" href={eventUrl} target="_blank" rel="noopener noreferrer">Official event page</a></p> : null}
+              </div>
+            ) : <p className="mt-1 text-sm text-gray-500">Not matched to an event yet, so no prices can be checked.</p>}
+          </div>
+        </aside>
+      </div>
 
-      <section>
-        <h2 className="font-semibold">Outbound send intents</h2>
-        <table className="tg-table mt-2">
-          <thead><tr><th>Class</th><th>State</th><th>Subject</th><th>Attempts</th><th>Provider id</th><th>Reason</th></tr></thead>
-          <tbody>{intents.map((i) => <tr key={i.id}><td>{i.messageClass}</td><td><span className={`tg-badge ${i.state === 'delivered' || i.state === 'provider_accepted' ? 'tg-badge-ok' : i.state === 'blocked' || i.state === 'suppressed' ? 'tg-badge-warn' : 'tg-badge-muted'}`}>{i.state}</span></td><td>{i.subject}</td><td>{i.attempts}</td><td className="text-xs">{i.providerMessageId ?? '—'}</td><td className="text-xs text-gray-600">{i.lastError ?? ''}</td></tr>)}</tbody>
-        </table>
-      </section>
+      {req.eventId ? (
+        <details className="rounded-lg border border-gray-200 p-4" open={handCheckOpen}>
+          <summary className="cursor-pointer text-lg font-semibold">Check sellers by hand</summary>
+          <p className="mt-2 text-sm text-gray-600">We can&rsquo;t read these sellers automatically yet. Open them, find seats that fit, and add what you see below: the exact listing link and the total with every fee. Then re-run the check to rebuild the reply.</p>
+          {researchLinks.length ? (
+            <>
+              <ResearchLinkList links={requiredLinks} />
+              {conditionalLinks.length ? (
+                <>
+                  <h3 className="mt-3 text-sm font-semibold text-gray-700">Also worth a look for this kind of event</h3>
+                  <ResearchLinkList links={conditionalLinks} />
+                </>
+              ) : null}
+            </>
+          ) : null}
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-medium">Add a listing you found</summary>
+            <div className="mt-2">
+              <JsonForm url={`/api/admin/requests/${id}/manual-offers`} submitLabel="Save listing" fields={[{ name: 'sourceId', label: 'Seller (e.g. stubhub, seatgeek, vividseats)', required: true, placeholder: 'stubhub' }, { name: 'sourceUrl', label: 'Listing link (https)', required: true }, { name: 'observedAt', label: 'When you saw it', type: 'datetime', required: true }, { name: 'quantity', label: 'Tickets', type: 'number', required: true, defaultValue: Number(brief?.quantity ?? 2) }, { name: 'section', label: 'Section' }, { name: 'row', label: 'Row' }, { name: 'seatClass', label: 'Seat area (upper, lower, floor…)' }, { name: 'baseTotalCents', label: 'Price before fees, in cents (e.g. 25000 = $250)', type: 'number' }, { name: 'payableTotalCents', label: 'Total with all fees, in cents', type: 'number' }, { name: 'seatsTogether', label: 'Seats are together', type: 'checkbox' }, { name: 'feesKnown', label: 'I saw every mandatory fee', type: 'checkbox' }, { name: 'taxKnown', label: 'Tax was shown', type: 'checkbox' }, { name: 'deliveryMethod', label: 'Delivery (mobile, transfer…)' }, { name: 'evidenceNote', label: 'What you saw and exactly what you selected', type: 'textarea', required: true }]} extra={{ restrictions: [] }} nullableCheckboxes={['seatsTogether']} />
+            </div>
+          </details>
+          <div className="mt-4"><ActionButton url={`/api/admin/requests/${id}/research`} body={{ expectedRevision: req.currentRevision, idempotencyKey: newIdempotencyKey() }} label="Re-run the check" /></div>
+        </details>
+      ) : null}
 
-      <section>
-        <h2 className="font-semibold">State history</h2>
-        <ul className="mt-1 text-xs text-gray-600">{transitions.map((x) => <li key={x.id}>{x.createdAt.toISOString().slice(0, 19)} · {x.fromState ?? '∅'} → {x.toState} · rev {x.revision} · {x.actor} · {x.reason}</li>)}</ul>
-        <p className="mt-2 text-xs text-gray-500">Viewing as {staff.email} ({staff.role}).</p>
-      </section>
+      <details className="rounded-lg border border-gray-200 p-4">
+        <summary className="cursor-pointer text-lg font-semibold">Behind the scenes</summary>
+        <p className="mt-1 text-xs text-gray-500">For troubleshooting. Nothing here needs doing day to day.</p>
+
+        <h3 className="mt-4 font-semibold">Listings found ({offers.length})</h3>
+        {offers.length ? (
+          <table className="tg-table mt-2">
+            <thead><tr><th>Seller</th><th>Tickets</th><th>Section / row</th><th>Together</th><th>Total</th><th>Price</th><th>How we got it</th><th>Seen</th></tr></thead>
+            <tbody>
+              {offers.map(({ o, off }) => (
+                <tr key={o.id}>
+                  <td>{off.sourceId}</td><td>{o.quantity}</td><td>{o.section ?? '—'} / {o.rowLabel ?? '—'}</td>
+                  <td>{o.seatsTogether === null ? 'unknown' : o.seatsTogether ? 'yes' : 'no'}</td>
+                  <td>{o.payableTotalCents === null ? 'unknown' : formatUsd(o.payableTotalCents)}</td>
+                  <td>{o.priceCompleteness === 'verified_total' ? 'all-in' : o.priceCompleteness === 'estimated_total' ? 'estimated' : 'incomplete'}</td>
+                  <td>{o.verificationMethod === 'approved_manual' ? 'added by staff' : o.verificationMethod === 'fixture' ? <span className="tg-badge tg-badge-danger">test data</span> : 'automatic'}</td>
+                  <td>{whenStaff(o.fetchedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <p className="mt-1 text-sm text-gray-500">None.</p>}
+
+        <h3 className="mt-4 font-semibold">Sellers checked {latestRun ? <span className="text-xs font-normal text-gray-500">({latestRun.mode}, {latestRun.status})</span> : null}</h3>
+        {checks.length ? (
+          <table className="tg-table mt-2">
+            <thead><tr><th>Seller</th><th>Result</th><th>Listings</th><th>Checked</th><th>Notes</th></tr></thead>
+            <tbody>{checks.map((k) => <tr key={k.id}><td>{k.sourceId}</td><td>{k.status.replace(/_/g, ' ')}</td><td>{k.resultCount}</td><td>{whenStaff(k.observedAt)}</td><td className="text-xs text-gray-600">{k.limitations.join('; ')}</td></tr>)}</tbody>
+          </table>
+        ) : <p className="mt-1 text-sm text-gray-500">Not checked yet.</p>}
+
+        {advice[0] ? (
+          <>
+            <h3 className="mt-4 font-semibold">How the reply was decided</h3>
+            <p className="mt-1 text-sm">Decision <strong>{advice[0].decision.replace(/_/g, ' ')}</strong> · reasons: {advice[0].reasonCodes.join(', ') || 'none'} · held back: {advice[0].abstentions.join(', ') || 'nothing'} · policy {advice[0].policyVersion}</p>
+            <p className="mt-1 text-xs text-gray-600">
+              Price history: {bench ? `${bench.adequacy}, ${bench.independentEventCount} past events${bench.medianCents !== null ? `, median ${formatUsd(bench.medianCents)}` : ''}` : 'none'} · Trend: {trend ? `${trend.direction} (${trend.adequacy})` : 'none'}
+            </p>
+            {packet ? (
+              <details className="mt-2 text-sm"><summary className="cursor-pointer">Facts the reply may use ({packet.claimRecords.length})</summary>
+                <ul className="mt-1 space-y-1">{packet.claimRecords.map((c) => <li key={c.id}><code className="text-xs">{c.id}</code> {c.customerVisible ? '' : <span className="tg-badge tg-badge-warn">staff only</span>} {c.text}</li>)}</ul>
+              </details>
+            ) : null}
+          </>
+        ) : null}
+
+        <h3 className="mt-4 font-semibold">Emails</h3>
+        {intents.length ? (
+          <table className="tg-table mt-2">
+            <thead><tr><th>Kind</th><th>Status</th><th>Subject</th><th>Problem</th></tr></thead>
+            <tbody>{intents.map((i) => { const [label, tone] = sendStateInfo(i.state); return <tr key={i.id}><td>{sendClassLabel(i.messageClass)}</td><td><span className={`tg-badge ${toneClass[tone]}`}>{label}</span></td><td>{i.subject}</td><td className="text-xs text-gray-600">{i.lastError ?? ''}</td></tr>; })}</tbody>
+          </table>
+        ) : <p className="mt-1 text-sm text-gray-500">None.</p>}
+
+        {earlierDrafts.length ? (
+          <>
+            <h3 className="mt-4 font-semibold">Earlier drafts</h3>
+            {earlierDrafts.map((r) => (
+              <details key={r.id} className="mt-2 text-sm">
+                <summary className="cursor-pointer">{r.subject} <span className="tg-badge tg-badge-muted">{DRAFT_STATUS[r.reviewStatus] ?? r.reviewStatus}</span> <span className="text-xs text-gray-500">{whenStaff(r.createdAt)}</span></summary>
+                <pre className="mt-1 whitespace-pre-wrap rounded bg-gray-50 p-2 font-sans">{r.bodyText}</pre>
+              </details>
+            ))}
+          </>
+        ) : null}
+
+        <h3 className="mt-4 font-semibold">History</h3>
+        <ul className="mt-1 space-y-0.5 text-xs text-gray-600">{transitions.map((x) => <li key={x.id}>{whenStaff(x.createdAt)} · {stateInfo(x.toState).label} · {reasonText(x.reason, x.toState) || '—'} · {x.actor}</li>)}</ul>
+        {versions[0]?.unresolvedFields.length ? <p className="mt-2 text-xs text-gray-600">Still unclear: {versions[0].unresolvedFields.join(', ')}</p> : null}
+        <p className="mt-2 text-xs text-gray-500">AI cost ${spendUsd.toFixed(3)} · request {id} · version {req.currentRevision} · viewing as {staff.email} ({staff.role})</p>
+      </details>
     </main>
   );
 }
+
+const DRAFT_STATUS: Record<string, string> = { pending: 'waiting', approved: 'approved', sent: 'sent', auto_sent: 'sent automatically', rejected: 'rejected', invalidated: 'replaced by a newer version' };
 
 const ACCESS_BADGE: Record<ResearchLink['access'], string | null> = {
   catalog_api: null,
   listing_api_partner: null,
   listing_no_api: null,
-  primary_platform: 'seller of record',
-  routing_reference: 'routing reference',
-  context_rule: 'context rule',
+  primary_platform: 'official seller',
+  routing_reference: 'shows who sells it',
+  context_rule: 'a policy to mention, not a price',
 };
 
 function ResearchLinkList({ links }: { links: ResearchLink[] }) {

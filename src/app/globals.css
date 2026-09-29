@@ -43,3 +43,6 @@ body {
 .tg-input {
   @apply w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600;
 }
+.tg-badge-info {
+  @apply bg-sky-100 text-sky-900;
+}
