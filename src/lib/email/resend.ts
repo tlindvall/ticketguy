@@ -182,6 +182,10 @@ export async function downloadAttachments(detail: ReceivedEmailDetail, fetchImpl
 }
 
 function stripHtml(html: string): string {
+  // The quoted thread under a reply is our own earlier email; reading it as the customer's words is how a
+  // "When: Thu, Oct 1" line from us became their date. Gmail, Apple Mail and Outlook all mark where it starts.
+  const cut = html.search(/<div[^>]*class="[^"]*gmail_quote|<blockquote|<div[^>]*id="(?:appendonsend|divRplyFwdMsg)"/i);
+  if (cut > 0) html = html.slice(0, cut);
   return html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
