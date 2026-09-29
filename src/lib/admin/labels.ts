@@ -20,7 +20,7 @@ export const STATE: Record<string, StateInfo> = {
   researching: { label: 'Checking prices', tone: 'info', group: 'working', next: 'Checking sellers. A draft reply will appear here for approval.' },
   recommendation_sent: { label: 'Answered', tone: 'ok', group: 'answered', next: 'The customer has our answer. Nothing to do unless they reply.' },
   referred: { label: 'Sent to the official sale', tone: 'ok', group: 'answered', next: 'Tickets are still on general sale, so we pointed the customer there. They can reply "compare" for resale.' },
-  monitoring: { label: 'Watching prices', tone: 'ok', group: 'answered', next: 'We are watching this event for the customer. Price alerts come to you for approval.' },
+  monitoring: { label: 'Watching for them', tone: 'ok', group: 'answered', next: 'We are watching for the customer: a sale opening or a new date emails them by itself; a price alert comes to you for approval.' },
   closed: { label: 'Closed', tone: 'muted', group: 'closed', next: 'Nothing to do.' },
   unsupported: { label: 'Outside what we cover', tone: 'muted', group: 'closed', next: 'We told the customer we can’t help with this one.' },
 };
@@ -43,6 +43,9 @@ const REASON: Record<string, string> = {
   approved_recommendation_sent: 'Sent after approval.',
   price_check_auto_sent: 'Price check answered automatically (no listing in it).',
   official_sale_open: 'Still on general sale; pointed to the official seller.',
+  event_alert_on_sale: 'Not on sale yet; we’ll email them when the general sale opens.',
+  event_alert_new_date: 'Nothing scheduled yet; we’ll email them when a date is announced.',
+  event_alert_sent: 'We emailed them that it’s on sale / announced.',
   browse_options: 'Sent a few event ideas; waiting for them to pick one.',
   brief_complete: 'We have everything we need; checking prices.',
   deletion_requested_pending_verification: 'Customer asked us to delete their data. Verify it is really them.',
@@ -126,6 +129,7 @@ const SEND_CLASS: Record<string, string> = {
   no_result: 'Answer (no listing)',
   watch_confirmation: 'Watch confirmation',
   watch_alert: 'Price alert',
+  event_alert: 'Sale / new date alert',
   marketing: 'Marketing',
   verification: 'Verification',
 };

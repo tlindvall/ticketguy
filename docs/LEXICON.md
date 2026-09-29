@@ -32,6 +32,12 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 |---|---|---|---|---|---|
 | Look at resale or compare prices. Without it, an event still on general sale is answered with the official sale link. **model** | “compare”, “is resale cheaper?”, “StubHub”, “best price”, “cheapest”, “secondary market” | `resaleAsked=true` | any | find | “compare” |
 
+## Tell me when it goes on sale
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| Email them when tickets go on sale or a date is announced. Not a price watch: no budget is needed. **model** _A price in the same message ("let me know if it drops under $300") makes it a price watch instead._ | “let me know when tickets go on sale”, “tell me when they announce New York dates”, “notify me if they add a show”, “when do tickets go on sale?”, “let me know” | `notifyAsked=true` | any | watch | “Let me know when Dolphins playoff tickets go on sale” |
+
 ## A price they saw
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |

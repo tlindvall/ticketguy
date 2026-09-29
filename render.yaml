@@ -46,6 +46,11 @@ services:
         value: "false"
       - key: WATCH_SEND_ENABLED
         value: "false"
+      # "Email me when it goes on sale / when they announce a date" (DECISION_LOG #43). Checks Ticketmaster
+      # Discovery on a schedule to notify customers: set "true" only after confirming Ticketmaster's API terms
+      # allow that use. Set here, not in the dashboard, for the same reason as EMAIL_SEND_ENABLED above.
+      - key: EVENT_ALERTS_ENABLED
+        value: "false"
       - key: HUMAN_REVIEW_REQUIRED
         value: "true"
       - key: PG_POOL_MAX

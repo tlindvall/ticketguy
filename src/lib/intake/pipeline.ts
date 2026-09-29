@@ -279,6 +279,7 @@ export class Concierge {
     }
     if (extraction.intent === 'cancel_watch') {
       await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.contactId, contact!.id), eq(t.watches.state, 'active')));
+      await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.contactId, contact!.id), eq(t.eventAlerts.state, 'active')));
       await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id } });
     }
 
@@ -353,6 +354,12 @@ export class Concierge {
       return { state: 'unsupported', revision, extraction: merged };
     }
 
+    // "Let me know when it goes on sale / when they announce a date" (DECISION_LOG #43).
+    if (this.env.EVENT_ALERTS_ENABLED && merged.notifyAsked && extraction.intent !== 'cancel_watch') {
+      const set = await this.maybeEventAlert({ req, msg, contact: contact!, merged, revision, resolution, home: merged.city ? null : await this.contactMarket(contact!.id) });
+      if (set) return set;
+    }
+
     if (unresolved.some((u) => CLARIFIABLE.includes(u))) {
       const count = req.clarificationCount + 1;
       if (count > 3) {
@@ -371,7 +378,10 @@ export class Concierge {
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       const countryCheck = !contact!.countryConfirmed && count === 1;
       const knownFacts = describeKnown(merged);
-      const eventNote = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const noMatch = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
+      const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city ? null : await this.contactMarket(contact!.id)));
+      const eventNote = noMatch ? `${noMatch}${offerAlert ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
       await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, assumptions, countryCheck, knownFacts }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
@@ -919,6 +929,136 @@ export class Concierge {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // Event alerts: "email me when it goes on sale / when they announce a date" (DECISION_LOG #43)
+  // ---------------------------------------------------------------------------------------------
+
+  /** No event at all for this performer or team where they asked, on any date. */
+  private async nothingScheduled(x: RequestExtraction, home: Market | null): Promise<boolean> {
+    const any = await this.resolveEvent({ ...x, dateExpression: null, resolvedLocalDate: null }, home);
+    return any.kind === 'no_match' && any.reason !== 'no_performer';
+  }
+
+  /**
+   * Sets an alert when one fits and answers the customer; null when the ordinary path should answer instead
+   * (the sale is already open, it has closed, or there are events on other dates to choose from).
+   */
+  private async maybeEventAlert(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; resolution: Awaited<ReturnType<Concierge['resolveEvent']>>; home: Market | null }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | null> {
+    const { req, msg, contact, merged, revision, resolution } = a;
+    const now = this.now();
+    let kind: 'on_sale' | 'new_date';
+    let vars: Record<string, unknown>;
+    let values: Partial<typeof t.eventAlerts.$inferInsert>;
+    if (resolution.kind === 'resolved') {
+      const e = resolution.event;
+      // Only a sale the provider says opens later. On sale now is the official-sale reply; no sale date at all
+      // could as easily mean sold out as not yet, and "isn't on sale yet" would then be wrong.
+      if (e.localStartAt <= now || !e.publicSaleStartAt || e.publicSaleStartAt <= now) return null;
+      const opens = e.publicSaleStartAt;
+      kind = 'on_sale';
+      vars = { kind, what: resolution.label, saleOpens: opens ? saleOpensLabel(opens, resolution.venue.timezone) : null };
+      values = { eventId: e.id, nextCheckAt: nextOnSaleCheck(opens, now), expiresAt: e.localStartAt };
+    } else if (resolution.kind === 'no_match' && merged.performerOrTeam && (await this.nothingScheduled(merged, a.home))) {
+      const mk = merged.city ? marketFor(merged.city, merged.state) : null;
+      kind = 'new_date';
+      vars = { kind, what: `${titleCaseName(merged.performerOrTeam)}${mk ? ` in ${mk.label}` : merged.city ? ` in ${merged.city}` : ''}` };
+      values = { keyword: merged.performerOrTeam, marketId: mk?.id ?? null, nextCheckAt: new Date(now.getTime() + EVENT_ALERT_CHECK_HOURS * 3_600_000), expiresAt: new Date(now.getTime() + NEW_DATE_ALERT_DAYS * 86_400_000) };
+    } else return null;
+
+    const [row] = await this.db.insert(t.eventAlerts).values({ requestId: req.id, contactId: contact.id, kind, consentMessageId: msg.id, nextCheckAt: values.nextCheckAt!, expiresAt: values.expiresAt!, eventId: values.eventId ?? null, keyword: values.keyword ?? null, marketId: values.marketId ?? null })
+      .onConflictDoUpdate({ target: [t.eventAlerts.requestId, t.eventAlerts.kind], set: { state: 'active', consentMessageId: msg.id, nextCheckAt: values.nextCheckAt!, expiresAt: values.expiresAt!, eventId: values.eventId ?? null, keyword: values.keyword ?? null, marketId: values.marketId ?? null } })
+      .returning({ id: t.eventAlerts.id });
+    await audit(this.db, { actor: 'system', action: 'event_alert.created', entityKind: 'event_alert', entityId: row!.id, diff: { kind, consentMessageId: msg.id } });
+    await this.transition(req.id, 'monitoring', kind === 'on_sale' ? 'event_alert_on_sale' : 'event_alert_new_date');
+    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, kind === 'on_sale' ? 'I’ll tell you when it’s on sale' : 'I’ll tell you when there’s a date'), template: 'event_alert_set', vars: { ...vars, countryUnconfirmed: !contact.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `event_alert_set:${row!.id}:${revision}` });
+    return { state: 'monitoring', revision, extraction: merged };
+  }
+
+  /**
+   * One pass over due alerts (hourly cron). Each check is one bounded Discovery call inside the daily budget;
+   * provider trouble just moves the check later. An alert fires once, then it is done.
+   */
+  async evaluateEventAlerts(opts: { limit?: number } = {}): Promise<{ checked: number; sent: number; expired: number; skipped?: string }> {
+    const out = { checked: 0, sent: 0, expired: 0 };
+    if (!this.env.EVENT_ALERTS_ENABLED) return { ...out, skipped: 'event_alerts_disabled' };
+    const discovery = await this.discoveryAvailability();
+    if (!discovery) return { ...out, skipped: 'discovery_unavailable' };
+    const now = this.now();
+    const due = await this.db.select().from(t.eventAlerts).where(and(eq(t.eventAlerts.state, 'active'), lte(t.eventAlerts.nextCheckAt, now))).orderBy(asc(t.eventAlerts.nextCheckAt)).limit(opts.limit ?? 25);
+    for (const al of due) {
+      if (al.expiresAt <= now) {
+        await this.db.update(t.eventAlerts).set({ state: 'expired', lastCheckedAt: now }).where(eq(t.eventAlerts.id, al.id));
+        out.expired += 1;
+        continue;
+      }
+      out.checked += 1;
+      const later = (at: Date) => this.db.update(t.eventAlerts).set({ nextCheckAt: at, lastCheckedAt: now }).where(eq(t.eventAlerts.id, al.id));
+      const fallback = new Date(now.getTime() + EVENT_ALERT_CHECK_HOURS * 3_600_000);
+      const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, al.requestId));
+      if (!req) continue;
+
+      if (al.kind === 'on_sale' && al.eventId) {
+        const [row] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, al.eventId));
+        if (!row) { await later(fallback); continue; }
+        // Refresh the event itself: its sale window and status are what we are waiting on.
+        const day = eventLocalDate(row.e.localStartAt, row.v.timezone);
+        const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: row.ent?.name ?? row.e.name, startDateTime: `${day}T00:00:00Z`, endDateTime: `${day}T23:59:59Z`, trigger: 'alert', dailyCallLimit: discovery.dailyCallLimit, now, force: true });
+        if (sync.status !== 'success') { await later(new Date(now.getTime() + 3_600_000)); continue; }
+        const [fresh] = await this.db.select().from(t.events).where(eq(t.events.id, al.eventId));
+        const official = fresh ? await this.officialSale(fresh, now) : null;
+        if (!official || !fresh) {
+          await later(nextOnSaleCheck(fresh?.publicSaleStartAt && fresh.publicSaleStartAt > now ? fresh.publicSaleStartAt : null, now));
+          continue;
+        }
+        await this.fireEventAlert(al, req, fresh.id, { kind: 'on_sale', what: eventLabel(fresh, row.v), seller: official.seller, affiliate: official.affiliate, events: [{ title: fresh.name, when: shortWhen(fresh.localStartAt, row.v.timezone, fresh.subtype === 'time_tba'), venue: row.v.name, url: official.buyUrl }] }, `On sale now: ${fresh.name}`);
+        out.sent += 1;
+        continue;
+      }
+
+      if (al.kind === 'new_date' && al.keyword) {
+        const mk = al.marketId ? marketById(al.marketId) : null;
+        const where = mk && mk.lat !== null && mk.lng !== null ? { geoPoint: geohash(mk.lat, mk.lng), radiusMiles: mk.radiusMiles } : {};
+        const end = new Date(now.getTime() + 365 * 86_400_000);
+        const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: al.keyword, ...where, startDateTime: `${now.toISOString().slice(0, 10)}T00:00:00Z`, endDateTime: `${end.toISOString().slice(0, 10)}T23:59:59Z`, trigger: 'alert', dailyCallLimit: discovery.dailyCallLimit, now });
+        if (sync.status !== 'success' && sync.status !== 'skipped_fresh') { await later(new Date(now.getTime() + 3_600_000)); continue; }
+        const version = await this.latestVersion(req.id);
+        const brief = version ? RequestExtractionSchema.parse(version.brief) : null;
+        const found = brief ? await this.resolveEvent({ ...brief, performerOrTeam: al.keyword, dateExpression: null, resolvedLocalDate: null }, mk) : null;
+        const ids = found?.kind === 'resolved' ? [found.event.id] : found?.kind === 'ambiguous' ? found.candidates.map((c) => c.id) : [];
+        if (!ids.length) { await later(fallback); continue; }
+        const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(inArray(t.events.id, ids)).orderBy(asc(t.events.localStartAt)).limit(3);
+        const maps = await this.db.select({ eventId: t.eventSourceMappings.eventId, url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(inArray(t.eventSourceMappings.eventId, rows.map((r) => r.e.id)), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
+        const urlOf = new Map(maps.map((m) => [m.eventId, m.url]));
+        let affiliate = false;
+        const events = rows.map(({ e, v }) => {
+          const raw = urlOf.get(e.id) ?? null;
+          const seller = raw ? officialSellerFor(raw) : null;
+          const l = raw && seller ? sellerLink(raw, seller, this.env.AFFILIATE_LINK_TEMPLATES) : null;
+          affiliate = affiliate || !!l?.affiliate;
+          return { title: e.name, when: shortWhen(e.localStartAt, v.timezone, e.subtype === 'time_tba'), venue: `${v.name}, ${v.city}`, url: l?.url ?? raw };
+        });
+        await this.fireEventAlert(al, req, rows[0]!.e.id, { kind: 'new_date', what: titleCaseName(al.keyword), where: mk?.label ?? null, affiliate, events }, `${titleCaseName(al.keyword)} just announced ${events.length === 1 ? 'a date' : 'dates'}`);
+        out.sent += 1;
+        continue;
+      }
+      await later(fallback);
+    }
+    return out;
+  }
+
+  private async fireEventAlert(al: typeof t.eventAlerts.$inferSelect, req: typeof t.requests.$inferSelect, firedEventId: string, vars: Record<string, unknown>, subject: string): Promise<void> {
+    const now = this.now();
+    const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, al.contactId));
+    if (!contact) return;
+    const [lastInbound] = await this.db.select({ id: t.messages.rfcMessageId, subject: t.messages.subject }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+    // Claim it first, so a second pass can never send it twice.
+    const claimed = await this.db.update(t.eventAlerts).set({ state: 'sent', sentAt: now, lastCheckedAt: now, firedEventId }).where(and(eq(t.eventAlerts.id, al.id), eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
+    if (!claimed.length) return;
+    await this.queueSend({ messageClass: 'event_alert', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision: null, recipient: contact.emailOriginal, subject: lastInbound?.subject ? reSubject(lastInbound.subject, subject) : subject, template: 'event_alert', vars, inReplyTo: lastInbound?.id ?? null, approvalId: null, approvedHash: null, dedupeKey: `event_alert:${al.id}` });
+    await audit(this.db, { actor: 'system', action: 'event_alert.sent', entityKind: 'event_alert', entityId: al.id, diff: { kind: al.kind, firedEventId } });
+    await this.transition(req.id, 'referred', 'event_alert_sent');
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Research → comparison → advice → draft
   // ---------------------------------------------------------------------------------------------
   async research(args: { requestId: string; revision: number }): Promise<{ recommendationId: string | null; state: string }> {
@@ -1253,6 +1393,13 @@ export class Concierge {
     if ((active[0]?.n ?? 0) >= WATCH_MAX_ACTIVE_PER_CONTACT) return null;
     const cadence = cadenceMinutes(a.eventStartAt, now, { lastMinuteApproved: false });
     if (cadence === null) return null;
+    // A watch needs a seller we may check on a schedule. Without one it could never alert, yet it showed as
+    // "active" to staff until it expired; the customer is already told we are not monitoring automatically.
+    const configs = await this.db.select({ enabled: t.adapterConfigs.enabled, monitoringAllowed: t.adapterConfigs.monitoringAllowed }).from(t.adapterConfigs);
+    if (!configs.some((c) => c.enabled && c.monitoringAllowed)) {
+      await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: a.requestId, diff: { reason: 'no_monitoring_coverage' } });
+      return null;
+    }
     const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, consentMessageId: a.consentMessageId, cadenceMinutes: cadence, nextCheckAt: new Date(now.getTime() + cadence * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
     await audit(this.db, { actor: 'system', action: 'watch.created', entityKind: 'watch', entityId: w!.id, diff: { consentMessageId: a.consentMessageId, targetTotalCents: target } });
     return w!.id;
@@ -1431,6 +1578,25 @@ export function shortWhen(at: Date, tz: string, timeTba: boolean): string {
 /** Model ambiguities that a resolved event answers: which team by that name, and which city. */
 const SETTLED_BY_RESOLUTION = ['performer_ambiguous', 'event_location_unknown'];
 
+/** How often an alert with nothing more specific to wait for is checked, and how long a new-date alert lives. */
+const EVENT_ALERT_CHECK_HOURS = 24;
+const NEW_DATE_ALERT_DAYS = 180;
+
+/** Check just after the published sale time, and at least daily in case it moves. */
+function nextOnSaleCheck(opens: Date | null, now: Date): Date {
+  const daily = new Date(now.getTime() + EVENT_ALERT_CHECK_HOURS * 3_600_000);
+  if (!opens) return daily;
+  const justAfter = new Date(opens.getTime() + 2 * 60_000);
+  return justAfter < daily ? justAfter : daily;
+}
+
+/** "Fri, Oct 2 at 10:00 am ET"-style, in the venue's zone. */
+function saleOpensLabel(at: Date, tz: string): string {
+  const day = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' }).format(at);
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(at);
+  return `${day} at ${time}`;
+}
+
 /**
  * The team a New York customer means by a shared nickname: named for the market ("New York Giants",
  * "Brooklyn Nets", "New Jersey Devils"), or at home in one of its venues in the games found.
@@ -1470,6 +1636,7 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
     else if (k === 'ambiguities') out.ambiguities = next.ambiguities;
     else if (k === 'intent') out.intent = next.intent === 'clarification' ? prior.intent : next.intent;
     else if (k === 'wantsMore') out.wantsMore = next.wantsMore; // about this message's list, never the next one's
+    else if (k === 'notifyAsked') out.notifyAsked = next.notifyAsked; // this message's ask; a later reply must not re-arm a cancelled or sent alert
     else if (v !== null && v !== undefined) (out as Record<string, unknown>)[k] = v;
   }
   return out;

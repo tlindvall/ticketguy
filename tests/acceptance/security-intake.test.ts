@@ -128,6 +128,7 @@ const baseExtraction: RequestExtraction = {
       genreHint: null,
       wantsMore: null,
       resaleAsked: null,
+      notifyAsked: null,
       quotedPriceCents: null,
       quotedPriceBasis: null,
 };

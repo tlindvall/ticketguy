@@ -25,6 +25,7 @@ Nothing in this runbook authorizes a live send. `EMAIL_SEND_ENABLED`, `MARKETING
 
 - Inngest serves at `/api/inngest` (`INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`). Functions: `dispatch-outbox` (every minute + kick on webhook), `evaluate-due-watches` (every 5 min), `retention-sweep` (03:17 UTC).
 - Fallback if Inngest is unavailable: a Render cron (or any scheduler) can `POST /api/internal/recover-outbox` with `Authorization: Bearer $INTERNAL_CRON_SECRET` every minute. Safe to run concurrently; rows are leased with `FOR UPDATE SKIP LOCKED`.
+- Sale and new-date alerts (`EVENT_ALERTS_ENABLED`, DECISION_LOG #43): `evaluate-event-alerts` runs hourly. Without Inngest, `POST /api/internal/event-alerts` hourly with the same bearer secret. Safe to repeat.
 - Health: `GET /api/health` (db round trip, mode, send flag). Monitor it externally; deployment success is not proof that mail or jobs work.
 
 ## 4. Inspect a stuck conversation

@@ -117,6 +117,22 @@ export const evaluateWatches = inngest.createFunction(
   },
 );
 
+/** Event alerts ("email me when it goes on sale / when they announce a date"): hourly, off unless enabled. */
+export const evaluateEventAlerts = inngest.createFunction(
+  { id: 'evaluate-event-alerts', concurrency: { limit: 1 }, triggers: [cron('23 * * * *')] },
+  async ({ step }) => {
+    return step.run('evaluate', async () => {
+      const c = await getConcierge();
+      const r = await c.evaluateEventAlerts({ limit: 25 });
+      if (r.checked || r.sent || r.expired) {
+        const { db } = await getDb();
+        await audit(db, { actor: 'system', action: 'event_alert.pass', entityKind: 'system', entityId: 'event_alerts', diff: r });
+      }
+      return r;
+    });
+  },
+);
+
 /** Retention: purge raw bodies/attachments past purge_at; expire media; observations past retention. */
 export const retentionSweep = inngest.createFunction(
   { id: 'retention-sweep', concurrency: { limit: 1 }, triggers: [cron('17 3 * * *')] },
@@ -148,4 +164,4 @@ export const catalogPrewarm = inngest.createFunction(
   },
 );
 
-export const functions = [dispatchOutbox, evaluateWatches, retentionSweep, catalogPrewarm];
+export const functions = [dispatchOutbox, evaluateWatches, evaluateEventAlerts, retentionSweep, catalogPrewarm];

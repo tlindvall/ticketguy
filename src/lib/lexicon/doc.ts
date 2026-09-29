@@ -4,6 +4,7 @@ const SECTIONS: Array<[LexiconEntry['field'][], string]> = [
   [['intent'], 'What kind of request'],
   [['wantsMore'], 'More of a list'],
   [['resaleAsked'], 'Resale and comparing'],
+  [['notifyAsked'], 'Tell me when it goes on sale'],
   [['quotedPriceCents'], 'A price they saw'],
   [['categoryHint'], 'What kind of event (no performer or team named)'],
   [['genreHint'], 'What kind of music'],

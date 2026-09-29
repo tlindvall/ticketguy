@@ -66,6 +66,9 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'browse.football', type: 'browse', text: 'I want to see an american football game in or near new york the second week of october. Anything interesting? We need 4 tickets.', brief: { categoryHint: 'nfl', intent: 'browse', quantity: 4 }, reply: { state: 'needs_clarification', contains: ['Football in New York, Oct 8–14'], notContains: ['Yankees', "isn't something I cover"] } },
   { id: 'browse.genre_borough', type: 'browse', text: 'Any indie rock gigs in Brooklyn next week?', brief: { categoryHint: 'concert', genreHint: 'rock', city: 'Brooklyn', intent: 'browse' } },
   { id: 'browse.more', type: 'browse', text: 'can you give me the other 7', brief: { wantsMore: true }, reply: { notContains: ['7 tickets', 'seven tickets'] } },
+  // "Let me know when…" is about the event, not its price: no budget needed, never a price watch.
+  { id: 'watch.notify_on_sale', type: 'watch', text: 'Let me know when Knicks playoff tickets go on sale', brief: { notifyAsked: true, intent: 'new_search' } },
+  { id: 'watch.notify_new_date', type: 'watch', text: 'Can you tell me when Dua Lipa announces New York dates?', brief: { notifyAsked: true, performerOrTeam: 'Dua Lipa' } },
   { id: 'find.resale_asked', type: 'find', text: 'Rangers Oct 3, 2 tickets — is resale cheaper than Ticketmaster?', brief: { resaleAsked: true, quantity: 2 } },
   { id: 'find.price_check', type: 'find', text: 'Is $106 for the Rangers on Oct 3 a good deal?', brief: { quotedPriceCents: 10600, budgetCents: null }, reply: { notContains: ['not integrated', 'marketplaces directly'] } },
   { id: 'browse.theater', type: 'browse', text: 'Any Broadway shows next week?', brief: { categoryHint: 'theater' }, reply: { state: 'needs_clarification', contains: ['Theater in New York'], notContains: ["isn't something I cover"] } },
@@ -91,7 +94,7 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'quantity.wife', type: 'find', text: 'Knicks on October 24 for me and my wife', brief: { quantity: 2 } },
 
   // ── Other request types ──────────────────────────────────────────────────────────────────────────────
-  { id: 'watch.drop', type: 'watch', text: 'Knicks Oct 24, 2 tickets, $300 total. Let me know if it drops.', brief: { intent: 'watch_request' } },
+  { id: 'watch.drop', type: 'watch', text: 'Knicks Oct 24, 2 tickets, $300 total. Let me know if it drops.', brief: { intent: 'watch_request', notifyAsked: null } },
   { id: 'stop.watch', type: 'stop', text: 'Please stop the watch, we bought tickets already.', brief: { intent: 'cancel_watch' } },
   { id: 'optout.marketing', type: 'stop', text: 'Unsubscribe me from marketing emails please', reply: { state: 'closed', sends: false } },
   { id: 'delete.data', type: 'stop', text: 'Please delete my data.', reply: { contains: ['CONFIRM'] } },

@@ -498,3 +498,45 @@ listing (no verified offer) but does answer a quoted price (C_QUOTE) goes out wi
 - `PILOT_SUPPORTED_CATEGORIES` is superseded and ignored. It still parses, so an old setting doesn't break
   startup. Keeping a curated allowlist meant every new category was refused until someone noticed (theater,
   NFL, soccer), and each refusal is a lost customer.
+
+## 43. Sale and new-date alerts need no resale data; price watches only exist when they can run
+
+**Price watches without a monitorable seller are no longer created.** A watch needs a seller with recorded
+rights to be checked on a schedule (`monitoringAllowed`). None is connected in production, yet
+`maybeCreateWatch` still created the row, and staff saw an "active" watch that could never alert. The
+customer's reply already said "We are not monitoring this automatically", so nothing changes for them. Now
+no row is created, and `watch.not_created` is audited instead.
+
+**"Let me know when it goes on sale / when they announce a date" is a different product, and it works
+today.** It needs the catalog, not listings. So it is built on Ticketmaster Discovery, the source we already
+use:
+- `notifyAsked` is a new brief field, taught to the model and in the phrasebook (`alert.notify`).
+  - It is not a price watch. A price word in the same message ("let me know if it drops under $300") keeps
+    it a watch.
+  - It applies to one message only, like `wantsMore`, so a later reply cannot re-arm an alert that was
+    cancelled or sent.
+- **On-sale alert:** the event is known and the provider publishes a general-sale start in the future.
+  - The reply names the published date.
+  - We re-check the event just after that time, and at least daily in case it moves.
+  - The alert fires when the official sale is open (the same test as the official-sale reply, #36).
+  - No sale date at all is not treated as "not on sale yet": it could as easily mean sold out.
+- **New-date alert:** nothing is scheduled for that performer or team in the customer's market on any date.
+  - Their named city's metro is used, or nationally when they name none.
+  - We check daily for 180 days and fire when an event appears, listing up to three with links.
+- The "we couldn't find a scheduled event" clarification now offers it: reply "let me know". It is only
+  offered when nothing is scheduled at all, not merely on the date they asked.
+- **One-shot.** The alert is claimed before the email is queued, so a second pass can't send it twice.
+  "Stop the alerts", "stop all emails" and deleting the contact all cancel it.
+- **It sends without review.** It uses the new `event_alert` message class. It carries no prices; it is the
+  official-sale referral the owner already exempted (#36), sent later.
+  - The `EVENT_ALERTS_ENABLED` switch, the `watches` kill switch and a watch suppression all stop it at the
+    send gate.
+  - A human-approved alert would arrive after the moment it is about.
+- **Cost:** each check is one Discovery call inside the existing daily budget.
+
+**Off until the terms are checked.** `EVENT_ALERTS_ENABLED` defaults to false, in the code and in
+`render.yaml`. Scheduled checks that notify customers are a use the Ticketmaster Discovery terms have to
+allow, and a working key is not permission (handoff rule). While it is off, nothing is offered, created,
+checked or sent.
+- The check runs hourly from Inngest (`evaluate-event-alerts`).
+- Or a Render cron can POST `/api/internal/event-alerts` with the cron secret.

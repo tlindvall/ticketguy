@@ -14,13 +14,16 @@ import type { RequestExtraction } from '@/lib/domain/types';
  * add an entry (or a phrase to one), give it at least one example, run the tests, regenerate the doc.
  */
 
+const NOTIFY_PATTERN =
+  /\b(?:(?:let me know|tell me|notify me|alert me|email me|e-mail me|ping me|message me|give me a heads[- ]?up)\b[^.?!]{0,60}\b(?:on ?sale|go(?:es)? on sale|release[sd]?|announce[sd]?|add(?:s|ed)? (?:a |another |more )?(?:date|show|game|concert)s?|(?:new|more|any) (?:dates?|shows?)|tour|come[s]? (?:to|back)|play(?:s|ing)? (?:in|near|at))|when (?:do|will|does) (?:the )?tickets? (?:go|come) on sale|^\s*(?:(?:yes|yeah|sure|ok(?:ay)?)[,!.]?\s*)?(?:please[,!.]?\s*)?(?:do\s+)?(?:let me know|keep me posted|tell me when)(?:\s+please)?[\s.!]*$)/i;
+
 export type RequestType = 'find' | 'browse' | 'watch' | 'change' | 'stop' | 'any';
 export type LexiconCategory = CategoryHint | 'any';
 
 export type LexiconEntry = {
   id: string;
   /** What the phrase sets. */
-  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'quotedPriceCents' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
+  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'notifyAsked' | 'quotedPriceCents' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
   /** The meaning, in words, for people. */
   meaning: string;
   /** The value it sets (for fields with a fixed value). */
@@ -108,6 +111,24 @@ export const LEXICON: LexiconEntry[] = [
       { text: 'compare', expect: { resaleAsked: true } },
       { text: 'Rangers Oct 3, 2 tickets — is resale cheaper than Ticketmaster?', expect: { resaleAsked: true } },
     ],
+  },
+
+  {
+    id: 'alert.notify',
+    field: 'notifyAsked',
+    value: true,
+    meaning: 'Email them when tickets go on sale or a date is announced. Not a price watch: no budget is needed.',
+    phrases: ['let me know when tickets go on sale', 'tell me when they announce New York dates', 'notify me if they add a show', 'when do tickets go on sale?', 'let me know'],
+    pattern: NOTIFY_PATTERN,
+    categories: ['any'],
+    requestTypes: ['watch'],
+    teachModel: true,
+    examples: [
+      { text: 'Let me know when Dolphins playoff tickets go on sale', expect: { notifyAsked: true, intent: 'new_search' } },
+      { text: 'Can you tell me when Dua Lipa announces New York dates?', expect: { notifyAsked: true } },
+      { text: 'let me know', expect: { notifyAsked: true } },
+    ],
+    note: 'A price in the same message ("let me know if it drops under $300") makes it a price watch instead.',
   },
 
   {
@@ -522,6 +543,12 @@ export function lexiconGenre(text: string): { value: string; quote: string } | n
     if (m) return { value: String(e.value), quote: m[0] };
   }
   return null;
+}
+
+/** "Let me know when it goes on sale / when they announce a date" — and a bare "let me know" reply to our offer. */
+export function lexiconNotifyAsked(text: string): boolean {
+  if (/\b(drops?|cheaper|lower|price|under|below|budget)\b/i.test(text)) return false; // that is a price watch
+  return entriesFor('notifyAsked').some((e) => e.pattern.test(text));
 }
 
 export function lexiconResaleAsked(text: string): boolean {

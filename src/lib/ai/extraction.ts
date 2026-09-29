@@ -4,7 +4,7 @@ import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
-import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
+import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
@@ -123,6 +123,9 @@ export class FixtureExtractor implements Extractor {
     else if (/\b(delete|erase|remove) (all )?(of )?my (data|information|account)\b/i.test(t)) intent = 'delete_data';
     else if (/\b(stop|cancel) (the |my )?(watch|monitoring|alerts?|looking)\b/i.test(t)) intent = 'cancel_watch';
     else if (/\b(keep (looking|watching|an eye)|watch (it|this|for)|let me know if|alert me|notify me)\b/i.test(t)) intent = 'watch_request';
+    // "Let me know when it goes on sale" is about the event, not its price: no watch, no budget needed.
+    const notify = lexiconNotifyAsked(t);
+    if (notify && intent === 'watch_request') intent = 'new_search';
 
     const qty = parseQuantity(t);
     ev('quantity', qty.quote);
@@ -233,6 +236,7 @@ export class FixtureExtractor implements Extractor {
       genreHint: genre?.value ?? null,
       wantsMore: lexiconWantsMore(t) ? true : null,
       resaleAsked: lexiconResaleAsked(t) ? true : null,
+      notifyAsked: notify ? true : null,
       quotedPriceCents: quoted?.cents ?? null,
       quotedPriceBasis: quoted?.basis ?? null,
     });

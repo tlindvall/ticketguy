@@ -33,6 +33,10 @@ So the integration backlog is seven rows, not 135, and six of the seven are gate
 3. `/admin/sources` → **ticketmaster** → implementation `ticketmaster_discovery`, enabled, **daily call limit `4000`** (the default quota is 5,000/day; leave headroom), and in *Access approval evidence* write who accepted the terms, when, and the app name. The adapter does nothing until this row exists — a working key on its own never enables an integration.
 4. Run the pre-warm once so the pilot names are on file before anyone writes in: `pnpm tsx scripts/catalog-prewarm.ts` in the Render shell. It then runs daily at 04:05 UTC.
 
+**Sale and new-date alerts** (`EVENT_ALERTS_ENABLED`, DECISION_LOG #43) check Discovery on a schedule to email customers when a sale opens or a date is announced. Before turning them on, confirm the terms allow periodic checks used to notify end users, and record that in the adapter row's approval evidence.
+
+**Price watches need monitoring rights, not just data.** When a listing partner is signed (below), ask explicitly for scheduled re-checks per event (every 5–60 minutes near the date) and the right to email customers about what was found. A data deal without that clause gives "compare" but no watches.
+
 What Discovery never does: produce an offer. Its event price ranges are dropped before the catalog sees them. A range is not a purchasable ticket.
 
 ## Listing sources — apply for these, in this order

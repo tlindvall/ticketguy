@@ -36,7 +36,8 @@ Legend — **Real**: implemented and exercised against the real dependency. **Fi
 | Immutable send intents, claim, uncertain handling, 24h reconciliation rule, status ordering | Real (unit) | A17/A18/A19 tests |
 | Send gate (mode, kill switches, suppression, approval hash, revision, freshness, fixture content, allowlist) | Real | A13/A38 tests |
 | Resend outbound provider | Blocked | Coded with idempotency key; never invoked live |
-| Watches: consent-gated creation, cadence, expiry, dedupe, daily cap, alert approval, cancellation race | Fixture-only | Unit tests; scheduled evaluation via Inngest cron; only fixture sources can be monitored today |
+| Watches: consent-gated creation, cadence, expiry, dedupe, daily cap, alert approval, cancellation race | Fixture-only | Unit tests; scheduled evaluation via Inngest cron; only fixture sources can be monitored today, and no watch is created without one (#43) |
+| Sale and new-date alerts ("let me know when it goes on sale / they announce a date") | Real (code) / Off | Ticketmaster Discovery, hourly; `EVENT_ALERTS_ENABLED=false` until the Discovery terms are confirmed (#43) |
 | Interest evidence (polarity, gift, negation, decay) separate from marketing permission | Real | A28/A29 tests |
 | Preferences page (signed token, GET never mutates, unchecked opt-in) + one-click POST unsubscribe | Real (unit) | A30 tests; route smoke-tested |
 | Natural-language unsubscribe / stop-all; bounce/complaint global suppression | Real | Pipeline tests |

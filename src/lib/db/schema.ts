@@ -573,6 +573,41 @@ export const recommendations = pgTable(
   (t) => [index('recommendations_request_idx').on(t.requestId, t.revision)],
 );
 
+/**
+ * "Email me when it goes on sale" / "…when they announce a date". No prices are involved: an on-sale alert
+ * waits for the official general sale of one event to open; a new-date alert waits for the performer or team
+ * to have an event in the customer's market. One-shot: it fires once and is done (DECISION_LOG #43).
+ */
+export const eventAlerts = pgTable(
+  'event_alerts',
+  {
+    id: id(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id),
+    kind: text('kind').notNull(), // on_sale | new_date
+    /** The event whose sale is awaited (on_sale). */
+    eventId: uuid('event_id').references(() => events.id),
+    /** Who they asked about (new_date), as they named it. */
+    keyword: text('keyword'),
+    /** The customer's market (new_date); null searches nationally. */
+    marketId: text('market_id'),
+    consentMessageId: uuid('consent_message_id').references(() => messages.id),
+    state: text('state').notNull().default('active'), // active | sent | cancelled | expired
+    nextCheckAt: ts('next_check_at').notNull(),
+    lastCheckedAt: ts('last_checked_at'),
+    expiresAt: ts('expires_at').notNull(),
+    /** What fired it: the event now on sale, or the first new event found. */
+    firedEventId: uuid('fired_event_id').references(() => events.id),
+    sentAt: ts('sent_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('event_alerts_state_next_idx').on(t.state, t.nextCheckAt), uniqueIndex('event_alerts_request_kind_uq').on(t.requestId, t.kind)],
+);
+
 export const watches = pgTable(
   'watches',
   {

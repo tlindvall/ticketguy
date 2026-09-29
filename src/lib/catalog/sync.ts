@@ -23,7 +23,7 @@ export const SYNC_FRESHNESS_HOURS = 6;
 /** Provider default quota is 5,000/day; the enforced ceiling leaves headroom for retries and staff use. */
 export const DEFAULT_DAILY_CALL_LIMIT = 4000;
 
-export type SyncTrigger = 'interpret' | 'prewarm' | 'manual';
+export type SyncTrigger = 'interpret' | 'prewarm' | 'manual' | 'alert';
 
 export type SyncOutcome = {
   status: SourceStatus | 'skipped_fresh' | 'skipped_budget';
