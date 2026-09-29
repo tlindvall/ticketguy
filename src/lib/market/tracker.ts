@@ -34,9 +34,12 @@ export async function ensureMarketDatasets(db: DbOrTx): Promise<void> {
 
 /** How long until the next poll: daily far out, hourly on the last day, twice as often after a big move. */
 export function pollIntervalMinutes(leadMinutes: number, recentMovePct: number | null): number {
+  // Each poll is a paid request (about $0.04 pay-as-you-go), and it returns every snapshot since the last one,
+  // so polling less often loses no history, only freshness between polls. A customer's request refreshes its
+  // event on the spot, so the schedule only has to keep the series and the scorecard current.
   const h = leadMinutes / 60;
-  const base = h > 720 ? 24 * 60 : h > 168 ? 12 * 60 : h > 48 ? 6 * 60 : h > 24 ? 3 * 60 : 60;
-  return recentMovePct !== null && Math.abs(recentMovePct) >= 0.1 ? Math.max(60, base / 2) : base;
+  const base = h > 168 ? 24 * 60 : h > 48 ? 12 * 60 : 6 * 60;
+  return recentMovePct !== null && Math.abs(recentMovePct) >= 0.1 ? Math.max(3 * 60, base / 2) : base;
 }
 
 const SHADOW_EVERY_HOURS = 12;

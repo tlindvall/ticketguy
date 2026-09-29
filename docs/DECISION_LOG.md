@@ -569,9 +569,10 @@ date purges the raw series in the nightly sweep.
   `MARKET_TRACK_ENTITIES`, one row per event (`tracked_events`).
 - It is matched by the Ticketmaster event id, or by name, date and city. When a customer is waiting,
   SeatData is asked once to add a missing event.
-- Polls ask only for snapshots newer than the last one held. They run daily far out, every 12 hours within
-  a month, every 6 hours within a week, every 3 hours on the day before and hourly on the day, and twice as
-  often after a 10% move. They stop at the start.
+- Polls ask only for snapshots newer than the last one held. Each is a paid request (about $0.04 pay-as-you-go)
+  and returns every snapshot since the last poll, so the schedule is sparse: daily beyond a week, every
+  12 hours in the last week, every 6 hours in the last two days, twice as often after a 10% move. They stop
+  at the start. A customer's request refreshes its event on the spot.
 - Research refreshes the event on the spot, so the first reply already has SeatData's history.
 - Points are stored in `market_snapshots` with fee basis `listed_price`. The verified-total trend and
   benchmark engines therefore never mix them with all-in group prices.
