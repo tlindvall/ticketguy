@@ -32,7 +32,7 @@ import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, typ
 import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
-import { geohash, inMarket, isOutsideUs, marketById, marketFor, type Market } from '@/lib/domain/markets';
+import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -372,9 +372,21 @@ export class Concierge {
     const assumptions = [...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // Event resolution (a browse that found exactly one event has already resolved it).
-    const found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
+    let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
       : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city ? null : await this.contactMarket(contact!.id) });
+    // Not playing where they named it ("Metallica soon in NY" while the tour stops in Philadelphia and
+    // Foxborough): the nearest shows elsewhere in the US, closest first. One that fits a date they named, or
+    // one close enough to be the same trip, is the answer, said as such; otherwise they choose.
+    let elsewhere: NearbyShow[] = [];
+    if (!picked && found.kind === 'no_match' && found.reason !== 'no_performer' && merged.city && merged.performerOrTeam) {
+      elsewhere = await this.nearestElsewhere(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
+      const only = elsewhere.length === 1 ? elsewhere[0]! : null;
+      if (only && (merged.resolvedLocalDate || (only.miles !== null && only.miles <= NEARBY_SAME_TRIP_MILES))) {
+        found = { kind: 'resolved', event: only.e, venue: only.v, label: eventLabel(only.e, only.v), entityKind: only.kind, assumed: `${titleCaseName(merged.performerOrTeam)} isn’t playing in ${placeLabel(merged)} then, so I’ve gone with ${only.v.name}${only.v.city ? ` in ${only.v.city}` : ''}${milesAway(only.miles, merged)}. Tell me if that’s too far.` };
+        elsewhere = [];
+      }
+    }
     // A game already settled stays settled unless this message moves it: "let's do 6 tickets" or a pasted link
     // to the same game must never reopen "which game?".
     const resolution = !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction)) ?? found) : found;
@@ -424,7 +436,7 @@ export class Concierge {
       // The question that decides the event comes first and is built from the filtered candidates, never a
       // dump of them. The extractor's ambiguities are asked too: they are why this clarification exists, and
       // they used to trigger it without ever reaching the email.
-      const eventQuestion = resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
+      const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
       const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')));
       if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
       const questions = [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
@@ -432,10 +444,11 @@ export class Concierge {
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       const countryCheck = !contact!.countryConfirmed && count === 1;
       const knownFacts = describeKnown(merged);
-      const noMatch = resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
+      const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows are a trip away.'}` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city ? null : await this.contactMarket(contact!.id)));
-      const eventNote = noMatch ? `${noMatch}${offerAlert ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null;
+      const eventNote = noMatch ? `${noMatch}${offerAlert ? (elsewhere.length ? ` If you’d rather wait for a ${placeLabel(merged)} date, reply "let me know" and I’ll email you when one is announced.` : ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.') : ''}` : null;
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
@@ -961,6 +974,47 @@ export class Concierge {
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
     return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist', assumed };
+  }
+
+  /**
+   * The performer's shows outside the place the customer named, nearest first (by distance from that
+   * market's centre; by date when the place has no coordinates), in the window they asked about, at most
+   * three. The local catalog is read first; when it has none, the provider is asked once, nationally.
+   */
+  private async nearestElsewhere(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null }): Promise<NearbyShow[]> {
+    const mk = marketFor(x.city, x.state);
+    const name = splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam;
+    if (!mk || !name) return [];
+    const now = this.now();
+    const load = async (): Promise<NearbyShow[]> => {
+      const out: NearbyShow[] = [];
+      for (const entity of await this.matchEntities(name)) {
+        const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(60);
+        for (const { e, v } of rows) {
+          if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) continue;
+          if (v.country !== 'US' || inMarket(v, mk)) continue;
+          const day = eventLocalDate(e.localStartAt, v.timezone);
+          if (x.resolvedLocalDate && day !== x.resolvedLocalDate) continue;
+          const win = !x.resolvedLocalDate && x.dateExpression ? dateWindowFor(x.dateExpression, now, v.timezone) : null;
+          if (win && (day < win.from || day > win.to)) continue;
+          const miles = mk.lat !== null && mk.lng !== null && v.latitude != null && v.longitude != null ? milesBetween(mk.lat, mk.lng, v.latitude, v.longitude) : null;
+          out.push({ e, v, miles, kind: entity.kind === 'team' ? 'team' : 'artist' });
+        }
+      }
+      const shows = oneListingPerShow(out, ({ e, v }) => ({ name: e.name, venueId: v.id, startAt: e.localStartAt, entityId: e.primaryEntityId }));
+      const sorted = shows.sort((a, b) => (a.miles ?? Infinity) - (b.miles ?? Infinity) || a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
+      // A drive or a short hop is worth offering beside nothing; Seattle beside Philadelphia is not.
+      const reachable = sorted.filter((s) => s.miles !== null && s.miles <= NEARBY_TRAVEL_MILES);
+      return (reachable.length ? reachable : sorted).slice(0, 3);
+    };
+    const local = await load();
+    if (local.length) return local;
+    const discovery = await this.discoveryAvailability();
+    if (!discovery) return [];
+    const win = this.discoveryWindow(x, ctx);
+    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: name, city: null, size: 50, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
+    await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: name.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win, scope: 'national_fallback' } });
+    return sync.status === 'success' || sync.status === 'skipped_fresh' ? load() : [];
   }
 
   /**
@@ -1642,6 +1696,33 @@ function candidateFrom(entity: { name: string; league: string | null }, e: { id:
  * Home and away games in the window → home at the venue, or would they travel. A few games → name them. More
  * than that → ask for the date. It never lists more than three events and never claims availability.
  */
+/** A show this far from where they asked is the same trip, and is proposed rather than asked about. */
+export const NEARBY_SAME_TRIP_MILES = 60;
+/** Shows within this distance are offered on their own; farther ones only when there is nothing closer. */
+export const NEARBY_TRAVEL_MILES = 300;
+export type NearbyShow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; miles: number | null; kind: 'team' | 'artist' | null };
+
+function placeLabel(x: RequestExtraction): string {
+  return marketFor(x.city, x.state)?.label ?? x.city ?? 'there';
+}
+
+/** " (about 95 miles from New York)"; nothing when the distance isn't known. */
+function milesAway(miles: number | null, x: RequestExtraction): string {
+  if (miles === null) return '';
+  const rounded = miles < 20 ? Math.round(miles) : miles < 500 ? Math.round(miles / 5) * 5 : Math.round(miles / 100) * 100;
+  return ` (about ${rounded.toLocaleString('en-US')} miles from ${placeLabel(x)})`;
+}
+
+/** "Would one of these work: Sat, Oct 10 at Lincoln Financial Field, Philadelphia (about 95 miles from New York), or …?" */
+export function elsewhereQuestion(shows: NearbyShow[], x: RequestExtraction): string {
+  const opts = shows.map(({ e, v, miles }) => {
+    const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt);
+    return `${when} at ${v.name}${v.city ? `, ${v.city}` : ''}${milesAway(miles, x)}`;
+  });
+  const list = opts.length === 1 ? opts[0]! : `${opts.slice(0, -1).join('; ')}; or ${opts[opts.length - 1]}`;
+  return `${opts.length === 1 ? 'Would this one work' : 'Would one of these work'}: ${list}? Reply with the date, or tell me how far you’d travel.`;
+}
+
 export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtraction): string {
   const who = x.performerOrTeam ? titleCaseName(x.performerOrTeam) : null;
   const teams = [...new Map(cands.map((c) => [c.entityName, c])).values()];

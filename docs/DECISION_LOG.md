@@ -681,3 +681,22 @@ answered as a ticket request: "Two tickets. Got it. Which event…? I've assumed
 - A sender over 10 inbound emails an hour or 30 a day gets no model call and no reply until the window
   passes. The count covers this email and those stored before it. Staff are alerted once a day (the request
   goes to manual attention). Nothing is sent to the sender.
+
+## 49. Not playing where they asked: offer the nearest shows
+
+**What went wrong.** "Two Metallica tickets soon in NY" got "We checked the official listings and couldn't
+find a scheduled Metallica event in NY". The tour wasn't stopping inside the New York market's 35-mile
+radius, though there were shows in Connecticut, Philadelphia and Foxborough. The event match and the
+provider search were both confined to the market named, and nothing looked beyond it.
+
+**The fix.** When a performer is named with a place and nothing matches there, the performer's other US
+shows in the same window are read. The local catalog comes first, then one national provider search if the
+catalog has none. They are ranked by distance from that market's centre:
+- Shows within 300 miles are offered, up to three, closest first, each with its distance ("Sat, Oct 24 at
+  Hartford HealthCare Amphitheater, Bridgeport (about 55 miles from New York)").
+- A coast away is offered only when there's nothing closer, and the note then says so ("the nearest shows
+  are a trip away").
+- When exactly one show fits a date the customer named, or one lies within 60 miles, it is taken as the
+  answer, and the reply says where and how far ("… so I've gone with …. Tell me if that's too far.").
+- A reply naming one of the offered dates settles on that show.
+- The "let me know when there's a date here" offer stays, worded as waiting for a date in their city.

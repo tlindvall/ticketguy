@@ -133,7 +133,9 @@ describe('event alerts', () => {
     const first = await ask(c, '2 tickets to Nova Vale in Chicago', 'offer@customer.example');
     const [q] = await sends(first.requestId);
     expect(q!.messageClass).toBe('clarification');
-    expect(q!.bodyText).toContain('reply "let me know" and I’ll email you when a date is out.');
+    // The show on file elsewhere (New York) is offered, and so is waiting for a Chicago date.
+    expect(q!.bodyText).toContain('Nova Vale isn’t playing in Chicago');
+    expect(q!.bodyText).toContain('If you’d rather wait for a Chicago date, reply "let me know" and I’ll email you when one is announced.');
     const reply = await ask(c, 'yes please, let me know', 'offer@customer.example', first);
     expect(reply.requestId).toBe(first.requestId);
     const [alert] = await alertsFor(first.requestId);

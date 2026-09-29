@@ -102,7 +102,8 @@ function resolveMonthDay(expr: string, receivedAt: Date): string | null {
 
 const CITIES: Array<[RegExp, string, string]> = [
   [/\b(brooklyn|barclays)\b/i, 'Brooklyn', 'NY'],
-  [/\b(new york|nyc|manhattan|msg|madison square garden)\b/i, 'New York', 'NY'],
+  [/\b(new york|nyc|manhattan|msg|madison square garden|(?:in|near|around) ny)\b/i, 'New York', 'NY'],
+  [/\b(philadelphia|philly)\b/i, 'Philadelphia', 'PA'],
   [/\b(los angeles|la\b|inglewood)\b/i, 'Los Angeles', 'CA'],
   [/\b(chicago)\b/i, 'Chicago', 'IL'],
   [/\b(boston)\b/i, 'Boston', 'MA'],
