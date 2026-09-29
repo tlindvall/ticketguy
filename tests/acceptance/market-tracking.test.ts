@@ -141,9 +141,12 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     // Advice, not only figures: what a fair price is for the group, and whether to hurry (prices are easing).
     expect(rec!.bodyText).toContain('My read: for two together, up to about $150 a ticket before fees is a fair price');
-    expect(rec!.bodyText).toContain('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush.');
+    // Prices are easing, but nobody has said when they must decide or whether they can risk missing it, so the
+    // email says the evidence doesn't settle waiting, and asks exactly that.
+    expect(rec!.bodyText).toContain('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
+    expect(rec!.bodyText).not.toContain('no need to rush');
     // And it ends with the questions that would change the answer, not a request for things already sent.
-    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.\n- What’s the most you’d want to pay per ticket?\n- When do you need to have tickets sorted by?');
+    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.\n- When do you need to have tickets sorted by?\n- Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
     expect(rec!.bodyHtml).toContain('<ul');
   });
 

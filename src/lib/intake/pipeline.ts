@@ -1486,12 +1486,15 @@ export class Concierge {
       : brief.quotedPriceCents != null
         ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported' }
         : null;
+    // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
+    const saidInThread = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
+    const travelling = TRAVELLING.test(saidInThread);
     // The market around the listing they showed us: cheaper seats for their group, from one fresh listings read.
     const around = shown?.perTicketCents != null && licence.allows('tracking') ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
     const marketAround = around && shown?.perTicketCents != null ? findAlternatives(around.listings, { perTicketCents: shown.perTicketCents, feeBasis: shown.feeBasis, section: shown.section, row: shown.row }, quantity) : null;
     // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
     const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
-    const packet = buildPacket({ subject: shown, marketAround, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -2066,6 +2069,9 @@ export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: stri
   }
   return out;
 }
+
+/** Words that say the customer is travelling to the event, so a missed purchase costs more than the ticket. */
+const TRAVELLING = /\b(fly(ing)? in|flight|flying (in|out|to)|travel(l)?ing (in|to|from|for)|driving in|coming in from|road trip|booked (a|our) hotel|hotel booked)\b/i;
 
 /** Told when a screenshot showed a barcode, card or ID: we deleted it and used nothing from it. */
 export const REDACTED_NOTE = 'One of your screenshots looked like it showed a ticket barcode, card details or an ID, so I deleted it and didn’t use it. A screenshot of the listing page (price, section, row) is all I need.';

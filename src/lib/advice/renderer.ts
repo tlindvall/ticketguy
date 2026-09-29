@@ -50,6 +50,14 @@ export const PROHIBITED_PHRASES = [
   'great deal',
   'a steal',
   'bargain',
+  // We check prices and listings, never tickets: no promise about authenticity, entry or delivery.
+  'legit',
+  'authentic',
+  'safe to buy',
+  'will be delivered',
+  'will arrive',
+  'you’ll get in',
+  "you'll get in",
 ];
 
 const NUMERIC_OR_URL = /(\d|\$|%|https?:\/\/|www\.)/i;
@@ -172,8 +180,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     const prose = claimTexts.some((c) => restates(p.prose, c.text)) ? '' : p.prose.trim();
     const text = [prose, ...claimTexts.map((c) => c.text)].filter(Boolean).join(' ');
     lines.push(text);
-    const htmlClaims = claimTexts.map((c) => (c.url ? `${esc(c.text)} <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : esc(c.text)));
-    html.push(P([esc(prose), ...htmlClaims].filter(Boolean).join(' ')));
+    // Seller links are gathered at the end: the recommendation and its reasons come first, where to buy last.
+    html.push(P([esc(prose), ...claimTexts.map((c) => esc(c.text))].filter(Boolean).join(' ')));
     if (!placed) {
       listingBlock();
       placed = true;
@@ -186,13 +194,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(coverage.text);
     html.push(P(esc(coverage.text)));
   }
-  for (const c of packet.claimRecords.filter((c) => c.url && used.has(c.id))) {
-    lines.push(`${c.linkLabel ?? 'Link'}: ${c.url}`);
-  }
-  if (opts.affiliateDisclosure) {
-    lines.push(opts.affiliateDisclosure);
-    html.push(P(esc(opts.affiliateDisclosure)));
-  }
+  const linked = packet.claimRecords.filter((c) => c.url && used.has(c.id));
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
   const asks = packet.followUps ?? [];
@@ -202,6 +204,15 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   } else if (b.closing.trim()) {
     lines.push(b.closing.trim());
     html.push(P(esc(b.closing.trim())));
+  }
+  // Where to buy, last, with the affiliate disclosure beside the links it's about.
+  if (linked.length) {
+    lines.push(linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n'));
+    html.push(P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>')));
+  }
+  if (opts.affiliateDisclosure) {
+    lines.push(opts.affiliateDisclosure);
+    html.push(P(esc(opts.affiliateDisclosure)));
   }
   return { ok: true, textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
 }
@@ -219,7 +230,8 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
   const rest = visible.filter((c) => c !== link).map((c) => (c.id === 'C_CATCHES' ? { ...c, text: `${CATCHES_LEAD}\n${c.text.split('\n').map((i) => `- ${i}`).join('\n')}` } : c));
   const lead = link ? link.text : decisionLine[packet.decision];
   const asks = packet.followUps ?? [];
-  const text = [GREETING, lead, ...rest.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : '')), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : [])].join('\n\n');
-  const html = [P(GREETING), P(esc(lead)), ...rest.map((c) => P(`${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}`)), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : [])].join('\n');
+  const linked = rest.filter((c) => c.url);
+  const text = [GREETING, lead, ...rest.map((c) => c.text), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
+  const html = [P(GREETING), P(esc(lead)), ...rest.map((c) => P(esc(c.text))), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
   return { textBody: text, htmlBody: html };
 }

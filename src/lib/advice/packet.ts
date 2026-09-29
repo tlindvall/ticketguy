@@ -109,6 +109,10 @@ export type BuildPacketArgs = {
   timeZone?: string;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
+  /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
+  travelling?: boolean;
+  /** Where they want to sit ("lower level"), when they said: a venue-wide figure doesn't describe those seats. */
+  seatingPreference?: string | null;
 };
 
 export type SubjectListing = ListingFields & { source: 'screenshot' | 'listing_text'; observedAt: Date; confidence: 'high' | 'medium' | 'low' | null };
@@ -317,11 +321,21 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   // A price they asked about already has its own verdict (C_QUOTE_MARKET).
   if (!a.quote) parts.push(`For ${group.replace(/^for /, '')}, up to about ${formatUsd(fairUpTo)} a ticket before fees is a fair price; much more than that and you’re paying for a better section, not a better deal.`);
   const s = m.supply;
-  if (s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats you like at a fair price, I wouldn’t wait.');
-  else if (c.adequacy === 'sufficient' && c.direction === 'down') parts.push('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush.');
-  else if (c.adequacy === 'sufficient' && c.direction === 'up') parts.push('Prices have been climbing, so waiting hasn’t been paying off for this game.');
-  else if (s.now !== null && s.now >= 50) parts.push('There’s plenty to choose from, so there’s no need to grab the first seats you see.');
-  else if (s.now !== null && s.now < 15 && q > 1) parts.push('There aren’t many blocks for a group your size, so if you find seats you like at a fair price, I wouldn’t wait long.');
+  // Timing is said only from a fresh series for this group size, for the seats they asked about, and waiting
+  // is suggested only to someone who has said they can take the risk and by when they must decide. Otherwise
+  // it says plainly that the evidence doesn't settle it.
+  const fresh = !c.reasons.some((r) => r.startsWith('stale'));
+  const trendKnown = fresh && c.adequacy === 'sufficient' && !a.seatingPreference;
+  const p = a.priorities;
+  const canWait = !a.travelling && p.mustAttend !== true && (p.waitRiskTolerance === 'medium' || p.waitRiskTolerance === 'high') && p.decisionDeadline !== null;
+  if (fresh && s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats you like at a fair price, I wouldn’t wait.');
+  else if (trendKnown && c.direction === 'down') {
+    if (canWait) parts.push('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush before your deadline.');
+    else if (a.travelling || p.mustAttend === true) parts.push('Prices have been easing, but since you can’t risk missing it, I wouldn’t hold out for a lower price.');
+    else parts.push('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
+  } else if (trendKnown && c.direction === 'up') parts.push('Prices have been climbing, so waiting hasn’t been paying off for this game.');
+  else if (fresh && s.now !== null && s.now < 15 && q > 1) parts.push('There aren’t many blocks for a group your size, so if you find seats you like at a fair price, I wouldn’t wait long.');
+  else if (!trendKnown && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
   return {
     id: 'C_READ',
@@ -348,8 +362,13 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   }
   // A price we had to read as per ticket is asked about, because the answer changes the whole comparison.
   if (a.quote?.assumedPerTicket && a.quantity > 1 && (a.quote.source === 'screenshot' || a.quote.source === 'listing_text')) out.push(`Is ${formatUsd(a.quote.perTicketCents)} the price per ticket, or for all ${a.quantity}?`);
-  if (a.priorities.budgetTotalCents === null && !a.quote) out.push('What’s the most you’d want to pay per ticket?');
-  if (a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
+  // Only what would change the answer: a budget when we're finding options, and the timing questions when the
+  // market could make waiting worth it or the policy needs them.
+  const askBudget = a.priorities.budgetTotalCents === null && !a.quote && !sub;
+  const timingMatters = a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down');
+  if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
+  if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
+  if (askBudget) out.push('What’s the most you’d want to pay per ticket?');
   return out.slice(0, 3);
 }
 
@@ -379,7 +398,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}`,
+      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${a.seatingPreference ? ` That’s across the whole venue, not only ${a.seatingPreference} seats.` : ''}`,
       values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
       scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
       limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict', ...(group !== null ? ['group_split_not_guaranteed'] : [])],
