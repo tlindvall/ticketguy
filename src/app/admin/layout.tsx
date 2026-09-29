@@ -8,6 +8,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     ['/admin/sources', 'Sellers'],
     ['/admin/templates', 'Email wording'],
     ['/admin/operations', 'System health'],
+    ['/preview/home', 'Homepage preview'],
   ];
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-4">
