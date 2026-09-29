@@ -69,8 +69,18 @@ export function pointsFromSnapshot(s: SeatDataStatsSnapshot): SeriesPoint[] {
  * that many tickets, their median, and how many there are. The listing shape is undocumented, so every field
  * is read defensively; a listing without a usable price or quantity is left out. No eligible listing, no point.
  */
+/**
+ * Listings that aren't ordinary seats for an ordinary buyer: wheelchair and companion spaces (they go to people
+ * who need them, and are often the cheapest listing), parking and suites. They never set a group's "from" price.
+ */
+const NOT_ORDINARY_SEATS = /\b(ada|accessible|accessibility|wheelchair|w\/c|companion|parking|lot [a-z0-9]+|suite)\b/i;
+export function isOrdinarySeatListing(l: Record<string, unknown>): boolean {
+  return ![l.section, l.zone, l.row, l.notes].some((v) => typeof v === 'string' && NOT_ORDINARY_SEATS.test(v));
+}
+
 export function pointsFromListings(listings: Array<Record<string, unknown>>, sizes: number[], at: Date): SeriesPoint[] {
   const rows = listings
+    .filter(isOrdinarySeatListing)
     .map((l) => ({ active: l.active === undefined || l.active === null || l.active === true || l.active === 1 || l.active === 'true', price: Number(l.price), qty: Number(l.quantity) }))
     .filter((r) => r.active && Number.isFinite(r.price) && r.price > 0 && Number.isInteger(r.qty) && r.qty > 0);
   const out: SeriesPoint[] = [];

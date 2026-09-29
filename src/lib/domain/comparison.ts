@@ -14,6 +14,7 @@ export type ExclusionReason =
   | 'vip_package'
   | 'obstructed_view'
   | 'not_accessible'
+  | 'accessible_only'
   | 'section_not_acceptable'
   | 'seats_not_together'
   | 'unavailable'
@@ -52,7 +53,11 @@ export function evaluateOffer(offer: Offer, c: HardConstraints, eventId: string)
     if (ex && !exclusions.includes(ex)) exclusions.push(ex);
   }
   if (c.excludeObstructedView && offer.restrictions.includes('obstructed_view')) exclusions.push('obstructed_view');
-  if (c.requireAccessible && !offer.restrictions.includes('accessible_seating')) exclusions.push('not_accessible');
+  // Accessible spaces go to people who need them, both ways: a buyer who asked for access sees only accessible
+  // seats, and one who didn't never has a wheelchair or companion space ranked as their cheap option (R18).
+  const accessible = offer.restrictions.includes('accessible_seating');
+  if (c.requireAccessible && !accessible) exclusions.push('not_accessible');
+  if (!c.requireAccessible && accessible) exclusions.push('accessible_only');
   if (c.acceptableSections && offer.section && !c.acceptableSections.map((s) => s.toLowerCase()).includes(offer.section.toLowerCase())) {
     exclusions.push('section_not_acceptable');
   }
