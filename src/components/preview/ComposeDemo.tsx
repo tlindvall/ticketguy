@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { CopyAddress } from './CopyAddress';
 import { PaperclipIcon } from './icons';
 
 /**
@@ -10,17 +11,7 @@ import { PaperclipIcon } from './icons';
 export function ComposeDemo({ address, subject: initialSubject, body: initialBody, cta }: { address: string; subject: string; body: string; cta: string }) {
   const [subject, setSubject] = useState(initialSubject);
   const [body, setBody] = useState(initialBody);
-  const [copied, setCopied] = useState(false);
   const href = `mailto:${address}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      window.prompt('Copy the address:', address);
-    }
-  };
   return (
     <form className="compose" aria-label="Write to your ticket guy" onSubmit={(e) => { e.preventDefault(); window.location.href = href; }}>
       <div className="compose-titlebar">New message</div>
@@ -38,7 +29,7 @@ export function ComposeDemo({ address, subject: initialSubject, body: initialBod
       </label>
       <div className="compose-footer">
         <span className="compose-attach"><PaperclipIcon /><span>Links and screenshots welcome</span></span>
-        <button type="button" className="compose-copy" onClick={copy} aria-live="polite">{copied ? 'Address copied' : 'Copy address'}</button>
+        <CopyAddress address={address} />
         <button type="submit" className="btn-lime">{cta} <span aria-hidden="true">›</span></button>
       </div>
     </form>
