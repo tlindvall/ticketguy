@@ -260,7 +260,7 @@ describe('resolving an event through discovery', () => {
     expect(open.kind).toBe('resolved');
     if (open.kind === 'resolved') {
       expect(open.event.name).toBe('New York Rangers vs. New Jersey Devils');
-      expect(open.assumed).toBe("I've gone with the New York Rangers — tell me if you meant a different team.");
+      expect(open.assumed).toBe("I've gone with the New York Rangers. Tell me if you meant a different team.");
     }
     const settled = await c.resolveEventWithDiscovery(brief({ performerOrTeam: 'rangers', resolvedLocalDate: '2026-10-20', city: 'New York' }), ctx);
     expect(settled.kind).toBe('resolved');

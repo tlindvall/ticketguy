@@ -73,7 +73,7 @@ describe('override wiring', () => {
 
   it('uses the built-in template when no override is active', () => {
     const r = renderTemplate('acknowledgment', { eventLabel: 'the Rangers game', knownFacts: [] }, ctx);
-    expect(r.text).toContain("we're checking options for the Rangers game");
+    expect(r.text).toContain("Got it. We're checking options for the Rangers game.");
   });
 
   it('uses staff copy when a slot is overridden, and still appends the disclosure', () => {
@@ -82,7 +82,9 @@ describe('override wiring', () => {
       overrides: { acknowledgment: { slot: 'acknowledgment', subject: null, body: 'On it for {{eventLabel}}.', signature: '— Tobias\nTicket Guy', version: 3 } },
     });
     expect(r.text).toContain('On it for the Rangers game.');
-    expect(r.text).toContain('— Tobias');
+    // Staff copy gets the house style too: the sign-off dash is dropped.
+    expect(r.text).toContain('Tobias\nTicket Guy');
+    expect(r.text).not.toMatch(/[—–]/);
     // An acknowledgment goes out automatically, so it may not claim a person reviewed it.
     expect(r.text).toContain('AI-assisted ticket advice.');
     expect(r.text).not.toContain('human-reviewed');

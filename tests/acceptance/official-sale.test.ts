@@ -64,7 +64,7 @@ describe('still on general sale: point at the official sale', () => {
     expect(await researchQueued(requestId)).toBe(0);
     const [send] = await sendsFor(requestId);
     expect(send!.messageClass).toBe('acknowledgment'); // no prices, so no review gate
-    expect(send!.bodyText).toContain("Metro Testers vs. Boston (Fri, Oct 30 at 7:30pm at Test Garden) is still on general sale on Ticketmaster — that's where I'd buy your 4 tickets.");
+    expect(send!.bodyText).toContain("Metro Testers vs. Boston (Fri, Oct 30 at 7:30pm at Test Garden) is still on general sale on Ticketmaster, and that's where I'd buy your 4 tickets.");
     expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: ${URL_OPEN}`);
     expect(send!.bodyText).toContain('Games that aren\'t sold out often go for less on resale. Want me to compare? Just reply "compare".');
     expect(send!.bodyText).not.toMatch(/\$\d/); // never a price
@@ -106,7 +106,7 @@ describe('still on general sale: point at the official sale', () => {
     const r = await c.ingestInbound(inbound({ text: 'Any basketball games in New York Oct 29-31?', from: 'browse-links@customer.example', subject: 'Hoops' }));
     await interpretAll(c);
     const [send] = await sendsFor((r as { requestId: string }).requestId);
-        expect(send!.bodyText).toContain('• Fri, Oct 30 — Metro Testers vs. Boston at Test Garden. Home game against Boston.');
+        expect(send!.bodyText).toContain('• Fri, Oct 30: Metro Testers vs. Boston at Test Garden. Home game against Boston.');
     expect(send!.bodyText).toContain('Team page: https://www.metro-testers.example');
     expect(send!.bodyText).toContain(`Tickets: ${URL_OPEN}`);
     expect(send!.bodyHtml).toContain(`href="${URL_OPEN}"`);
@@ -140,7 +140,7 @@ describe('still on general sale: point at the official sale', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body).toContain('You mentioned $106 (I’ve taken that as per ticket). That’s a little above the face value Ticketmaster lists ($55–$95 a ticket before fees); fees alone can add that much, so it may well be the official price all-in.');
+    expect(body).toContain('You mentioned $106 (I’ve taken that as per ticket). That’s a little above the face value Ticketmaster lists ($55 to $95 a ticket before fees); fees alone can add that much, so it may well be the official price all-in.');
     expect(body).toContain('still on general sale on Ticketmaster');
     expect(body).toContain(`Buy on Ticketmaster: ${URL_OPEN}`);
     for (const noise of ['not integrated', 'packet', 'check primary', 'marketplaces directly', 'Sources checked']) expect(body, noise).not.toContain(noise);

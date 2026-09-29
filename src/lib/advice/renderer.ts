@@ -65,7 +65,7 @@ function checkProse(label: string, prose: string, errors: string[]): void {
 
 /** The sign-off says what is true of the message: "human-reviewed" only when a person approved it. */
 function signOff(reviewed: boolean): string {
-  return reviewed ? '— Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.' : '— Ticket Guy (AI-assisted). Buying happens with the seller; we never hold tickets or payments.';
+  return reviewed ? 'Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.' : 'Ticket Guy (AI-assisted). Buying happens with the seller; we never hold tickets or payments.';
 }
 
 const words = (s: string) => new Set(s.toLowerCase().replace(/[’']/g, '').match(/[a-z]+/g) ?? []);
@@ -150,7 +150,7 @@ export function renderEvidenceOnly(packet: AdvicePacket, opts: { reviewed?: bool
   const visible: ClaimRecord[] = packet.claimRecords.filter((c) => c.customerVisible);
   const decisionLine: Record<AdvicePacket['decision'], string> = {
     buy_now: 'Given your priorities, securing the option below is reasonable.',
-    wait_and_recheck: 'Given your priorities, a bounded wait is reasonable — see the recheck point below.',
+    wait_and_recheck: 'Given your priorities, a bounded wait is reasonable. See the recheck point below.',
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };

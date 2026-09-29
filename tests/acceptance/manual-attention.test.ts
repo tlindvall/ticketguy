@@ -39,7 +39,7 @@ describe('waiting on a person', () => {
     }
   };
   const alertsFor = (requestId: string) => h.db.select().from(t.outboxEvents).where(and(eq(t.outboxEvents.eventType, 'staff.alert'), eq(t.outboxEvents.entityId, requestId)));
-  const holdingFor = async (requestId: string) => (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).filter((s) => s.bodyText.includes('this one needs a person'));
+  const holdingFor = async (requestId: string) => (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).filter((s) => /this one needs a person/i.test(s.bodyText));
 
   it('after three rounds of questions, the customer is told a person has it and staff are alerted', async () => {
     const c = makeConcierge(h, { env });
@@ -56,8 +56,8 @@ describe('waiting on a person', () => {
 
     const holding = await holdingFor(requestId);
     expect(holding).toHaveLength(1);
-    expect(holding[0]!.bodyText).toContain('Thanks for bearing with me — this one needs a person, so I’ve passed it to the team.');
-    expect(holding[0]!.bodyText).toContain('The team replies between 9am–9pm ET.');
+    expect(holding[0]!.bodyText).toContain('Thanks for bearing with me. This one needs a person, so I’ve passed it to the team.');
+    expect(holding[0]!.bodyText).toContain('The team replies from 9am to 9pm ET.');
     expect(holding[0]!.bodyText).toContain('AI-assisted ticket advice.');
     expect(await alertsFor(requestId)).toHaveLength(1);
 
@@ -118,6 +118,6 @@ describe('waiting on a person', () => {
   it('labels reasons and hours in words', () => {
     expect(staffReasonLabel('extraction_failed:malformed: response did not satisfy the schema')).toBe('the AI could not read the message (malformed)');
     expect(staffReasonLabel('extraction_failed:budget_exceeded: cap')).toBe('the AI budget for this request ran out');
-    expect(staffedHoursLabel({ STAFFED_HOURS_START: 9, STAFFED_HOURS_END: 21, STAFFED_HOURS_TIMEZONE: 'America/New_York' })).toBe('9am–9pm ET');
+    expect(staffedHoursLabel({ STAFFED_HOURS_START: 9, STAFFED_HOURS_END: 21, STAFFED_HOURS_TIMEZONE: 'America/New_York' })).toBe('9am to 9pm ET');
   });
 });

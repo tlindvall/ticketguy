@@ -107,7 +107,7 @@ describe('end-to-end fixture flow', () => {
     expect(req!.state).toBe('awaiting_review');
     expect(req!.currentRevision).toBe(1);
     const [ack] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, reqId));
-    expect(ack!.bodyText).toContain("I've read $300 as the total for both — tell me if you meant per ticket.");
+    expect(ack!.bodyText).toContain("I've read $300 as the total for both. Tell me if you meant per ticket.");
     expect(ack!.bodyText).not.toContain('per ticket or for everyone combined');
     const versions = await h.db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, reqId));
     // $300 for two is 30000 whole-party, never 60000 (A01).

@@ -255,7 +255,7 @@ export function spanLabel(from: string, to: string): string {
   const fmt = (iso: string, opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', ...opts }).format(new Date(`${iso}T12:00:00Z`));
   if (from === to) return fmt(from, { weekday: 'short', month: 'short', day: 'numeric' });
   const sameMonth = from.slice(0, 7) === to.slice(0, 7);
-  return sameMonth ? `${fmt(from, { month: 'short', day: 'numeric' })}–${fmt(to, { day: 'numeric' })}` : `${fmt(from, { month: 'short', day: 'numeric' })} – ${fmt(to, { month: 'short', day: 'numeric' })}`;
+  return sameMonth ? `${fmt(from, { month: 'short', day: 'numeric' })} to ${fmt(to, { day: 'numeric' })}` : `${fmt(from, { month: 'short', day: 'numeric' })} to ${fmt(to, { month: 'short', day: 'numeric' })}`;
 }
 
 /** Phrases that ask what is on, and the kind-of-event words, live in the lexicon (src/lib/lexicon). */

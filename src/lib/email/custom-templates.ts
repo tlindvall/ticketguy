@@ -27,7 +27,7 @@ export const SLOTS: SlotSpec[] = [
     variables: [
       { name: 'eventLabel', kind: 'text', description: 'What we think they asked for', sample: 'the New York Rangers vs. New Jersey Devils game' },
       { name: 'knownFacts', kind: 'list', description: 'What we understood, one per line', sample: ['5 tickets', 'Seated together', 'Madison Square Garden'] },
-      { name: 'assumptions', kind: 'list', description: 'What we assumed instead of asking (quantity, budget basis), one line each; empty when nothing was', sample: ["I've assumed two tickets — just tell me if you need a different number."] },
+      { name: 'assumptions', kind: 'list', description: 'What we assumed instead of asking (quantity, budget basis), one line each; empty when nothing was', sample: ["I've assumed two tickets. Just tell me if you need a different number."] },
       { name: 'countryUnconfirmed', kind: 'flag', description: 'True when we could not confirm the customer is in the US', sample: true },
     ],
   },
@@ -36,12 +36,12 @@ export const SLOTS: SlotSpec[] = [
     label: 'Clarification request',
     description: 'Asks the customer for missing details before any price research.',
     variables: [
-      { name: 'acknowledgement', kind: 'text', description: 'One sentence saying what we understood', sample: 'Two Rangers tickets next week, up to $200 total—got it.' },
+      { name: 'acknowledgement', kind: 'text', description: 'One sentence saying what we understood', sample: 'Two Rangers tickets next week, up to $200 total. Got it.' },
       { name: 'eventNote', kind: 'text', description: 'What we found (or did not) about the event, when there is something to say', sample: 'We don’t have a scheduled Dua Lipa event on file, so we haven’t looked at prices yet.' },
       { name: 'questions', kind: 'list', description: 'The questions that decide it, most important first', sample: ['Are you looking for a home game at Madison Square Garden, or are away games an option?'] },
       { name: 'countryCheck', kind: 'flag', description: 'True on the first clarification to a customer whose country is not yet confirmed', sample: true },
       { name: 'knownFacts', kind: 'list', description: 'What we have so far, as a list (kept for existing templates)', sample: ['4 tickets', 'Budget $600 total'] },
-      { name: 'assumptions', kind: 'list', description: 'What we assumed instead of asking (quantity, budget basis), one line each; empty when nothing was', sample: ["I've assumed two tickets — just tell me if you need a different number."] },
+      { name: 'assumptions', kind: 'list', description: 'What we assumed instead of asking (quantity, budget basis), one line each; empty when nothing was', sample: ["I've assumed two tickets. Just tell me if you need a different number."] },
     ],
   },
   {
@@ -226,12 +226,12 @@ export type TemplateOverrides = Partial<Record<SlotName, ActiveTemplate>>;
 
 /** Starter copy shown in the editor: the built-in wording, in the authoring syntax. */
 export const STARTER_BODY: Record<SlotName, string> = {
-  acknowledgment: `Got it — we're checking options for {{eventLabel}}.
+  acknowledgment: `Got it. We're checking options for {{eventLabel}}.
 
 What we understood:
 {{knownFacts}}
 
-{{countryUnconfirmed}}One quick check: we serve US customers only — reply if you're not in the US.
+{{countryUnconfirmed}}One quick check: we serve US customers only, so reply if you're not in the US.
 
 We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`,
   clarification: `Hey,

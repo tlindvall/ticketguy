@@ -22,7 +22,7 @@ describe('a price the customer saw, against face value', () => {
     } as unknown as BuildPacketArgs;
     const p = buildPacket(args);
     const byId = Object.fromEntries(p.claimRecords.map((c) => [c.id, c]));
-    expect(byId.C_QUOTE!.text).toBe('You mentioned $106 (I’ve taken that as per ticket). Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value — but if $106 is Ticketmaster’s own price, it’s face value, not a resale markup.');
+    expect(byId.C_QUOTE!.text).toBe('You mentioned $106 (I’ve taken that as per ticket). Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. But if $106 is Ticketmaster’s own price, it’s face value, not a resale markup.');
     expect(byId.C_OFFICIAL!.linkLabel).toBe('Buy on Ticketmaster');
     expect(byId.C_COVERAGE!.text).toBe('I can’t see live resale listings for this show yet, so this doesn’t compare other sellers’ prices.');
     expect(byId.C_NOHIST).toBeUndefined(); // no history line when there was no market to compare

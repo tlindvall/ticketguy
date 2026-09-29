@@ -121,7 +121,7 @@ describe('event alerts', () => {
     expect(await c.evaluateEventAlerts()).toMatchObject({ checked: 1, sent: 1 });
     const [mail] = await sends(requestId);
     expect(mail!.messageClass).toBe('event_alert');
-    expect(mail!.bodyText).toContain('Good news — Nova Vale');
+    expect(mail!.bodyText).toContain('Good news: Nova Vale');
     expect(mail!.bodyText).toContain('is on general sale now on Ticketmaster.');
     expect(mail!.bodyText).toContain('https://www.ticketmaster.com/nova-vale-new-york/event/nv1');
   });
