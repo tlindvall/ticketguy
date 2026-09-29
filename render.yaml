@@ -51,6 +51,10 @@ services:
       # allow that use. Set here, not in the dashboard, for the same reason as EMAIL_SEND_ENABLED above.
       - key: EVENT_ALERTS_ENABLED
         value: "false"
+      # SeatData market data (DECISION_LOG #44). The key is entered in the dashboard; nothing runs until the
+      # licence record on /admin/market is approved for tracking.
+      - key: SEATDATA_API_KEY
+        sync: false
       - key: HUMAN_REVIEW_REQUIRED
         value: "true"
       - key: PG_POOL_MAX

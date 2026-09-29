@@ -85,6 +85,13 @@
       "when": 1790643549670,
       "tag": "0011_event_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790646583645,
+      "tag": "0012_market_tracking",
+      "breakpoints": true
     }
   ]
 }

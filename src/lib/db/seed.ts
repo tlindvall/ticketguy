@@ -1,3 +1,4 @@
+import { ensureMarketDatasets } from '@/lib/market/tracker';
 import { sql } from 'drizzle-orm';
 import type { Db } from './index';
 import * as t from './schema';
@@ -18,6 +19,7 @@ export async function seedRegistry(db: Db): Promise<number> {
       .onConflictDoNothing();
   }
   await ensureDefaultSwitches(db);
+  await ensureMarketDatasets(db);
   return reg.sources.length;
 }
 
@@ -73,7 +75,7 @@ export async function seedFixtures(db: Db): Promise<void> {
   for (const [hAgo, cents] of trend) {
     snaps.push({ datasetId: null, eventId: FX.events.rangersPreseason, basketKey: basket5, quantity: 5, seatZone: 'upper', observedAt: new Date(FIXTURE_NOW.getTime() - hAgo * 3_600_000), leadTimeMinutes: Math.round((RANGERS_PRESEASON_START.getTime() - (FIXTURE_NOW.getTime() - hAgo * 3_600_000)) / 60_000), cheapestEligibleTotalCents: cents, eligibleOptionCount: 3, sourceIds: [FX.source, FX.sourceB], feeBasis: 'verified_total', coverageComplete: true, qualityFlags: [`cheapest_source:${FX.source}`], methodVersion: 'fixture', isFixture: true });
   }
-  await db.insert(t.marketSnapshots).values(snaps);
+  await db.insert(t.marketSnapshots).values(snaps).onConflictDoNothing();
   await db.insert(t.venueSeatZones).values([
     ...['208', '212', '218', '224', '227', '419'].map((s) => ({ venueId: FX.venues.msg, layoutVersion: 'v2024', section: s, zone: 'upper', evidence: 'fixture', reviewedBy: 'seed' })),
     { venueId: FX.venues.msg, layoutVersion: 'v2024', section: '110', zone: 'lower', evidence: 'fixture', reviewedBy: 'seed' },

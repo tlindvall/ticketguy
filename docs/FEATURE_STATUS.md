@@ -37,6 +37,7 @@ Legend — **Real**: implemented and exercised against the real dependency. **Fi
 | Send gate (mode, kill switches, suppression, approval hash, revision, freshness, fixture content, allowlist) | Real | A13/A38 tests |
 | Resend outbound provider | Blocked | Coded with idempotency key; never invoked live |
 | Watches: consent-gated creation, cadence, expiry, dedupe, daily cap, alert approval, cancellation race | Fixture-only | Unit tests; scheduled evaluation via Inngest cron; only fixture sources can be monitored today, and no watch is created without one (#43) |
+| Resale market statistics (SeatData): tracking every requested event, own history, typical prices, group-aware wait rule, shadow scorecard | Real (code) / Licence-gated | `/admin/market`; nothing runs until the licence is approved for tracking; advice and customer display are separate switches (#44) |
 | Sale and new-date alerts ("let me know when it goes on sale / they announce a date") | Real (code) / Off | Ticketmaster Discovery, hourly; `EVENT_ALERTS_ENABLED=false` until the Discovery terms are confirmed (#43) |
 | Interest evidence (polarity, gift, negation, decay) separate from marketing permission | Real | A28/A29 tests |
 | Preferences page (signed token, GET never mutates, unchecked opt-in) + one-click POST unsubscribe | Real (unit) | A30 tests; route smoke-tested |

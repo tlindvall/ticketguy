@@ -39,6 +39,17 @@ So the integration backlog is seven rows, not 135, and six of the seven are gate
 
 What Discovery never does: produce an offer. Its event price ranges are dropped before the catalog sees them. A range is not a purchasable ticket.
 
+## Market data: SeatData (connected, licence-gated)
+
+SeatData (seatdata.io) reports resale market statistics per event: cheapest and median listed prices per ticket before fees, for any quantity and for two or more, overall and per seating zone, and the active listing count, as a time series. It is evidence for buy/wait advice, never an offer (DECISION_LOG #44). Setup:
+
+1. Render → Environment: `SEATDATA_API_KEY` (never in chat or the repo). Optional `SEATDATA_DAILY_CALL_LIMIT` (default 300) and `MARKET_TRACK_ENTITIES`.
+2. Render shell: `pnpm tsx scripts/probe-seatdata.ts` confirms the live response shapes (structure only).
+3. `/admin/market` → Change licence: approve **tracking** (and **benchmark**) under the standard licence's internal-use terms, with the licence version as the reference.
+4. **advice** and **customer display** only after SeatData confirms in writing that email advice, charts, alerts and historical comparisons shown to customers are allowed; record the email date, sender and exact wording.
+
+Known limits: fees are not in the statistics; `all_in_price` is empty for StubHub sales and some sales details are inferred (sales are not used); refreshes are about every 30 minutes for requested events; no price exists for three or more seats together.
+
 ## Listing sources — apply for these, in this order
 
 Each of these is a **commercial application**, not a signup form. Expect days to weeks, and expect to state the use case: an email concierge that compares listings and links customers to the seller, never buys or resells. Record the outcome — who approved, what operations, what rate limit, what retention, what link/affiliate terms — in the adapter row's approval evidence. Nothing is enabled on a key alone.

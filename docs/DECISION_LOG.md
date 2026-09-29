@@ -540,3 +540,62 @@ allow, and a working key is not permission (handoff rule). While it is off, noth
 checked or sent.
 - The check runs hourly from Inngest (`evaluate-event-alerts`).
 - Or a Render cron can POST `/api/internal/event-alerts` with the cron secret.
+
+## 44. SeatData resale market statistics: our own series, a group-aware wait rule, and a scorecard
+
+**What SeatData is to us.** It is market data, not a seller. For each event it reports the cheapest and
+median *listed* price per ticket, before fees:
+- for any quantity (`get_in`) and for listings of two or more (`get_in_qty2plus`);
+- overall and per seating zone;
+- plus the number of active listings.
+
+Nothing from it is ever a purchasable offer or compared with an all-in checkout total. Its sales data is not
+used, because `all_in_price` is empty for StubHub rows and some quantities and prices are inferred. It is
+not in the seller registry.
+
+**Licence first.** The key alone runs nothing. A licence record (`market_datasets`, fixed id) is created
+quarantined on deploy and switched per use on `/admin/market`:
+- **tracking**: collect and keep series for events we follow;
+- **benchmark**: typical prices from past games;
+- **advice**: let it steer buy/wait;
+- **customer_display**: show its numbers to customers.
+
+Approving needs a written reference. SeatData's standard licence restricts redistribution and competing
+services, so advice and display each need SeatData's written OK for exactly that use. The licence retention
+date purges the raw series in the nightly sweep.
+
+**Tracking.**
+- Every upcoming event a customer asks about is followed, plus any team or performer in
+  `MARKET_TRACK_ENTITIES`, one row per event (`tracked_events`).
+- It is matched by the Ticketmaster event id, or by name, date and city. When a customer is waiting,
+  SeatData is asked once to add a missing event.
+- Polls ask only for snapshots newer than the last one held. They run daily far out, every 12 hours within
+  a month, every 6 hours within a week, every 3 hours on the day before and hourly on the day, and twice as
+  often after a 10% move. They stop at the start.
+- Research refreshes the event on the spot, so the first reply already has SeatData's history.
+- Points are stored in `market_snapshots` with fee basis `listed_price`. The verified-total trend and
+  benchmark engines therefore never mix them with all-in group prices.
+- Past games of the same team at the same venue (up to 8, refreshed monthly, sampled every 6 hours) go to
+  `market_history` for "typical at this point before the game". That needs at least 5 games, one value
+  each.
+- Calls per UTC day are capped (`SEATDATA_DAILY_CALL_LIMIT`, default 300) and logged in `market_fetches`.
+
+**Group size decides what the data can say** (the owner's correction: "prices fell" is not "wait").
+- One ticket reads the any-quantity series and two read the 2+ series.
+- Three or more get **no price trend**: nothing says five seats together exist. They get only the listing
+  count, said to be all listings.
+- A falling market can support "wait" only when it is the customer's own series, and only for a customer
+  who accepts the risk and has a deadline; otherwise we ask.
+- Shrinking listings (25% and 10 fewer within three days) always argue for buying, for any group, even
+  while prices fall: `market_listings_shrinking`, never wait.
+
+**Proving it before we lean on it.**
+- Twice a day per tracked event the engine records what it would tell a flexible single and a flexible
+  pair buyer (`shadow_advice`): wait when their series is falling and listings hold, otherwise buy.
+- 24 hours later it scores that against the listed floor.
+- `/admin/market` shows how often waiting saved money, what it cost when it did not, how often listings fell
+  while waiting, and how often buying was the wrong call. Nothing there is sent.
+
+**In the reply** (with customer_display): the claims `C_MARKET`, `C_MARKET_TYPICAL` and `C_QUOTE_MARKET`.
+Each says "listed price, before fees" and names SeatData as market statistics, not tickets we checked.
+"Past movement does not predict" still holds.

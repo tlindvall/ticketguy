@@ -26,12 +26,15 @@ export class FixtureDrafter implements Drafter {
     };
     const paragraphs: ResponseBlocks['paragraphs'] = [];
     // The customer's own question comes first, then where to buy.
-    const about = ['C_QUOTE', 'C_FACE'].filter((id) => ids.has(id));
+    const about = ['C_QUOTE', 'C_QUOTE_MARKET', 'C_FACE'].filter((id) => ids.has(id));
     if (about.length) paragraphs.push({ claimIds: about, prose: '' });
     if (ids.has('C_OFFICIAL')) paragraphs.push({ claimIds: ['C_OFFICIAL'], prose: '' });
     if (ids.has('C_BEST')) paragraphs.push({ claimIds: ['C_BEST'], prose: 'Best verified option for your group:' });
     else if (ids.has('C_ALT1')) paragraphs.push({ claimIds: ['C_ALT1'], prose: 'Closest verified option:' });
     const context: string[] = [];
+    // Resale market statistics: where the market is, and what comparable games usually cost at this point.
+    const market = ['C_MARKET', 'C_MARKET_TYPICAL'].filter((id) => ids.has(id));
+    if (market.length) paragraphs.push({ claimIds: market, prose: 'On the resale market:' });
     if (ids.has('C_BENCH')) context.push('C_BENCH');
     else if (ids.has('C_NOHIST')) context.push('C_NOHIST');
     if (ids.has('C_TREND')) context.push('C_TREND');

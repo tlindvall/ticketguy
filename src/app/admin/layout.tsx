@@ -4,6 +4,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const nav: Array<[string, string]> = [
     ['/admin/inbox', 'Requests'],
     ['/admin/watches', 'Price watches'],
+    ['/admin/market', 'Resale market'],
     ['/admin/sources', 'Sellers'],
     ['/admin/templates', 'Email wording'],
     ['/admin/operations', 'System health'],

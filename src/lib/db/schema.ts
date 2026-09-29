@@ -985,7 +985,114 @@ export const marketSnapshots = pgTable(
     methodVersion: text('method_version').notNull(),
     isFixture: boolean('is_fixture').notNull().default(false),
   },
-  (t) => [index('market_snapshots_event_basket_time_idx').on(t.eventId, t.basketKey, t.observedAt)],
+  (t) => [index('market_snapshots_event_basket_time_idx').on(t.eventId, t.basketKey, t.observedAt), uniqueIndex('market_snapshots_event_basket_time_uq').on(t.eventId, t.basketKey, t.observedAt)],
+);
+
+/**
+ * Events whose resale market we follow (DECISION_LOG #44). One row per event and provider, however many
+ * customers asked: the market is polled once and shared. Rows come from open requests and the evaluation
+ * cohort; polling stops when the event starts.
+ */
+export const trackedEvents = pgTable(
+  'tracked_events',
+  {
+    id: id(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id),
+    provider: text('provider').notNull(), // seatdata
+    providerEventId: text('provider_event_id'),
+    state: text('state').notNull().default('pending_match'), // pending_match | requested | active | unmatched | ended
+    reasons: jsonb('reasons').$type<string[]>().notNull().default([]), // request | cohort
+    nextPollAt: ts('next_poll_at').notNull(),
+    lastPolledAt: ts('last_polled_at'),
+    /** The newest provider snapshot we hold; the next poll asks only for what came after it. */
+    lastObservedAt: ts('last_observed_at'),
+    matchAttempts: integer('match_attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('tracked_events_event_provider_uq').on(t.eventId, t.provider), index('tracked_events_state_next_idx').on(t.state, t.nextPollAt)],
+);
+
+/**
+ * Price history of past comparable events (same team or performer, same venue) as the provider reports it.
+ * Kept apart from market_snapshots because these events are not in our catalog. Deleted with the dataset's
+ * retention.
+ */
+export const marketHistory = pgTable(
+  'market_history',
+  {
+    id: id(),
+    datasetId: uuid('dataset_id')
+      .notNull()
+      .references(() => marketDatasets.id),
+    providerEventId: text('provider_event_id').notNull(),
+    entityId: uuid('entity_id').references(() => entities.id),
+    venueId: uuid('venue_id').references(() => venues.id),
+    eventName: text('event_name').notNull(),
+    eventStartAt: ts('event_start_at').notNull(),
+    basketKey: text('basket_key').notNull(),
+    quantity: integer('quantity').notNull(),
+    seatZone: text('seat_zone'),
+    observedAt: ts('observed_at').notNull(),
+    leadTimeMinutes: integer('lead_time_minutes').notNull(),
+    priceCents: integer('price_cents').notNull(),
+    medianCents: integer('median_cents'),
+    activeListings: integer('active_listings'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('market_history_event_basket_time_uq').on(t.providerEventId, t.basketKey, t.observedAt), index('market_history_entity_venue_idx').on(t.entityId, t.venueId)],
+);
+
+/** Every provider call, for the daily budget and so staff can see what the data costs. No payloads. */
+export const marketFetches = pgTable(
+  'market_fetches',
+  {
+    id: id(),
+    provider: text('provider').notNull(),
+    kind: text('kind').notNull(), // match | stats | history_search | history_stats | request_event
+    eventId: uuid('event_id'),
+    status: text('status').notNull(), // success | not_found | error | skipped_budget
+    calls: integer('calls').notNull().default(1),
+    points: integer('points').notNull().default(0),
+    detail: text('detail'),
+    at: ts('at').notNull(),
+  },
+  (t) => [index('market_fetches_provider_at_idx').on(t.provider, t.at)],
+);
+
+/**
+ * What the engine would have advised at a moment, for standard customer profiles, and — once the checkpoint
+ * has passed — what the market then did. It is how we find out whether "wait" is worth the risk before we
+ * tell a customer to (DECISION_LOG #44). Nothing here is ever sent.
+ */
+export const shadowAdvice = pgTable(
+  'shadow_advice',
+  {
+    id: id(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id),
+    basketKey: text('basket_key').notNull(),
+    profile: text('profile').notNull(), // single_flexible | pair_flexible
+    quantity: integer('quantity').notNull(),
+    decidedAt: ts('decided_at').notNull(),
+    leadTimeMinutes: integer('lead_time_minutes').notNull(),
+    decision: text('decision').notNull(), // buy | wait
+    reasons: jsonb('reasons').$type<string[]>().notNull().default([]),
+    priceCents: integer('price_cents').notNull(),
+    activeListings: integer('active_listings'),
+    checkpointAt: ts('checkpoint_at').notNull(),
+    outcomePriceCents: integer('outcome_price_cents'),
+    outcomeActiveListings: integer('outcome_active_listings'),
+    outcomeAt: ts('outcome_at'),
+    verdict: text('verdict'), // wait_saved | wait_cost | wait_even | buy_right | buy_regret | no_data
+    deltaCents: integer('delta_cents'),
+    methodVersion: text('method_version').notNull(),
+    scoredAt: ts('scored_at'),
+  },
+  (t) => [uniqueIndex('shadow_advice_uq').on(t.eventId, t.basketKey, t.profile, t.decidedAt), index('shadow_advice_unscored_idx').on(t.scoredAt, t.checkpointAt)],
 );
 
 export const venueSeatZones = pgTable(

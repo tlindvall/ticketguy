@@ -12,6 +12,8 @@ import { newIdempotencyKey, nowMs } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
 import { researchLinksFor, type ResearchLink } from '@/lib/catalog/research-links';
 import { eventLocalDate } from '@/lib/domain/dates';
+import { marketForGroup, marketLicence } from '@/lib/market/tracker';
+import type { MarketContext } from '@/lib/market/series';
 import { ago, briefLines, type Tone, reasonText, sendClassLabel, sendStateInfo, stateInfo, toneClass, whenLocal, whenStaff } from '@/lib/admin/labels';
 
 export const dynamic = 'force-dynamic';
@@ -66,6 +68,10 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const handCheckOpen = req.state === 'manual_attention' || (req.state === 'awaiting_review' && offers.length === 0);
   const eventUrl = event ? (officialUrls.ticketmaster ?? Object.values(officialUrls)[0]) : undefined;
   const lines = brief ? briefLines(brief) : [];
+  // Resale market statistics for this event (DECISION_LOG #44): staff see them whenever tracking is licensed.
+  const licence = await marketLicence(db);
+  const [tracked] = event ? await db.select().from(t.trackedEvents).where(eq(t.trackedEvents.eventId, event.e.id)) : [];
+  const market = event && licence.allows('tracking') ? await marketForGroup(db, { eventId: event.e.id, quantity: Number(brief?.quantity ?? 2), eventStartAt: event.e.localStartAt, now: new Date(now) }) : null;
   // The conversation is what was actually sent and received, plus our emails that are queued or were held
   // back (those never become messages), so a reviewer sees every reply the customer got or is about to get.
   const sentIds = new Set(messages.map((m) => m.providerEmailId).filter(Boolean));
@@ -151,6 +157,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
               </div>
             ) : <p className="mt-1 text-sm text-gray-500">Not matched to an event yet, so no prices can be checked.</p>}
           </div>
+          {event ? <MarketCard market={market} tracked={tracked ?? null} licensed={licence.allows('tracking')} shown={licence.allows('customer_display')} quantity={Number(brief?.quantity ?? 2)} now={now} /> : null}
         </aside>
       </div>
 
@@ -277,5 +284,38 @@ function ResearchLinkList({ links }: { links: ResearchLink[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function MarketCard({ market, tracked, licensed, shown, quantity, now }: { market: Awaited<ReturnType<typeof marketForGroup>> | null; tracked: typeof t.trackedEvents.$inferSelect | null; licensed: boolean; shown: boolean; quantity: number; now: number }) {
+  const line = (label: string, c: MarketContext | null) => {
+    if (!c?.current) return <p className="text-gray-500">{label}: no data yet</p>;
+    const w = c.h72 ?? c.h24;
+    return (
+      <p>
+        {label}: from <strong>{formatUsd(c.current.priceCents)}</strong> a ticket
+        {w ? <span className={w.changeCents < 0 ? 'text-emerald-700' : w.changeCents > 0 ? 'text-rose-700' : ''}> ({w.changeCents < 0 ? '' : '+'}{formatUsd(w.changeCents)} in {w.hours}h)</span> : null}
+        {c.adequacy !== 'sufficient' ? <span className="text-gray-500"> · not enough data for a trend</span> : c.direction !== 'flat' ? <span> · {c.direction === 'down' ? 'falling' : 'rising'}</span> : <span> · flat</span>}
+      </p>
+    );
+  };
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <h2 className="font-semibold">Resale market</h2>
+      {!licensed ? (
+        <p className="mt-1 text-sm text-gray-500">Not switched on. See <a className="underline" href="/admin/market">Resale market</a>.</p>
+      ) : !market || (!market.single.current && !tracked?.lastObservedAt) ? (
+        <p className="mt-1 text-sm text-gray-500">{tracked ? (tracked.state === 'unmatched' ? 'SeatData does not have this event.' : tracked.state === 'requested' ? 'Asked SeatData to start tracking it.' : 'No market data yet.') : 'Not tracked yet.'}</p>
+      ) : (
+        <div className="mt-1 space-y-1 text-sm">
+          {line('One ticket', market.single)}
+          {quantity >= 2 ? line('Two together', quantity === 2 ? market.context : null) : null}
+          {quantity > 2 ? <p className="text-xs text-gray-500">No price data for {quantity} seats together; only the listing count below applies to this group.</p> : null}
+          {market.supply.now !== null ? <p>Listings: {market.supply.now}{market.supply.before !== null ? ` (was ${market.supply.before}${market.supply.hours ? ` ${market.supply.hours}h ago` : ''})` : ''}{market.supply.trend === 'shrinking' ? <span className="tg-badge tg-badge-warn ml-1">shrinking</span> : null}</p> : null}
+          {market.single.typical ? <p className="text-gray-600">Past games here at this point: {formatUsd(market.single.typical.p25Cents)}–{formatUsd(market.single.typical.p75Cents)} a ticket ({market.single.typical.events} games)</p> : null}
+          <p className="text-xs text-gray-500">Listed prices before fees{market.single.current ? `, as of ${ago(market.single.current.at.getTime(), now)}` : ''}. {shown ? 'Shown to customers in replies.' : 'Staff only: not in customer emails until customer display is licensed.'}</p>
+        </div>
+      )}
+    </div>
   );
 }
