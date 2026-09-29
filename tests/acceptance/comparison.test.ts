@@ -136,3 +136,21 @@ describe('A27 freshness', () => {
     expect(v).toMatchObject({ fresh: false, reason: 'source_data_stale' });
   });
 });
+
+// R18: an accessible space listed cheaply was ranked as the best option for a buyer who never asked for access.
+describe('accessible seating goes to buyers who need it', () => {
+  const accessibleCheap = fixtureOffer({ id: 'ada-cheap', quantity: 2, payableTotalCents: 12000, section: '111', row: 'WC', restrictions: ['accessible_seating'], seatsTogether: true });
+  const ordinary = fixtureOffer({ id: 'ordinary', quantity: 2, payableTotalCents: 30000, section: '212', row: 'D', seatsTogether: true });
+
+  it('a buyer who did not ask for access never gets the accessible space as the cheap option', () => {
+    const r = compareOffers([accessibleCheap, ordinary], base, FIXTURE_EVENT_ID);
+    expect(r.eligible.concat(r.needsReview).map((e) => e.offer.id)).toEqual(['ordinary']);
+    expect(r.excluded.find((e) => e.offer.id === 'ada-cheap')!.exclusions).toContain('accessible_only');
+  });
+
+  it('a buyer who needs access sees only accessible seats', () => {
+    const r = compareOffers([accessibleCheap, ordinary], { ...base, requireAccessible: true }, FIXTURE_EVENT_ID);
+    expect(r.eligible.concat(r.needsReview).map((e) => e.offer.id)).toEqual(['ada-cheap']);
+    expect(r.excluded.find((e) => e.offer.id === 'ordinary')!.exclusions).toContain('not_accessible');
+  });
+});

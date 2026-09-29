@@ -3,7 +3,7 @@ import { env, type Env } from '@/lib/config/env';
 import { Concierge } from '@/lib/intake/pipeline';
 import { FixtureExtractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
-import { ModelDrafter, ModelExtractor, type Effort, type StructuredClient } from '@/lib/ai/model-client';
+import { ModelDrafter, ModelExtractor, ModelListingReader, type Effort, type StructuredClient } from '@/lib/ai/model-client';
 import { AnthropicClient } from '@/lib/ai/anthropic';
 import { OpenAiClient } from '@/lib/ai/openai';
 import { ResendProvider } from '@/lib/email/resend';
@@ -43,6 +43,8 @@ export function getConcierge(): Promise<Concierge> {
         env: e,
         extractor: selected ? new ModelExtractor(selected.client, selected.model, selected.effort) : new FixtureExtractor(),
         drafter: selected ? new ModelDrafter(selected.client, selected.model, selected.effort) : new FixtureDrafter(),
+        // Screenshots and pasted listings are read only by a real model; fixture mode stores them unread.
+        listingReader: selected ? new ModelListingReader(selected.client, selected.model, selected.effort) : undefined,
         emailProvider: e.EMAIL_SEND_ENABLED && e.RESEND_API_KEY ? new ResendProvider(e.RESEND_API_KEY) : null,
         fixtureOffers: fixture || e.DEV_FIXTURE_OFFERS ? FIXTURE_OFFERS : {},
       });

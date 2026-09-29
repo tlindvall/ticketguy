@@ -8,6 +8,7 @@ import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
 import { formatUsd, formatUsdChange } from '@/lib/domain/money';
 import type { AdvicePacket } from '@/lib/advice/packet';
+import type { ListingFields } from '@/lib/ai/listing-evidence';
 import { newIdempotencyKey, nowMs } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
 import { researchLinksFor, type ResearchLink } from '@/lib/catalog/research-links';
@@ -36,6 +37,8 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const observations = latestRun ? await db.select({ o: t.offerObservations, off: t.offers }).from(t.offerObservations).innerJoin(t.offers, eq(t.offers.id, t.offerObservations.offerId)).where(eq(t.offerObservations.runId, latestRun.id)) : [];
   const manual = req.eventId ? await db.select({ o: t.offerObservations, off: t.offers }).from(t.offerObservations).innerJoin(t.offers, eq(t.offers.id, t.offerObservations.offerId)).where(eq(t.offerObservations.verificationMethod, 'approved_manual')).then((rows) => rows.filter((r) => r.o.eventId === req.eventId)) : [];
   const recs = await db.select().from(t.recommendations).where(eq(t.recommendations.requestId, id)).orderBy(desc(t.recommendations.createdAt));
+  const shownListings = await db.select().from(t.listingEvidence).where(eq(t.listingEvidence.requestId, id)).orderBy(desc(t.listingEvidence.createdAt));
+  const outcomes = await db.select().from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, id)).orderBy(asc(t.requestOutcomes.at));
   const advice = await db.select().from(t.adviceRuns).where(eq(t.adviceRuns.requestId, id)).orderBy(desc(t.adviceRuns.createdAt)).limit(1);
   const bench = advice[0]?.benchmarkRunId ? (await db.select().from(t.benchmarkRuns).where(eq(t.benchmarkRuns.id, advice[0].benchmarkRunId)))[0] : null;
   const trend = advice[0]?.trendRunId ? (await db.select().from(t.trendRuns).where(eq(t.trendRuns.id, advice[0].trendRunId)))[0] : null;
@@ -159,6 +162,8 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
               </div>
             ) : <p className="mt-1 text-sm text-gray-500">Not matched to an event yet, so no prices can be checked.</p>}
           </div>
+          <ListingEvidenceCard rows={shownListings} timeZone={event?.v.timezone ?? 'America/New_York'} />
+          <OutcomesCard id={id} tags={req.problemTypes ?? []} rows={outcomes} timeZone={event?.v.timezone ?? 'America/New_York'} />
           {event ? <MarketCard market={market} tracked={tracked ?? null} licensed={licence.allows('tracking')} shown={marketUses(licence, appEnv()).display} quantity={Number(brief?.quantity ?? 2)} now={now} /> : null}
         </aside>
       </div>
@@ -181,7 +186,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
           <details className="mt-4">
             <summary className="cursor-pointer text-sm font-medium">Add a listing you found</summary>
             <div className="mt-2">
-              <JsonForm url={`/api/admin/requests/${id}/manual-offers`} submitLabel="Save listing" fields={[{ name: 'sourceId', label: 'Seller (e.g. stubhub, seatgeek, vividseats)', required: true, placeholder: 'stubhub' }, { name: 'sourceUrl', label: 'Listing link (https)', required: true }, { name: 'observedAt', label: 'When you saw it', type: 'datetime', required: true }, { name: 'quantity', label: 'Tickets', type: 'number', required: true, defaultValue: Number(brief?.quantity ?? 2) }, { name: 'section', label: 'Section' }, { name: 'row', label: 'Row' }, { name: 'seatClass', label: 'Seat area (upper, lower, floor…)' }, { name: 'baseTotalCents', label: 'Price before fees, in cents (e.g. 25000 = $250)', type: 'number' }, { name: 'payableTotalCents', label: 'Total with all fees, in cents', type: 'number' }, { name: 'seatsTogether', label: 'Seats are together', type: 'checkbox' }, { name: 'feesKnown', label: 'I saw every mandatory fee', type: 'checkbox' }, { name: 'taxKnown', label: 'Tax was shown', type: 'checkbox' }, { name: 'deliveryMethod', label: 'Delivery (mobile, transfer…)' }, { name: 'evidenceNote', label: 'What you saw and exactly what you selected', type: 'textarea', required: true }]} extra={{ restrictions: [] }} nullableCheckboxes={['seatsTogether']} />
+              <JsonForm url={`/api/admin/requests/${id}/manual-offers`} submitLabel="Save listing" fields={[{ name: 'sourceId', label: 'Seller (e.g. stubhub, seatgeek, vividseats)', required: true, placeholder: 'stubhub' }, { name: 'sourceUrl', label: 'Listing link (https)', required: true }, { name: 'observedAt', label: 'When you saw it', type: 'datetime', required: true }, { name: 'quantity', label: 'Tickets', type: 'number', required: true, defaultValue: Number(brief?.quantity ?? 2) }, { name: 'section', label: 'Section' }, { name: 'row', label: 'Row' }, { name: 'seatClass', label: 'Seat area (upper, lower, floor…)' }, { name: 'baseTotalCents', label: 'Price before fees, in cents (e.g. 25000 = $250)', type: 'number' }, { name: 'payableTotalCents', label: 'Total with all fees, in cents', type: 'number' }, { name: 'seatsTogether', label: 'Seats are together', type: 'checkbox' }, { name: 'feesKnown', label: 'I saw every mandatory fee', type: 'checkbox' }, { name: 'taxKnown', label: 'Tax was shown', type: 'checkbox' }, { name: 'deliveryMethod', label: 'Delivery (mobile, transfer…)' }, { name: 'accessibleOnly', label: 'Accessible seating (wheelchair or companion space)', type: 'checkbox' }, { name: 'obstructedView', label: 'Obstructed or limited view', type: 'checkbox' }, { name: 'vipPackage', label: 'VIP or hospitality package', type: 'checkbox' }, { name: 'evidenceNote', label: 'What you saw and exactly what you selected', type: 'textarea', required: true }]} extra={{ restrictions: [] }} nullableCheckboxes={['seatsTogether']} />
             </div>
           </details>
           <div className="mt-4"><ActionButton url={`/api/admin/requests/${id}/research`} body={{ expectedRevision: req.currentRevision, idempotencyKey: newIdempotencyKey() }} label="Re-run the check" /></div>
@@ -319,6 +324,74 @@ function MarketCard({ market, tracked, licensed, shown, quantity, now }: { marke
           <p className="text-xs text-gray-500">Listed prices before fees{market.single.current ? `, as of ${ago(market.single.current.at.getTime(), now)}` : ''}. {shown ? 'In the reply emails.' : 'Staff only: not in customer emails until customer display is licensed.'}</p>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * What the customer showed us about the listing they're considering, as read: the starting point for finding
+ * alternatives by hand. It is what their screenshot or pasted text displayed, never a checked offer.
+ */
+function ListingEvidenceCard({ rows, timeZone }: { rows: Array<typeof t.listingEvidence.$inferSelect>; timeZone: string }) {
+  if (!rows.length) return null;
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <h2 className="font-semibold">Listing they sent</h2>
+      <ul className="mt-2 space-y-2 text-sm">
+        {rows.map((r) => {
+          const f = (r.fields ?? {}) as Partial<ListingFields>;
+          const where = [f.section ? `Sec ${f.section}` : null, f.row ? `Row ${f.row}` : null, f.seatNumbers?.length ? `Seats ${f.seatNumbers.join(', ')}` : null].filter(Boolean).join(' · ');
+          return (
+            <li key={r.id} className="border-t border-gray-100 pt-2 first:border-0 first:pt-0">
+              <p className="text-gray-500">{r.source === 'screenshot' ? 'Screenshot' : r.source === 'listing_text' ? 'Pasted listing' : 'Link'} · sent {whenLocal(r.observedAt, timeZone)}{r.confidence ? ` · read ${r.confidence}` : ''}</p>
+              {r.sensitive ? <p className="text-red-700">Showed a barcode, card or ID. Deleted unread; ask for a listing screenshot.</p> : !r.fields ? <p className="text-gray-500">Not a ticket listing ({r.kind}).</p> : (
+                <>
+                  <p>{[f.quantity ? `${f.quantity} tickets` : null, f.seller, where].filter(Boolean).join(' · ') || 'No seats read'}</p>
+                  <p>{f.perTicketCents != null ? `${formatUsd(f.perTicketCents)}/ticket` : 'No price'}{f.wholePartyCents != null ? ` · ${formatUsd(f.wholePartyCents)} total` : ''} · fees {f.feeBasis === 'all_in' ? 'included' : f.feeBasis === 'before_fees' ? 'extra' : 'unknown'}{f.priceBasis === 'unknown' ? ' · per ticket or total not stated' : ''}</p>
+                  {f.deliveryText || f.deliveryBy ? <p className="text-gray-600">Delivery: {f.deliveryText ?? f.deliveryBy}</p> : null}
+                  {f.restrictions?.length ? <p className="text-gray-600">Notes: {f.restrictions.join('; ')}</p> : null}
+                  {f.unreadable?.length ? <p className="text-amber-700">Couldn&rsquo;t read: {f.unreadable.join('; ')}</p> : null}
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+const OUTCOME_LABELS: Record<string, string> = {
+  link_click: 'Clicked a link',
+  user_reported_purchase: 'Said they bought',
+  user_reported_no_purchase: 'Said they didn’t buy',
+  stop_watching: 'Asked us to stop',
+  follow_up_sent: 'Follow-up sent',
+  follow_up_reply: 'Answered the follow-up',
+  affiliate_confirmed_purchase: 'Purchase confirmed by affiliate network',
+};
+
+/** What they needed help with, and what happened after we answered, each as the kind of evidence it is. */
+function OutcomesCard({ id, tags, rows, timeZone }: { id: string; tags: string[]; rows: Array<typeof t.requestOutcomes.$inferSelect>; timeZone: string }) {
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <h2 className="font-semibold">Pilot</h2>
+      <p className="mt-1 text-sm text-gray-600">{tags.length ? tags.map((x) => x.replace(/_/g, ' ')).join(', ') : 'No problem type yet'}</p>
+      {rows.length ? (
+        <ul className="mt-2 space-y-1 text-sm">
+          {rows.map((r) => {
+            const d = r.details as { changedWhat?: boolean | null; changedWhen?: boolean | null; likelyBot?: boolean; label?: string | null; note?: string };
+            const extra = r.kind === 'follow_up_reply' ? ` · changed what: ${d.changedWhat ?? 'not said'}, when: ${d.changedWhen ?? 'not said'}` : r.kind === 'link_click' ? ` · ${d.label ?? 'link'}${d.likelyBot ? ' (likely automated)' : ''}` : d.note ? ` · ${d.note}` : '';
+            return <li key={r.id}>{whenLocal(r.at, timeZone)}: {OUTCOME_LABELS[r.kind] ?? r.kind}{extra}</li>;
+          })}
+        </ul>
+      ) : <p className="mt-1 text-sm text-gray-500">No outcome yet.</p>}
+      <details className="mt-2">
+        <summary className="cursor-pointer text-sm font-medium">Record an outcome</summary>
+        <div className="mt-2">
+          <JsonForm url={`/api/admin/requests/${id}/outcomes`} submitLabel="Save outcome" fields={[{ name: 'kind', label: 'What happened (affiliate_confirmed_purchase, user_reported_purchase or user_reported_no_purchase)', required: true, placeholder: 'affiliate_confirmed_purchase' }, { name: 'network', label: 'Affiliate network, if any' }, { name: 'amountCents', label: 'Order total in cents, if shown', type: 'number' }, { name: 'note', label: 'Where you saw it', type: 'textarea', required: true }]} />
+        </div>
+      </details>
     </div>
   );
 }

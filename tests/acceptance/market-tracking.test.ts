@@ -141,10 +141,29 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     // Advice, not only figures: what a fair price is for the group, and whether to hurry (prices are easing).
     expect(rec!.bodyText).toContain('My read: for two together, up to about $150 a ticket before fees is a fair price');
-    expect(rec!.bodyText).toContain('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush.');
+    // Prices are easing, but nobody has said when they must decide or whether they can risk missing it, so the
+    // email says the evidence doesn't settle waiting, and asks exactly that.
+    expect(rec!.bodyText).toContain('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
+    expect(rec!.bodyText).not.toContain('no need to rush');
     // And it ends with the questions that would change the answer, not a request for things already sent.
-    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link, or the price and section, and I’ll tell you if it’s a good deal.\n- What’s the most you’d want to pay per ticket?\n- When do you need to have tickets sorted by?');
+    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.\n- When do you need to have tickets sorted by?\n- Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
     expect(rec!.bodyHtml).toContain('<ul');
+  });
+
+  // A price under the cheapest resale listing used to read "a good price if it's genuine". It is a reason to
+  // look closer, and a price well above it is not a bargain; neither is a verified offer.
+  it('a price the customer asks about is set against the resale floor without calling it a deal', async () => {
+    const c = concierge();
+    const low = await ask(c, '2 Testers tickets Oct 30, is $100 a good deal?', 'quote-low@customer.example');
+    await c.research({ requestId: low, revision: 1 });
+    const [lowRec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, low));
+    expect(lowRec!.bodyText).toContain('Against resale: $100 a ticket is below the cheapest resale listing I can see ($130 before fees, anywhere in the venue). That’s unusually low, so make sure the seats, the number of tickets and the fees are what you think before you pay.');
+    expect(lowRec!.bodyText).not.toMatch(/good price|good deal/i);
+
+    const high = await ask(c, '2 Testers tickets Oct 30, is $260 a good deal?', 'quote-high@customer.example');
+    await c.research({ requestId: high, revision: 1 });
+    const [highRec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, high));
+    expect(highRec!.bodyText).toContain('is above the cheapest resale listing I can see ($130 before fees, anywhere in the venue). That can be fair for a better section, but it isn’t a bargain.');
   });
 
   // Live: a reply that was only a StubHub link came back with market figures, a sentence naming SeatData, and
@@ -160,7 +179,7 @@ describe('resale market tracking', () => {
     expect(body.startsWith('Hey,\n\nGoing by the StubHub link you sent, here’s what I have for two tickets to Metro Testers vs. Boston at Test Garden')).toBe(true);
     expect(body).toContain('Resale listings for two tickets together currently start at $130');
     expect(body).toContain('up to about $150 a ticket before fees is a fair price');
-    expect(body).toContain('- What price per ticket does that StubHub listing show, and which section? I’ll tell you if it’s a good deal.');
+    expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
 
@@ -238,6 +257,27 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('StubHub and Vivid Seats resale prices before fees');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
+  });
+
+  // "Look for better options": the listing they send is set against the market's current listings for their
+  // group. Cheaper seats in their section or area are named as market data (before fees, no link, not their
+  // seats); a listing in their own section and row is never offered back, since it may be the same seats.
+  it('a pasted listing gets a recommendation first, its catches, and cheaper listings for the group', async () => {
+    const read = { kind: 'ticket_listing' as const, sensitiveContent: false, seller: 'StubHub', eventName: 'Metro Testers vs. Boston', eventDate: '2026-10-30', venue: null, city: null, quantity: 4, priceText: '$210 each incl. fees', priceDollars: 210, priceBasis: 'per_ticket' as const, feeBasis: 'all_in' as const, totalDollars: null, section: '112', row: '5', seatNumbers: ['1', '2', '3', '4'], seatsTogether: true, restrictions: [], deliveryText: 'Mobile transfer', deliveryBy: '2026-10-29', includedBenefits: [], confidence: 'high' as const, unreadable: [] };
+    const c = new Concierge({ db: h.db, env: env(), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: null, marketFetch: fetchImpl, listingReader: { name: 'fake', read: async () => read } });
+    const requestId = await ask(c, '4 Testers tickets Oct 30. Found this: Sec 112 Row 5, seats 1-4, $210 each incl fees. Good?', 'alts@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const body = rec!.bodyText;
+    expect(body.startsWith('Hey,\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
+    expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
+    expect(body).not.toContain('I can’t see what sellers are charging');
+    expect(body).not.toMatch(/send me the listing/i);
+    expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket (about $620 for all four), in your section. These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. They aren’t your seats, and I haven’t checked they’re still for sale.');
+    expect(body).toContain('I haven’t found a verified alternative I can link you to yet, with a checked all-in price.');
+    // Recommendation first, the market figures after it, and nothing called a good deal.
+    expect(body.indexOf('Before you buy it')).toBeLessThan(body.indexOf('Cheaper listings'));
+    expect(body).not.toMatch(/good deal/i);
   });
 
   it('a failed listings read is logged and the stats poll still runs', async () => {

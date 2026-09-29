@@ -1,9 +1,11 @@
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { problemTypesFor } from '@/lib/domain/problem-types';
+import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
 import { raPointer } from '@/lib/sources/resident-advisor';
-import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
 import * as t from '@/lib/db/schema';
@@ -14,6 +16,7 @@ import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReference
 import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
+import { fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
@@ -30,13 +33,14 @@ import { classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppr
 import { sourcePlan } from '@/lib/sources/routing';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
+import { findAlternatives } from '@/lib/market/alternatives';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
-import { buildPacket, packetHash } from '@/lib/advice/packet';
+import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
@@ -65,6 +69,8 @@ export type ConciergeDeps = {
   discoveryFetch?: typeof fetch;
   /** Fetch used for SeatData market data; tests inject a fake. */
   marketFetch?: typeof fetch;
+  /** Reads the listing a customer shows us (screenshot or pasted text). Absent: stored, never read. */
+  listingReader?: ListingReader;
 };
 
 export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } | { kind: 'ignored_recipient'; messageId: string } | { kind: 'duplicate'; messageId: string } | { kind: 'queued'; messageId: string; conversationId: string; requestId: string; contactId: string; isNewConversation: boolean };
@@ -295,10 +301,15 @@ export class Concierge {
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
     extraction = applyTicketLinks(extraction, known);
+    // So does the listing they show us: a screenshot, or listing text pasted into the email. What it showed is
+    // kept as evidence; what it didn't show stays unknown.
+    const listing = await this.readListingEvidence(msg, req);
+    if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known);
+    const listingNotes = listing.redacted ? [REDACTED_NOTE] : [];
 
     // A first message that isn't about tickets ("tell me something about New York", "are you an idiot?") gets
     // one short "I only do tickets" reply a day, and nothing is assumed about a request that isn't there.
-    if (!priorVersion && isOffTopic(extraction, msg.sanitizedText ?? '')) {
+    if (!priorVersion && !listing.images && isOffTopic(extraction, msg.sanitizedText ?? '')) {
       const replied = await this.recentAudit('intake.off_topic_replied', contact!.id, msg.receivedAt, OFF_TOPIC_REPLY_EVERY_HOURS);
       if (!replied) {
         await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy does tickets'), template: 'off_topic', vars: {}, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `off_topic:${req.id}` });
@@ -332,6 +343,19 @@ export class Concierge {
       await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.contactId, contact!.id), eq(t.watches.state, 'active')));
       await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.contactId, contact!.id), eq(t.eventAlerts.state, 'active')));
       await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id } });
+    }
+
+    // What they need help with, accumulated over the conversation (pilot measurement).
+    const tags = problemTypesFor(extraction, msg.sanitizedText ?? '', { listing: !!listing.fields || listing.images > 0, link: ticketLinksIn(extraction.submittedUrls).length > 0 });
+    const allTags = [...new Set([...(req.problemTypes ?? []), ...tags])];
+    if (allTags.length !== (req.problemTypes ?? []).length) await this.db.update(t.requests).set({ problemTypes: allTags }).where(eq(t.requests.id, req.id));
+
+    // How it ended: "I bought them", "stop watching", or the answer to our one follow-up. Recorded as the
+    // customer's own report; a reply that brings something new (a link, a listing, a price, another event)
+    // is a request and carries on below.
+    if (priorVersion) {
+      const done = await this.recordOutcomeReply({ req, msg, contact: contact!, extraction, prior: RequestExtractionSchema.parse(priorVersion.brief), listingSent: !!listing.fields || listing.images > 0 });
+      if (done) return { state: done, revision: req.currentRevision, extraction };
     }
 
     // New revision.
@@ -369,7 +393,7 @@ export class Concierge {
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
     const { brief: withDefaults, assumed } = applyDefaults(merged);
     merged = withDefaults;
-    const assumptions = [...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+    const assumptions = [...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
@@ -470,7 +494,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
       });
@@ -571,6 +595,155 @@ export class Concierge {
     const usage = (this.deps.extractor as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
     if (usage) await settleBudget(this.db, res.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
     return out;
+  }
+
+  /**
+   * Reads the listing this message shows: each accepted screenshot (up to the per-message limit), or, when there
+   * is none, listing text pasted into the email. A screenshot is re-encoded first (metadata stripped, bounded
+   * size). One that shows a barcode, payment card or ID is deleted and quarantined, and nothing read from it is
+   * kept. A read that fails never fails the request; the customer is asked for the details instead.
+   */
+  private async readListingEvidence(msg: typeof t.messages.$inferSelect, req: typeof t.requests.$inferSelect): Promise<{ fields: ListingFields | null; source: 'screenshot' | 'listing_text' | null; images: number; redacted: number }> {
+    const atts = await this.db.select().from(t.attachments).where(and(eq(t.attachments.messageId, msg.id), eq(t.attachments.validationState, 'accepted')));
+    const images = atts.filter((a) => a.mediaId);
+    const reader = this.deps.listingReader;
+    if (!reader) return { fields: null, source: null, images: images.length, redacted: 0 };
+    const media = createMediaStore(this.db, this.env.MEDIA_PROVIDER, this.env.MEDIA_MAX_TOTAL_BYTES);
+    let best: ListingFields | null = null;
+    let source: 'screenshot' | 'listing_text' | null = null;
+    let redacted = 0;
+    const read = async (input: { image?: ListingImage; text?: string }) => {
+      const model = this.env.modelName ?? 'rules';
+      const est = estimateUsdMicros(model, input.image ? 2200 : Math.ceil((input.text?.length ?? 0) / 3) + 900, 600, 0, this.env.modelPrices);
+      const r = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'listing_read', model, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
+      try {
+        const out = await reader.read({ ...input, receivedAt: msg.receivedAt });
+        const usage = (reader as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
+        if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
+        return out;
+      } catch (e) {
+        if (e instanceof ModelOutputError && e.kind === 'transport') await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'listing_read' });
+        throw e;
+      }
+    };
+    for (const a of images) {
+      const stored = await media.get(a.mediaId!);
+      if (!stored) continue;
+      let image: ListingImage;
+      try {
+        const sharp = (await import('sharp')).default;
+        const jpeg = await sharp(stored.bytes).rotate().resize({ width: 2000, height: 2000, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+        image = { mimeType: 'image/jpeg', base64: jpeg.toString('base64') };
+      } catch {
+        await audit(this.db, { actor: 'system', action: 'listing.image_unreadable', entityKind: 'attachment', entityId: a.id, diff: { messageId: msg.id } });
+        continue;
+      }
+      let r;
+      try {
+        r = await read({ image });
+      } catch (e) {
+        if (e instanceof BudgetExceededError) break;
+        await audit(this.db, { actor: 'system', action: 'listing.read_failed', entityKind: 'attachment', entityId: a.id, diff: { messageId: msg.id, error: e instanceof ModelOutputError ? e.kind : 'error' } });
+        continue;
+      }
+      if (r.sensitiveContent || r.kind === 'payment_or_id') {
+        await this.db.update(t.attachments).set({ mediaId: null, validationState: 'quarantined', validationReason: 'sensitive_content' }).where(eq(t.attachments.id, a.id));
+        await media.delete(a.mediaId!);
+        await this.db.insert(t.listingEvidence).values({ requestId: req.id, messageId: msg.id, attachmentId: a.id, source: 'screenshot', observedAt: msg.receivedAt, sensitive: true, kind: r.kind, confidence: null, fields: null, readBy: reader.name });
+        await audit(this.db, { actor: 'system', action: 'listing.sensitive_quarantined', entityKind: 'attachment', entityId: a.id, diff: { messageId: msg.id } });
+        redacted += 1;
+        continue;
+      }
+      const fields = usableListing(r) ? fieldsFromRead(r) : null;
+      await this.db.insert(t.listingEvidence).values({ requestId: req.id, messageId: msg.id, attachmentId: a.id, source: 'screenshot', observedAt: msg.receivedAt, kind: r.kind, confidence: r.confidence, fields: fields as unknown as Record<string, unknown> | null, readBy: reader.name });
+      if (fields && !best) {
+        best = fields;
+        source = 'screenshot';
+      }
+    }
+    const text = msg.sanitizedText ?? '';
+    if (!best && looksLikeListingText(text) && reader.name !== 'none') {
+      try {
+        const r = await read({ text });
+        const fields = usableListing(r) ? fieldsFromRead(r) : null;
+        await this.db.insert(t.listingEvidence).values({ requestId: req.id, messageId: msg.id, source: 'listing_text', observedAt: msg.receivedAt, kind: r.kind, confidence: r.confidence, fields: fields as unknown as Record<string, unknown> | null, readBy: reader.name });
+        if (fields) {
+          best = fields;
+          source = 'listing_text';
+        }
+      } catch (e) {
+        if (!(e instanceof BudgetExceededError)) await audit(this.db, { actor: 'system', action: 'listing.read_failed', entityKind: 'message', entityId: msg.id, diff: { source: 'listing_text', error: e instanceof ModelOutputError ? e.kind : 'error' } });
+      }
+    }
+    return { fields: best, source, images: images.length, redacted };
+  }
+
+  /**
+   * A reply that reports how it ended. Returns the new state when it was one (the request is closed and
+   * acknowledged), or null when the message should be handled as part of the request.
+   */
+  private async recordOutcomeReply(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; extraction: RequestExtraction; prior: RequestExtraction; listingSent: boolean }): Promise<string | null> {
+    const { req, msg, contact, extraction: x, prior } = a;
+    const changed = (k: 'quantity' | 'dateExpression') => x[k] != null && x[k] !== prior[k];
+    const bringsSomethingNew = a.listingSent || x.submittedUrls.length > 0 || x.quotedPriceCents != null || changed('quantity') || changed('dateExpression') || (!!x.performerOrTeam && !!prior.performerOrTeam && x.performerOrTeam.toLowerCase() !== prior.performerOrTeam.toLowerCase());
+    if (bringsSomethingNew) return null;
+    const outcomes = await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, req.id));
+    const followUpOpen = outcomes.some((o) => o.kind === 'follow_up_sent') && !outcomes.some((o) => o.kind === 'follow_up_reply');
+    // A question is a request ("we got them, but can you check parking?"), except in answer to our follow-up.
+    if (!followUpOpen && /\?/.test(msg.sanitizedText ?? '')) return null;
+    const reply = classifyOutcomeReply(msg.sanitizedText ?? '');
+    if (!reply && !followUpOpen) return null;
+    const at = msg.receivedAt;
+    const rows: Array<typeof t.requestOutcomes.$inferInsert> = [];
+    if (followUpOpen) rows.push({ requestId: req.id, kind: 'follow_up_reply', source: 'customer_reply', messageId: msg.id, details: { bought: reply?.bought ?? null, changedWhat: reply?.changedWhat ?? null, changedWhen: reply?.changedWhen ?? null }, actor: 'customer', at });
+    if (reply?.bought === true) rows.push({ requestId: req.id, kind: 'user_reported_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at });
+    if (reply?.bought === false) rows.push({ requestId: req.id, kind: 'user_reported_no_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at });
+    if (reply?.stopWatching && reply.bought !== true) rows.push({ requestId: req.id, kind: 'stop_watching', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at });
+    if (rows.length) await this.db.insert(t.requestOutcomes).values(rows);
+    // Bought or stop: nothing more to watch for this request.
+    if (reply?.bought === true || reply?.stopWatching) {
+      await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active')));
+      await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.requestId, req.id), eq(t.eventAlerts.state, 'active')));
+    }
+    const kind = reply?.bought === true ? 'bought' : reply?.stopWatching ? 'stopped' : 'thanks';
+    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, 'Thanks'), template: 'outcome_ack', vars: { kind }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `outcome_ack:${msg.id}` });
+    await audit(this.db, { actor: 'customer', action: 'request.outcome_reported', entityKind: 'request', entityId: req.id, diff: { kinds: rows.map((r) => r.kind) } });
+    await this.transition(req.id, 'closed', kind === 'bought' ? 'customer_bought' : kind === 'stopped' ? 'customer_stopped' : 'follow_up_answered');
+    return 'closed';
+  }
+
+  /**
+   * The one follow-up per request, the day after the event: did the advice change what or when they bought?
+   * Only for requests we actually answered with advice or a referral, never after "stop", and only once.
+   * The send gate keeps it off until FOLLOW_UP_ENABLED is set.
+   */
+  async sendFollowUps(opts: { limit?: number } = {}): Promise<{ queued: number; considered: number }> {
+    const now = this.now();
+    const from = new Date(now.getTime() - 14 * 86_400_000);
+    const to = new Date(now.getTime() - 18 * 3_600_000);
+    const rows = await this.db.select({ r: t.requests, e: t.events, v: t.venues, c: t.contacts }).from(t.requests).innerJoin(t.events, eq(t.events.id, t.requests.eventId)).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(and(notInArray(t.requests.state, ['unsupported', 'needs_clarification', 'manual_attention']), gte(t.events.localStartAt, from), lte(t.events.localStartAt, to), sql`not exists (select 1 from ${t.requestOutcomes} o where o.request_id = ${t.requests.id} and o.kind in ('follow_up_sent', 'stop_watching'))`)).limit(opts.limit ?? 50);
+    let queued = 0;
+    for (const { r, e, c } of rows) {
+      if (c.status === 'deleted') continue;
+      const outs = await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, r.id));
+      if (outs.some((o) => o.kind === 'follow_up_sent' || o.kind === 'stop_watching')) continue;
+      // Closed without advice (off-topic, opted out, unsupported) is not a request we helped with.
+      if (r.state === 'closed' && !outs.some((o) => o.kind === 'user_reported_purchase')) continue;
+      // Only after an answer actually reached them: advice, a price check or an official-sale referral.
+      const answered = await this.db.select({ id: t.sendIntents.id }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, r.id), inArray(t.sendIntents.messageClass, ['recommendation', 'no_result', 'acknowledgment']), or(sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.dedupeKey} like 'official_sale:%'`), inArray(t.sendIntents.state, ['provider_accepted', 'delivered']))).limit(1);
+      if (!answered.length) continue;
+      const [last] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+      await this.queueSend({ messageClass: 'follow_up', contactId: c.id, conversationId: r.conversationId, requestId: r.id, revision: r.currentRevision, recipient: c.emailOriginal, subject: reSubject(last?.subject ?? null, `How was ${e.name}?`), template: 'follow_up', vars: { what: e.name }, inReplyTo: last?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `follow_up:${r.id}` });
+      await this.db.insert(t.requestOutcomes).values({ requestId: r.id, kind: 'follow_up_sent', source: 'system', details: {}, at: now });
+      queued += 1;
+    }
+    return { queued, considered: rows.length };
+  }
+
+  /** A link for a customer email, behind /go/<id> so a click can be counted; the id carries nothing personal. */
+  private async trackLink(requestId: string, url: string, label: string | null, affiliate: boolean): Promise<string> {
+    const [row] = await this.db.insert(t.trackedLinks).values({ requestId, url, label, affiliate }).returning({ id: t.trackedLinks.id });
+    return `${this.env.APP_URL.replace(/\/$/, '')}/go/${row!.id}`;
   }
 
   private limits() {
@@ -1308,12 +1481,25 @@ export class Concierge {
     // price the customer asked about (per ticket; a total is divided by the party size).
     const official = await this.officialSale(event, now);
     const faceValue = event.faceMinCents != null && event.faceMaxCents != null ? { minCents: event.faceMinCents, maxCents: event.faceMaxCents } : null;
-    const quote = brief.quotedPriceCents != null
-      ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null }
-      : null;
+    // The listing they showed us, newest first: what it displayed is the price being checked, with its source.
+    const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), sql`${t.listingEvidence.fields} is not null`)).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
+    const shown: SubjectListing | null = ev ? { ...(ev.fields as unknown as ListingFields), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    const quote: QuotedPrice | null = shown?.perTicketCents != null
+      ? { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
+      : brief.quotedPriceCents != null
+        ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported' }
+        : null;
+    // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
+    const saidInThread = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
+    const travelling = TRAVELLING.test(saidInThread);
+    // The market around the listing they showed us: cheaper seats for their group, from one fresh listings read.
+    const around = shown?.perTicketCents != null && licence.allows('tracking') ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
+    const marketAround = around && shown?.perTicketCents != null ? findAlternatives(around.listings, { perTicketCents: shown.perTicketCents, feeBasis: shown.feeBasis, section: shown.section, row: shown.row }, quantity) : null;
     // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
     const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
-    const packet = buildPacket({ link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
+    for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 
@@ -1884,6 +2070,52 @@ export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: stri
     }
     if (best) out.performerOrTeam = best.name;
   }
+  return out;
+}
+
+/** Words that say the customer is travelling to the event, so a missed purchase costs more than the ticket. */
+const TRAVELLING = /\b(fly(ing)? in|flight|flying (in|out|to)|travel(l)?ing (in|to|from|for)|driving in|coming in from|road trip|booked (a|our) hotel|hotel booked)\b/i;
+
+/** Told when a screenshot showed a barcode, card or ID: we deleted it and used nothing from it. */
+export const REDACTED_NOTE = 'One of your screenshots looked like it showed a ticket barcode, card details or an ID, so I deleted it and didn’t use it. A screenshot of the listing page (price, section, row) is all I need.';
+
+/** The name of a known team or artist inside some text, longest match first ("New York Rangers" over "New York"). */
+function knownNameIn(text: string, known: Array<{ name: string; aliases: string[] }>): string | null {
+  const hay = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+  let best: { name: string; len: number } | null = null;
+  for (const k of known) {
+    for (const n of [k.name, ...k.aliases]) {
+      const w = n.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      if (w.length >= 4 && hay.includes(` ${w} `) && (!best || w.length > best.len)) best = { name: k.name, len: w.length };
+    }
+  }
+  return best?.name ?? null;
+}
+
+/**
+ * Folds what a listing showed into this message's extraction, only where the customer's words left a gap:
+ * what they typed wins. A price whose wording didn't say per ticket or total stays "basis unknown", so the
+ * reply says how it was read.
+ */
+export function applyListingFields(x: RequestExtraction, f: ListingFields, known: Array<{ name: string; aliases: string[] }>): RequestExtraction {
+  const out: RequestExtraction = { ...x, ambiguities: [...x.ambiguities] };
+  if (out.quantity == null && f.quantity) {
+    out.quantity = f.quantity;
+    out.ambiguities = out.ambiguities.filter((a) => a !== 'quantity_unclear');
+  }
+  if (out.quotedPriceCents == null && f.perTicketCents) {
+    out.quotedPriceCents = f.perTicketCents;
+    out.quotedPriceBasis = f.priceBasis === 'unknown' ? null : 'per_ticket';
+  }
+  if (!out.resolvedLocalDate && f.eventDate) {
+    out.resolvedLocalDate = f.eventDate;
+    out.dateExpression ??= f.eventDate;
+    out.ambiguities = out.ambiguities.filter((a) => !a.startsWith('date_'));
+  }
+  // A matchup ("Rangers vs. Islanders") is the first-named team's game, as when the customer types it.
+  if (!out.performerOrTeam && f.eventName) out.performerOrTeam = knownNameIn(splitMatchup(f.eventName)?.first ?? f.eventName, known) ?? knownNameIn(f.eventName, known);
+  if (!out.eventName && f.eventName) out.eventName = f.eventName;
+  if (!out.city && f.city) out.city = f.city;
   return out;
 }
 

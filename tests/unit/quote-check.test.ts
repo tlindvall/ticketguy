@@ -30,3 +30,42 @@ describe('a price the customer saw, against face value', () => {
     expect(JSON.stringify(p.claimRecords.map((c) => c.text))).not.toContain('stubhub');
   });
 });
+
+describe('where a price came from, and what face value means', () => {
+  const args = (over: Partial<BuildPacketArgs>) => ({
+    requestId: 'r', revision: 1, quantity: 2, eventLabel: 'x', best: null, alternatives: [], entryReference: null, benchmark: null, benchmarkRunId: null, trend: null, trendRunId: null,
+    policy: { decision: 'insufficient_evidence', reasonCodes: [], abstentions: [], nextCheckpointAt: null, waitDeadlineAt: null, watchScheduled: false, stopConditions: [], policyVersion: 'p' },
+    priorities: { mustAttend: null, waitRiskTolerance: null, decisionDeadline: null },
+    sourcesChecked: [], sourcesUnavailable: [], independentOptionCount: 0, observedAt: new Date('2026-09-28T23:32:00Z'), evidenceExpiresAt: null, basketKey: 'b', watchConsentReference: null, isFixture: false,
+    official: null, faceValue: face, ...over,
+  }) as unknown as BuildPacketArgs;
+  const quoteText = (over: Partial<BuildPacketArgs>) => buildPacket(args(over)).claimRecords.find((c) => c.id === 'C_QUOTE')!.text;
+
+  it('below face value is a reason to check the seats, never "a good price"', () => {
+    const t = quoteText({ quote: { perTicketCents: 4000, assumedPerTicket: false } });
+    expect(t).toContain('below the face value');
+    expect(t).toContain('not what seats are worth now');
+    expect(t).not.toMatch(/good (price|deal)/i);
+  });
+
+  it('well above face value is not called a bad price, and says when there is no market to compare', () => {
+    const t = quoteText({ quote: { perTicketCents: 20000, assumedPerTicket: false } });
+    expect(t).toContain('doesn’t make it a bad price');
+    expect(t).toContain('I can’t see current resale prices for this show');
+  });
+
+  it('a screenshot price is what the listing showed, not a verified offer', () => {
+    const t = quoteText({ quote: { perTicketCents: 10600, assumedPerTicket: false, source: 'screenshot', feeBasis: 'all_in', seller: 'StubHub' } });
+    expect(t.startsWith('The screenshot you sent shows $106 a ticket including fees on StubHub. That’s what the listing showed when you took it; I haven’t checked that the seats are still there.')).toBe(true);
+  });
+
+  it('a pasted listing and a typed price are each said as what they are', () => {
+    expect(quoteText({ quote: { perTicketCents: 10600, assumedPerTicket: false, source: 'listing_text' } })).toMatch(/^The listing you pasted shows \$106 a ticket\./);
+    expect(quoteText({ quote: { perTicketCents: 10600, assumedPerTicket: true } })).toMatch(/^You mentioned \$106 \(I’ve taken that as per ticket\)\./);
+  });
+
+  it('face value alone is labelled as the original price', () => {
+    const t = buildPacket(args({ quote: null })).claimRecords.find((c) => c.id === 'C_FACE')!.text;
+    expect(t).toContain('That’s what the original seller charged, not what seats sell for now.');
+  });
+});

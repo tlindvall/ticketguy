@@ -223,6 +223,27 @@ function renderBody(
       ];
       return wrap(paras, paras.map(para));
     }
+    case 'follow_up': {
+      // One question, once, the day after the event: the pilot's measure of whether we helped. No links, no pitch.
+      const paras = [
+        'Hey,',
+        `How did ${String(v.what ?? 'it')} go?`,
+        'One quick question, because it helps me get better: did my note change which tickets you bought, or when you bought them? A one-line reply is plenty, and "no" is a useful answer too.',
+      ];
+      return wrap(paras, paras.map(para));
+    }
+    case 'outcome_ack': {
+      const kind = String(v.kind ?? '');
+      const paras = [
+        'Hey,',
+        kind === 'bought'
+          ? 'Glad you got them. I’ve stopped keeping an eye on this one. Enjoy it.'
+          : kind === 'stopped'
+            ? 'Done: I’ve stopped keeping an eye on this one. Just reply if you want me to look again.'
+            : 'Thanks, that really helps.',
+      ];
+      return wrap(paras, paras.map(para));
+    }
     case 'off_topic': {
       // A first message with nothing about tickets in it (a general question, a test, a jibe): say what we do,
       // once, without assuming a request. It never engages with the content.

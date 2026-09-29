@@ -121,6 +121,8 @@ const rawSchema = z.object({
    * customers (DECISION_LOG #43); while off, nothing is offered, created or sent.
    */
   EVENT_ALERTS_ENABLED: explicitBoolean,
+  /** The one "did this change what or when you bought?" email after the event (pilot measurement). Off until activated. */
+  FOLLOW_UP_ENABLED: explicitBoolean,
   HUMAN_REVIEW_REQUIRED: z
     .string()
     .optional()
@@ -256,7 +258,7 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
  * Mirrors MessageClass in @/lib/email/send-gate. Declared here rather than imported: send-gate imports Env,
  * and the cycle would leave one of the two undefined at module-evaluation time. A test pins the two in step.
  */
-export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'event_alert', 'marketing', 'verification'] as const;
+export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'event_alert', 'follow_up', 'marketing', 'verification'] as const;
 export type MessageClass = (typeof MESSAGE_CLASSES)[number];
 
 export class ConfigurationError extends Error {

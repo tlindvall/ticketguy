@@ -95,3 +95,19 @@ describe('market series', () => {
     expect(pointsFromListings(listings, [10], at)).toEqual([]);
   });
 });
+
+describe('group floors ignore seats that are not for an ordinary buyer', () => {
+  it('a wheelchair block or parking pass never sets the "5 or more from" price', async () => {
+    const { pointsFromListings } = await import('@/lib/market/series');
+    const at = new Date('2026-09-29T12:00:00Z');
+    const pts = pointsFromListings([
+      { active: true, price: 45, quantity: 6, section: 'ADA 111', row: 'WC' },
+      { active: true, price: 30, quantity: 8, section: 'Parking Lot C' },
+      { active: true, price: 120, quantity: 6, section: '212', row: 'D' },
+      { active: true, price: 140, quantity: 5, section: '224', row: 'F', zone: 'Upper Level' },
+    ], [5], at);
+    expect(pts).toHaveLength(1);
+    expect(pts[0]!.priceCents).toBe(12000);
+    expect(pts[0]!.activeListings).toBe(2);
+  });
+});

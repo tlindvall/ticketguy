@@ -5,7 +5,8 @@ import * as t from '@/lib/db/schema';
 import { eventLocalDate, localToInstant } from '@/lib/domain/dates';
 import { audit } from '@/lib/util/audit';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
-import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, marketBasketKey, pointsFromListings, pointsFromSnapshot, type MarketBasis, type MarketContext, type SeriesPoint } from './series';
+import { toMarketListing, type MarketListing } from './alternatives';
+import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, type MarketBasis, type MarketContext, type SeriesPoint } from './series';
 
 /**
  * Market tracking (DECISION_LOG #44): every event a customer asks about, and the cohort named in
@@ -333,6 +334,31 @@ export class MarketTracker {
     const current = new Map(reqs.map((r) => [r.id, r.rev]));
     const sizes = versions.filter((v) => current.get(v.requestId) === v.revision).map((v) => Number((v.brief as { quantity?: unknown } | null)?.quantity)).filter((q) => Number.isInteger(q) && q >= 3);
     return [...new Set(sizes.map((q) => basisSize(basisForQuantity(q))))].sort((a, b) => a - b);
+  }
+
+  /**
+   * The event's current listings, to set one listing a customer showed us against the rest of the market. One
+   * paid request, under the same gates as tracking, only for an event already matched to SeatData. The result
+   * is used for this answer and never stored. Wheelchair, companion, parking and suite listings are left out.
+   */
+  async currentListings(eventId: string): Promise<{ at: Date; listings: MarketListing[] } | null> {
+    if (await this.blocked()) return null;
+    if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return null;
+    const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
+    if (!tr || tr.state !== 'active' || !tr.providerEventId) return null;
+    const api = this.api();
+    const before = api.calls;
+    try {
+      const r = await api.listings(tr.providerEventId);
+      const raw = Array.isArray(r.listings) ? r.listings : [];
+      const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
+      // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
+      await this.log('listings_compare', eventId, 'success', api.calls - before, listings.length, `${raw.length} listings`);
+      return { at: this.now(), listings };
+    } catch (e) {
+      await this.log('listings_compare', eventId, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+      return null;
+    }
   }
 
   private async groupsReadSince(eventId: string, since: Date): Promise<boolean> {

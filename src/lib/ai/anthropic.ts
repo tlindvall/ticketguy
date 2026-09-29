@@ -30,7 +30,7 @@ export class AnthropicClient implements StructuredClient {
         model: args.model,
         max_tokens: args.maxOutputTokens,
         system: args.instructions,
-        messages: [{ role: 'user', content: args.input }],
+        messages: [{ role: 'user', content: args.images?.length ? [...args.images.map((i) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: i.mimeType, data: i.base64 } })), { type: 'text' as const, text: args.input }] : args.input }],
         thinking: { type: 'adaptive' },
         output_config: { format: betaZodOutputFormat(args.schema), effort: args.effort },
         betas: ['server-side-fallback-2026-07-01'],

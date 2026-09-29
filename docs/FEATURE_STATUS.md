@@ -18,10 +18,13 @@ Legend — **Real**: implemented and exercised against the real dependency. **Fi
 | Inbound reconciliation sweep (`scripts/reconcile-resend.ts`) | Real (unit) / Blocked (list shape) | Queues provider-listed mail that never became an inbound event; parser fails loudly on an unrecognised list response until the live shape has been seen |
 | Local inbound simulator (normalized contract) | Real | CLI + admin form (fixture mode only) |
 | Auto-response suppression, thread authorization, quoted-content stripping | Real | A20/A21/A04 tests |
-| Attachment validation (magic bytes, dimensions, pixel bomb, SVG/HTML/PDF rejection), db media with budget | Real | A22/A44/A45 tests; sharp installed but re-encode/resize not yet wired (validation is decoder-free) |
+| Attachment validation (magic bytes, dimensions, pixel bomb, SVG/HTML/PDF rejection), db media with budget | Real | A22/A44/A45 tests; accepted screenshots are re-encoded with sharp (metadata stripped, ≤2000px) before the model sees them |
+| Reading the customer's listing (screenshot or pasted listing text) into what it showed | Real (code) / Unvalidated live | `listing_evidence`; strict schema, unknowns stay null, cents computed in code; barcode/card/ID screenshots deleted and quarantined (#50). No live-model eval yet: run it on real screenshots before relying on it |
+| Recommendation on the customer's listing: verdict first, catches, market alternatives, verified alternative or "none yet" | Real (code) | Market alternatives come from one SeatData listings read (licence-gated, before fees, no link); verified alternatives are staff-entered until a listing partner exists (#50) |
+| Pilot measurement: problem-type tags, outcomes (clicks, customer-reported, affiliate-confirmed), "bought"/"stop" replies, one follow-up | Real (code) / Follow-up off | `/admin/pilot`, `/go/<id>` click redirect; `FOLLOW_UP_ENABLED=false` until activated; affiliate confirmations entered by staff (#50) |
 | Extraction schema (strict) | Real | Zod schema shared by fixture and OpenAI extractors |
 | Fixture extractor (rules) | Fixture-only | Handles budget basis, quantities, dates, negation, gifts, opt-outs, preferences |
-| Claude extractor/drafter (Messages API, Zod structured outputs, adaptive thinking at `low` effort, server-side refusal fallbacks) | Blocked | Coded against the installed SDK and typechecked; no API key, so no live call and no eval run. Bounded eval report is therefore **not delivered** |
+| Claude extractor/drafter (Messages API, Zod structured outputs, adaptive thinking at `low` effort, server-side refusal fallbacks) | Real | Live since 2026-09-24; also reads listing screenshots. A bounded eval on real (redacted) requests is still **not delivered** |
 | AI budget reservation (per-request soft/hard, global daily, call cap; advisory lock) | Real | A34 unit + real-PG concurrency test |
 | Event resolution (canonical events only; ambiguity → clarification; no invention) | Real | A02 test |
 | Clarification (≤3 questions, no re-asking, country check) | Real | Pipeline tests |

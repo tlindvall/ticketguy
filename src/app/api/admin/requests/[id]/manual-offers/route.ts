@@ -20,6 +20,10 @@ const Body = z.object({
   taxKnown: z.boolean(),
   deliveryMethod: z.string().nullable(),
   restrictions: z.array(z.string()).default([]),
+  /** What the listing said, as checkboxes on the form; folded into restriction codes. */
+  accessibleOnly: z.boolean().optional(),
+  obstructedView: z.boolean().optional(),
+  vipPackage: z.boolean().optional(),
   evidenceNote: z.string().min(3).max(2000),
 });
 
@@ -30,8 +34,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (!registryIds().has(body.sourceId)) return Response.json({ error: 'unknown_source' }, { status: 422 });
     const u = validateUrlSyntax(body.sourceUrl);
     if (!u.ok) return Response.json({ error: 'unsafe_url', reason: u.reason }, { status: 422 });
+    const { accessibleOnly, obstructedView, vipPackage, ...rest } = body;
+    const restrictions = [...new Set([...body.restrictions, ...(accessibleOnly ? ['accessible_seating'] : []), ...(obstructedView ? ['obstructed_view'] : []), ...(vipPackage ? ['vip_package'] : [])])];
     const c = await getConcierge();
-    const r = await c.addManualOffer({ staffUserId: staff.userId, requestId: id, ...body, observedAt: new Date(body.observedAt) });
+    const r = await c.addManualOffer({ staffUserId: staff.userId, requestId: id, ...rest, restrictions, observedAt: new Date(body.observedAt) });
     return Response.json(r, { status: 201 });
   });
 }

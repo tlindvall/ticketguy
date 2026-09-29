@@ -181,4 +181,20 @@ export const catalogPrewarm = inngest.createFunction(
   },
 );
 
-export const functions = [dispatchOutbox, evaluateWatches, evaluateEventAlerts, trackMarkets, retentionSweep, catalogPrewarm];
+/** The one pilot follow-up per request, the day after the event; the send gate holds it until FOLLOW_UP_ENABLED. */
+export const sendFollowUps = inngest.createFunction(
+  { id: 'send-follow-ups', concurrency: { limit: 1 }, triggers: [cron('37 15 * * *')] },
+  async ({ step }) => {
+    return step.run('follow-ups', async () => {
+      const c = await getConcierge();
+      const r = await c.sendFollowUps({ limit: 50 });
+      if (r.queued) {
+        const { db } = await getDb();
+        await audit(db, { actor: 'system', action: 'follow_up.pass', entityKind: 'system', entityId: 'follow_ups', diff: r });
+      }
+      return r;
+    });
+  },
+);
+
+export const functions = [dispatchOutbox, evaluateWatches, evaluateEventAlerts, trackMarkets, retentionSweep, catalogPrewarm, sendFollowUps];

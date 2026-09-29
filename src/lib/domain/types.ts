@@ -50,7 +50,10 @@ export const OfferSchema = z
     seatNumbers: z.array(z.string()).nullable(),
     seatsTogether: z.boolean().nullable(),
     admissionType: AdmissionType,
-    /** Free-form restriction codes, e.g. 'parking_only', 'obstructed_view', 'different_session', 'vip_package', 'resale_deposit'. */
+    /**
+     * Restriction codes, e.g. 'parking_only', 'obstructed_view', 'different_session', 'vip_package',
+     * 'resale_deposit', and 'accessible_seating' for wheelchair and companion spaces (only for buyers who need them).
+     */
     restrictions: z.array(z.string()),
     deliveryMethod: z.string().nullable(),
     expectedDeliveryAt: z.string().datetime().nullable(),
