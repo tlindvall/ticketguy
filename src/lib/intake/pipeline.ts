@@ -1,6 +1,6 @@
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
-import { ticketLinksIn } from '@/lib/domain/ticket-links';
+import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
 import { raPointer } from '@/lib/sources/resident-advisor';
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -1203,7 +1203,9 @@ export class Concierge {
     const quote = brief.quotedPriceCents != null
       ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null }
       : null;
-    const packet = buildPacket({ market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
+    const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
+    const packet = buildPacket({ link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 

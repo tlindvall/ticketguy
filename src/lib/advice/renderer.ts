@@ -69,6 +69,7 @@ function checkProse(label: string, prose: string, errors: string[]): void {
  * body carries neither; it used to carry its own, and the email said it twice.
  */
 const GREETING = 'Hey,';
+const questionsLead = (n: number) => (n === 1 ? 'One thing that would help me:' : n === 2 ? 'Two things that would help me narrow it down:' : 'A few things that would help me narrow it down:');
 const P = (inner: string) => `<p style="margin:0 0 18px;">${inner}</p>`;
 
 const words = (s: string) => new Set(s.toLowerCase().replace(/[’']/g, '').match(/[a-z]+/g) ?? []);
@@ -118,9 +119,19 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
 
   const lines: string[] = [];
   const html: string[] = [];
-  lines.push(GREETING, b.opening.trim());
-  html.push(P(GREETING), P(esc(b.opening.trim())));
-  for (const p of b.paragraphs) {
+  // The customer's link is acknowledged first, in the server's words, and stands in for the model's opening.
+  const link = claimsById.get('C_LINK');
+  const opening = link?.customerVisible ? link.text : b.opening.trim();
+  lines.push(GREETING, opening);
+  html.push(P(GREETING), P(esc(opening)));
+  // What the market means for them (C_READ) goes straight after the market figures, whether or not the model
+  // placed it; C_LINK is never repeated in a paragraph.
+  const read = claimsById.get('C_READ');
+  const paragraphs = b.paragraphs
+    .map((p) => ({ ...p, claimIds: p.claimIds.filter((id) => id !== 'C_LINK' && !(read && id === 'C_READ')) }))
+    .flatMap((p) => (read?.customerVisible && p.claimIds.includes('C_MARKET') ? [p, { claimIds: ['C_READ'], prose: '' }] : [p]))
+    .filter((p) => p.claimIds.length || p.prose.trim());
+  for (const p of paragraphs) {
     const claimTexts = p.claimIds.map((id) => claimsById.get(id)!);
     // The model sometimes paraphrases the claim it cites ("I can't see live resale listings…" twice in a row).
     // The claim is the server's wording, so a lead-in that says the same thing is dropped.
@@ -143,8 +154,16 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(opts.affiliateDisclosure);
     html.push(P(esc(opts.affiliateDisclosure)));
   }
-  lines.push(b.closing.trim());
-  html.push(P(esc(b.closing.trim())));
+  // The follow-up questions end the email and replace the model's closing, which used to ask for things the
+  // customer had already sent.
+  const asks = packet.followUps ?? [];
+  if (asks.length) {
+    lines.push(questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n'));
+    html.push(P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`);
+  } else if (b.closing.trim()) {
+    lines.push(b.closing.trim());
+    html.push(P(esc(b.closing.trim())));
+  }
   return { ok: true, textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
 }
 
@@ -157,7 +176,11 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
-  const text = [GREETING, decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : ''))].join('\n\n');
-  const html = [P(GREETING), P(esc(decisionLine[packet.decision])), ...visible.map((c) => P(`${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}`))].join('\n');
+  const link = visible.find((c) => c.id === 'C_LINK');
+  const rest = visible.filter((c) => c.id !== 'C_LINK');
+  const lead = link ? link.text : decisionLine[packet.decision];
+  const asks = packet.followUps ?? [];
+  const text = [GREETING, lead, ...rest.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : '')), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : [])].join('\n\n');
+  const html = [P(GREETING), P(esc(lead)), ...rest.map((c) => P(`${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}`)), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : [])].join('\n');
   return { textBody: text, htmlBody: html };
 }

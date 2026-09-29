@@ -75,7 +75,8 @@ Include C_MARKET whenever the packet has it: when there is no listing to recomme
 Never restate a claim in your prose: the claim's own sentence is printed right after your words, so a paragraph's prose is a short lead-in or empty. C_COVERAGE is appended automatically; do not paraphrase it.
 Never use em dashes or en dashes; use a period, a comma or the word "to" instead.
 Write for a fan, not an analyst. Never use the words "verified", "eligible", "evidence", "listing to judge against", "packet" or "market evidence". When there is nothing to recommend yet, say plainly what would let you answer (the listing they are looking at, or how long they can wait) instead of explaining why you can't.
-Open with the most useful thing you can say, usually where to buy or what the price means. Never open with what you can't do ("I can't give a call yet"), and never write "baseline", "solid call" or "clearer call". Ask for at most one thing, in one short sentence.
+Open with the most useful thing you can say, usually where to buy or what the price means. Never open with what you can't do ("I can't give a call yet"), and never write "baseline", "solid call" or "clearer call".
+C_LINK (the link the customer sent) is printed first by the server in place of your opening, and C_READ (what the market means for them) right after C_MARKET: never cite either, and never ask for a link or listing when C_LINK is present. The server ends the email with its own follow-up questions when the packet has any, and then your closing is not used: your opening, prose and closing never ask the customer for anything.
 Voice: concise, specific, like a knowledgeable friend who buys tickets, without pretending personal attendance or insider access.`;
 
 /** Reasoning tokens share the output budget, so these ceilings are well above the visible output size. */
@@ -118,7 +119,7 @@ export class ModelDrafter implements Drafter {
   }
   async draft(packet: AdvicePacket, ctx: DraftContext): Promise<ResponseBlocks> {
     const claims = packet.claimRecords.filter((c) => c.customerVisible).map((c) => `${c.id} [${c.kind}]: ${c.text}`).join('\n');
-    const input = `Decision: ${packet.decision}\nReason codes: ${packet.reasonCodes.join(', ')}\nAbstentions: ${packet.abstentions.join(', ') || 'none'}\nCustomer context: quantity=${ctx.quantity}, together=${ctx.togetherRequired ?? 'unknown'}, mustAttend=${ctx.mustAttend ?? 'unknown'}, waitRiskTolerance=${ctx.waitRiskTolerance ?? 'unknown'}\nAvailable claims:\n${claims}`;
+    const input = `Decision: ${packet.decision}\nReason codes: ${packet.reasonCodes.join(', ')}\nAbstentions: ${packet.abstentions.join(', ') || 'none'}\nCustomer context: quantity=${ctx.quantity}, together=${ctx.togetherRequired ?? 'unknown'}, mustAttend=${ctx.mustAttend ?? 'unknown'}, waitRiskTolerance=${ctx.waitRiskTolerance ?? 'unknown'}\nFollow-up questions the server adds at the end: ${(packet.followUps ?? []).join(' | ') || 'none'}\nAvailable claims:\n${claims}`;
     const { output, usage } = await this.client.parseStructured({ model: this.model, instructions: DRAFT_INSTRUCTIONS, input, schema: ResponseBlocksSchema, schemaName: 'response_blocks', maxOutputTokens: DRAFT_MAX_OUTPUT_TOKENS, effort: this.effort });
     this.lastUsage = usage;
     return ResponseBlocksSchema.parse(output);

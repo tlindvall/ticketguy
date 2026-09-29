@@ -10,7 +10,7 @@ import type { Evaluated } from '@/lib/domain/comparison';
  * Typed evidence packet (API_AND_DATA_CONTRACTS §10). Every fact the customer sees is a server-rendered
  * claim with an ID, scope and allowed wording. The model may only reference claim IDs.
  */
-export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale' | 'market_price' | 'market_benchmark' | 'market_supply';
+export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale' | 'market_price' | 'market_benchmark' | 'market_supply' | 'market_read' | 'customer_link';
 
 export type ClaimRecord = {
   id: string;
@@ -44,6 +44,8 @@ export type AdvicePacket = {
   reasonCodes: string[];
   abstentions: string[];
   claimRecords: ClaimRecord[];
+  /** Questions the email ends with, server-written from what we still don't know (never model-authored). */
+  followUps?: string[];
   evidenceExpiresAt: string | null;
   nextCheckpointAt: string | null;
   stopConditions: string[];
@@ -93,7 +95,61 @@ export type BuildPacketArgs = {
    * `visible` is the licence's customer-display right; without it the claims are staff-only.
    */
   market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; comparableLabel: string | null; visible: boolean } | null;
+  /** A ticket-site link the customer sent (its marketplace name); we read the URL, never the page. */
+  link?: { marketplace: string } | null;
 };
+
+const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const countWord = (n: number) => COUNT_WORDS[n] ?? String(n);
+
+/**
+ * What the market figures mean for this customer, in one or two plain sentences: what a fair price is for
+ * their group, and whether anything argues for moving quickly. It reads the calculated context only and
+ * never says where prices will go.
+ */
+function marketRead(a: BuildPacketArgs): ClaimRecord | null {
+  const m = a.market;
+  const c = m?.context;
+  if (!m || !c?.current) return null;
+  const q = a.quantity;
+  const group = q > 1 ? `for ${countWord(q)} together` : 'for one ticket';
+  const floor = c.current.priceCents;
+  const fairUpTo = roundToDollar(Math.round(floor * 1.15));
+  const parts: string[] = [];
+  // A price they asked about already has its own verdict (C_QUOTE_MARKET).
+  if (!a.quote) parts.push(`For ${group.replace(/^for /, '')}, up to about ${formatUsd(fairUpTo)} a ticket before fees is a fair price; much more than that and you’re paying for a better section, not a better deal.`);
+  const s = m.supply;
+  if (s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats you like at a fair price, I wouldn’t wait.');
+  else if (c.adequacy === 'sufficient' && c.direction === 'down') parts.push('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush.');
+  else if (c.adequacy === 'sufficient' && c.direction === 'up') parts.push('Prices have been climbing, so waiting hasn’t been paying off for this game.');
+  else if (s.now !== null && s.now >= 50) parts.push('There’s plenty to choose from, so there’s no need to grab the first seats you see.');
+  else if (s.now !== null && s.now < 15 && q > 1) parts.push('There aren’t many blocks for a group your size, so if you find seats you like at a fair price, I wouldn’t wait long.');
+  if (!parts.length) return null;
+  return {
+    id: 'C_READ',
+    kind: 'market_read',
+    text: `My read: ${parts.join(' ').replace(/^./, (ch) => ch.toLowerCase())}`,
+    values: { floorCents: floor, fairUpToCents: fairUpTo, direction: c.direction, supplyTrend: s.trend, listings: s.now },
+    scope: { quantity: q, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+    evidenceIds: [],
+    methodVersion: c.methodVersion ?? 'market-1.0',
+    limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'no_forecast'],
+    customerVisible: m.visible,
+  };
+}
+
+/** At most three questions, each one something that would change the answer and that we don't know yet. */
+function followUpQuestions(a: BuildPacketArgs): string[] {
+  const out: string[] = [];
+  if (!a.quote && !a.best) {
+    out.push(a.link
+      ? `What price per ticket does that ${a.link.marketplace} listing show, and which section? I’ll tell you if it’s a good deal.`
+      : 'Found seats you like? Send me the link, or the price and section, and I’ll tell you if it’s a good deal.');
+  }
+  if (a.priorities.budgetTotalCents === null && !a.quote) out.push('What’s the most you’d want to pay per ticket?');
+  if (a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
+  return out.slice(0, 3);
+}
 
 /** Resale market claims. Every number is the calculated context's; wording says what the figure is and is not. */
 function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
@@ -121,7 +177,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` A listing with more tickets may not sell exactly ${q}.` : ''}`,
+      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}`,
       values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
       scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
       limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict', ...(group !== null ? ['group_split_not_guaranteed'] : [])],
@@ -353,8 +409,23 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  if (a.link) {
+    claims.push({
+      id: 'C_LINK',
+      kind: 'customer_link',
+      text: `Going by the ${a.link.marketplace} link you sent, here’s what I have for ${a.quantity > 1 ? `${countWord(a.quantity)} tickets` : 'one ticket'} to ${a.eventLabel}.`,
+      values: { marketplace: a.link.marketplace },
+      scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['link_read_from_url_only'],
+      customerVisible: true,
+    });
+  }
   const market = marketClaims(a, obs);
   claims.push(...market);
+  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price') ? marketRead(a) : null;
+  if (read) claims.push(read);
   const marketShown = market.some((c) => c.customerVisible);
 
   // What we checked, in the customer's terms. Sources we have no integration with are our business, not
@@ -368,7 +439,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     kind: 'coverage',
     text: noMarket
       ? marketShown
-        ? `The resale figures are market statistics from SeatData (StubHub and Vivid Seats listings, before fees), not specific tickets I’ve checked; prices can change quickly.`
+        ? `Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked, and they can move quickly.`
         : `I can’t see live resale listings for this show yet, so this doesn’t compare other sellers’ prices.`
       : `Checked: ${a.sourcesChecked.join(', ')}.${failed.length ? ` Couldn’t reach: ${failed.join(', ')}.` : ''} Prices can change before checkout.`,
     values: { checked: a.sourcesChecked.length, unavailable: unavailable.length },
@@ -408,6 +479,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     reasonCodes: a.policy.reasonCodes,
     abstentions: a.policy.abstentions,
     claimRecords: claims,
+    followUps: followUpQuestions(a),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,
     stopConditions: a.policy.stopConditions,
