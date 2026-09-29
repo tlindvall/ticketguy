@@ -140,7 +140,7 @@ describe('still on general sale: point at the official sale', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body).toContain('You mentioned $106 (I’ve taken that as per ticket). That’s a little above the face value Ticketmaster lists ($55 to $95 a ticket before fees); fees alone can add that much, so it may well be the official price all-in.');
+    expect(body).toContain('You mentioned $106 (I’ve taken that as per ticket). That’s a little above the face value Ticketmaster lists ($55 to $95 a ticket before fees); fees alone can add that much, so it may be close to the original price all-in.');
     // No resale in the email, so no "unless a resale seat is cheaper" hedge.
     expect(body).toContain('It’s on general sale on Ticketmaster, and that’s where I’d buy.');
     expect(body).not.toContain('unless a resale seat');

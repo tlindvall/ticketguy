@@ -147,6 +147,22 @@ describe('resale market tracking', () => {
     expect(rec!.bodyHtml).toContain('<ul');
   });
 
+  // A price under the cheapest resale listing used to read "a good price if it's genuine". It is a reason to
+  // look closer, and a price well above it is not a bargain; neither is a verified offer.
+  it('a price the customer asks about is set against the resale floor without calling it a deal', async () => {
+    const c = concierge();
+    const low = await ask(c, '2 Testers tickets Oct 30, is $100 a good deal?', 'quote-low@customer.example');
+    await c.research({ requestId: low, revision: 1 });
+    const [lowRec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, low));
+    expect(lowRec!.bodyText).toContain('Against resale: $100 a ticket is below the cheapest resale listing I can see ($130 before fees, anywhere in the venue). That’s unusually low, so make sure the seats, the number of tickets and the fees are what you think before you pay.');
+    expect(lowRec!.bodyText).not.toMatch(/good price|good deal/i);
+
+    const high = await ask(c, '2 Testers tickets Oct 30, is $260 a good deal?', 'quote-high@customer.example');
+    await c.research({ requestId: high, revision: 1 });
+    const [highRec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, high));
+    expect(highRec!.bodyText).toContain('is above the cheapest resale listing I can see ($130 before fees, anywhere in the venue). That can be fair for a better section, but it isn’t a bargain.');
+  });
+
   // Live: a reply that was only a StubHub link came back with market figures, a sentence naming SeatData, and
   // "send me the listing you are considering". It now says it went by their link, gives the read, and asks
   // for what the link can't tell us (the listing's price and section).

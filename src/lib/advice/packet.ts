@@ -89,7 +89,7 @@ export type BuildPacketArgs = {
   /** The provider's published face-value range per ticket, before fees. A reference, never an offer. */
   faceValue?: { minCents: number; maxCents: number } | null;
   /** A price the customer saw and asked about, per ticket; `assumedPerTicket` when they did not say. */
-  quote?: { perTicketCents: number; assumedPerTicket: boolean } | null;
+  quote?: QuotedPrice | null;
   /**
    * Resale market statistics (DECISION_LOG #44): listed prices before fees, per ticket, never an offer.
    * `visible` is the licence's customer-display right; without it the claims are staff-only.
@@ -98,6 +98,32 @@ export type BuildPacketArgs = {
   /** A ticket-site link the customer sent (its marketplace name); we read the URL, never the page. */
   link?: { marketplace: string } | null;
 };
+
+/**
+ * A price the customer is asking about, and where it came from. It is never a verified offer: a price they
+ * typed, or what a listing showed when they copied or captured it. How it was worded (fees included or not,
+ * per ticket or for the group) stays unknown unless the source says.
+ */
+export type QuotedPrice = {
+  perTicketCents: number;
+  /** They gave a number without saying per ticket or total; it was read as per ticket. */
+  assumedPerTicket: boolean;
+  source?: 'customer_reported' | 'listing_text' | 'screenshot';
+  feeBasis?: 'all_in' | 'before_fees' | 'unknown';
+  /** When the listing showed it (a screenshot's or pasted listing's time), when known. */
+  seenAt?: Date | null;
+  seller?: string | null;
+};
+
+/** "You mentioned $106 a ticket", or "The screenshot you sent shows $106 a ticket including fees on StubHub". */
+function quoteLead(q: QuotedPrice): string {
+  const fees = q.feeBasis === 'all_in' ? ' including fees' : q.feeBasis === 'before_fees' ? ' before fees' : '';
+  const per = q.assumedPerTicket ? ' (I’ve taken that as per ticket)' : ' a ticket';
+  const on = q.seller ? ` on ${q.seller}` : '';
+  if (q.source === 'screenshot') return `The screenshot you sent shows ${formatUsd(q.perTicketCents)}${per}${fees}${on}. That’s what the listing showed when you took it; I haven’t checked that the seats are still there.`;
+  if (q.source === 'listing_text') return `The listing you pasted shows ${formatUsd(q.perTicketCents)}${per}${fees}${on}. That’s what it said when you copied it; I haven’t checked that the seats are still there.`;
+  return `You mentioned ${formatUsd(q.perTicketCents)}${per}${fees}.`;
+}
 
 const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const countWord = (n: number) => COUNT_WORDS[n] ?? String(n);
@@ -196,7 +222,15 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     }
     if (a.quote) {
       const listed = c.current.priceCents;
-      const verdict = a.quote.perTicketCents < listed ? `below the cheapest resale listing (${formatUsd(listed)} before fees), so it’s a good price if it’s genuine` : a.quote.perTicketCents <= Math.round(listed * 1.3) ? `about what the cheapest resale ticket (${formatUsd(listed)} before fees) comes to once fees are added` : `above the cheapest resale listing even allowing for fees (${formatUsd(listed)} before fees)`;
+      // The floor is the cheapest listing anywhere in the venue, before fees; the quote is one listing, with fees
+      // included or not. Under the floor is a reason to look closer, not a bargain.
+      const floorText = `${formatUsd(listed)} before fees, anywhere in the venue${group !== null ? `, for ${group} or more tickets` : ''}`;
+      const nearCap = Math.round(listed * (a.quote.feeBasis === 'before_fees' ? 1.15 : 1.3));
+      const verdict = a.quote.perTicketCents < listed
+        ? `below the cheapest resale listing I can see (${floorText}). That’s unusually low, so make sure the seats, the number of tickets and the fees are what you think before you pay`
+        : a.quote.perTicketCents <= nearCap
+          ? `close to the cheapest resale listing I can see (${floorText}${a.quote.feeBasis === 'before_fees' ? '' : ', and fees add to that'}), so it’s in line with the market for the cheapest seats`
+          : `above the cheapest resale listing I can see (${floorText}). That can be fair for a better section, but it isn’t a bargain`;
       out.push({
         id: 'C_QUOTE_MARKET',
         kind: 'quoted_price',
@@ -241,15 +275,20 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
 
   // The customer's own question first: the price they saw, against what the provider publishes.
   if (a.quote) {
-    const price = `${formatUsd(a.quote.perTicketCents)}${a.quote.assumedPerTicket ? ' (I’ve taken that as per ticket)' : ' a ticket'}`;
     const face = a.faceValue;
     const range = face ? `${formatUsd(face.minCents)} to ${formatUsd(face.maxCents)} a ticket before fees` : null;
+    // Face value is what the original seller charged: context for the price, never proof of a good deal. What
+    // comparable seats cost now is the resale comparison (C_QUOTE_MARKET), when we have it.
+    const marketShown = !!(a.market?.visible && a.market.context?.current);
+    const noMarket = marketShown ? '' : ' I can’t see current resale prices for this show, so I can’t tell you whether that’s the going rate.';
     const verdictText = face
       ? {
-          below: `That’s below the face value Ticketmaster lists (${range}), so it’s a good price if the seats suit you.`,
-          within: `That’s within the face value Ticketmaster lists (${range}), so it isn’t marked up.`,
-          fees: `That’s a little above the face value Ticketmaster lists (${range}); fees alone can add that much, so it may well be the official price all-in.`,
-          markup: `That’s well above the face value Ticketmaster lists (${range}), so you’d be paying a resale markup.`,
+          below: `That’s below the face value Ticketmaster lists (${range}). Face value is only what the original seller charged, not what seats are worth now, and a price under it can mean seats with a catch, so check the section, the view and any restrictions before you buy.`,
+          within: `That’s within the face value Ticketmaster lists (${range}), so it isn’t above what the original seller charged. That says nothing about how good the seats are.`,
+          fees: a.quote.feeBasis === 'before_fees'
+            ? `That’s a little above the face value Ticketmaster lists (${range}), a small resale markup.`
+            : `That’s a little above the face value Ticketmaster lists (${range}); fees alone can add that much, so it may be close to the original price all-in.`,
+          markup: `That’s well above the face value Ticketmaster lists (${range}). That alone doesn’t make it a bad price: resale follows demand, so what matters is what comparable seats cost now.${noMarket}`,
         }[quoteVerdict(a.quote.perTicketCents, face)]
       : a.official
         ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. But if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
@@ -257,19 +296,19 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_QUOTE',
       kind: 'quoted_price',
-      text: `You mentioned ${price}. ${verdictText}`,
-      values: { perTicketCents: a.quote.perTicketCents, faceMinCents: face?.minCents ?? null, faceMaxCents: face?.maxCents ?? null },
-      scope: { quantity: q, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: obs },
+      text: `${quoteLead(a.quote)} ${verdictText}`,
+      values: { perTicketCents: a.quote.perTicketCents, faceMinCents: face?.minCents ?? null, faceMaxCents: face?.maxCents ?? null, source: a.quote.source ?? 'customer_reported', feeBasis: a.quote.feeBasis ?? 'unknown' },
+      scope: { quantity: q, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: a.quote.seenAt?.toISOString() ?? obs },
       evidenceIds: [],
-      methodVersion: 'quote-1.0',
-      limitations: ['face_value_is_before_fees', 'not_a_listing'],
+      methodVersion: 'quote-2.0',
+      limitations: ['face_value_is_before_fees', 'not_a_verified_offer', 'face_value_is_context_not_value'],
       customerVisible: true,
     });
   } else if (a.faceValue) {
     claims.push({
       id: 'C_FACE',
       kind: 'face_value',
-      text: `Ticketmaster lists face value for this show at ${formatUsd(a.faceValue.minCents)} to ${formatUsd(a.faceValue.maxCents)} a ticket before fees.`,
+      text: `Ticketmaster lists face value for this show at ${formatUsd(a.faceValue.minCents)} to ${formatUsd(a.faceValue.maxCents)} a ticket before fees. That’s what the original seller charged, not what seats sell for now.`,
       values: { minCents: a.faceValue.minCents, maxCents: a.faceValue.maxCents },
       scope: { quantity: null, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: obs },
       evidenceIds: [],

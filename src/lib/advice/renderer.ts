@@ -45,6 +45,11 @@ export const PROHIBITED_PHRASES = [
   'confidence',
   '% chance',
   'probability',
+  // Only a server claim, with the evidence behind it, can call a price fair; the model's prose never judges one.
+  'good deal',
+  'great deal',
+  'a steal',
+  'bargain',
 ];
 
 const NUMERIC_OR_URL = /(\d|\$|%|https?:\/\/|www\.)/i;
