@@ -69,7 +69,7 @@ describe('reading the listing a customer sends', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
     const body = rec!.bodyText;
     expect(body).toContain('The screenshot you sent shows $245 a ticket including fees on StubHub. That’s what the listing showed when you took it; I haven’t checked that the seats are still there.');
-    expect(body).toContain('The screenshot shows 2 tickets, in section 212, row D, on StubHub, for $490 in total including fees.');
+    expect(body).toContain('That’s 2 tickets, in section 212, row D, on StubHub, for $490 in total including fees.');
     expect(body).toContain('Worth checking before you buy:');
     expect(body).toContain('- It doesn’t say the seats are together. Check before you buy if that matters.');
     expect(body).toContain('- It doesn’t say when the tickets will be delivered.');

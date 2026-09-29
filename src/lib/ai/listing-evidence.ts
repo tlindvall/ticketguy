@@ -134,9 +134,14 @@ export function usableListing(r: ListingRead): boolean {
   return r.priceDollars !== null || r.totalDollars !== null || r.section !== null;
 }
 
-/** Pasted text that reads like a listing: a price next to a section, row or seat. */
+/**
+ * Pasted text that reads like a listing: a price next to a section, row or seat, and something that says it's a
+ * listing they found (a marketplace, "found", "listing", "this one"). "Row 1 preferred, budget $300" is a request.
+ */
 export function looksLikeListingText(text: string): boolean {
-  return /\$\s?\d/.test(text) && /\b(sec(tion)?|row|seats?)\s*[:#]?\s*[a-z0-9]/i.test(text);
+  if (!/\$\s?\d/.test(text) || !/\b(sec(tion)?|row|seats?)\s*[:#]?\s*[a-z0-9]/i.test(text)) return false;
+  if (!/\b(stubhub|ticketmaster|seatgeek|vivid|gametime|tickpick|axs|listing|listed|found|seeing|this one|these|checkout|ea\b|each)\b/i.test(text)) return false;
+  return !/\b(budget|up to|no more than|max(imum)?|under)\s*\$/i.test(text) || /\b(listing|listed|found|seeing|stubhub|vivid|seatgeek|ticketmaster)\b/i.test(text);
 }
 
 export type ListingImage = { mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; base64: string };

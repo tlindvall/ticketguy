@@ -270,7 +270,9 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
     expect(body.startsWith('Hey,\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
-    expect(body).toContain('The listing you pasted shows 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
+    expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
+    expect(body).not.toContain('I can’t see what sellers are charging');
+    expect(body).not.toMatch(/send me the listing/i);
     expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket (about $620 for all four), in your section. These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. They aren’t your seats, and I haven’t checked they’re still for sale.');
     expect(body).toContain('I haven’t found a verified alternative I can link you to yet, with a checked all-in price.');
     // Recommendation first, the market figures after it, and nothing called a good deal.

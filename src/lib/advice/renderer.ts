@@ -201,7 +201,9 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   if (asks.length) {
     lines.push(questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n'));
     html.push(P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`);
-  } else if (b.closing.trim()) {
+  } else if (b.closing.trim() && !subject) {
+    // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
+    // worse, ask for the listing they already sent.
     lines.push(b.closing.trim());
     html.push(P(esc(b.closing.trim())));
   }

@@ -132,7 +132,8 @@ function subjectClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
   return {
     id: 'C_SUBJECT',
     kind: 'subject_listing',
-    text: `The ${what} shows ${bits.length ? bits.join(', ') : 'no ticket details I could read'}.${caveat}`,
+    // After the price line (which names the source), this reads on from it rather than repeating "the listing shows".
+    text: bits.length ? (a.quote ? `That’s ${bits.join(', ')}.` : `The ${what} shows ${bits.join(', ')}.${caveat}`) : `I couldn’t read the ticket details in the ${what}.${caveat}`,
     values: { quantity: sub.quantity, wholePartyCents: sub.wholePartyCents, section: sub.section, row: sub.row, source: sub.source },
     scope: { quantity: sub.quantity, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() },
     evidenceIds: [],
@@ -474,7 +475,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     const range = face ? `${formatUsd(face.minCents)} to ${formatUsd(face.maxCents)} a ticket before fees` : null;
     // Face value is what the original seller charged: context for the price, never proof of a good deal. What
     // comparable seats cost now is the resale comparison (C_QUOTE_MARKET), when we have it.
-    const marketShown = !!(a.market?.visible && a.market.context?.current);
+    const marketShown = !!(a.market?.visible && (a.market.context?.current || a.marketAround));
     const noMarket = marketShown ? '' : ' I can’t see current resale prices for this show, so I can’t tell you whether that’s the going rate.';
     const verdictText = face
       ? {

@@ -12,7 +12,8 @@ export type OutcomeReply = {
 };
 
 const NEGATED_BUY = /\b(didn'?t|did not|haven'?t|have not|never|decided not to|not going to|won'?t)\s+(?:end up\s+)?(buy|get|go|purchase)\b|\bpassed on (them|it)\b|\bno tickets\b/i;
-const BOUGHT = /\b(i|we)\s+(?:just\s+|finally\s+|already\s+)?(bought|got|purchased|grabbed|booked|picked up)\b|\b(bought|got|purchased|grabbed) (them|it|the tickets|tickets|the seats|seats)\b|\bgot (our|my) tickets\b/i;
+// "Got" counts only with the tickets as its object: "I got your email" is not a purchase.
+const BOUGHT = /\b(i|we)\s+(?:just\s+|finally\s+|already\s+|ended up\s+)?(bought|purchased|grabbed|booked)\b|\b(bought|got|purchased|grabbed|picked up) (them|the tickets|tickets|the seats|seats|our tickets|my tickets|the pair|both)\b/i;
 const STOP = /\b(stop|quit)\s+(watching|tracking|checking|looking|monitoring)\b|\bno longer need\b|\bdon'?t need (them|it|tickets|the tickets) any ?more\b|\byou can stop\b/i;
 
 export function classifyOutcomeReply(text: string): OutcomeReply | null {

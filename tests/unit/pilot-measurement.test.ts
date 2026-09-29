@@ -28,3 +28,10 @@ describe('outcome replies', () => {
     expect(classifyOutcomeReply('No, I bought them anyway')).toMatchObject({ changedWhat: false, changedWhen: false });
   });
 });
+
+describe('what is not an outcome', () => {
+  it('"I got your email" is not a purchase', () => {
+    expect(classifyOutcomeReply('I got your email, thanks. Will think about it')).toBeNull();
+    expect(classifyOutcomeReply('We got the tickets!')).toMatchObject({ bought: true });
+  });
+});

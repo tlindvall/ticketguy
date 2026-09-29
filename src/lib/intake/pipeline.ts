@@ -662,7 +662,7 @@ export class Concierge {
       }
     }
     const text = msg.sanitizedText ?? '';
-    if (!best && looksLikeListingText(text)) {
+    if (!best && looksLikeListingText(text) && reader.name !== 'none') {
       try {
         const r = await read({ text });
         const fields = usableListing(r) ? fieldsFromRead(r) : null;
@@ -684,10 +684,13 @@ export class Concierge {
    */
   private async recordOutcomeReply(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; extraction: RequestExtraction; prior: RequestExtraction; listingSent: boolean }): Promise<string | null> {
     const { req, msg, contact, extraction: x, prior } = a;
-    const bringsSomethingNew = a.listingSent || x.submittedUrls.length > 0 || x.quotedPriceCents != null || (!!x.performerOrTeam && !!prior.performerOrTeam && x.performerOrTeam.toLowerCase() !== prior.performerOrTeam.toLowerCase());
+    const changed = (k: 'quantity' | 'dateExpression') => x[k] != null && x[k] !== prior[k];
+    const bringsSomethingNew = a.listingSent || x.submittedUrls.length > 0 || x.quotedPriceCents != null || changed('quantity') || changed('dateExpression') || (!!x.performerOrTeam && !!prior.performerOrTeam && x.performerOrTeam.toLowerCase() !== prior.performerOrTeam.toLowerCase());
     if (bringsSomethingNew) return null;
     const outcomes = await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, req.id));
     const followUpOpen = outcomes.some((o) => o.kind === 'follow_up_sent') && !outcomes.some((o) => o.kind === 'follow_up_reply');
+    // A question is a request ("we got them, but can you check parking?"), except in answer to our follow-up.
+    if (!followUpOpen && /\?/.test(msg.sanitizedText ?? '')) return null;
     const reply = classifyOutcomeReply(msg.sanitizedText ?? '');
     if (!reply && !followUpOpen) return null;
     const at = msg.receivedAt;
@@ -718,7 +721,7 @@ export class Concierge {
     const now = this.now();
     const from = new Date(now.getTime() - 14 * 86_400_000);
     const to = new Date(now.getTime() - 18 * 3_600_000);
-    const rows = await this.db.select({ r: t.requests, e: t.events, v: t.venues, c: t.contacts }).from(t.requests).innerJoin(t.events, eq(t.events.id, t.requests.eventId)).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(and(notInArray(t.requests.state, ['unsupported', 'needs_clarification', 'manual_attention']), gte(t.events.localStartAt, from), lte(t.events.localStartAt, to))).limit(opts.limit ?? 50);
+    const rows = await this.db.select({ r: t.requests, e: t.events, v: t.venues, c: t.contacts }).from(t.requests).innerJoin(t.events, eq(t.events.id, t.requests.eventId)).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(and(notInArray(t.requests.state, ['unsupported', 'needs_clarification', 'manual_attention']), gte(t.events.localStartAt, from), lte(t.events.localStartAt, to), sql`not exists (select 1 from ${t.requestOutcomes} o where o.request_id = ${t.requests.id} and o.kind in ('follow_up_sent', 'stop_watching'))`)).limit(opts.limit ?? 50);
     let queued = 0;
     for (const { r, e, c } of rows) {
       if (c.status === 'deleted') continue;
