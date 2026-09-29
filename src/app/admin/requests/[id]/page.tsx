@@ -6,7 +6,7 @@ import * as t from '@/lib/db/schema';
 import { guardPage } from '@/lib/admin/guard';
 import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
-import { formatUsd } from '@/lib/domain/money';
+import { formatUsd, formatUsdChange } from '@/lib/domain/money';
 import type { AdvicePacket } from '@/lib/advice/packet';
 import { newIdempotencyKey, nowMs } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
@@ -294,7 +294,7 @@ function MarketCard({ market, tracked, licensed, shown, quantity, now }: { marke
     return (
       <p>
         {label}: from <strong>{formatUsd(c.current.priceCents)}</strong> a ticket
-        {w ? <span className={w.changeCents < 0 ? 'text-emerald-700' : w.changeCents > 0 ? 'text-rose-700' : ''}> ({w.changeCents < 0 ? '' : '+'}{formatUsd(w.changeCents)} in {w.hours}h)</span> : null}
+        {w ? <span className={w.changeCents < 0 ? 'text-emerald-700' : w.changeCents > 0 ? 'text-rose-700' : ''}> ({formatUsdChange(w.changeCents)} in {w.hours}h)</span> : null}
         {c.adequacy !== 'sufficient' ? <span className="text-gray-500"> · not enough data for a trend</span> : c.direction !== 'flat' ? <span> · {c.direction === 'down' ? 'falling' : 'rising'}</span> : <span> · flat</span>}
       </p>
     );
