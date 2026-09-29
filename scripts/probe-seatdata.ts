@@ -5,7 +5,8 @@
  * The client was written from SeatData's official SDK, not from a live response; this confirms the live
  * shapes before tracking is switched on. It prints structure and counts — status codes, key names, how many
  * snapshots and zones, how fresh the newest snapshot is, how often all_in_price is empty per source — never
- * the key, and never listing contents. About 6 API calls.
+ * the key, and never listing contents (one aggregate: the cheapest listing price against the stats floor,
+ * to confirm listings are priced per ticket). About 6 API calls.
  */
 import { SeatDataClient, SeatDataError } from '../src/lib/market/seatdata';
 
@@ -62,6 +63,12 @@ const listings = await step(`listings for event ${first.event_id}`, () => api.li
 if (listings) {
   const items = Array.isArray(listings.listings) ? listings.listings : [];
   console.log(`  top-level keys: ${keys(listings)} · listings: ${items.length} · listing keys: ${keys(items[0])}`);
+  // Is a listing's price per ticket and on the same basis as the stats? The cheapest active one should sit at
+  // or near the newest snapshot's get_in; a multiple of it would mean a whole-listing price.
+  const active = items.filter((l) => l.active !== false && l.active !== 0).map((l) => ({ price: Number(l.price), qty: Number(l.quantity) })).filter((l) => l.price > 0 && l.qty > 0);
+  const cheapest = active.map((l) => l.price).sort((a, b) => a - b)[0];
+  const newestGetIn = stats?.snapshots.slice().sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]?.get_in;
+  console.log(`  cheapest active listing price ${cheapest ?? '—'} vs newest stats get_in ${newestGetIn ?? '—'} · listings seating 5+: ${active.filter((l) => l.qty >= 5).length}`);
 }
 
 const sales = await step(`sales for event ${first.event_id}`, () => api.eventSales(first.event_id, { limit: 100 }));

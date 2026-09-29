@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { basisForQuantity, computeMarketContext, pointsFromSnapshot, typicalAtLead, marketBasketKey } from '@/lib/market/series';
+import { basisForQuantity, computeMarketContext, pointsFromListings, pointsFromSnapshot, typicalAtLead, marketBasketKey } from '@/lib/market/series';
 import { marketDecision, pollIntervalMinutes } from '@/lib/market/tracker';
 
 const H = 3_600_000;
@@ -22,8 +22,9 @@ describe('market series', () => {
     expect(pointsFromSnapshot({ timestamp: 'garbage' } as never)).toEqual([]);
   });
 
-  it('only one and two tickets have a price series; groups of three or more do not', () => {
-    expect([1, 2, 3, 5].map(basisForQuantity)).toEqual(['single', 'pair', null, null]);
+  it('one and two tickets read the stats series; three or more read their own group series, capped at 12', () => {
+    expect([1, 2, 3, 5, 20].map(basisForQuantity)).toEqual(['single', 'pair', 'group:3', 'group:5', 'group:12']);
+    expect(marketBasketKey('e1', 'group:5', null)).not.toBe(marketBasketKey('e1', 'group:4', null));
     expect(marketBasketKey('e1', 'single', null)).not.toBe(marketBasketKey('e1', 'pair', null));
   });
 
@@ -69,5 +70,26 @@ describe('market series', () => {
     expect(pollIntervalMinutes(4 * 24 * 60, -0.15)).toBe(6 * 60);
     expect(pollIntervalMinutes(12 * 60, null)).toBe(6 * 60);
     expect(pollIntervalMinutes(12 * 60, 0.2)).toBe(3 * 60);
+  });
+
+  it('listings become one point per group size: the cheapest active listing with at least that many tickets, and how many there are', () => {
+    const at = new Date('2026-10-01T12:00:00Z');
+    const listings = [
+      { active: true, listing_id: 1, price: 95, quantity: 2 },
+      { active: true, listing_id: 2, price: 140, quantity: 6 },
+      { active: true, listing_id: 3, price: 155.5, quantity: 5 },
+      { active: false, listing_id: 4, price: 60, quantity: 8 },
+      { active: 1, listing_id: 5, price: '120', quantity: 4 },
+      { listing_id: 6, price: null, quantity: 9 },
+      { listing_id: 7, price: 200, quantity: 'many' },
+    ];
+    const pts = pointsFromListings(listings, [5, 4, 5, 2, 9], at);
+    expect(pts.map((p) => [p.basis, p.priceCents, p.medianCents, p.activeListings])).toEqual([
+      ['group:4', 12000, 14000, 3],
+      ['group:5', 14000, 15550, 2],
+    ]);
+    expect(pts.every((p) => p.observedAt === at && p.zone === null)).toBe(true);
+    // Nothing big enough: no point, rather than a made-up price.
+    expect(pointsFromListings(listings, [10], at)).toEqual([]);
   });
 });

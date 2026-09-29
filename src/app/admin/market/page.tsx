@@ -102,7 +102,7 @@ export default async function Market() {
       <section>
         <h2 className="text-lg font-semibold">What we follow</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Every upcoming event a customer asks about{e.MARKET_TRACK_ENTITIES.length ? `, and every game of: ${e.MARKET_TRACK_ENTITIES.join(', ')}` : ''}. One check per event serves every customer following it; checks run daily beyond a week, twice a day in the last week and every 6 hours in the last two days; a customer&rsquo;s request refreshes its event on the spot. Each check is a paid SeatData request.
+          Every upcoming event a customer asks about{e.MARKET_TRACK_ENTITIES.length ? `, and every game of: ${e.MARKET_TRACK_ENTITIES.join(', ')}` : ''}. One check per event serves every customer following it; checks run daily beyond a week, twice a day in the last week and every 6 hours in the last two days; a customer&rsquo;s request refreshes its event on the spot. Each check is a paid SeatData request, plus one listings read while a group of three or more is asking about the event (their price is the cheapest listing with that many tickets).
           {' '}{byState.map((s) => `${TRACK_STATE[s.state] ?? s.state}: ${s.n}`).join(' · ') || 'Nothing yet.'}
         </p>
         <p className="mt-1 text-sm text-gray-600">Our own history: {own?.points ?? 0} market points on tracked events · {history?.events ?? 0} past comparable games ({history?.points ?? 0} points).</p>
@@ -126,7 +126,7 @@ export default async function Market() {
       <section>
         <h2 className="text-lg font-semibold">Would &ldquo;wait&rdquo; have been right?</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Twice a day for every tracked event, the engine decides what it would tell a flexible buyer from market data alone — <strong>wait</strong> when prices for that group size are falling and listings are holding up, otherwise <strong>buy</strong> — and 24 hours later checks what the cheapest listed price did. Nothing here is sent to anyone. Groups of three or more are not scored: the data has no price for that many seats together. {pending?.n ?? 0} decisions still waiting for their 24 hours.
+          Twice a day for every tracked event, the engine decides what it would tell a flexible buyer from market data alone — <strong>wait</strong> when prices for that group size are falling and listings are holding up, otherwise <strong>buy</strong> — and 24 hours later checks what the cheapest listed price did. Nothing here is sent to anyone. Groups of three or more are not scored yet: their prices come from listings read only while a request is open. {pending?.n ?? 0} decisions still waiting for their 24 hours.
         </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {cards.map((c) => (

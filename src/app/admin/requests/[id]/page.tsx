@@ -310,9 +310,10 @@ function MarketCard({ market, tracked, licensed, shown, quantity, now }: { marke
       ) : (
         <div className="mt-1 space-y-1 text-sm">
           {line('One ticket', market.single)}
-          {quantity >= 2 ? line('Two together', quantity === 2 ? market.context : null) : null}
-          {quantity > 2 ? <p className="text-xs text-gray-500">No price data for {quantity} seats together; only the listing count below applies to this group.</p> : null}
-          {market.supply.now !== null ? <p>Listings: {market.supply.now}{market.supply.before !== null ? ` (was ${market.supply.before}${market.supply.hours ? ` ${market.supply.hours}h ago` : ''})` : ''}{market.supply.trend === 'shrinking' ? <span className="tg-badge tg-badge-warn ml-1">shrinking</span> : null}</p> : null}
+          {line('Two together', market.pair)}
+          {quantity > 2 ? line(`${Math.min(quantity, 12)} or more on one listing`, market.context) : null}
+          {quantity > 2 ? <p className="text-xs text-gray-500">From SeatData&rsquo;s listings, read at each check while this request is open. A listing with more tickets may not sell exactly {quantity}.</p> : null}
+          {market.supply.now !== null ? <p>{market.supplyScope === 'group' ? `Listings with ${Math.min(quantity, 12)} or more tickets` : 'Listings'}: {market.supply.now}{market.supply.before !== null ? ` (was ${market.supply.before}${market.supply.hours ? ` ${market.supply.hours}h ago` : ''})` : ''}{market.supply.trend === 'shrinking' ? <span className="tg-badge tg-badge-warn ml-1">shrinking</span> : null}</p> : null}
           {market.single.typical ? <p className="text-gray-600">Past games here at this point: {formatUsd(market.single.typical.p25Cents)}–{formatUsd(market.single.typical.p75Cents)} a ticket ({market.single.typical.events} games)</p> : null}
           <p className="text-xs text-gray-500">Listed prices before fees{market.single.current ? `, as of ${ago(market.single.current.at.getTime(), now)}` : ''}. {shown ? 'Shown to customers in replies.' : 'Staff only: not in customer emails until customer display is licensed.'}</p>
         </div>

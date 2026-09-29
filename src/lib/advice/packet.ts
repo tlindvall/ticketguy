@@ -1,4 +1,4 @@
-import type { MarketBasis, MarketContext } from '@/lib/market/series';
+import { basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
 import type { BenchmarkResult } from './benchmark';
@@ -92,7 +92,7 @@ export type BuildPacketArgs = {
    * Resale market statistics (DECISION_LOG #44): listed prices before fees, per ticket, never an offer.
    * `visible` is the licence's customer-display right; without it the claims are staff-only.
    */
-  market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; comparableLabel: string | null; visible: boolean } | null;
+  market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; comparableLabel: string | null; visible: boolean } | null;
 };
 
 /** Resale market claims. Every number is the calculated context's; wording says what the figure is and is not. */
@@ -103,20 +103,25 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const q = a.quantity;
   const c = m.context;
   const common = { evidenceIds: [], methodVersion: c?.methodVersion ?? 'market-1.0', customerVisible: m.visible };
+  const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
+  const size = m.basis ? basisSize(m.basis) : q;
+  const moved = (s: MarketContext['supply']) => s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? `, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${s.before} over the last ${s.hours} hours` : '';
   const supplyText = (s: MarketContext['supply']) =>
-    s.now === null ? '' : s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? ` About ${s.now} listings are up, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${s.before} over the last ${s.hours} hours.` : ` About ${s.now} listings are up.`;
-  if (c && c.current && c.adequacy === 'sufficient') {
-    const what = m.basis === 'pair' ? 'for two tickets together' : 'for a single ticket';
-    const w = c.h72 ?? c.h24;
+    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${s.now} listings have ${group} or more tickets${moved(s)}.` : ` About ${s.now} listings are up${moved(s)}.`;
+  // A group's series starts at the first listings read, so its current floor is worth saying before there is a trend.
+  const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
+  if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
+    const what = m.basis === 'pair' ? 'for two tickets together' : group !== null ? `with ${group} or more tickets` : 'for a single ticket';
+    const w = c.adequacy === 'sufficient' ? (c.h72 ?? c.h24) : null;
     const when = w ? (w.hours >= 72 ? 'three days ago' : 'a day ago') : null;
     const move = !w || !when ? '' : c.direction === 'down' ? ` That’s down from ${formatUsd(w.fromCents)} ${when}.` : c.direction === 'up' ? ` That’s up from ${formatUsd(w.fromCents)} ${when}.` : ` About the same as ${when}.`;
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `Resale listings ${what} currently start at ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}`,
+      text: `Resale listings ${what} currently start at ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` A listing with more tickets may not sell exactly ${q}.` : ''}`,
       values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
-      scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
-      limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict'],
+      scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+      limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict', ...(group !== null ? ['group_split_not_guaranteed'] : [])],
       ...common,
     });
     if (c.typical) {
@@ -125,7 +130,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
         kind: 'market_benchmark',
         text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price for two together' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)} to ${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
         values: { events: c.typical.events, p25Cents: c.typical.p25Cents, medianCents: c.typical.medianCents, p75Cents: c.typical.p75Cents },
-        scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: obs },
+        scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: obs },
         limitations: ['listed_prices_before_fees', 'comparable_games_same_venue'],
         ...common,
       });
@@ -138,13 +143,13 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
         kind: 'quoted_price',
         text: `Against resale: ${formatUsd(a.quote.perTicketCents)} a ticket is ${verdict}.`,
         values: { perTicketCents: a.quote.perTicketCents, listedCents: listed },
-        scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: null, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+        scope: { quantity: size, seatZone: null, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
         limitations: ['listed_prices_before_fees', 'market_statistics_not_listings'],
         ...common,
       });
     }
-  } else if (m.basis === null && m.supply.now !== null) {
-    // Three or more: no group price series exists, so only the listing count is said, and said to be that.
+  } else if ((m.basis === null || group !== null) && m.supply.now !== null && m.supplyScope !== 'group') {
+    // Three or more before any listings read for the group: only the count of all listings, and said to be that.
     out.push({
       id: 'C_MARKET',
       kind: 'market_supply',
