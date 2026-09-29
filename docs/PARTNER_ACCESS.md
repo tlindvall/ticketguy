@@ -43,7 +43,7 @@ What Discovery never does: produce an offer. Its event price ranges are dropped 
 
 SeatData (seatdata.io) reports resale market statistics per event: cheapest and median listed prices per ticket before fees, for any quantity and for two or more, overall and per seating zone, and the active listing count, as a time series. It is evidence for buy/wait advice, never an offer (DECISION_LOG #44). Setup:
 
-1. Render → Environment: `SEATDATA_API_KEY` (never in chat or the repo). Optional `SEATDATA_DAILY_CALL_LIMIT` (default 300) and `MARKET_TRACK_ENTITIES`.
+1. Render → Environment: `SEATDATA_API_KEY` (never in chat or the repo). Optional `SEATDATA_DAILY_CALL_LIMIT` (default 50; set it to your plan's allowance) and `MARKET_TRACK_ENTITIES`.
 2. Render shell: `pnpm tsx scripts/probe-seatdata.ts` confirms the live response shapes (structure only).
 3. `/admin/market` → Change licence: approve **tracking** (and **benchmark**) under the standard licence's internal-use terms, with the licence version as the reference.
 4. **advice** and **customer display** only after SeatData confirms in writing that email advice, charts, alerts and historical comparisons shown to customers are allowed; record the email date, sender and exact wording.

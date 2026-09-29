@@ -54,6 +54,7 @@ describe('resale market tracking', () => {
       const base = 80 + (Number(m[1]) - 900) * 10;
       return json({ event_id: Number(m[1]), data: statsFor(new Date(start.getTime() - 40 * 24 * H), 40 * 24, base, base, base + 20, base + 20), has_more: false, next_cursor: null });
     }
+    if (url.pathname === '/api/v1/events/777/sales') return json({ event_id: 777, data: [], has_more: false, next_cursor: null });
     if (url.pathname === '/api/v0.4/events/event-request-add') return json({ job_id: 'job-1' });
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;

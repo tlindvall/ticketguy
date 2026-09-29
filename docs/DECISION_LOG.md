@@ -578,7 +578,8 @@ date purges the raw series in the nightly sweep.
 - Past games of the same team at the same venue (up to 8, refreshed monthly, sampled every 6 hours) go to
   `market_history` for "typical at this point before the game". That needs at least 5 games, one value
   each.
-- Calls per UTC day are capped (`SEATDATA_DAILY_CALL_LIMIT`, default 300) and logged in `market_fetches`.
+- SeatData rescans an event about every 8 hours on its own (probe: 479-minute median gap). One small sales call a day per followed event puts it on its ~30-minute rescan.
+- Calls per UTC day are capped (`SEATDATA_DAILY_CALL_LIMIT`, default 50; set it to the plan's allowance) and logged in `market_fetches`.
 
 **Group size decides what the data can say** (the owner's correction: "prices fell" is not "wait").
 - One ticket reads the any-quantity series and two read the 2+ series.

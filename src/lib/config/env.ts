@@ -206,7 +206,7 @@ const rawSchema = z.object({
    * own approved uses. Calls per UTC day are capped.
    */
   SEATDATA_API_KEY: z.string().optional(),
-  SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(300),
+  SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(50),
   /** Teams/performers tracked every day whether or not anyone has asked (the evaluation cohort). Names as in the catalog. */
   MARKET_TRACK_ENTITIES: csv,
 
