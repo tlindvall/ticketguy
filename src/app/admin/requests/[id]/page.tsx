@@ -38,6 +38,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const manual = req.eventId ? await db.select({ o: t.offerObservations, off: t.offers }).from(t.offerObservations).innerJoin(t.offers, eq(t.offers.id, t.offerObservations.offerId)).where(eq(t.offerObservations.verificationMethod, 'approved_manual')).then((rows) => rows.filter((r) => r.o.eventId === req.eventId)) : [];
   const recs = await db.select().from(t.recommendations).where(eq(t.recommendations.requestId, id)).orderBy(desc(t.recommendations.createdAt));
   const shownListings = await db.select().from(t.listingEvidence).where(eq(t.listingEvidence.requestId, id)).orderBy(desc(t.listingEvidence.createdAt));
+  const outcomes = await db.select().from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, id)).orderBy(asc(t.requestOutcomes.at));
   const advice = await db.select().from(t.adviceRuns).where(eq(t.adviceRuns.requestId, id)).orderBy(desc(t.adviceRuns.createdAt)).limit(1);
   const bench = advice[0]?.benchmarkRunId ? (await db.select().from(t.benchmarkRuns).where(eq(t.benchmarkRuns.id, advice[0].benchmarkRunId)))[0] : null;
   const trend = advice[0]?.trendRunId ? (await db.select().from(t.trendRuns).where(eq(t.trendRuns.id, advice[0].trendRunId)))[0] : null;
@@ -162,6 +163,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
             ) : <p className="mt-1 text-sm text-gray-500">Not matched to an event yet, so no prices can be checked.</p>}
           </div>
           <ListingEvidenceCard rows={shownListings} timeZone={event?.v.timezone ?? 'America/New_York'} />
+          <OutcomesCard id={id} tags={req.problemTypes ?? []} rows={outcomes} timeZone={event?.v.timezone ?? 'America/New_York'} />
           {event ? <MarketCard market={market} tracked={tracked ?? null} licensed={licence.allows('tracking')} shown={marketUses(licence, appEnv()).display} quantity={Number(brief?.quantity ?? 2)} now={now} /> : null}
         </aside>
       </div>
@@ -355,6 +357,41 @@ function ListingEvidenceCard({ rows, timeZone }: { rows: Array<typeof t.listingE
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+const OUTCOME_LABELS: Record<string, string> = {
+  link_click: 'Clicked a link',
+  user_reported_purchase: 'Said they bought',
+  user_reported_no_purchase: 'Said they didn’t buy',
+  stop_watching: 'Asked us to stop',
+  follow_up_sent: 'Follow-up sent',
+  follow_up_reply: 'Answered the follow-up',
+  affiliate_confirmed_purchase: 'Purchase confirmed by affiliate network',
+};
+
+/** What they needed help with, and what happened after we answered, each as the kind of evidence it is. */
+function OutcomesCard({ id, tags, rows, timeZone }: { id: string; tags: string[]; rows: Array<typeof t.requestOutcomes.$inferSelect>; timeZone: string }) {
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <h2 className="font-semibold">Pilot</h2>
+      <p className="mt-1 text-sm text-gray-600">{tags.length ? tags.map((x) => x.replace(/_/g, ' ')).join(', ') : 'No problem type yet'}</p>
+      {rows.length ? (
+        <ul className="mt-2 space-y-1 text-sm">
+          {rows.map((r) => {
+            const d = r.details as { changedWhat?: boolean | null; changedWhen?: boolean | null; likelyBot?: boolean; label?: string | null; note?: string };
+            const extra = r.kind === 'follow_up_reply' ? ` · changed what: ${d.changedWhat ?? 'not said'}, when: ${d.changedWhen ?? 'not said'}` : r.kind === 'link_click' ? ` · ${d.label ?? 'link'}${d.likelyBot ? ' (likely automated)' : ''}` : d.note ? ` · ${d.note}` : '';
+            return <li key={r.id}>{whenLocal(r.at, timeZone)}: {OUTCOME_LABELS[r.kind] ?? r.kind}{extra}</li>;
+          })}
+        </ul>
+      ) : <p className="mt-1 text-sm text-gray-500">No outcome yet.</p>}
+      <details className="mt-2">
+        <summary className="cursor-pointer text-sm font-medium">Record an outcome</summary>
+        <div className="mt-2">
+          <JsonForm url={`/api/admin/requests/${id}/outcomes`} submitLabel="Save outcome" fields={[{ name: 'kind', label: 'What happened (affiliate_confirmed_purchase, user_reported_purchase or user_reported_no_purchase)', required: true, placeholder: 'affiliate_confirmed_purchase' }, { name: 'network', label: 'Affiliate network, if any' }, { name: 'amountCents', label: 'Order total in cents, if shown', type: 'number' }, { name: 'note', label: 'Where you saw it', type: 'textarea', required: true }]} />
+        </div>
+      </details>
     </div>
   );
 }

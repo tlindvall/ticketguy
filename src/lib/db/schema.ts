@@ -261,10 +261,59 @@ export const requests = pgTable(
     clarificationCount: integer('clarification_count').notNull().default(0),
     /** Event ids a browse reply has already listed for the current criteria, so "the other 7" shows the rest. */
     browseShown: jsonb('browse_shown').$type<string[]>().notNull().default([]),
+    /** What the buyer needed help with (src/lib/domain/problem-types.ts), accumulated over the conversation. */
+    problemTypes: jsonb('problem_types').$type<string[]>().notNull().default([]),
     createdAt: createdAt(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
   (t) => [index('requests_state_deadline_idx').on(t.state, t.deadlineAt), index('requests_contact_idx').on(t.contactId)],
+);
+
+/**
+ * What happened after we answered, one row per fact, each kept as the kind of evidence it is: a click on a
+ * link we sent, what the customer told us (bought, didn't, stop watching, whether the advice changed what or
+ * when they bought), a purchase an affiliate network confirmed, and the one follow-up we sent. A click is not a
+ * purchase, and a customer's word is not an affiliate confirmation.
+ */
+export const requestOutcomes = pgTable(
+  'request_outcomes',
+  {
+    id: id(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    /** link_click | user_reported_purchase | user_reported_no_purchase | stop_watching | follow_up_sent | follow_up_reply | affiliate_confirmed_purchase */
+    kind: text('kind').notNull(),
+    /** redirect | customer_reply | staff | affiliate_report | system */
+    source: text('source').notNull(),
+    messageId: uuid('message_id').references(() => messages.id),
+    recommendationId: uuid('recommendation_id'),
+    details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+    actor: text('actor').notNull().default('system'),
+    at: ts('at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('request_outcomes_request_idx').on(t.requestId, t.kind)],
+);
+
+/**
+ * A link we put in a customer email, behind /go/<id> so a click can be counted. The redirect only ever sends
+ * someone to the URL stored here; the id is random and carries nothing about the customer.
+ */
+export const trackedLinks = pgTable(
+  'tracked_links',
+  {
+    id: id(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    recommendationId: uuid('recommendation_id'),
+    url: text('url').notNull(),
+    label: text('label'),
+    affiliate: boolean('affiliate').notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [index('tracked_links_request_idx').on(t.requestId)],
 );
 
 export const requestVersions = pgTable(
@@ -1285,7 +1334,7 @@ export const emailTemplates = pgTable(
 export const schema = {
   user, session, account, verification, twoFactor,
   contacts, contactPreferences, conversations, messages, mediaObjects, attachments, listingEvidence,
-  requests, requestVersions, requestTransitions,
+  requests, requestVersions, requestTransitions, requestOutcomes, trackedLinks,
   venues, entities, events, eventSourceMappings, catalogSyncs,
   sourceRegistry, adapterConfigs, researchRuns, sourceChecks, offers, offerObservations,
   recommendations, watches, watchAlerts,

@@ -1,9 +1,11 @@
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { problemTypesFor } from '@/lib/domain/problem-types';
+import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
 import { raPointer } from '@/lib/sources/resident-advisor';
-import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
 import * as t from '@/lib/db/schema';
@@ -343,6 +345,19 @@ export class Concierge {
       await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id } });
     }
 
+    // What they need help with, accumulated over the conversation (pilot measurement).
+    const tags = problemTypesFor(extraction, msg.sanitizedText ?? '', { listing: !!listing.fields || listing.images > 0, link: ticketLinksIn(extraction.submittedUrls).length > 0 });
+    const allTags = [...new Set([...(req.problemTypes ?? []), ...tags])];
+    if (allTags.length !== (req.problemTypes ?? []).length) await this.db.update(t.requests).set({ problemTypes: allTags }).where(eq(t.requests.id, req.id));
+
+    // How it ended: "I bought them", "stop watching", or the answer to our one follow-up. Recorded as the
+    // customer's own report; a reply that brings something new (a link, a listing, a price, another event)
+    // is a request and carries on below.
+    if (priorVersion) {
+      const done = await this.recordOutcomeReply({ req, msg, contact: contact!, extraction, prior: RequestExtractionSchema.parse(priorVersion.brief), listingSent: !!listing.fields || listing.images > 0 });
+      if (done) return { state: done, revision: req.currentRevision, extraction };
+    }
+
     // New revision.
     const revision = priorVersion ? req.currentRevision + 1 : 1;
     // Only a statement that names a place counts; "I'm in a hurry" or an unrecognised place changes nothing.
@@ -479,7 +494,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: official.buyUrl, eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
       });
@@ -661,6 +676,71 @@ export class Concierge {
       }
     }
     return { fields: best, source, images: images.length, redacted };
+  }
+
+  /**
+   * A reply that reports how it ended. Returns the new state when it was one (the request is closed and
+   * acknowledged), or null when the message should be handled as part of the request.
+   */
+  private async recordOutcomeReply(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; extraction: RequestExtraction; prior: RequestExtraction; listingSent: boolean }): Promise<string | null> {
+    const { req, msg, contact, extraction: x, prior } = a;
+    const bringsSomethingNew = a.listingSent || x.submittedUrls.length > 0 || x.quotedPriceCents != null || (!!x.performerOrTeam && !!prior.performerOrTeam && x.performerOrTeam.toLowerCase() !== prior.performerOrTeam.toLowerCase());
+    if (bringsSomethingNew) return null;
+    const outcomes = await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, req.id));
+    const followUpOpen = outcomes.some((o) => o.kind === 'follow_up_sent') && !outcomes.some((o) => o.kind === 'follow_up_reply');
+    const reply = classifyOutcomeReply(msg.sanitizedText ?? '');
+    if (!reply && !followUpOpen) return null;
+    const at = msg.receivedAt;
+    const rows: Array<typeof t.requestOutcomes.$inferInsert> = [];
+    if (followUpOpen) rows.push({ requestId: req.id, kind: 'follow_up_reply', source: 'customer_reply', messageId: msg.id, details: { bought: reply?.bought ?? null, changedWhat: reply?.changedWhat ?? null, changedWhen: reply?.changedWhen ?? null }, actor: 'customer', at });
+    if (reply?.bought === true) rows.push({ requestId: req.id, kind: 'user_reported_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at });
+    if (reply?.bought === false) rows.push({ requestId: req.id, kind: 'user_reported_no_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at });
+    if (reply?.stopWatching && reply.bought !== true) rows.push({ requestId: req.id, kind: 'stop_watching', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at });
+    if (rows.length) await this.db.insert(t.requestOutcomes).values(rows);
+    // Bought or stop: nothing more to watch for this request.
+    if (reply?.bought === true || reply?.stopWatching) {
+      await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active')));
+      await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.requestId, req.id), eq(t.eventAlerts.state, 'active')));
+    }
+    const kind = reply?.bought === true ? 'bought' : reply?.stopWatching ? 'stopped' : 'thanks';
+    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, 'Thanks'), template: 'outcome_ack', vars: { kind }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `outcome_ack:${msg.id}` });
+    await audit(this.db, { actor: 'customer', action: 'request.outcome_reported', entityKind: 'request', entityId: req.id, diff: { kinds: rows.map((r) => r.kind) } });
+    await this.transition(req.id, 'closed', kind === 'bought' ? 'customer_bought' : kind === 'stopped' ? 'customer_stopped' : 'follow_up_answered');
+    return 'closed';
+  }
+
+  /**
+   * The one follow-up per request, the day after the event: did the advice change what or when they bought?
+   * Only for requests we actually answered with advice or a referral, never after "stop", and only once.
+   * The send gate keeps it off until FOLLOW_UP_ENABLED is set.
+   */
+  async sendFollowUps(opts: { limit?: number } = {}): Promise<{ queued: number; considered: number }> {
+    const now = this.now();
+    const from = new Date(now.getTime() - 14 * 86_400_000);
+    const to = new Date(now.getTime() - 18 * 3_600_000);
+    const rows = await this.db.select({ r: t.requests, e: t.events, v: t.venues, c: t.contacts }).from(t.requests).innerJoin(t.events, eq(t.events.id, t.requests.eventId)).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(and(notInArray(t.requests.state, ['unsupported', 'needs_clarification', 'manual_attention']), gte(t.events.localStartAt, from), lte(t.events.localStartAt, to))).limit(opts.limit ?? 50);
+    let queued = 0;
+    for (const { r, e, c } of rows) {
+      if (c.status === 'deleted') continue;
+      const outs = await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, r.id));
+      if (outs.some((o) => o.kind === 'follow_up_sent' || o.kind === 'stop_watching')) continue;
+      // Closed without advice (off-topic, opted out, unsupported) is not a request we helped with.
+      if (r.state === 'closed' && !outs.some((o) => o.kind === 'user_reported_purchase')) continue;
+      // Only after an answer actually reached them: advice, a price check or an official-sale referral.
+      const answered = await this.db.select({ id: t.sendIntents.id }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, r.id), inArray(t.sendIntents.messageClass, ['recommendation', 'no_result', 'acknowledgment']), or(sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.dedupeKey} like 'official_sale:%'`), inArray(t.sendIntents.state, ['provider_accepted', 'delivered']))).limit(1);
+      if (!answered.length) continue;
+      const [last] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+      await this.queueSend({ messageClass: 'follow_up', contactId: c.id, conversationId: r.conversationId, requestId: r.id, revision: r.currentRevision, recipient: c.emailOriginal, subject: reSubject(last?.subject ?? null, `How was ${e.name}?`), template: 'follow_up', vars: { what: e.name }, inReplyTo: last?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `follow_up:${r.id}` });
+      await this.db.insert(t.requestOutcomes).values({ requestId: r.id, kind: 'follow_up_sent', source: 'system', details: {}, at: now });
+      queued += 1;
+    }
+    return { queued, considered: rows.length };
+  }
+
+  /** A link for a customer email, behind /go/<id> so a click can be counted; the id carries nothing personal. */
+  private async trackLink(requestId: string, url: string, label: string | null, affiliate: boolean): Promise<string> {
+    const [row] = await this.db.insert(t.trackedLinks).values({ requestId, url, label, affiliate }).returning({ id: t.trackedLinks.id });
+    return `${this.env.APP_URL.replace(/\/$/, '')}/go/${row!.id}`;
   }
 
   private limits() {
@@ -1412,6 +1492,8 @@ export class Concierge {
     // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
     const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
     const packet = buildPacket({ subject: shown, marketAround, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
+    for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 

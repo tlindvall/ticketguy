@@ -38,7 +38,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       await tx.update(t.eventAlerts).set({ state: 'cancelled' }).where(eq(t.eventAlerts.contactId, id));
       await tx.delete(t.interestObservations).where(eq(t.interestObservations.contactId, id));
       await tx.delete(t.contactInterests).where(eq(t.contactInterests.contactId, id));
-      await tx.update(t.requestVersions).set({ brief: { deleted: true } }).where(inArray(t.requestVersions.requestId, tx.select({ id: t.requests.id }).from(t.requests).where(eq(t.requests.contactId, id))));
+      const theirRequests = tx.select({ id: t.requests.id }).from(t.requests).where(eq(t.requests.contactId, id));
+      await tx.update(t.requestVersions).set({ brief: { deleted: true } }).where(inArray(t.requestVersions.requestId, theirRequests));
+      // What their screenshots and replies showed, and the links we sent them, go too; the counts stay.
+      await tx.update(t.listingEvidence).set({ fields: null }).where(inArray(t.listingEvidence.requestId, theirRequests));
+      await tx.update(t.requestOutcomes).set({ details: { deleted: true } }).where(inArray(t.requestOutcomes.requestId, theirRequests));
+      await tx.delete(t.trackedLinks).where(inArray(t.trackedLinks.requestId, theirRequests));
       await addSuppression(tx, { emailLookup: contact.emailLookup, scope: 'global', reason: 'deletion' });
       await tx.update(t.contacts).set({ status: 'deleted', deletedAt: now, emailOriginal: '[deleted]' }).where(eq(t.contacts.id, id));
       await tx.insert(t.deletionLedger).values({ emailLookupHash: createHash('sha256').update(contact.emailLookup).digest('hex'), contactId: id, requestedAt: now, verifiedAt: now, completedAt: now, actor: staff.userId, scope: ['messages', 'attachments', 'media', 'requests', 'interests', 'watches', 'send_intents'] });
