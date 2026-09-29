@@ -27,6 +27,17 @@ export async function marketLicence(db: DbOrTx): Promise<{ status: string; uses:
   return { status: row?.status ?? 'missing', uses, allows: (u) => !!live && uses.includes(u), row: row ?? null };
 }
 
+/**
+ * Whether market data may steer advice and appear in emails. The licence switches decide, except while the
+ * test allowlist is in force: then every email goes only to the owner's named test addresses, which is internal
+ * use (what "tracking" already covers), so the numbers are used and shown there without a second switch. At
+ * launch (allowlist emptied) the licence switches alone decide again.
+ */
+export function marketUses(lic: { allows: (u: LicenceUse) => boolean }, e: Pick<Env, 'EMAIL_TEST_RECIPIENT_ALLOWLIST'>): { advice: boolean; display: boolean; testing: boolean } {
+  const testing = lic.allows('tracking') && e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0;
+  return { advice: lic.allows('advice') || testing, display: lic.allows('customer_display') || testing, testing: testing && !(lic.allows('advice') && lic.allows('customer_display')) };
+}
+
 /** The licence record exists from the first deploy, quarantined, so the owner has something to approve. */
 export async function ensureMarketDatasets(db: DbOrTx): Promise<void> {
   await db.insert(t.marketDatasets).values({ id: SEATDATA_DATASET_ID, provider: SEATDATA_PROVIDER, licenseReference: null, approvedUses: [], coverageNote: 'SeatData resale market statistics: cheapest and median listed prices (before fees, per ticket) for any quantity and for 2+, by seating zone; active listing counts.', status: 'quarantined', isFixture: false }).onConflictDoNothing();

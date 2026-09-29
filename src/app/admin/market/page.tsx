@@ -75,6 +75,7 @@ export default async function Market() {
           ))}
         </ul>
         <p className="mt-2 text-xs text-gray-600">
+          {e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length && lic.allows('tracking') ? <strong>While the test allowlist is on, the numbers also steer advice and appear in replies to the test addresses, without the two switches below. At launch the switches decide. </strong> : null}
           SeatData&rsquo;s standard licence restricts redistributing its data. Collecting and using it internally is the first switch; letting it steer advice and showing its numbers in emails each need SeatData&rsquo;s written OK for exactly that use. Record the reference (email date, who, what was allowed) before approving.
         </p>
         {staff.role === 'admin' ? (

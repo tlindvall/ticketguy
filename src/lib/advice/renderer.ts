@@ -108,6 +108,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // Required claims for a substantive recommendation.
   const hasBest = claimsById.has('C_BEST');
   if (hasBest && !used.has('C_BEST')) errors.push('the best current offer claim (C_BEST) must be included');
+  // Resale market numbers we are allowed to show are the answer when there is no listing: never left out.
+  if (claimsById.get('C_MARKET')?.customerVisible && !used.has('C_MARKET')) errors.push('the resale market claim (C_MARKET) must be included');
   if (!used.has('C_COVERAGE')) {
     // coverage footer is always appended server-side; not an error
   }
