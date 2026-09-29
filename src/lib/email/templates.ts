@@ -70,10 +70,16 @@ function authoringVars(slot: SlotName, v: Record<string, TemplateValue>): Record
   return { ...v, priceTotal: `$${(total / 100).toFixed(total % 100 === 0 ? 0 : 2)}` };
 }
 
-/** Every customer email body, with no em or en dashes (see punctuation.ts). */
+/**
+ * Every customer email body, with no em or en dashes (see punctuation.ts), greeting the customer by name when
+ * we know it: the opening "Hey," of any template, staff wording and advice bodies included, becomes "Hey Tobias,".
+ */
 export function renderTemplate(...args: Parameters<typeof renderBody>): { text: string; html: string } {
   const r = renderBody(...args);
-  return { text: noDashes(r.text), html: noDashes(r.html) };
+  const name = typeof args[1]?.firstName === 'string' && /^[A-Za-z][A-Za-z'’-]{1,19}$/.test(args[1].firstName) ? args[1].firstName : null;
+  const text = name ? r.text.replace(/^Hey,/, `Hey ${name},`) : r.text;
+  const html = name ? r.html.replace(/(<p[^>]*>)Hey,(<\/p>)/, `$1Hey ${name},$2`) : r.html;
+  return { text: noDashes(text), html: noDashes(html) };
 }
 
 function renderBody(

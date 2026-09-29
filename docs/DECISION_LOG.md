@@ -646,3 +646,21 @@ near?") instead of reported as empty. A browse reply with one result says so rat
 requests, and neighbourhoods with an independent scene and few official listings link to RA's events page for
 the city. Only pages that have been opened and checked are listed (`RA_EVENT_PAGES`, New York for now): a plain
 link, not an offer and not an affiliate link.
+
+## 47. A settled game stays settled; a pasted ticket link is read like the customer's words
+
+**What went wrong.** Two live threads for the Rangers: after the game was settled, a reply of "lets do 6
+tickets" and a reply that was only a StubHub link each came back "Which game: Thu, Oct 1 or Tue, Oct 13?".
+Every reply re-identified the event from scratch from the merged brief. Our own quoted email under the reply
+("When: Thu, Oct 1, 7:00 PM EDT") reached the extractor as the customer's words, because a Gmail attribution
+wrapped over two lines, and html-only replies, were not cut. The link itself was never read.
+
+**The fix.**
+- An event the request has settled is kept when the new message names no other team, show or date, or when
+  what it names still fits that event (it is among the candidates). A reply naming another date or team
+  still moves it. A settled event that was cancelled or has been played is not kept.
+- Quoted threads are cut at a wrapped "On … wrote:" line, an Outlook rule, and, for html-only mail, at the
+  Gmail, Apple Mail and Outlook quote markers.
+- Links to StubHub, Ticketmaster, SeatGeek, Vivid Seats, Gametime, TickPick and AXS are read from the URL
+  alone, never fetched: the date in the path, `quantity`/`qty`, the listing id and the team in the slug. The
+  link's date wins over a looser phrase; a quantity or team the customer typed wins over the link.

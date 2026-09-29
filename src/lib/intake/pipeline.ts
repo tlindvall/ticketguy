@@ -1,4 +1,6 @@
 import { noDashes } from '@/lib/email/punctuation';
+import { headerFirstName, statedFirstName } from '@/lib/domain/names';
+import { ticketLinksIn } from '@/lib/domain/ticket-links';
 import { raPointer } from '@/lib/sources/resident-advisor';
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -130,11 +132,14 @@ export class Concierge {
       // Contact (conservative lookup: lowercase only).
       const [existingContact] = await tx.select().from(t.contacts).where(eq(t.contacts.emailLookup, senderLookup));
       let contactId = existingContact?.id;
+      // "Tobias here" beats the account name; a name they give later replaces the one we had.
+      const stated = statedFirstName(msg.text);
+      const fromHeader = headerFirstName(msg.fromName);
       if (!contactId) {
-        const [c] = await tx.insert(t.contacts).values({ emailOriginal: msg.from, emailLookup: senderLookup, lastInboundAt: now }).returning({ id: t.contacts.id });
+        const [c] = await tx.insert(t.contacts).values({ emailOriginal: msg.from, emailLookup: senderLookup, lastInboundAt: now, firstName: stated ?? fromHeader }).returning({ id: t.contacts.id });
         contactId = c!.id;
       } else {
-        await tx.update(t.contacts).set({ lastInboundAt: now }).where(eq(t.contacts.id, contactId));
+        await tx.update(t.contacts).set({ lastInboundAt: now, ...(stated ? { firstName: stated } : !existingContact!.firstName && fromHeader ? { firstName: fromHeader } : {}) }).where(eq(t.contacts.id, contactId));
       }
 
       // Thread resolution with participant authorization (A20).
@@ -272,6 +277,9 @@ export class Concierge {
       throw e;
     }
 
+    // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
+    extraction = applyTicketLinks(extraction, known);
+
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
 
@@ -334,9 +342,12 @@ export class Concierge {
     const assumptions = [...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // Event resolution (a browse that found exactly one event has already resolved it).
-    const resolution: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
+    const found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
       : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city ? null : await this.contactMarket(contact!.id) });
+    // A game already settled stays settled unless this message moves it: "let's do 6 tickets" or a pasted link
+    // to the same game must never reopen "which game?".
+    const resolution = !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction)) ?? found) : found;
     const eventResolved = resolution.kind === 'resolved';
     if (resolution.kind === 'resolved' && resolution.assumed) assumptions.unshift(resolution.assumed);
     const missing = missingMandatoryFields(merged, { eventResolved });
@@ -899,6 +910,21 @@ export class Concierge {
   }
 
   /**
+   * The event this request had already settled on, when the new message does not move it: it names no other
+   * team, show or date, or what it names still fits that event (it is one of the candidates). A settled event
+   * that has since been cancelled or played is not kept.
+   */
+  private async keepSettledEvent(eventId: string, resolution: Awaited<ReturnType<Concierge['resolveEvent']>>, said: RequestExtraction): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
+    if (resolution.kind === 'resolved' || resolution.kind === 'non_us') return null;
+    const saysNothingNew = !said.performerOrTeam && !said.eventName && !said.dateExpression && !said.resolvedLocalDate;
+    const stillFits = resolution.kind === 'ambiguous' && resolution.candidates.some((c) => c.id === eventId);
+    if (!saysNothingNew && !stillFits) return null;
+    const [row] = await this.db.select({ e: t.events, v: t.venues, kind: t.entities.kind }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
+    if (!row || row.e.status !== 'scheduled' || row.e.localStartAt <= this.now() || row.v.country !== 'US') return null;
+    return { kind: 'resolved', event: row.e, venue: row.v, label: eventLabel(row.e, row.v), entityKind: row.kind === 'team' ? 'team' : row.kind ? 'artist' : null };
+  }
+
+  /**
    * Whether the catalog may be extended from the provider right now. Both halves are required on purpose: the
    * key proves the account works, the adapter row proves someone accepted the terms and set the limits — a
    * working key alone never enables an integration (ENGINEERING_SPEC §6).
@@ -1350,7 +1376,16 @@ export class Concierge {
     // Blocked and suppressed intents never reached the customer, so they do not count as the introduction.
     const [prior] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, a.conversationId), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
     const signature = (prior?.n ?? 0) === 0 ? 'full' : 'short';
-    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature, brand });
+    // One thread in the customer's inbox: Gmail groups by subject as well as by reply headers, so every email
+    // after the first carries the conversation's subject. With no subject from the customer, our first
+    // email's subject becomes the conversation's.
+    const [conv] = await this.db.select({ subject: t.conversations.subject }).from(t.conversations).where(eq(t.conversations.id, a.conversationId));
+    let subject = a.subject;
+    if (conv?.subject?.trim()) subject = reSubject(conv.subject, a.subject);
+    else if (conv) await this.db.update(t.conversations).set({ subject: a.subject.replace(/^re:\s*/i, '') }).where(eq(t.conversations.id, a.conversationId));
+    const [who] = await this.db.select({ firstName: t.contacts.firstName }).from(t.contacts).where(eq(t.contacts.id, a.contactId));
+    const vars = who?.firstName && a.vars.firstName === undefined ? { ...a.vars, firstName: who.firstName } : a.vars;
+    const rendered = renderTemplate(a.template, vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature, brand });
     const headers: Record<string, string> = { 'Reply-To': this.env.CONCIERGE_FROM_ADDRESS };
     if (a.inReplyTo) {
       headers['In-Reply-To'] = a.inReplyTo;
@@ -1359,7 +1394,7 @@ export class Concierge {
     }
     if (a.containsFixtureData) headers['X-TicketGuy-Fixture'] = 'true';
     return await this.db.transaction(async (tx) => {
-      const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject: a.subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
+      const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
       if (r.created) await enqueueOutbox(tx, { eventType: 'email.send_requested', eventKey: `send:${r.id}`, entityId: r.id, payload: { sendIntentId: r.id }, now: this.now() });
       return r;
     });
@@ -1678,6 +1713,43 @@ export function basketKeyFor(eventId: string, quantity: number, seatClass: strin
 }
 
 /** Later statements override earlier ones only when they carry a value; established facts are kept. */
+/**
+ * Folds what pasted ticket links say into this message's extraction. The link's date is the event's own date,
+ * so it wins over a looser phrase ("early October"); a quantity or team the customer typed wins over the link.
+ */
+export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: string; aliases: string[] }>): RequestExtraction {
+  const links = ticketLinksIn(x.submittedUrls);
+  if (!links.length) return x;
+  const out: RequestExtraction = { ...x, ambiguities: [...x.ambiguities] };
+  const dated = links.find((l) => l.localDate);
+  if (dated) {
+    out.dateExpression = dated.localDate;
+    out.resolvedLocalDate = dated.localDate;
+    out.ambiguities = out.ambiguities.filter((a) => !a.startsWith('date_'));
+  }
+  const counted = links.find((l) => l.quantity);
+  if (out.quantity == null && counted) {
+    out.quantity = counted.quantity;
+    out.ambiguities = out.ambiguities.filter((a) => a !== 'quantity_unclear');
+  }
+  if (!out.performerOrTeam) {
+    // The longest name in the slug: "new york rangers new york" is the New York Rangers, not "New York".
+    let best: { name: string; len: number } | null = null;
+    for (const l of links) {
+      if (!l.slugText) continue;
+      const slug = ` ${l.slugText} `;
+      for (const k of known) {
+        for (const n of [k.name, ...k.aliases]) {
+          const w = n.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          if (w.length >= 4 && slug.includes(` ${w} `) && (!best || w.length > best.len)) best = { name: k.name, len: w.length };
+        }
+      }
+    }
+    if (best) out.performerOrTeam = best.name;
+  }
+  return out;
+}
+
 export function mergeExtraction(prior: RequestExtraction, next: RequestExtraction): RequestExtraction {
   const out: RequestExtraction = { ...prior };
   for (const k of Object.keys(next) as Array<keyof RequestExtraction>) {

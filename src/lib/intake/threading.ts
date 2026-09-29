@@ -43,12 +43,25 @@ export function buildReferencesChain(existing: string[], inboundRfcMessageId: st
   return [chain[0]!, ...chain.slice(chain.length - (max - 1))].join(' ');
 }
 
+/** "On <date> <sender> wrote:" on one line or wrapped over up to three, with a date, a time or an address in it. */
+function isAttribution(next: string[]): boolean {
+  if (!/^On\s/.test(next[0] ?? '')) return false;
+  for (let n = 1; n <= next.length; n++) {
+    const joined = next.slice(0, n).join(' ');
+    if (/wrote:\s*$/.test(joined)) return /\b(?:19|20)\d{2}\b|\d:\d{2}|@/.test(joined);
+  }
+  return false;
+}
+
 /** The customer is the authenticated top-level sender, never someone quoted in a forward. */
 export function stripQuotedContent(text: string): string {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const out: string[] = [];
-  for (const line of lines) {
-    if (/^On .+ wrote:\s*$/.test(line.trim())) break;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    // Gmail wraps a long attribution: "On Tue, Sep 29, 2026 at 3:53 PM Ticket Guy <\nhello@ticketguy.now> wrote:".
+    if (isAttribution(lines.slice(i, i + 3).map((l) => l.trim()))) break;
+    if (/^_{8,}\s*$/.test(line.trim())) break; // Outlook's rule above "From: ... Sent: ...
     if (/^-{2,}\s*(Original|Forwarded) message\s*-{2,}$/i.test(line.trim())) break;
     if (/^Begin forwarded message:?$/i.test(line.trim())) break;
     if (/^From:\s.+$/.test(line.trim()) && out.length > 0) break;
