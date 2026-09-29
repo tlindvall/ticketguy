@@ -507,6 +507,39 @@ export const offers = pgTable(
   (t) => [index('offers_event_idx').on(t.eventId, t.sourceId)],
 );
 
+/**
+ * What a customer showed us about the listing they're considering: a screenshot, pasted listing text, or a
+ * link (read from its URL only). It is evidence of what was displayed when they captured it, never a verified
+ * offer and never proof the seats are still there or genuine. Fields the source didn't show stay null.
+ * A screenshot that showed a barcode, payment card or ID is kept only as that fact: its bytes are deleted and
+ * nothing read from it is stored.
+ */
+export const listingEvidence = pgTable(
+  'listing_evidence',
+  {
+    id: id(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id),
+    attachmentId: uuid('attachment_id').references(() => attachments.id),
+    source: text('source').notNull(), // screenshot | listing_text | link
+    /** When the customer sent it: the most we know about when the listing showed this. */
+    observedAt: ts('observed_at').notNull(),
+    sensitive: boolean('sensitive').notNull().default(false),
+    /** ticket_listing | checkout | purchased_ticket | payment_or_id | unrelated */
+    kind: text('kind').notNull(),
+    confidence: text('confidence'), // high | medium | low
+    /** The fields read (ListingFields), null when sensitive or unrelated. */
+    fields: jsonb('fields').$type<Record<string, unknown>>(),
+    readBy: text('read_by').notNull(), // model name, or url_only for a link
+    createdAt: createdAt(),
+  },
+  (t) => [index('listing_evidence_request_idx').on(t.requestId, t.createdAt)],
+);
+
 export const offerObservations = pgTable(
   'offer_observations',
   {
@@ -1251,7 +1284,7 @@ export const emailTemplates = pgTable(
 
 export const schema = {
   user, session, account, verification, twoFactor,
-  contacts, contactPreferences, conversations, messages, mediaObjects, attachments,
+  contacts, contactPreferences, conversations, messages, mediaObjects, attachments, listingEvidence,
   requests, requestVersions, requestTransitions,
   venues, entities, events, eventSourceMappings, catalogSyncs,
   sourceRegistry, adapterConfigs, researchRuns, sourceChecks, offers, offerObservations,

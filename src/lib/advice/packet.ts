@@ -5,12 +5,13 @@ import type { BenchmarkResult } from './benchmark';
 import type { TrendResult } from './trend';
 import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
+import type { ListingFields } from '@/lib/ai/listing-evidence';
 
 /**
  * Typed evidence packet (API_AND_DATA_CONTRACTS §10). Every fact the customer sees is a server-rendered
  * claim with an ID, scope and allowed wording. The model may only reference claim IDs.
  */
-export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale' | 'market_price' | 'market_benchmark' | 'market_supply' | 'market_read' | 'customer_link';
+export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale' | 'market_price' | 'market_benchmark' | 'market_supply' | 'market_read' | 'customer_link' | 'subject_listing' | 'catches';
 
 export type ClaimRecord = {
   id: string;
@@ -97,7 +98,85 @@ export type BuildPacketArgs = {
   market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; comparableLabel: string | null; visible: boolean } | null;
   /** A ticket-site link the customer sent (its marketplace name); we read the URL, never the page. */
   link?: { marketplace: string } | null;
+  /** The listing the customer showed us (screenshot or pasted text): what it displayed, never a verified offer. */
+  subject?: SubjectListing | null;
+  /** The event's own local date and start, to check the listing against. */
+  eventLocalDate?: string | null;
+  /** Whether the buyer said they need accessible seating. */
+  accessibilityRequired?: boolean;
 };
+
+export type SubjectListing = ListingFields & { source: 'screenshot' | 'listing_text'; observedAt: Date; confidence: 'high' | 'medium' | 'low' | null };
+
+const shortDate = (iso: string) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${iso}T12:00:00Z`));
+const listJoin = (xs: string[]) => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/** "The listing shows 2 tickets in section 212, row D, seats 5 and 6, on StubHub, for $490 in total, delivered by Oct 3." */
+function subjectClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
+  const parts: string[] = [];
+  if (sub.quantity) parts.push(`${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}`);
+  const where = [sub.section ? `section ${sub.section}` : null, sub.row ? `row ${sub.row}` : null, sub.seatNumbers ? `seat${sub.seatNumbers.length === 1 ? '' : 's'} ${listJoin(sub.seatNumbers)}` : null].filter(Boolean);
+  const bits = [parts.join(''), where.length ? `in ${where.join(', ')}` : null, sub.seller ? `on ${sub.seller}` : null, sub.wholePartyCents ? `for ${formatUsd(sub.wholePartyCents)} in total${sub.feeBasis === 'all_in' ? ' including fees' : ''}` : null, sub.deliveryBy ? `delivered by ${shortDate(sub.deliveryBy)}` : sub.deliveryText ? `with delivery: ${sub.deliveryText}` : null].filter(Boolean);
+  const what = sub.source === 'screenshot' ? 'screenshot' : 'listing you pasted';
+  // The price line (C_QUOTE) says when it was captured; without one, this does.
+  const caveat = a.quote ? '' : ` That’s what it showed when you ${sub.source === 'screenshot' ? 'took it' : 'copied it'}; I haven’t checked the seats are still there.`;
+  return {
+    id: 'C_SUBJECT',
+    kind: 'subject_listing',
+    text: `The ${what} shows ${bits.length ? bits.join(', ') : 'no ticket details I could read'}.${caveat}`,
+    values: { quantity: sub.quantity, wholePartyCents: sub.wholePartyCents, section: sub.section, row: sub.row, source: sub.source },
+    scope: { quantity: sub.quantity, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() },
+    evidenceIds: [],
+    methodVersion: 'listing-1.0',
+    limitations: ['customer_supplied_evidence', 'not_a_verified_offer', 'availability_not_checked', 'authenticity_not_checked'],
+    customerVisible: true,
+  };
+}
+
+/**
+ * The catches worth checking before paying, most material first, from what the listing showed and what it
+ * didn't. Each is a fact about the listing or a gap in it; none is a verdict on the seller.
+ */
+export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[] {
+  const q = a.quantity;
+  const out: string[] = [];
+  if (sub.eventDate && a.eventLocalDate && sub.eventDate !== a.eventLocalDate) out.push(`The date on the listing (${shortDate(sub.eventDate)}) isn’t the date I have for this event (${shortDate(a.eventLocalDate)}). Make sure it’s the right game or show.`);
+  if (sub.quantity && sub.quantity !== q) out.push(`It’s for ${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}, not the ${q} you asked about.`);
+  if (sub.restrictionCodes.includes('accessible_seating') && !a.accessibilityRequired) out.push('These are accessible seats (wheelchair or companion spaces), meant for people who need them. If you don’t, pick other seats.');
+  if (q > 1 && (sub.quantity ?? q) > 1) {
+    if (sub.seatsTogether === false) out.push('It says the seats may not be together.');
+    else if (sub.seatsTogether === null) out.push('It doesn’t say the seats are together. Check before you buy if that matters.');
+  }
+  if (sub.feeBasis === 'unknown') out.push('It doesn’t say whether fees are included, so check the total at checkout before you pay.');
+  else if (sub.feeBasis === 'before_fees') out.push('Fees are extra, so the total at checkout will be higher than the listed price.');
+  if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) out.push(`The tickets are delivered by ${shortDate(sub.deliveryBy)}, the day of the event. That’s common for resale, but it leaves no time to fix a problem.`);
+  else if (!sub.deliveryBy && !sub.deliveryText) out.push('It doesn’t say when the tickets will be delivered.');
+  if (sub.restrictionCodes.includes('obstructed_view')) out.push('It notes a limited or obstructed view.');
+  if (sub.section && !sub.seatNumbers) out.push('It doesn’t show seat numbers, so you won’t know exactly where you’re sitting until after you buy.');
+  const otherNotes = sub.restrictions.filter((r) => restrictionIsOther(r));
+  if (otherNotes.length) out.push(`It also notes: ${listJoin(otherNotes.slice(0, 3))}.`);
+  if (sub.includedBenefits.length) out.push(`It lists extras (${listJoin(sub.includedBenefits.slice(0, 3))}). Resale sellers can’t always pass those on, so confirm they’re included.`);
+  if (sub.unreadable.length || sub.confidence === 'low') out.push(`I couldn’t read everything${sub.unreadable.length ? ` (${listJoin(sub.unreadable.slice(0, 2))})` : ''}, so check those details yourself.`);
+  return out.slice(0, 5);
+}
+
+const restrictionIsOther = (r: string) => !/\b(wheelchair|accessible|accessibility|ada|companion|obstructed|limited|partial|restricted|side view|vip|hospitality|package)\b/i.test(r);
+
+function catchesClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord | null {
+  const items = listingCatches(a, sub);
+  if (!items.length) return null;
+  return {
+    id: 'C_CATCHES',
+    kind: 'catches',
+    text: items.join('\n'),
+    values: { count: items.length },
+    scope: { quantity: a.quantity, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() },
+    evidenceIds: [],
+    methodVersion: 'listing-1.0',
+    limitations: ['customer_supplied_evidence'],
+    customerVisible: true,
+  };
+}
 
 /**
  * A price the customer is asking about, and where it came from. It is never a verified offer: a price they
@@ -167,11 +246,15 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
 /** At most three questions, each one something that would change the answer and that we don't know yet. */
 function followUpQuestions(a: BuildPacketArgs): string[] {
   const out: string[] = [];
-  if (!a.quote && !a.best) {
+  const sub = a.subject ?? null;
+  if (!a.quote && !a.best && !sub) {
+    // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link
-      ? `What price per ticket does that ${a.link.marketplace} listing show, and which section? I’ll tell you if it’s a good deal.`
-      : 'Found seats you like? Send me the link, or the price and section, and I’ll tell you if it’s a good deal.');
+      ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
+      : 'Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.');
   }
+  // A price we had to read as per ticket is asked about, because the answer changes the whole comparison.
+  if (a.quote?.assumedPerTicket && a.quantity > 1 && (a.quote.source === 'screenshot' || a.quote.source === 'listing_text')) out.push(`Is ${formatUsd(a.quote.perTicketCents)} the price per ticket, or for all ${a.quantity}?`);
   if (a.priorities.budgetTotalCents === null && !a.quote) out.push('What’s the most you’d want to pay per ticket?');
   if (a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
   return out.slice(0, 3);
@@ -316,6 +399,11 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: ['face_value_is_before_fees', 'not_a_listing'],
       customerVisible: true,
     });
+  }
+  if (a.subject) {
+    claims.push(subjectClaim(a, a.subject));
+    const catches = catchesClaim(a, a.subject);
+    if (catches) claims.push(catches);
   }
   if (a.official) {
     claims.push({

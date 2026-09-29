@@ -74,6 +74,7 @@ function checkProse(label: string, prose: string, errors: string[]): void {
  * body carries neither; it used to carry its own, and the email said it twice.
  */
 const GREETING = 'Hey,';
+const CATCHES_LEAD = 'Worth checking before you buy:';
 const questionsLead = (n: number) => (n === 1 ? 'One thing that would help me:' : n === 2 ? 'Two things that would help me narrow it down:' : 'A few things that would help me narrow it down:');
 const P = (inner: string) => `<p style="margin:0 0 18px;">${inner}</p>`;
 
@@ -132,10 +133,26 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // What the market means for them (C_READ) goes straight after the market figures, whether or not the model
   // placed it; C_LINK is never repeated in a paragraph.
   const read = claimsById.get('C_READ');
+  // What their listing shows and the catches in it are placed by the server, straight after the answer.
+  const subject = claimsById.get('C_SUBJECT');
+  const catches = claimsById.get('C_CATCHES');
+  const SERVER_PLACED = new Set(['C_LINK', 'C_SUBJECT', 'C_CATCHES']);
   const paragraphs = b.paragraphs
-    .map((p) => ({ ...p, claimIds: p.claimIds.filter((id) => id !== 'C_LINK' && !(read && id === 'C_READ')) }))
+    .map((p) => ({ ...p, claimIds: p.claimIds.filter((id) => !SERVER_PLACED.has(id) && !(read && id === 'C_READ')) }))
     .flatMap((p) => (read?.customerVisible && p.claimIds.includes('C_MARKET') ? [p, { claimIds: ['C_READ'], prose: '' }] : [p]))
     .filter((p) => p.claimIds.length || p.prose.trim());
+  const listingBlock = () => {
+    if (subject?.customerVisible) {
+      lines.push(subject.text);
+      html.push(P(esc(subject.text)));
+    }
+    if (catches?.customerVisible) {
+      const items = catches.text.split('\n').filter(Boolean);
+      lines.push(CATCHES_LEAD, items.map((i) => `- ${i}`).join('\n'));
+      html.push(P(esc(CATCHES_LEAD)), `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i)}</li>`).join('')}</ul>`);
+    }
+  };
+  let placed = false;
   for (const p of paragraphs) {
     const claimTexts = p.claimIds.map((id) => claimsById.get(id)!);
     // The model sometimes paraphrases the claim it cites ("I can't see live resale listings…" twice in a row).
@@ -145,7 +162,12 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(text);
     const htmlClaims = claimTexts.map((c) => (c.url ? `${esc(c.text)} <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : esc(c.text)));
     html.push(P([esc(prose), ...htmlClaims].filter(Boolean).join(' ')));
+    if (!placed) {
+      listingBlock();
+      placed = true;
+    }
   }
+  if (!placed) listingBlock();
   // Always append the coverage footer and observation caveat from the packet (never model-authored).
   const coverage = claimsById.get('C_COVERAGE');
   if (coverage && !used.has('C_COVERAGE')) {
@@ -182,7 +204,7 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
   const link = visible.find((c) => c.id === 'C_LINK');
-  const rest = visible.filter((c) => c.id !== 'C_LINK');
+  const rest = visible.filter((c) => c.id !== 'C_LINK').map((c) => (c.id === 'C_CATCHES' ? { ...c, text: `${CATCHES_LEAD}\n${c.text.split('\n').map((i) => `- ${i}`).join('\n')}` } : c));
   const lead = link ? link.text : decisionLine[packet.decision];
   const asks = packet.followUps ?? [];
   const text = [GREETING, lead, ...rest.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : '')), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : [])].join('\n\n');

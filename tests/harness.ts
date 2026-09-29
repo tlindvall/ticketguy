@@ -1,3 +1,4 @@
+import type { ListingReader } from '@/lib/ai/listing-evidence';
 import { openDatabase, type DbHandle } from '@/lib/db';
 import { applyMigrations } from '@/lib/db/migrate';
 import { seedRegistry, seedFixtures } from '@/lib/db/seed';
@@ -37,8 +38,8 @@ export function testEnv(over: Record<string, string> = {}): Env {
   return parseEnv({ NODE_ENV: 'test', APP_MODE: 'fixture', ...over });
 }
 
-export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor } = {}) {
-  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS });
+export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor; listingReader?: ListingReader } = {}) {
+  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS, listingReader: opts.listingReader });
 }
 
 let seq = 0;

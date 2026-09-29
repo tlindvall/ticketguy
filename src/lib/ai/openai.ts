@@ -26,7 +26,7 @@ export class OpenAiClient implements StructuredClient {
       res = await this.client.responses.parse({
         model: args.model,
         instructions: args.instructions,
-        input: args.input,
+        input: args.images?.length ? [{ role: 'user' as const, content: [{ type: 'input_text' as const, text: args.input }, ...args.images.map((i) => ({ type: 'input_image' as const, detail: 'high' as const, image_url: `data:${i.mimeType};base64,${i.base64}` }))] }] : args.input,
         max_output_tokens: args.maxOutputTokens,
         reasoning: { effort: args.effort },
         text: { format: zodTextFormat(args.schema, args.schemaName) },

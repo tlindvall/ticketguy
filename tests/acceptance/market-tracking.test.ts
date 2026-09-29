@@ -143,7 +143,7 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('My read: for two together, up to about $150 a ticket before fees is a fair price');
     expect(rec!.bodyText).toContain('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush.');
     // And it ends with the questions that would change the answer, not a request for things already sent.
-    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link, or the price and section, and I’ll tell you if it’s a good deal.\n- What’s the most you’d want to pay per ticket?\n- When do you need to have tickets sorted by?');
+    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.\n- What’s the most you’d want to pay per ticket?\n- When do you need to have tickets sorted by?');
     expect(rec!.bodyHtml).toContain('<ul');
   });
 
@@ -176,7 +176,7 @@ describe('resale market tracking', () => {
     expect(body.startsWith('Hey,\n\nGoing by the StubHub link you sent, here’s what I have for two tickets to Metro Testers vs. Boston at Test Garden')).toBe(true);
     expect(body).toContain('Resale listings for two tickets together currently start at $130');
     expect(body).toContain('up to about $150 a ticket before fees is a fair price');
-    expect(body).toContain('- What price per ticket does that StubHub listing show, and which section? I’ll tell you if it’s a good deal.');
+    expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
 
