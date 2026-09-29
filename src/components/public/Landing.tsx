@@ -172,7 +172,7 @@ export function Landing({ state, address }: Props) {
 }
 
 /** The ticket mark and the mascot from the design, defined once and referenced with <use>. */
-function SvgLibrary() {
+export function SvgLibrary() {
   return (
     <svg className="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
