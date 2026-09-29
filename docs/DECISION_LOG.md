@@ -700,3 +700,52 @@ catalog has none. They are ranked by distance from that market's centre:
   answer, and the reply says where and how far ("… so I've gone with …. Tell me if that's too far.").
 - A reply naming one of the offered dates settles on that show.
 - The "let me know when there's a date here" offer stays, worded as waiting for a date in their city.
+
+## 50. The deal check: read their listing, check it, compare it, and measure whether it helped
+
+The promise is "send your ticket link or screenshot: I'll check the price, flag important catches, and look for
+better options". This entry covers the work that completes it against the gap analysis
+(`docs/PRODUCT_GAP_ANALYSIS.md`).
+
+**Wrong advice fixed first.**
+- Accessible-only seats are excluded for a buyer who didn't ask for access, as well as the other way round
+  (R18). Staff can mark a manual listing as accessible, obstructed or a VIP package; wheelchair, companion,
+  parking and suite listings never set a group's floor.
+- A quoted price carries its source (typed, pasted listing, screenshot), fee basis and time, and is never a
+  verified offer.
+- Face value is the original price, not value. Under it is a reason to check the seats, and well above it
+  isn't called bad. Under the resale floor is "unusually low", not "a good price".
+
+**Their listing.**
+- Screenshots and pasted listing text are read into `listing_evidence`, with the source and the time sent.
+  Nothing is inferred and unknown stays null.
+- A barcode, card or ID screenshot is deleted unused and the customer is told.
+- We never open marketplace pages. A link alone gets a request for a screenshot or the price and section.
+
+**The comparison.**
+- The email opens with a server-written recommendation: don't buy it as it stands (and why), look at a
+  cheaper verified option first, look at cheaper market listings first, or where its price sits.
+- Then comes what it shows, a short list of catches, cheaper market listings (their section first, then their
+  area), and either the verified alternative or "none yet". Seller links go last.
+- Market listings are prices before fees without links. They're said to be neither their seats nor checked,
+  and a listing in their own section and row is never offered, since it may be the same seats.
+
+**Timing.**
+- Trend lines need a fresh series for their group size and seats.
+- Waiting is suggested only to a buyer who has said they can take the risk and when they must decide.
+  Someone travelling, or who must go, is told not to hold out. Otherwise the reply says the evidence doesn't
+  settle it and asks those two questions.
+
+**Measurement.**
+- Every request carries problem-type tags.
+- Outcomes are kept by kind: clicks (via `/go/<id>`, likely bots flagged), what the customer said,
+  affiliate-confirmed purchases (staff-entered), and the follow-up.
+- "Bought" and "stop" replies close the request and stop watching.
+- One follow-up goes out after the event, off until `FOLLOW_UP_ENABLED`.
+- `/admin/pilot` counts only real requests toward ten.
+
+**Dependencies, kept separate.**
+- Inventory access: a listing partner, for verified alternatives with links.
+- Historical and customer-display rights: SeatData's written OK.
+- Affiliate approval: needed for commissions and confirmed purchases.
+- None of these blocks the deal check itself, which works on the customer's own evidence.
