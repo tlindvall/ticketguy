@@ -1,4 +1,5 @@
 import { noDashes } from '@/lib/email/punctuation';
+import { raPointer } from '@/lib/sources/resident-advisor';
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
@@ -14,7 +15,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { areaFor, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -386,9 +387,11 @@ export class Concierge {
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city ? null : await this.contactMarket(contact!.id)));
       const eventNote = noMatch ? `${noMatch}${offerAlert ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null;
+      // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
+      const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, assumptions, countryCheck, knownFacts }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, assumptions, countryCheck, knownFacts, ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -646,8 +649,10 @@ export class Concierge {
       let providerChecked = false;
       if (discovery && w.from <= w.to) {
         // A borough is asked about by its own cities; a metro by its centre and radius; a town by name.
+        // A neighbourhood is asked about around its centre (its venues are filed under the borough), and its
+        // borough too, so there is something to widen to.
         const wheres: Array<{ city?: string; stateCode?: string | null; geoPoint?: string; radiusMiles?: number }> = area
-          ? area.providerCities.map((city) => ({ city }))
+          ? [...(area.centre ? [{ geoPoint: geohash(area.centre.lat, area.centre.lng), radiusMiles: Math.ceil(area.centre.radiusMiles) + 1 }] : []), ...area.providerCities.map((city) => ({ city }))]
           : market.lat !== null && market.lng !== null
             ? [{ geoPoint: geohash(market.lat, market.lng), radiusMiles: market.radiusMiles }]
             : [{ city: market.label, stateCode: merged.state }];
@@ -675,19 +680,22 @@ export class Concierge {
       });
       // The provider lists VIP, premium and package versions of one show as separate events; one line per show.
       const all = oneListingPerShow(inWindow, ({ e, v }) => ({ name: e.name, venueId: v.id, startAt: e.localStartAt, entityId: e.primaryEntityId }));
-      const inArea = area ? all.filter(({ v }) => area.venueCities.includes((v.city ?? '').trim().toLowerCase())) : all;
-      const areaKept = !area || inArea.length > 0;
-      const placed = areaKept ? inArea : all;
+      // The area named, else the borough it is in, else the whole market: whichever has something on.
+      const inArea = area ? all.filter(({ v }) => venueInArea(area, v)) : all;
+      const inParent = area?.parent && !inArea.length ? all.filter(({ v }) => venueInArea(area.parent!, v)) : [];
+      const areaUsed = !area ? null : inArea.length ? area : inParent.length ? area.parent! : null;
+      const areaKept = !area || areaUsed === area;
+      const placed = !area ? all : inArea.length ? inArea : inParent.length ? inParent : all;
       const ofGenre = genre ? placed.filter(({ e }) => genreMatches(genre, e.genre)) : placed;
       const genreKept = !genre || ofGenre.length > 0;
-      return { providerChecked, all, placed, areaKept, genreKept, events: genreKept ? ofGenre : placed };
+      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : placed };
     };
     // Nothing in the window is not a dead end: a team that plays at home every other week, or a quiet week,
     // gets the next few after it (six weeks on), said as such.
     const within = await lookIn(win);
     const after = within.events.length ? null : await lookIn({ from: day(win.to, 1), to: day(win.to, 42) });
     const found = after?.events.length ? after : within;
-    const { all, placed, areaKept, genreKept } = found;
+    const { all, placed, areaKept, areaUsed, genreKept } = found;
     // A run of dates (a Broadway show, a two-night stand, a series) is one pick. Then "the other 7": the same
     // list, without what was already sent. Runs are formed first, so a sent show never returns as its next date.
     const runs = collapseRuns(found.events, ({ e, v }) => ({ name: e.name, venueId: v.id, day: eventLocalDate(e.localStartAt, v.timezone) }));
@@ -703,7 +711,7 @@ export class Concierge {
     const single = !more && !after && events.length === 1 && !runOf.get(events[0]!.e.id)?.moreDates && genreKept && areaKept;
     if (single && merged.quantity !== null) {
       const only = events[0]!;
-      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it. Tell me if you had something else in mind.` };
+      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it. Tell me if you had something else in mind.` };
     }
     await recordVersion();
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
@@ -712,22 +720,31 @@ export class Concierge {
     const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}: ${e.name} at ${v.name}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
-    const place = area && areaKept ? area.label : market.label;
+    const place = areaUsed?.label ?? market.label;
     const span = spanLabel(win.from, win.to);
     const headline = more
       ? (options.length ? `More ${label.toLowerCase()} in ${place}, ${span}:` : `That's everything I have for ${label.toLowerCase()} in ${place}, ${span}.`)
       : after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
-      : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:` : '.'}`;
+      : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? (options.length === 1 ? '. Here’s the one I found:' : `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:`) : '.'}`;
+    // Most small venues sell outside the listings we read; saying so beats implying there is nothing on.
+    const sceneNote = area?.independentScene && events.length < 3 ? `A lot of the smaller venues around ${area.label} sell through DICE, Eventbrite or Resident Advisor, which I can't see yet.` : null;
+    const ra = genre?.key === 'electronic' ? raPointer(market.id) : sceneNote ? raPointer(market.id, `${sceneNote} Resident Advisor lists many of them.`) : null;
     const assumptions = [assumedWindow ? 'the next two weeks' : null, assumedPlace ? market.label : null].filter(Boolean);
     const notes = [
       assumptions.length ? `I've looked at ${assumptions.join(', in ')}. Tell me if you had something else in mind.` : null,
       area && areaKept && events.length ? `I've kept it to ${area.label} venues. Say if you'd go further.` : null,
-      area && !areaKept && all.length ? `Nothing in ${area.label} fits, so here's the rest of ${market.label}.` : null,
+      area && !areaKept && all.length ? `Nothing in ${area.label} fits, so here's the rest of ${areaUsed?.label ?? market.label}.` : null,
+      // Said here only when there is no Resident Advisor link to say it with.
+      sceneNote && !ra ? sceneNote : null,
       genre && !genreKept && placed.length ? `I couldn't find any ${genre.words} listed for those dates, so here's everything that's on.` : null,
     ].filter(Boolean);
     const assumption = notes.length ? notes.join(' ') : null;
-    const emptyNote = providerChecked
+    // A place we don't know is searched as a town of that name; finding nothing there says more about the name.
+    const unknownPlace = market.id.startsWith('city:') && !all.length;
+    const emptyNote = unknownPlace
+      ? `I couldn't find ${market.label} as a place in the official listings. Which city is it in or near? I'll look there.`
+      : providerChecked
       ? `I checked the official listings and couldn't find any ${label.toLowerCase()} in ${place} for ${span}.`
       : `I don't have any ${label.toLowerCase()} in ${place} on file for ${span}.`;
     // What this reply lists is remembered, so "the other 7" continues from here; a new question starts over.
@@ -737,7 +754,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1 },
+      vars: { headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1, ra },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };

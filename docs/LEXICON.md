@@ -66,7 +66,7 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 | Rock, indie, alternative and punk — one family, because the provider files indie bands under either Rock or Alternative. **model** | “indie”, “indie rock”, “rock and roll”, “alternative”, “punk” | `genreHint="rock"` | concert | browse, find | “I like indie rock and roll. We are staying in brooklyn.” |
 | Jazz. **model** | “jazz”, “a jazz club”, “swing” | `genreHint="jazz"` | concert | browse, find | “Any jazz in the city this weekend?” |
 | Hip-hop and rap. **model** | “hip-hop”, “hip hop”, “rap” | `genreHint="hip-hop"` | concert | browse, find | “Looking for a hip hop show next week” |
-| Electronic and dance music. **model** | “electronic”, “EDM”, “techno”, “house music”, “a DJ” | `genreHint="electronic"` | concert | browse, find | “Any techno parties in Brooklyn next weekend?” |
+| Electronic and dance music. **model** | “electronic”, “EDM”, “techno”, “house music”, “a DJ”, “DJ set”, “rave”, “club night”, “drum and bass”, “deep house” | `genreHint="electronic"` | concert | browse, find | “Any techno parties in Brooklyn next weekend?” |
 | Pop. | “pop”, “a pop concert” | `genreHint="pop"` | concert | browse, find | “We want a pop concert in October” |
 | Country, Americana and bluegrass. "Country" on its own is not read: it is usually about where someone lives. | “country music”, “Americana”, “bluegrass” | `genreHint="country"` | concert | browse, find | “Any country music shows next month?” |
 | R&B, soul and funk. | “R&B”, “soul”, “funk” | `genreHint="r&b"` | concert | browse, find | “Something R&B next weekend?” |

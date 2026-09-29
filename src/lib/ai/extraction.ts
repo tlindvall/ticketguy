@@ -4,6 +4,7 @@ import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
+import { neighbourhoodFor } from '@/lib/domain/neighbourhoods';
 import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
@@ -174,7 +175,13 @@ export class FixtureExtractor implements Extractor {
 
     let city: string | null = null;
     let state: string | null = null;
-    for (const [re, c, s] of CITIES) {
+    // A neighbourhood first: "Bushwick, Brooklyn" is Bushwick, and the market follows from it.
+    const hood = neighbourhoodFor(t);
+    if (hood) {
+      city = hood.label.replace(/^the /, '');
+      ev('city', hood.match.exec(t)?.[0] ?? hood.label);
+    }
+    for (const [re, c, s] of hood ? [] : CITIES) {
       const m = re.exec(t);
       if (m) {
         city = c;
