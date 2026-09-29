@@ -162,6 +162,12 @@ describe('still on general sale: point at the official sale', () => {
     const requestId = (r as { requestId: string }).requestId;
     expect(await stateOf(requestId)).toBe('researching');
     expect(await researchQueued(requestId)).toBe(1);
+    // The acknowledgment names the resolved game once, and promises no comparison it may not be able to make.
+    const ack = (await sendsFor(requestId)).find((s) => s.messageClass === 'acknowledgment')!.bodyText;
+    expect(ack).toContain('Metro Testers vs. Boston');
+    expect(ack).not.toContain('Event:');
+    expect(ack).not.toContain('reviewed the comparison');
+    expect(ack).toContain('Tickets: 2');
   });
 
   it('does not point at a sale that has not opened or has closed', async () => {

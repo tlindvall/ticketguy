@@ -403,7 +403,7 @@ export class Concierge {
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
     // a "compare" after the official-sale reply.
     if (revision === 1 || picked || cameFromReferral) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged, { eventResolved: true }), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1475,9 +1475,13 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
   return out;
 }
 
-export function describeKnown(x: RequestExtraction): string[] {
+/**
+ * What we understood, one line each. Once the event is resolved the email already names it exactly, so the
+ * customer's own looser wording ("Miami Dolphins in Miami (in october)") is left out rather than repeated.
+ */
+export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {
   const parts: string[] = [];
-  if (x.performerOrTeam) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);
+  if (x.performerOrTeam && !opts.eventResolved) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);
   if (x.quantity) parts.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
   if (x.budgetCents !== null && x.budgetBasis) parts.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'per ticket'}`);
   return parts;

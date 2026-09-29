@@ -2,11 +2,11 @@ import Link from 'next/link';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const nav: Array<[string, string]> = [
-    ['/admin/inbox', 'Inbox'],
-    ['/admin/watches', 'Watches'],
-    ['/admin/sources', 'Sources'],
-    ['/admin/templates', 'Templates'],
-    ['/admin/operations', 'Operations'],
+    ['/admin/inbox', 'Requests'],
+    ['/admin/watches', 'Price watches'],
+    ['/admin/sources', 'Sellers'],
+    ['/admin/templates', 'Email wording'],
+    ['/admin/operations', 'System health'],
   ];
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-4">
@@ -15,7 +15,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {nav.map(([href, label]) => (
           <Link key={href} href={href} className="text-gray-700 hover:underline">{label}</Link>
         ))}
-        <Link href="/admin/setup-mfa" className="ml-auto text-gray-500 hover:underline">MFA</Link>
+        <Link href="/admin/setup-mfa" className="ml-auto text-gray-500 hover:underline">Two-factor login</Link>
       </nav>
       {children}
     </div>

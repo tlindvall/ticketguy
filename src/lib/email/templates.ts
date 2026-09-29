@@ -92,8 +92,8 @@ export function renderTemplate(
     case 'acknowledgment': {
       const known = (v.knownFacts as string[]) ?? [];
       const assumed = (v.assumptions as string[] | undefined) ?? [];
-      const paras = [`Got it — we're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', ...assumed, v.countryUnconfirmed ? `One quick check: we serve US customers only — reply if you're not in the US.` : '', `We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.`].filter(Boolean);
-      const html = [`<p>Got it — we're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', ...assumed.map(para), v.countryUnconfirmed ? `<p>One quick check: we serve US customers only — reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.</p>`].filter(Boolean);
+      const paras = [`Got it — we're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', ...assumed, v.countryUnconfirmed ? `One quick check: we serve US customers only — reply if you're not in the US.` : '', `We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`].filter(Boolean);
+      const html = [`<p>Got it — we're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', ...assumed.map(para), v.countryUnconfirmed ? `<p>One quick check: we serve US customers only — reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.</p>`].filter(Boolean);
       return wrap(paras, html);
     }
     case 'clarification': {

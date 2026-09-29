@@ -233,7 +233,7 @@ What we understood:
 
 {{countryUnconfirmed}}One quick check: we serve US customers only — reply if you're not in the US.
 
-We'll reply in this thread once a person has reviewed the comparison. No purchases happen on our side.`,
+We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`,
   clarification: `Hey,
 
 {{acknowledgement}}
