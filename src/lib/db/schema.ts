@@ -123,6 +123,8 @@ export const contacts = pgTable(
     // Conservative lookup: lowercase only. Never strip Gmail dots/plus tags globally.
     emailLookup: text('email_lookup').notNull(),
     countryConfirmed: text('country_confirmed'), // ISO 3166-1 alpha-2 once explicitly confirmed; null = unknown
+    /** First name for greetings ("Hey Tobias,"): what they said, else their email account's name. Null when unsure. */
+    firstName: text('first_name'),
     status: text('status').notNull().default('active'), // active | deleted | blocked
     createdAt: createdAt(),
     lastInboundAt: ts('last_inbound_at'),

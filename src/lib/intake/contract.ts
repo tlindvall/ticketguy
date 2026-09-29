@@ -19,6 +19,8 @@ export const NormalizedInboundSchema = z.object({
   inReplyTo: z.string().nullable(),
   references: z.string().nullable(),
   from: z.string().email(),
+  /** The name on the sender's account ("Tobias Lindvall" in "Tobias Lindvall <...>"), when given. */
+  fromName: z.string().nullable().optional(),
   to: z.array(z.string()),
   subject: z.string().nullable(),
   text: z.string(),

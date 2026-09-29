@@ -1,4 +1,5 @@
 import { noDashes } from '@/lib/email/punctuation';
+import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { raPointer } from '@/lib/sources/resident-advisor';
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -130,11 +131,14 @@ export class Concierge {
       // Contact (conservative lookup: lowercase only).
       const [existingContact] = await tx.select().from(t.contacts).where(eq(t.contacts.emailLookup, senderLookup));
       let contactId = existingContact?.id;
+      // "Tobias here" beats the account name; a name they give later replaces the one we had.
+      const stated = statedFirstName(msg.text);
+      const fromHeader = headerFirstName(msg.fromName);
       if (!contactId) {
-        const [c] = await tx.insert(t.contacts).values({ emailOriginal: msg.from, emailLookup: senderLookup, lastInboundAt: now }).returning({ id: t.contacts.id });
+        const [c] = await tx.insert(t.contacts).values({ emailOriginal: msg.from, emailLookup: senderLookup, lastInboundAt: now, firstName: stated ?? fromHeader }).returning({ id: t.contacts.id });
         contactId = c!.id;
       } else {
-        await tx.update(t.contacts).set({ lastInboundAt: now }).where(eq(t.contacts.id, contactId));
+        await tx.update(t.contacts).set({ lastInboundAt: now, ...(stated ? { firstName: stated } : !existingContact!.firstName && fromHeader ? { firstName: fromHeader } : {}) }).where(eq(t.contacts.id, contactId));
       }
 
       // Thread resolution with participant authorization (A20).
@@ -1350,7 +1354,16 @@ export class Concierge {
     // Blocked and suppressed intents never reached the customer, so they do not count as the introduction.
     const [prior] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, a.conversationId), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
     const signature = (prior?.n ?? 0) === 0 ? 'full' : 'short';
-    const rendered = renderTemplate(a.template, a.vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature, brand });
+    // One thread in the customer's inbox: Gmail groups by subject as well as by reply headers, so every email
+    // after the first carries the conversation's subject. With no subject from the customer, our first
+    // email's subject becomes the conversation's.
+    const [conv] = await this.db.select({ subject: t.conversations.subject }).from(t.conversations).where(eq(t.conversations.id, a.conversationId));
+    let subject = a.subject;
+    if (conv?.subject?.trim()) subject = reSubject(conv.subject, a.subject);
+    else if (conv) await this.db.update(t.conversations).set({ subject: a.subject.replace(/^re:\s*/i, '') }).where(eq(t.conversations.id, a.conversationId));
+    const [who] = await this.db.select({ firstName: t.contacts.firstName }).from(t.contacts).where(eq(t.contacts.id, a.contactId));
+    const vars = who?.firstName && a.vars.firstName === undefined ? { ...a.vars, firstName: who.firstName } : a.vars;
+    const rendered = renderTemplate(a.template, vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature, brand });
     const headers: Record<string, string> = { 'Reply-To': this.env.CONCIERGE_FROM_ADDRESS };
     if (a.inReplyTo) {
       headers['In-Reply-To'] = a.inReplyTo;
@@ -1359,7 +1372,7 @@ export class Concierge {
     }
     if (a.containsFixtureData) headers['X-TicketGuy-Fixture'] = 'true';
     return await this.db.transaction(async (tx) => {
-      const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject: a.subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
+      const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
       if (r.created) await enqueueOutbox(tx, { eventType: 'email.send_requested', eventKey: `send:${r.id}`, entityId: r.id, payload: { sendIntentId: r.id }, now: this.now() });
       return r;
     });

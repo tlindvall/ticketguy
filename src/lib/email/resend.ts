@@ -185,6 +185,12 @@ function stripHtml(html: string): string {
   return html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
+/** "Tobias Lindvall" from "Tobias Lindvall <t@example.com>"; null when there is no display name. */
+function extractDisplayName(s: string): string | null {
+  const m = /^\s*"?([^"<]*?)"?\s*</.exec(s);
+  return m && m[1]!.trim() ? m[1]!.trim() : null;
+}
+
 function extractAddress(s: string): string {
   const m = /<([^>]+)>/.exec(s);
   return (m ? m[1]! : s).trim();
@@ -198,6 +204,7 @@ export function normalizeReceived(detail: ReceivedEmailDetail, attachments: Norm
     inReplyTo: detail.in_reply_to,
     references: detail.references,
     from: extractAddress(detail.from),
+    fromName: extractDisplayName(detail.from),
     to: detail.to.map(extractAddress),
     subject: detail.subject,
     text: detail.text ?? (detail.html ? stripHtml(detail.html) : ''),
