@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { LaunchState } from '@/lib/config/launch';
 import { SvgLibrary } from '@/components/public/Landing';
-import { ComposeDemo } from './ComposeDemo';
+import { HeroDemo } from './HeroDemo';
 import { CopyAddress } from './CopyAddress';
 import { HeroVideo } from './HeroVideo';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
@@ -12,6 +12,9 @@ import './inbox.css';
  * Email is the way in, so the page is built from email parts: one working compose window as the hero, an
  * example reply, subject lines that start a draft, and the address as the brand. Every example opens a draft
  * in the visitor's own email app (nothing is sent until they press send), with copy-address as the fallback.
+ *
+ * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
+ * pressed, and an illustrative reply arrives with the call. It stays a working composer throughout.
  *
  * Order: promise + composer → example reply → request starters → how it works → demo animation → FAQ →
  * closing invitation. The animation is an optional demonstration lower down; the headline and the composer
@@ -48,10 +51,12 @@ const STARTERS: Starter[] = [
 ];
 
 const FAQ: Array<{ q: string; a: string }> = [
-  { q: 'What does it cost?', a: 'Nothing. Ticket Guy is free. Some seller links pay us a commission if you buy, and that never decides what we recommend.' },
+  { q: 'What does it cost?', a: 'Nothing. Ticket Guy is free. Some seller links pay us a commission if you buy, but that never decides what we recommend.' },
   { q: 'When will I hear back?', a: 'Usually within 5 minutes. If we need a detail, like how many tickets or your budget, we’ll ask.' },
   { q: 'Which events can you help with?', a: 'Live events across the US: pro and college sports, concerts, theater, comedy, festivals and more. Name the event, or send the listing you’re looking at.' },
-  { q: 'Who replies?', a: 'Ticket Guy, an AI assistant that works from the listings and prices we check. Our small team oversees it and steps in when a request needs a person.' },
+  { q: 'Where do you cover?', a: 'The whole United States, coast to coast: big arenas, stadiums and theaters, and smaller local venues too.' },
+  { q: 'Who replies?', a: 'Ticket Guy, an AI assistant built for one job: getting you the right tickets at the right price. It reads the listing you send, checks the event against live resale market data from the major marketplaces, including StubHub and Vivid Seats, and prices your whole group with fees. It tracks how prices are moving, so it can tell you when to buy and when to wait. Our team oversees it and steps in when a request needs a person.' },
+  { q: 'How do you make money?', a: 'Ticket Guy is always free for you. With some ticket sellers we’re an affiliate: if you buy through our link, the seller pays us a commission. It never decides what we recommend.' },
   { q: 'Can you guarantee the lowest price, or that tickets are valid?', a: 'No. We compare what sellers are listing and tell you what to check: the total with fees, where the seats are, and when the tickets arrive. You buy from the seller, and the seller is responsible for the tickets, delivery and refunds.' },
 ];
 
@@ -82,19 +87,15 @@ export function InboxHome({ state, address, preview = false }: Props) {
       <main id="main">
         <section className="hero wrap" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <h1 id="hero-title">You’ve finally got <span className="nowrap">a ticket guy.</span></h1>
+            <h1 id="hero-title">You’ve finally got a ticket guy now.</h1>
             <p className="hero-lede">Found tickets? Get a second opinion before you buy.</p>
             <p className="hero-sub">Send a link, a screenshot, or tell us what you’re looking for. We’ll check the price, flag important catches, and look for better options.</p>
             <p className="hero-address">
               <a className="link" href={mailto(general)}>{address}</a>
             </p>
-            <p className="mono-note">No app. No account. Just email.</p>
+            <p className="mono-note">Free. Usually a reply within 5 minutes.<br />No app. No account. Just email.</p>
           </div>
-          <div className="hero-demo">
-            <ComposeDemo address={address} subject="Knicks next Saturday" body={'Four of us. Under $150 each.\nCan you find something decent?'} cta={cta} />
-            <p className="compose-note">Free. Usually a reply within 5 minutes.</p>
-            <svg className="mascot" aria-hidden="true"><use href="#ticket-friend" /></svg>
-          </div>
+          <HeroDemo address={address} cta={cta} />
         </section>
 
         <section className="example wrap" aria-labelledby="example-title">
@@ -190,7 +191,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
           <h2 id="faq-title">Before you send.</h2>
           <div className="faq-list">
             {FAQ.map((f) => (
-              <details key={f.q}>
+              <details key={f.q} name="faq">
                 <summary>{f.q}</summary>
                 <p>{f.a}</p>
               </details>

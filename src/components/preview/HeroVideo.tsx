@@ -5,12 +5,14 @@ import { useEffect, useRef, useState } from 'react';
  * The brand animation, shown as an optional demonstration below the fold: the headline, a request being
  * written and sent, and the reply with its price chart (marked as an illustrative example in the film itself). It is silent (the audio
  * track is stripped), loops, and has a pause button, since anything that moves for more than five seconds
- * must be stoppable. Visitors who ask for reduced motion get the still frame and start it themselves.
+ * must be stoppable. It starts when scrolled into view (from the beginning) and pauses out of view.
+ * Visitors who ask for reduced motion get the still frame and start it themselves.
  */
 export function HeroVideo() {
   const ref = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
 
+  // Plays from the start when the section scrolls into view, pauses when it leaves: nobody arrives mid-film.
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
@@ -20,7 +22,26 @@ export function HeroVideo() {
     } catch {
       // No matchMedia: play as normal.
     }
-    if (!reduced) v.play().catch(() => setPlaying(false));
+    if (reduced || typeof IntersectionObserver === 'undefined') return;
+    let away = true;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return;
+        if (entry.intersectionRatio >= 0.6) {
+          if (away) v.currentTime = 0;
+          away = false;
+          v.play().catch(() => setPlaying(false));
+        } else if (entry.intersectionRatio === 0) {
+          away = true;
+          v.pause();
+        } else if (entry.intersectionRatio < 0.3) {
+          v.pause();
+        }
+      },
+      { threshold: [0, 0.3, 0.6] },
+    );
+    io.observe(v);
+    return () => io.disconnect();
   }, []);
 
   const toggle = () => {
@@ -39,7 +60,7 @@ export function HeroVideo() {
         muted
         loop
         playsInline
-        preload="auto"
+        preload="metadata"
         width={1920}
         height={1080}
         aria-label="Illustrative animation: you’ve finally got a ticket guy. Someone emails “Knicks next Saturday, four of us, under $150 each”, and the reply finds four tickets at $130 each, with prices trending down, so it suggests holding off another 24 hours. Before you buy, ask your guy."
