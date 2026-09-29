@@ -2,8 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * The brand animation at the top of the homepage: the headline typing in, a request being written, and the
- * reply with its price chart (marked as an illustrative example in the film itself). It is silent (the audio
+ * The brand animation, shown as an optional demonstration below the fold: the headline, a request being
+ * written and sent, and the reply with its price chart (marked as an illustrative example in the film itself). It is silent (the audio
  * track is stripped), loops, and has a pause button, since anything that moves for more than five seconds
  * must be stoppable. Visitors who ask for reduced motion get the still frame and start it themselves.
  */
@@ -42,7 +42,7 @@ export function HeroVideo() {
         preload="auto"
         width={1920}
         height={1080}
-        aria-label="Animation: you’ve got a ticket guy. Someone emails “Knicks next Saturday, four of us, under $150 each”, and the reply shows four tickets at $130 each with prices trending down. Before you buy, ask your guy."
+        aria-label="Illustrative animation: you’ve finally got a ticket guy. Someone emails “Knicks next Saturday, four of us, under $150 each”, and the reply finds four tickets at $130 each, with prices trending down, so it suggests holding off another 24 hours. Before you buy, ask your guy."
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
       />
