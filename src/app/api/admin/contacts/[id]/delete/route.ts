@@ -35,6 +35,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         await tx.update(t.sendIntents).set({ state: 'blocked', lastError: 'contact_deleted', bodyText: '[deleted]', bodyHtml: '[deleted]' }).where(and(inArray(t.sendIntents.conversationId, convIds), inArray(t.sendIntents.state, ['queued', 'uncertain'])));
       }
       await tx.update(t.watches).set({ state: 'cancelled' }).where(eq(t.watches.contactId, id));
+      await tx.update(t.eventAlerts).set({ state: 'cancelled' }).where(eq(t.eventAlerts.contactId, id));
       await tx.delete(t.interestObservations).where(eq(t.interestObservations.contactId, id));
       await tx.delete(t.contactInterests).where(eq(t.contactInterests.contactId, id));
       await tx.update(t.requestVersions).set({ brief: { deleted: true } }).where(inArray(t.requestVersions.requestId, tx.select({ id: t.requests.id }).from(t.requests).where(eq(t.requests.contactId, id))));

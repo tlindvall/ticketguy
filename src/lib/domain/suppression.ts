@@ -1,5 +1,5 @@
 import type { DbOrTx } from '@/lib/db';
-import { suppressions, marketingPermissions, watches } from '@/lib/db/schema';
+import { suppressions, marketingPermissions, watches, eventAlerts } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 
 /**
@@ -24,6 +24,7 @@ export async function stopAll(db: DbOrTx, args: { contactId: string | null; emai
   await addSuppression(db, { emailLookup: args.emailLookup, scope: 'watch', reason: 'stop_all' });
   if (args.contactId) {
     await db.update(watches).set({ state: 'cancelled' }).where(and(eq(watches.contactId, args.contactId), eq(watches.state, 'active')));
+    await db.update(eventAlerts).set({ state: 'cancelled' }).where(and(eq(eventAlerts.contactId, args.contactId), eq(eventAlerts.state, 'active')));
   }
 }
 

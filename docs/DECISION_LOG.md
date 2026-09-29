@@ -498,3 +498,104 @@ listing (no verified offer) but does answer a quoted price (C_QUOTE) goes out wi
 - `PILOT_SUPPORTED_CATEGORIES` is superseded and ignored. It still parses, so an old setting doesn't break
   startup. Keeping a curated allowlist meant every new category was refused until someone noticed (theater,
   NFL, soccer), and each refusal is a lost customer.
+
+## 43. Sale and new-date alerts need no resale data; price watches only exist when they can run
+
+**Price watches without a monitorable seller are no longer created.** A watch needs a seller with recorded
+rights to be checked on a schedule (`monitoringAllowed`). None is connected in production, yet
+`maybeCreateWatch` still created the row, and staff saw an "active" watch that could never alert. The
+customer's reply already said "We are not monitoring this automatically", so nothing changes for them. Now
+no row is created, and `watch.not_created` is audited instead.
+
+**"Let me know when it goes on sale / when they announce a date" is a different product, and it works
+today.** It needs the catalog, not listings. So it is built on Ticketmaster Discovery, the source we already
+use:
+- `notifyAsked` is a new brief field, taught to the model and in the phrasebook (`alert.notify`).
+  - It is not a price watch. A price word in the same message ("let me know if it drops under $300") keeps
+    it a watch.
+  - It applies to one message only, like `wantsMore`, so a later reply cannot re-arm an alert that was
+    cancelled or sent.
+- **On-sale alert:** the event is known and the provider publishes a general-sale start in the future.
+  - The reply names the published date.
+  - We re-check the event just after that time, and at least daily in case it moves.
+  - The alert fires when the official sale is open (the same test as the official-sale reply, #36).
+  - No sale date at all is not treated as "not on sale yet": it could as easily mean sold out.
+- **New-date alert:** nothing is scheduled for that performer or team in the customer's market on any date.
+  - Their named city's metro is used, or nationally when they name none.
+  - We check daily for 180 days and fire when an event appears, listing up to three with links.
+- The "we couldn't find a scheduled event" clarification now offers it: reply "let me know". It is only
+  offered when nothing is scheduled at all, not merely on the date they asked.
+- **One-shot.** The alert is claimed before the email is queued, so a second pass can't send it twice.
+  "Stop the alerts", "stop all emails" and deleting the contact all cancel it.
+- **It sends without review.** It uses the new `event_alert` message class. It carries no prices; it is the
+  official-sale referral the owner already exempted (#36), sent later.
+  - The `EVENT_ALERTS_ENABLED` switch, the `watches` kill switch and a watch suppression all stop it at the
+    send gate.
+  - A human-approved alert would arrive after the moment it is about.
+- **Cost:** each check is one Discovery call inside the existing daily budget.
+
+**Off until the terms are checked.** `EVENT_ALERTS_ENABLED` defaults to false, in the code and in
+`render.yaml`. Scheduled checks that notify customers are a use the Ticketmaster Discovery terms have to
+allow, and a working key is not permission (handoff rule). While it is off, nothing is offered, created,
+checked or sent.
+- The check runs hourly from Inngest (`evaluate-event-alerts`).
+- Or a Render cron can POST `/api/internal/event-alerts` with the cron secret.
+
+## 44. SeatData resale market statistics: our own series, a group-aware wait rule, and a scorecard
+
+**What SeatData is to us.** It is market data, not a seller. For each event it reports the cheapest and
+median *listed* price per ticket, before fees:
+- for any quantity (`get_in`) and for listings of two or more (`get_in_qty2plus`);
+- overall and per seating zone;
+- plus the number of active listings.
+
+Nothing from it is ever a purchasable offer or compared with an all-in checkout total. Its sales data is not
+used, because `all_in_price` is empty for StubHub rows and some quantities and prices are inferred. It is
+not in the seller registry.
+
+**Licence first.** The key alone runs nothing. A licence record (`market_datasets`, fixed id) is created
+quarantined on deploy and switched per use on `/admin/market`:
+- **tracking**: collect and keep series for events we follow;
+- **benchmark**: typical prices from past games;
+- **advice**: let it steer buy/wait;
+- **customer_display**: show its numbers to customers.
+
+Approving needs a written reference. SeatData's standard licence restricts redistribution and competing
+services, so advice and display each need SeatData's written OK for exactly that use. The licence retention
+date purges the raw series in the nightly sweep.
+
+**Tracking.**
+- Every upcoming event a customer asks about is followed, plus any team or performer in
+  `MARKET_TRACK_ENTITIES`, one row per event (`tracked_events`).
+- It is matched by the Ticketmaster event id, or by name, date and city. When a customer is waiting,
+  SeatData is asked once to add a missing event.
+- Polls ask only for snapshots newer than the last one held. They run daily far out, every 12 hours within
+  a month, every 6 hours within a week, every 3 hours on the day before and hourly on the day, and twice as
+  often after a 10% move. They stop at the start.
+- Research refreshes the event on the spot, so the first reply already has SeatData's history.
+- Points are stored in `market_snapshots` with fee basis `listed_price`. The verified-total trend and
+  benchmark engines therefore never mix them with all-in group prices.
+- Past games of the same team at the same venue (up to 8, refreshed monthly, sampled every 6 hours) go to
+  `market_history` for "typical at this point before the game". That needs at least 5 games, one value
+  each.
+- Calls per UTC day are capped (`SEATDATA_DAILY_CALL_LIMIT`, default 300) and logged in `market_fetches`.
+
+**Group size decides what the data can say** (the owner's correction: "prices fell" is not "wait").
+- One ticket reads the any-quantity series and two read the 2+ series.
+- Three or more get **no price trend**: nothing says five seats together exist. They get only the listing
+  count, said to be all listings.
+- A falling market can support "wait" only when it is the customer's own series, and only for a customer
+  who accepts the risk and has a deadline; otherwise we ask.
+- Shrinking listings (25% and 10 fewer within three days) always argue for buying, for any group, even
+  while prices fall: `market_listings_shrinking`, never wait.
+
+**Proving it before we lean on it.**
+- Twice a day per tracked event the engine records what it would tell a flexible single and a flexible
+  pair buyer (`shadow_advice`): wait when their series is falling and listings hold, otherwise buy.
+- 24 hours later it scores that against the listed floor.
+- `/admin/market` shows how often waiting saved money, what it cost when it did not, how often listings fell
+  while waiting, and how often buying was the wrong call. Nothing there is sent.
+
+**In the reply** (with customer_display): the claims `C_MARKET`, `C_MARKET_TYPICAL` and `C_QUOTE_MARKET`.
+Each says "listed price, before fees" and names SeatData as market statistics, not tickets we checked.
+"Past movement does not predict" still holds.

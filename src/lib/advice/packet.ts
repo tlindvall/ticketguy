@@ -1,3 +1,4 @@
+import type { MarketBasis, MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
 import type { BenchmarkResult } from './benchmark';
@@ -9,7 +10,7 @@ import type { Evaluated } from '@/lib/domain/comparison';
  * Typed evidence packet (API_AND_DATA_CONTRACTS §10). Every fact the customer sees is a server-rendered
  * claim with an ID, scope and allowed wording. The model may only reference claim IDs.
  */
-export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale';
+export type ClaimKind = 'current_offer' | 'alternative_offer' | 'benchmark_range' | 'trend_change' | 'option_count' | 'coverage' | 'entry_reference' | 'checkpoint' | 'missing_history' | 'observation_time' | 'quoted_price' | 'face_value' | 'official_sale' | 'market_price' | 'market_benchmark' | 'market_supply';
 
 export type ClaimRecord = {
   id: string;
@@ -87,7 +88,75 @@ export type BuildPacketArgs = {
   faceValue?: { minCents: number; maxCents: number } | null;
   /** A price the customer saw and asked about, per ticket; `assumedPerTicket` when they did not say. */
   quote?: { perTicketCents: number; assumedPerTicket: boolean } | null;
+  /**
+   * Resale market statistics (DECISION_LOG #44): listed prices before fees, per ticket, never an offer.
+   * `visible` is the licence's customer-display right; without it the claims are staff-only.
+   */
+  market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; comparableLabel: string | null; visible: boolean } | null;
 };
+
+/** Resale market claims. Every number is the calculated context's; wording says what the figure is and is not. */
+function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
+  const m = a.market;
+  if (!m) return [];
+  const out: ClaimRecord[] = [];
+  const q = a.quantity;
+  const c = m.context;
+  const common = { evidenceIds: [], methodVersion: c?.methodVersion ?? 'market-1.0', customerVisible: m.visible };
+  const supplyText = (s: MarketContext['supply']) =>
+    s.now === null ? '' : s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? ` About ${s.now} listings are up, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${s.before} over the last ${s.hours} hours.` : ` About ${s.now} listings are up.`;
+  if (c && c.current && c.adequacy === 'sufficient') {
+    const what = m.basis === 'pair' ? 'for two tickets together' : 'for a single ticket';
+    const w = c.h72 ?? c.h24;
+    const when = w ? (w.hours >= 72 ? 'three days ago' : 'a day ago') : null;
+    const move = !w || !when ? '' : c.direction === 'down' ? ` That’s down from ${formatUsd(w.fromCents)} ${when}.` : c.direction === 'up' ? ` That’s up from ${formatUsd(w.fromCents)} ${when}.` : ` About the same as ${when}.`;
+    out.push({
+      id: 'C_MARKET',
+      kind: 'market_price',
+      text: `Resale listings ${what} currently start at ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}`,
+      values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
+      scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+      limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict'],
+      ...common,
+    });
+    if (c.typical) {
+      out.push({
+        id: 'C_MARKET_TYPICAL',
+        kind: 'market_benchmark',
+        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price for two together' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)}–${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
+        values: { events: c.typical.events, p25Cents: c.typical.p25Cents, medianCents: c.typical.medianCents, p75Cents: c.typical.p75Cents },
+        scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: obs },
+        limitations: ['listed_prices_before_fees', 'comparable_games_same_venue'],
+        ...common,
+      });
+    }
+    if (a.quote) {
+      const listed = c.current.priceCents;
+      const verdict = a.quote.perTicketCents < listed ? `below the cheapest resale listing (${formatUsd(listed)} before fees), so it’s a good price if it’s genuine` : a.quote.perTicketCents <= Math.round(listed * 1.3) ? `about what the cheapest resale ticket (${formatUsd(listed)} before fees) comes to once fees are added` : `above the cheapest resale listing even allowing for fees (${formatUsd(listed)} before fees)`;
+      out.push({
+        id: 'C_QUOTE_MARKET',
+        kind: 'quoted_price',
+        text: `Against resale: ${formatUsd(a.quote.perTicketCents)} a ticket is ${verdict}.`,
+        values: { perTicketCents: a.quote.perTicketCents, listedCents: listed },
+        scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: null, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+        limitations: ['listed_prices_before_fees', 'market_statistics_not_listings'],
+        ...common,
+      });
+    }
+  } else if (m.basis === null && m.supply.now !== null) {
+    // Three or more: no group price series exists, so only the listing count is said, and said to be that.
+    out.push({
+      id: 'C_MARKET',
+      kind: 'market_supply',
+      text: `There are about ${m.supply.now} resale listings for this game${m.supply.before !== null && m.supply.hours !== null && m.supply.trend !== 'stable' && m.supply.trend !== 'unknown' ? `, ${m.supply.trend === 'shrinking' ? 'down' : 'up'} from ${m.supply.before} over the last ${m.supply.hours} hours` : ''}. That counts all listings, not blocks of ${q} seats together.`,
+      values: { listings: m.supply.now, listingsBefore: m.supply.before, trend: m.supply.trend },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      limitations: ['all_listings_not_group_blocks'],
+      ...common,
+    });
+  }
+  return out;
+}
 
 /**
  * What a quoted price is next to the provider's face value. Face value is before fees, so a little above it
@@ -219,7 +288,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: [...a.benchmark.adequacyReasons, 'asking_prices_not_sales'],
       customerVisible: a.benchmark.customerDisplayAllowed,
     });
-  } else if (!noMarket) {
+  } else if (!noMarket && !(a.market?.visible && a.market.context?.typical)) {
     claims.push({
       id: 'C_NOHIST',
       kind: 'missing_history',
@@ -275,6 +344,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  const market = marketClaims(a, obs);
+  claims.push(...market);
+  const marketShown = market.some((c) => c.customerVisible);
+
   // What we checked, in the customer's terms. Sources we have no integration with are our business, not
   // theirs: they are listed for staff in the review console, never in the email. A source that should have
   // answered and failed (a timeout) is named, because it changes what the reply covers.
@@ -285,7 +358,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     id: 'C_COVERAGE',
     kind: 'coverage',
     text: noMarket
-      ? `I can’t see live resale listings for this show yet, so this doesn’t compare other sellers’ prices.`
+      ? marketShown
+        ? `The resale figures are market statistics from SeatData (StubHub and Vivid Seats listings, before fees), not specific tickets I’ve checked; prices can change quickly.`
+        : `I can’t see live resale listings for this show yet, so this doesn’t compare other sellers’ prices.`
       : `Checked: ${a.sourcesChecked.join(', ')}.${failed.length ? ` Couldn’t reach: ${failed.join(', ')}.` : ''} Prices can change before checkout.`,
     values: { checked: a.sourcesChecked.length, unavailable: unavailable.length },
     scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },

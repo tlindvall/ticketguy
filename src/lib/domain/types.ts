@@ -148,6 +148,8 @@ export const RequestExtractionSchema = z
     /** A price the customer saw or was offered and is asking about ("is $106 a good deal?"). Not their budget. */
     quotedPriceCents: z.number().int().nonnegative().nullable().default(null),
     quotedPriceBasis: z.enum(['per_ticket', 'whole_party']).nullable().default(null),
+    /** Wants an email when tickets go on sale or a date is announced ("let me know when they go on sale"). Not a price watch. */
+    notifyAsked: z.boolean().nullable().default(null),
   })
   .strict();
 export type RequestExtraction = z.infer<typeof RequestExtractionSchema>;

@@ -7,7 +7,7 @@ import type { Env } from '@/lib/config/env';
  * Send gate (API_AND_DATA_CONTRACTS §5). Evaluated immediately before every provider submission, using
  * the CURRENT switch state, never a cached scheduling decision (A38). Fixture mode can never pass (A13).
  */
-export type MessageClass = 'acknowledgment' | 'clarification' | 'recommendation' | 'no_result' | 'watch_confirmation' | 'watch_alert' | 'marketing' | 'verification';
+export type MessageClass = 'acknowledgment' | 'clarification' | 'recommendation' | 'no_result' | 'watch_confirmation' | 'watch_alert' | 'event_alert' | 'marketing' | 'verification';
 
 export type GateInput = {
   messageClass: MessageClass;
@@ -58,9 +58,16 @@ export function evaluateGate(env: Env, switches: Record<string, boolean>, suppre
     if (switches['watches'] === false) reasons.push('kill_switch_watches');
     if (suppressed.has('watch')) reasons.push('suppressed_watch');
   }
+  // "Tickets are on sale now" / "they announced a date": no prices, so no approval (DECISION_LOG #43), but the
+  // feature switch, the watches kill switch and a watch suppression ("stop all emails") all stop it.
+  if (input.messageClass === 'event_alert') {
+    if (!env.EVENT_ALERTS_ENABLED) reasons.push('event_alerts_disabled');
+    if (switches['watches'] === false) reasons.push('kill_switch_watches');
+    if (suppressed.has('watch')) reasons.push('suppressed_watch');
+  }
   if (suppressed.has('global')) reasons.push('suppressed_global');
   if (env.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0 && !env.EMAIL_TEST_RECIPIENT_ALLOWLIST.includes(input.recipientLookup)) reasons.push('recipient_not_in_test_allowlist');
-  if (REQUIRES_APPROVAL.includes(input.messageClass) || env.HUMAN_REVIEW_REQUIRED && input.messageClass !== 'acknowledgment' && input.messageClass !== 'clarification' && input.messageClass !== 'verification' && input.messageClass !== 'no_result') {
+  if (REQUIRES_APPROVAL.includes(input.messageClass) || env.HUMAN_REVIEW_REQUIRED && input.messageClass !== 'acknowledgment' && input.messageClass !== 'clarification' && input.messageClass !== 'verification' && input.messageClass !== 'no_result' && input.messageClass !== 'event_alert') {
     if (!input.approved) reasons.push('not_approved');
     if (!input.approvalHashMatches) reasons.push('approval_hash_mismatch');
   }

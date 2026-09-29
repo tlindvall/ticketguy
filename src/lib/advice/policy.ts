@@ -5,7 +5,7 @@ import type { TrendResult } from './trend';
  * Buy/wait decision policy (ADVICE_ENGINE §7). Rule-based, versioned, human reviewed.
  * Price attractiveness and timing advice are separate outputs. Affiliate data is not an input.
  */
-export const POLICY_VERSION = 'policy-1.0';
+export const POLICY_VERSION = 'policy-1.1';
 
 export type Decision = 'buy_now' | 'wait_and_recheck' | 'consider_alternative' | 'insufficient_evidence';
 export type PriceAttractiveness = 'below_typical' | 'within_typical' | 'above_typical' | 'unknown';
@@ -42,6 +42,12 @@ export type PolicyInput = {
   /** Whether unattended monitoring coverage exists for this event's sources (manual-only sources cannot support watches). */
   monitoringCoverageAvailable: boolean;
   staffedUntil: Date | null;
+  /**
+   * Resale market statistics (DECISION_LOG #44), only when the licence allows them in advice.
+   * `basisMatchesGroup` is true only for one or two tickets, where the provider's cheapest-price series is the
+   * customer's own; the listing count applies to any group, and can only ever argue for buying sooner.
+   */
+  market?: { basisMatchesGroup: boolean; direction: 'down' | 'up' | 'flat' | 'insufficient'; supply: 'shrinking' | 'stable' | 'growing' | 'unknown' } | null;
 };
 
 export type PolicyResult = {
@@ -103,6 +109,29 @@ export function decide(input: PolicyInput): PolicyResult {
     ...extra,
   });
 
+  const market = input.market ?? null;
+  const marketShrinking = market?.supply === 'shrinking';
+  const marketFalling = !!market && market.basisMatchesGroup && market.direction === 'down' && !marketShrinking;
+  if (marketShrinking) reasons.push('market_listings_shrinking');
+  const waitCheckpoint = () => new Date(Math.min(waitDeadline.getTime(), input.now.getTime() + 24 * 3_600_000));
+  const waitStops = ['listings_shrink', 'price_reverses_up', 'delivery_cutoff_approaches', 'customer_deadline', 'event_status_change'];
+
+  // No verified listing, but the market for exactly this group size is falling with listings holding up:
+  // waiting is a real option for a customer who has said they can take the risk and when they must decide.
+  if (!hasOffer && marketFalling && waitWindowMinutes > 0 && priorities.mustAttend !== true) {
+    if (priorities.waitRiskTolerance === 'high' || priorities.waitRiskTolerance === 'medium') {
+      if (priorities.decisionDeadline !== null) {
+        reasons.push('market_prices_falling_listings_holding', 'customer_accepts_wait_risk');
+        stop.push(...waitStops);
+        const watchScheduled = priorities.watchConsentGiven && input.monitoringCoverageAvailable;
+        return finish('wait_and_recheck', { nextCheckpointAt: waitCheckpoint(), waitDeadlineAt: waitDeadline, watchScheduled });
+      }
+    }
+    if (priorities.waitRiskTolerance === null) clarify.push('wait_risk_tolerance');
+    if (priorities.decisionDeadline === null) clarify.push('decision_deadline');
+    reasons.push('market_falling_but_risk_tolerance_or_deadline_unknown');
+  }
+
   // No qualifying offer inside budget → report no fit; alternatives or watch, never silently exceed budget.
   if (!hasOffer || !withinBudget) {
     reasons.push(hasOffer ? 'no_offer_within_budget' : 'no_verified_eligible_offer');
@@ -123,8 +152,14 @@ export function decide(input: PolicyInput): PolicyResult {
     return finish('buy_now');
   }
 
+  // Suitable listings disappearing: the price may still be falling, but waiting risks the seats. Never wait.
+  if (marketShrinking) {
+    reasons.push('suitable_verified_offer_within_budget');
+    return finish('buy_now');
+  }
+
   // Group basket trending down, price above target, adequate options, and customer explicitly accepts waiting risk.
-  const groupTrendDown = trend?.adequacy === 'sufficient' && trend.direction === 'down';
+  const groupTrendDown = (trend?.adequacy === 'sufficient' && trend.direction === 'down') || marketFalling;
   const aboveTarget = attractiveness === 'above_typical' || (priorities.budgetTotalCents !== null && offers.bestEligibleTotalCents! > priorities.budgetTotalCents * 0.9);
   if (groupTrendDown && aboveTarget) {
     if (priorities.waitRiskTolerance === null || priorities.decisionDeadline === null) {

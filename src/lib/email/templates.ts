@@ -135,6 +135,35 @@ export function renderTemplate(
       const html = [...lead.map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...end.map(para)];
       return wrap(text, html);
     }
+    case 'event_alert_set': {
+      // The reply to "let me know when": what we'll watch for, in one sentence, and nothing else to do.
+      const what = String(v.what ?? 'it');
+      const lead = v.kind === 'on_sale'
+        ? `${what} isn't on general sale yet.${v.saleOpens ? ` Ticketmaster lists the general sale opening ${String(v.saleOpens)}.` : ''} I'll email you the moment it opens, with the link.`
+        : `Nothing's scheduled for ${what} yet. I'll email you as soon as a date is announced.`;
+      const tail = ['Nothing else to do — just keep an eye on this thread.', v.countryUnconfirmed ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
+      const text = ['Hey,', lead, ...tail];
+      return wrap(text, text.map(para));
+    }
+    case 'event_alert': {
+      // The alert itself: what happened, and the link. On sale: the one event. New date: up to three.
+      const events = (v.events as unknown as Array<{ title: string; when: string; venue: string; url: string | null }>) ?? [];
+      const seller = String(v.seller ?? 'Ticketmaster');
+      const lead = v.kind === 'on_sale' ? `Good news — ${String(v.what)} is on general sale now on ${seller}.` : `${String(v.what)} just announced ${events.length === 1 ? 'a date' : 'dates'}${v.where ? ` in ${String(v.where)}` : ''}:`;
+      const lines = events.map((e) => `${e.title} — ${e.when}, ${e.venue}${e.url ? `: ${e.url}` : ''}`);
+      const tail = [
+        v.kind === 'on_sale' ? '' : 'Want tickets for one of these? Reply with which one and how many.',
+        v.affiliate ? AFFILIATE_DISCLOSURE : '',
+      ].filter(Boolean);
+      const text = ['Hey,', lead, ...lines, ...tail];
+      const html = [
+        para('Hey,'),
+        para(lead),
+        ...events.map((e) => `<p style="margin:0 0 12px;">${e.url ? link(e.title, e.url, true) : esc(e.title)} — ${esc(`${e.when}, ${e.venue}`)}</p>`),
+        ...tail.map(para),
+      ];
+      return wrap(text, html);
+    }
     case 'official_sale': {
       // One clear recommendation and a direct link to buy, written as a sentence. No prices: buy/wait is for
       // resale, and resale is one reply away.

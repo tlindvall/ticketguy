@@ -9,6 +9,7 @@ import { leaseDueOutbox, markDispatched, markFailed } from '@/lib/intake/outbox'
 import { detailFromWebhookPayload, fetchReceivedEmail, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
 import { audit } from '@/lib/util/audit';
 import { prewarmCatalog } from '@/lib/catalog/prewarm';
+import { MarketTracker, purgeExpiredMarketData } from '@/lib/market/tracker';
 
 /**
  * Durable workflows. Each step retrieves data by ID; nothing large is checkpointed. Handlers are idempotent
@@ -117,6 +118,37 @@ export const evaluateWatches = inngest.createFunction(
   },
 );
 
+/** Event alerts ("email me when it goes on sale / when they announce a date"): hourly, off unless enabled. */
+export const evaluateEventAlerts = inngest.createFunction(
+  { id: 'evaluate-event-alerts', concurrency: { limit: 1 }, triggers: [cron('23 * * * *')] },
+  async ({ step }) => {
+    return step.run('evaluate', async () => {
+      const c = await getConcierge();
+      const r = await c.evaluateEventAlerts({ limit: 25 });
+      if (r.checked || r.sent || r.expired) {
+        const { db } = await getDb();
+        await audit(db, { actor: 'system', action: 'event_alert.pass', entityKind: 'system', entityId: 'event_alerts', diff: r });
+      }
+      return r;
+    });
+  },
+);
+
+/** Resale market tracking (SeatData, DECISION_LOG #44): hourly; does nothing until the licence allows tracking. */
+export const trackMarkets = inngest.createFunction(
+  { id: 'track-markets', concurrency: { limit: 1 }, triggers: [cron('41 * * * *')] },
+  async ({ step }) => {
+    return step.run('track', async () => runMarketTracking());
+  },
+);
+
+export async function runMarketTracking() {
+  const { db } = await getDb();
+  const r = await new MarketTracker({ db, env: env() }).run({ limit: 40 });
+  if (!r.skipped && (r.polled || r.matched || r.scored)) await audit(db, { actor: 'system', action: 'market.tracking_pass', entityKind: 'system', entityId: 'market', diff: r });
+  return r;
+}
+
 /** Retention: purge raw bodies/attachments past purge_at; expire media; observations past retention. */
 export const retentionSweep = inngest.createFunction(
   { id: 'retention-sweep', concurrency: { limit: 1 }, triggers: [cron('17 3 * * *')] },
@@ -131,6 +163,7 @@ export async function runRetentionSweep(now: Date): Promise<{ mediaDeleted: numb
   const atts = await db.update(t.attachments).set({ mediaId: null, validationState: 'purged' }).where(and(lte(t.attachments.purgeAt, now), sql`${t.attachments.mediaId} is not null`)).returning({ id: t.attachments.id });
   await db.update(t.messages).set({ rawMediaId: null }).where(lte(t.messages.purgeAt, now));
   const obs = await db.delete(t.offerObservations).where(and(lte(t.offerObservations.retentionUntil, now), sql`${t.offerObservations.id} not in (select unnest(chosen_observation_ids::text[])::uuid from ${t.recommendations} where review_status in ('pending','approved'))`)).returning({ id: t.offerObservations.id });
+  await purgeExpiredMarketData(db, now);
   await audit(db, { actor: 'system', action: 'retention.sweep', entityKind: 'system', entityId: 'retention', diff: { media: media.length, attachments: atts.length, observations: obs.length } });
   return { mediaDeleted: media.length, attachmentsPurged: atts.length, observationsPurged: obs.length };
 }
@@ -148,4 +181,4 @@ export const catalogPrewarm = inngest.createFunction(
   },
 );
 
-export const functions = [dispatchOutbox, evaluateWatches, retentionSweep, catalogPrewarm];
+export const functions = [dispatchOutbox, evaluateWatches, evaluateEventAlerts, trackMarkets, retentionSweep, catalogPrewarm];

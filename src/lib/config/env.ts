@@ -115,6 +115,12 @@ const rawSchema = z.object({
   EMAIL_SEND_ENABLED: explicitBoolean,
   MARKETING_SEND_ENABLED: explicitBoolean,
   WATCH_SEND_ENABLED: explicitBoolean,
+  /**
+   * "Email me when it goes on sale / when they announce a date", checked against Ticketmaster Discovery on a
+   * schedule. Off until the owner has confirmed the Discovery terms allow scheduled checks that notify
+   * customers (DECISION_LOG #43); while off, nothing is offered, created or sent.
+   */
+  EVENT_ALERTS_ENABLED: explicitBoolean,
   HUMAN_REVIEW_REQUIRED: z
     .string()
     .optional()
@@ -194,6 +200,15 @@ const rawSchema = z.object({
    */
   CATALOG_SEED_KEYWORDS: csvDefault('new york rangers,new york knicks,new york islanders,new jersey devils,brooklyn nets,new york yankees,new york mets,new york liberty,new york giants,new york jets'),
   LIVE_INVENTORY_ENABLED: explicitBoolean,
+  /**
+   * SeatData market data (DECISION_LOG #44). The key alone enables nothing: tracking runs only once the
+   * SeatData licence record in /admin/sources is approved for "tracking", and customer-facing use needs its
+   * own approved uses. Calls per UTC day are capped.
+   */
+  SEATDATA_API_KEY: z.string().optional(),
+  SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(300),
+  /** Teams/performers tracked every day whether or not anyone has asked (the evaluation cohort). Names as in the catalog. */
+  MARKET_TRACK_ENTITIES: csv,
 
   /** Superseded by BLOCKED_CATEGORIES (everything is covered unless blocked); kept so an old setting still parses. */
   PILOT_SUPPORTED_CATEGORIES: z.string().default(''),
@@ -231,7 +246,7 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
  * Mirrors MessageClass in @/lib/email/send-gate. Declared here rather than imported: send-gate imports Env,
  * and the cycle would leave one of the two undefined at module-evaluation time. A test pins the two in step.
  */
-export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'marketing', 'verification'] as const;
+export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'event_alert', 'marketing', 'verification'] as const;
 export type MessageClass = (typeof MESSAGE_CLASSES)[number];
 
 export class ConfigurationError extends Error {
