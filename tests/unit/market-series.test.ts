@@ -51,7 +51,9 @@ describe('market series', () => {
 
   it('refuses to call anything on too few, too short or stale data', () => {
     expect(computeMarketContext({ basis: 'single', zone: null, points: series(15000, 12000).slice(-3), now, eventStartAt: start }).adequacy).toBe('insufficient');
-    const stale = computeMarketContext({ basis: 'single', zone: null, points: series(15000, 12000), now: new Date(now.getTime() + 24 * H), eventStartAt: start });
+    // A day old is too old; half a day is SeatData's normal cadence, not staleness (the Rangers card said "13 h ago").
+    expect(computeMarketContext({ basis: 'single', zone: null, points: series(15000, 12000), now: new Date(now.getTime() + 13 * H), eventStartAt: start }).adequacy).toBe('sufficient');
+    const stale = computeMarketContext({ basis: 'single', zone: null, points: series(15000, 12000), now: new Date(now.getTime() + 30 * H), eventStartAt: start });
     expect(stale.adequacy).toBe('insufficient');
     expect(stale.reasons.some((r) => r.startsWith('stale'))).toBe(true);
   });

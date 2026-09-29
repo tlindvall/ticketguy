@@ -1,4 +1,4 @@
-import { basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
+import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
 import type { BenchmarkResult } from './benchmark';
@@ -112,13 +112,16 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
   if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
     const what = m.basis === 'pair' ? 'for two tickets together' : group !== null ? `with ${group} or more tickets` : 'for a single ticket';
+    // "Currently" only when the figure is recent; otherwise its age, so a day-old floor isn't passed off as now.
+    const ageHours = Math.round((a.observedAt.getTime() - c.current.at.getTime()) / 3_600_000);
+    const lead = ageHours < MARKET_RECENT_HOURS ? `Resale listings ${what} currently start at` : `As of about ${ageHours} hours ago, resale listings ${what} started at`;
     const w = c.adequacy === 'sufficient' ? (c.h72 ?? c.h24) : null;
     const when = w ? (w.hours >= 72 ? 'three days ago' : 'a day ago') : null;
     const move = !w || !when ? '' : c.direction === 'down' ? ` That’s down from ${formatUsd(w.fromCents)} ${when}.` : c.direction === 'up' ? ` That’s up from ${formatUsd(w.fromCents)} ${when}.` : ` About the same as ${when}.`;
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `Resale listings ${what} currently start at ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` A listing with more tickets may not sell exactly ${q}.` : ''}`,
+      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` A listing with more tickets may not sell exactly ${q}.` : ''}`,
       values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
       scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
       limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict', ...(group !== null ? ['group_split_not_guaranteed'] : [])],
@@ -223,7 +226,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_OFFICIAL',
       kind: 'official_sale',
-      text: `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.`,
+      // "Unless resale is cheaper" only when there is resale in the email to be cheaper; otherwise it reads as a hedge we can't back.
+      text: a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}, and that’s where I’d buy.`,
       values: { seller: a.official.seller },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],

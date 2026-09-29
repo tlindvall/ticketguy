@@ -1,3 +1,4 @@
+import { autoApproveActive } from '@/lib/intake/pipeline';
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
@@ -36,7 +37,7 @@ export default async function Operations() {
     <main className="space-y-8">
       <header>
         <h1 className="text-xl font-bold">Operations</h1>
-        <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · event alerts {e.EVENT_ALERTS_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'}</p>
+        <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · event alerts {e.EVENT_ALERTS_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'} · drafts {autoApproveActive(e) ? <strong>auto-approved (testing allowlist on)</strong> : 'wait for a person'}</p>
       </header>
       <section className="grid gap-3 text-sm sm:grid-cols-3">
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Outbox</h2><p>pending {lag.pending} ({lag.due} due now) · dead {lag.dead} · oldest pending {lag.oldestPendingSeconds ?? 0}s</p>{retrying.length ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{retrying.length} retrying after failure</span></p> : null}</div>
