@@ -38,6 +38,7 @@ export const GROUPS: Array<{ id: InboxGroup; title: string; empty: string }> = [
 
 /** Why a request is where it is, from the last transition's reason code. Unknown codes are shown as written. */
 const REASON: Record<string, string> = {
+  removed_by_staff: 'Removed from the board by staff.',
   draft_ready: 'Draft reply with a recommendation is ready.',
   no_verified_result_pending_review: 'Draft reply is ready, but it has no listing to recommend.',
   approved_recommendation_sent: 'Sent after approval.',

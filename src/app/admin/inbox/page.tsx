@@ -4,6 +4,7 @@ import { getDb } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import { guardPage } from '@/lib/admin/guard';
 import { nowMs } from '@/lib/util/clock';
+import { RequestList as List, type RequestRow } from '@/components/RequestList';
 import { GROUPS, STATE, ago, reasonText, stateInfo, toneClass, whenLocal, type InboxGroup } from '@/lib/admin/labels';
 
 export const dynamic = 'force-dynamic';
@@ -110,7 +111,7 @@ export default async function Inbox({ searchParams }: { searchParams: Promise<{ 
       {state ? (
         <section>
           <h2 className="text-lg font-semibold">{STATE[state]?.label ?? state}</h2>
-          <RequestList rows={rows} now={now} empty="None." />
+          <RequestList rows={rows} now={now} empty="None." removable={state !== 'closed'} />
         </section>
       ) : (
         GROUPS.map((g) => <Group key={g.id} id={g.id} title={g.title} empty={g.empty} rows={rows.filter((r) => stateInfo(r.state).group === g.id)} now={now} />)
@@ -132,33 +133,13 @@ function Group({ id, title, empty, rows, now }: { id: InboxGroup; title: string;
   );
 }
 
-function RequestList({ rows, now, empty }: { rows: Row[]; now: number; empty: string }) {
-  if (!rows.length) return <p className="mt-2 text-sm text-gray-500">{empty}</p>;
-  return (
-    <ul className="mt-2 divide-y divide-gray-200 rounded-lg border border-gray-200">
-      {rows.map((r) => {
-        const s = stateInfo(r.state);
-        return (
-          <li key={r.id}>
-            <Link href={`/admin/requests/${r.id}`} className="block px-4 py-3 hover:bg-gray-50">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className={`tg-badge ${toneClass[s.tone]}`}>{s.label}</span>
-                {r.newReply ? <span className="tg-badge tg-badge-warn">New reply</span> : null}
-                <span className="text-gray-600">{r.customer}</span>
-                <span className="ml-auto text-xs text-gray-500">{ago(r.updatedAt.getTime(), now)}</span>
-              </div>
-              <p className="mt-1 font-medium text-gray-900">
-                {r.headline}
-                {r.when ? <span className="font-normal text-gray-600"> · {r.when}</span> : null}
-              </p>
-              {r.snippet ? <p className="mt-0.5 truncate text-sm text-gray-600">&ldquo;{r.snippet}&rdquo;</p> : null}
-              {r.why ? <p className="mt-0.5 text-xs text-gray-500">{r.why}</p> : null}
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
+/** Rows as the client list shows them: labels and ages worked out here, so the list stays a plain component. */
+function RequestList({ rows, now, empty, removable = true }: { rows: Row[]; now: number; empty: string; removable?: boolean }) {
+  const shown: RequestRow[] = rows.map((r) => {
+    const s = stateInfo(r.state);
+    return { id: r.id, badge: s.label, badgeClass: toneClass[s.tone], newReply: r.newReply, customer: r.customer, age: ago(r.updatedAt.getTime(), now), headline: r.headline, when: r.when, snippet: r.snippet, why: r.why };
+  });
+  return <List rows={shown} empty={empty} removable={removable} />;
 }
 
 /** The customer's own words, without quoted history or signatures: the first non-empty line, capped. */
