@@ -58,7 +58,7 @@ describe('a shared nickname means the local team', () => {
     const [event] = await h.db.select().from(t.events).where(eq(t.events.id, req!.eventId!));
     expect(event!.name).toBe('New York Giants vs. Philadelphia Eagles');
     const body = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).map((s) => s.bodyText).join('\n');
-    expect(body).toContain("I've gone with the New York Giants — tell me if you meant a different team.");
+    expect(body).toContain("I've gone with the New York Giants. Tell me if you meant a different team.");
     expect(body).not.toContain('which Giants');
     expect(body).not.toContain('Which city or venue');
   });

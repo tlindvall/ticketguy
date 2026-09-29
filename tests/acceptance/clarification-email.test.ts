@@ -72,7 +72,7 @@ describe('the clarification email', () => {
       writeFileSync(`${process.env.PRINT_CLARIFICATION}/clarification.html`, intent!.bodyHtml ?? '');
     }
 
-    expect(body).toMatch(/^Hey,\n\nTwo (New York )?Rangers tickets next week, up to \$200 total—got it\./);
+    expect(body).toMatch(/^Hey,\n\nTwo (New York )?Rangers tickets next week, up to \$200 total\. Got it\./);
     expect(body).toContain('Are you looking for a home game at Madison Square Garden, or are away games an option?');
     expect(body).not.toMatch(/alumni/i); // neither the November night nor the alumni "team"
     expect(body).not.toContain('Oct 15'); // outside the week
@@ -94,7 +94,7 @@ describe('the clarification email', () => {
     expect(intent!.bodyHtml).not.toContain('margin:0 auto');
   });
 
-  it('signs later messages in the same conversation "— Ticket Guy" and does not repeat the residency line', async () => {
+  it('signs later messages in the same conversation "Ticket Guy" and does not repeat the residency line', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: 'Four tickets for the Knicks, around $300.', from: 'sam@customer.example', subject: 'Knicks' }));
     await interpretAll(h, c);
@@ -103,7 +103,8 @@ describe('the clarification email', () => {
     const [contact] = await h.db.select().from(t.contacts).where(eq(t.contacts.id, req!.contactId));
     const follow = await c.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req!.conversationId, requestId, revision: 2, recipient: contact!.emailOriginal, subject: 'Re: Knicks', template: 'clarification', vars: { acknowledgement: 'Four Knicks tickets, around $300—got it.', questions: ['Which date?'], countryCheck: false }, inReplyTo: null, approvalId: null, approvedHash: null });
     const [second] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.id, follow.id));
-    expect(second!.bodyText).toContain('— Ticket Guy');
+    expect(second!.bodyText).toContain('\n\nTicket Guy\n');
+    expect(second!.bodyText).not.toMatch(/[—–]/);
     expect(second!.bodyText).not.toContain('Your second opinion before you buy.');
     expect(second!.bodyText).not.toContain('outside the US');
   });
@@ -115,13 +116,13 @@ describe('the clarification email', () => {
     const requestId = (r as { requestId: string }).requestId;
     const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId));
     expect(intent!.bodyText).not.toContain('per ticket or for everyone combined');
-    expect(intent!.bodyText).toContain("I've read $300 as the total for both — tell me if you meant per ticket.");
+    expect(intent!.bodyText).toContain("I've read $300 as the total for both. Tell me if you meant per ticket.");
 
     const q = await c.ingestInbound(inbound({ text: 'Rangers tickets on Oct 3 please.', from: 'noqty@customer.example', subject: 'Rangers' }));
     await interpretAll(h, c);
     const [qi] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, (q as { requestId: string }).requestId));
     expect(qi!.bodyText).not.toContain('How many tickets do you need');
-    expect(qi!.bodyText).toContain("I've assumed two tickets — just tell me if you need a different number.");
+    expect(qi!.bodyText).toContain("I've assumed two tickets. Just tell me if you need a different number.");
 
     // Real doubt is still asked, not papered over.
     const few = await c.ingestInbound(inbound({ text: 'A few tickets for the Rangers on Oct 3.', from: 'few@customer.example', subject: 'Rangers' }));
@@ -160,13 +161,13 @@ describe('the clarification email', () => {
   });
 
   it('plays the request back in one sentence', () => {
-    expect(acknowledgementLine(brief({ performerOrTeam: 'rangers', quantity: 2, dateExpression: 'next week', budgetCents: 20000, budgetBasis: 'whole_party' }))).toBe('Two Rangers tickets next week, up to $200 total—got it.');
-    expect(acknowledgementLine(brief({ performerOrTeam: 'Knicks', quantity: 1, budgetCents: 15000, budgetBasis: 'per_ticket' }))).toBe('One Knicks ticket, up to $150 each—got it.');
-    expect(acknowledgementLine(brief({ performerOrTeam: 'Dua Lipa', quantity: 12, togetherRequired: true }))).toBe('12 Dua Lipa tickets together—got it.');
+    expect(acknowledgementLine(brief({ performerOrTeam: 'rangers', quantity: 2, dateExpression: 'next week', budgetCents: 20000, budgetBasis: 'whole_party' }))).toBe('Two Rangers tickets next week, up to $200 total. Got it.');
+    expect(acknowledgementLine(brief({ performerOrTeam: 'Knicks', quantity: 1, budgetCents: 15000, budgetBasis: 'per_ticket' }))).toBe('One Knicks ticket, up to $150 each. Got it.');
+    expect(acknowledgementLine(brief({ performerOrTeam: 'Dua Lipa', quantity: 12, togetherRequired: true }))).toBe('12 Dua Lipa tickets together. Got it.');
     expect(acknowledgementLine(brief({ quantity: null }))).toBe('Thanks for getting in touch.');
     // A game reads as a game, with the matchup's "vs" left lower case.
     expect(acknowledgementLine(brief({ performerOrTeam: 'new york rangers vs tampa bay lightning', quantity: 2, togetherRequired: true, dateExpression: 'oct 1st', budgetCents: 40000, budgetBasis: 'whole_party' }))).toBe(
-      'Two tickets together for New York Rangers vs Tampa Bay Lightning oct 1st, up to $400 total—got it.',
+      'Two tickets together for New York Rangers vs Tampa Bay Lightning oct 1st, up to $400 total. Got it.',
     );
   });
 

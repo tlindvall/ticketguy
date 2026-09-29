@@ -1,3 +1,4 @@
+import { noDashes } from '@/lib/email/punctuation';
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
@@ -416,7 +417,7 @@ export class Concierge {
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
     // a "compare" after the official-sale reply.
     if (revision === 1 || picked || cameFromReferral) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it — checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged, { eventResolved: true }), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged, { eventResolved: true }), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -702,13 +703,13 @@ export class Concierge {
     const single = !more && !after && events.length === 1 && !runOf.get(events[0]!.e.id)?.moreDates && genreKept && areaKept;
     if (single && merged.quantity !== null) {
       const only = events[0]!;
-      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it — tell me if you had something else in mind.` };
+      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${area?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it. Tell me if you had something else in mind.` };
     }
     await recordVersion();
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
     const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
     const shown = choosePicks(events, 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint) }));
-    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)} — ${e.name} at ${v.name}`);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}: ${e.name} at ${v.name}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && genreKept ? genre.label : browseLabel(merged.categoryHint);
     const place = area && areaKept ? area.label : market.label;
@@ -717,11 +718,11 @@ export class Concierge {
       ? (options.length ? `More ${label.toLowerCase()} in ${place}, ${span}:` : `That's everything I have for ${label.toLowerCase()} in ${place}, ${span}.`)
       : after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
-      : `${label} in ${place}, ${span}${single ? ' — there’s one on:' : options.length ? ` — here are my ${options.length === 3 ? 'three' : 'two'} picks:` : '.'}`;
+      : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:` : '.'}`;
     const assumptions = [assumedWindow ? 'the next two weeks' : null, assumedPlace ? market.label : null].filter(Boolean);
     const notes = [
-      assumptions.length ? `I've looked at ${assumptions.join(', in ')} — tell me if you had something else in mind.` : null,
-      area && areaKept && events.length ? `I've kept it to ${area.label} venues — say if you'd go further.` : null,
+      assumptions.length ? `I've looked at ${assumptions.join(', in ')}. Tell me if you had something else in mind.` : null,
+      area && areaKept && events.length ? `I've kept it to ${area.label} venues. Say if you'd go further.` : null,
       area && !areaKept && all.length ? `Nothing in ${area.label} fits, so here's the rest of ${market.label}.` : null,
       genre && !genreKept && placed.length ? `I couldn't find any ${genre.words} listed for those dates, so here's everything that's on.` : null,
     ].filter(Boolean);
@@ -858,7 +859,7 @@ export class Concierge {
       const local = withEvents.filter((p) => isLocalTeam(p.entity, p.cands, homeMarket));
       if (local.length === 1) {
         withEvents = local;
-        assumed = `I've gone with the ${local[0]!.entity.name} — tell me if you meant a different ${local[0]!.entity.kind === 'team' ? 'team' : 'act'}.`;
+        assumed = `I've gone with the ${local[0]!.entity.name}. Tell me if you meant a different ${local[0]!.entity.kind === 'team' ? 'team' : 'act'}.`;
       }
     }
     if (withEvents.length > 1) {
@@ -1196,9 +1197,11 @@ export class Concierge {
       }
     }
     if (!body) body = renderEvidenceOnly(packet, renderOpts);
+    // Staff approve exactly what the customer gets, so the house style is applied before review, not at send.
+    body = { textBody: noDashes(body.textBody), htmlBody: noDashes(body.htmlBody) };
 
     const isNoResult = !best && alternatives.length === 0;
-    const subject = isNoResult ? `Ticket Guy: what we found for ${eventLabel(event, venue)}` : `Ticket Guy: ${quantity} for ${event.name}`;
+    const subject = noDashes(isNoResult ? `Ticket Guy: what we found for ${eventLabel(event, venue)}` : `Ticket Guy: ${quantity} for ${event.name}`);
     const draftHash = sha(body.textBody + body.htmlBody);
     const [rec] = await this.db.insert(t.recommendations).values({ requestId: req.id, revision: args.revision, draftHash, chosenObservationIds: packet.verifiedOfferObservationIds, adviceRunId: adviceRun!.id, computedSavingsCents: null, bodyText: body.textBody, bodyHtml: body.htmlBody, subject, reviewStatus: 'pending', reviewNote: [draftNote, isFixtureRun ? 'FIXTURE DATA — cannot be sent' : null, contact?.countryConfirmed ? null : 'customer country unconfirmed'].filter(Boolean).join(' | ') || null, expiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.recommendations.id });
     await this.db.update(t.researchRuns).set({ status: 'completed', completedAt: now }).where(eq(t.researchRuns.id, runId));
@@ -1550,12 +1553,12 @@ export function acknowledgementLine(x: RequestExtraction): string {
   if (isGame) line += ` for ${who}`;
   if (x.dateExpression && !/^\d{4}-\d{2}-\d{2}$/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
-  return `${line}—got it.`;
+  return `${line}. Got it.`;
 }
 
 export function eventLabel(e: { name: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }): string {
   const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
-  return `${e.name} — ${v.name}${v.city ? `, ${v.city}` : ''} — ${when}`;
+  return `${e.name} at ${v.name}${v.city ? `, ${v.city}` : ''}, ${when}`;
 }
 
 /**
@@ -1726,10 +1729,10 @@ export function applyDefaults(x: RequestExtraction): { brief: RequestExtraction;
 
 export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: RequestExtraction): string[] {
   const lines: string[] = [];
-  if (assumed.includes('quantity')) lines.push(`I've assumed ${QTY_WORDS[DEFAULT_QUANTITY]?.toLowerCase() ?? DEFAULT_QUANTITY} tickets — just tell me if you need a different number.`);
+  if (assumed.includes('quantity')) lines.push(`I've assumed ${QTY_WORDS[DEFAULT_QUANTITY]?.toLowerCase() ?? DEFAULT_QUANTITY} tickets. Just tell me if you need a different number.`);
   if (assumed.includes('budget_basis') && x.budgetCents !== null) {
     const n = x.quantity ?? DEFAULT_QUANTITY;
-    lines.push(`I've read ${formatUsd(x.budgetCents)} as the total for ${n === 2 ? 'both' : `all ${n}`} — tell me if you meant per ticket.`);
+    lines.push(`I've read ${formatUsd(x.budgetCents)} as the total for ${n === 2 ? 'both' : `all ${n}`}. Tell me if you meant per ticket.`);
   }
   return lines;
 }
@@ -1746,5 +1749,5 @@ export function staffReasonLabel(reason: string): string {
 export function staffedHoursLabel(e: { STAFFED_HOURS_START: number; STAFFED_HOURS_END: number; STAFFED_HOURS_TIMEZONE: string }): string {
   const h = (n: number) => (n === 0 || n === 24 ? '12am' : n === 12 ? '12pm' : n < 12 ? `${n}am` : `${n - 12}pm`);
   const zone = e.STAFFED_HOURS_TIMEZONE === 'America/New_York' ? 'ET' : e.STAFFED_HOURS_TIMEZONE;
-  return `${h(e.STAFFED_HOURS_START)}–${h(e.STAFFED_HOURS_END)} ${zone}`;
+  return `${h(e.STAFFED_HOURS_START)} to ${h(e.STAFFED_HOURS_END)} ${zone}`;
 }

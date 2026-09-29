@@ -17,7 +17,7 @@ export const SIGNATURE_TAGLINE = 'Your second opinion before you buy.';
 export type BrandLogo = 'badge' | 'mark' | 'none';
 export const BRAND_LOGOS: readonly BrandLogo[] = ['badge', 'mark', 'none'];
 export type BrandSignature = { displayName: string; tagline: string; shortSignoff: string; logo: BrandLogo };
-export const BUILT_IN_BRAND: BrandSignature = { displayName: 'Ticket Guy', tagline: SIGNATURE_TAGLINE, shortSignoff: '— Ticket Guy', logo: 'mark' };
+export const BUILT_IN_BRAND: BrandSignature = { displayName: 'Ticket Guy', tagline: SIGNATURE_TAGLINE, shortSignoff: 'Ticket Guy', logo: 'mark' };
 
 /** Hosted image, displayed size, alt-free (the name beside it is text). */
 const LOGO: Record<Exclude<BrandLogo, 'none'>, { file: string; width: number; height: number }> = {

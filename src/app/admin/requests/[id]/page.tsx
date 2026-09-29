@@ -6,7 +6,7 @@ import * as t from '@/lib/db/schema';
 import { guardPage } from '@/lib/admin/guard';
 import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
-import { formatUsd } from '@/lib/domain/money';
+import { formatUsd, formatUsdChange } from '@/lib/domain/money';
 import type { AdvicePacket } from '@/lib/advice/packet';
 import { newIdempotencyKey, nowMs } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
@@ -90,6 +90,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
           From <Link className="underline" href={`/admin/contacts/${contact!.id}`}>{contact!.emailOriginal}</Link> · started {ago(req.createdAt.getTime(), now)} · last change {ago(req.updatedAt.getTime(), now)}
           {!contact!.countryConfirmed ? <> · <span className="tg-badge tg-badge-warn">US not confirmed</span></> : null}
         </p>
+        {req.state !== 'closed' ? <ActionButton url="/api/admin/requests/remove" body={{ requestIds: [req.id] }} label="Remove from the board" confirm="Remove this request? Nothing more will be sent for it, and it moves to Closed." /> : null}
         {pending ? null : <div className={`rounded-lg border p-3 ${s.tone === 'danger' ? 'border-rose-300 bg-rose-50' : s.tone === 'warn' ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-gray-50'}`}>
           <p className="text-sm"><span className={`tg-badge ${toneClass[s.tone]}`}>{s.label}</span> <span className="ml-1">{s.next}</span></p>
           {why ? <p className="mt-1 text-sm text-gray-700"><strong>Why:</strong> {why}</p> : null}
@@ -294,7 +295,7 @@ function MarketCard({ market, tracked, licensed, shown, quantity, now }: { marke
     return (
       <p>
         {label}: from <strong>{formatUsd(c.current.priceCents)}</strong> a ticket
-        {w ? <span className={w.changeCents < 0 ? 'text-emerald-700' : w.changeCents > 0 ? 'text-rose-700' : ''}> ({w.changeCents < 0 ? '' : '+'}{formatUsd(w.changeCents)} in {w.hours}h)</span> : null}
+        {w ? <span className={w.changeCents < 0 ? 'text-emerald-700' : w.changeCents > 0 ? 'text-rose-700' : ''}> ({formatUsdChange(w.changeCents)} in {w.hours}h)</span> : null}
         {c.adequacy !== 'sufficient' ? <span className="text-gray-500"> · not enough data for a trend</span> : c.direction !== 'flat' ? <span> · {c.direction === 'down' ? 'falling' : 'rising'}</span> : <span> · flat</span>}
       </p>
     );

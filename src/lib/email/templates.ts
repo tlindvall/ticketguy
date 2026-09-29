@@ -1,6 +1,7 @@
 import { isSlotName, renderAuthored, type SlotName, type TemplateOverrides, type TemplateValue } from './custom-templates';
 import { renderSignature, type BrandSignature, type SignatureKind } from './signature';
 import { AFFILIATE_DISCLOSURE } from './links';
+import { noDashes } from './punctuation';
 
 /**
  * Bounded email templates (API_AND_DATA_CONTRACTS §6). Text + HTML, escaped user text, no invented availability.
@@ -41,12 +42,12 @@ function link(label: string, url: string, bold = false): string {
  * on why, then its links inline ("Listen · Tickets").
  */
 function pickHtml(p: Pick): string {
-  const [when, ...rest] = p.line.split(' — ');
-  const after = rest.join(' — ');
+  const [when, ...rest] = p.line.split(': ');
+  const after = rest.join(': ');
   const i = after.indexOf(p.title);
   const titled = i >= 0 ? `${esc(after.slice(0, i))}${p.eventUrl ? link(p.title, p.eventUrl, true) : `<strong>${esc(p.title)}</strong>`}${esc(after.slice(i + p.title.length))}` : esc(after);
   const links = p.links.map((l) => link(l.label, l.url)).join(' · ');
-  return `<li style="margin:0 0 10px;">${esc(when ?? '')} — ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
+  return `<li style="margin:0 0 10px;">${esc(when ?? '')}: ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
 }
 
 function pickText(p: Pick): string {
@@ -64,7 +65,13 @@ function authoringVars(slot: SlotName, v: Record<string, TemplateValue>): Record
   return { ...v, priceTotal: `$${(total / 100).toFixed(total % 100 === 0 ? 0 : 2)}` };
 }
 
-export function renderTemplate(
+/** Every customer email body, with no em or en dashes (see punctuation.ts). */
+export function renderTemplate(...args: Parameters<typeof renderBody>): { text: string; html: string } {
+  const r = renderBody(...args);
+  return { text: noDashes(r.text), html: noDashes(r.html) };
+}
+
+function renderBody(
   name: string,
   vars: Record<string, unknown>,
   ctx: { appUrl: string; postalAddress: string | null; overrides?: TemplateOverrides; signature?: SignatureKind; brand?: BrandSignature },
@@ -92,8 +99,8 @@ export function renderTemplate(
     case 'acknowledgment': {
       const known = (v.knownFacts as string[]) ?? [];
       const assumed = (v.assumptions as string[] | undefined) ?? [];
-      const paras = [`Got it — we're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', ...assumed, v.countryUnconfirmed ? `One quick check: we serve US customers only — reply if you're not in the US.` : '', `We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`].filter(Boolean);
-      const html = [`<p>Got it — we're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', ...assumed.map(para), v.countryUnconfirmed ? `<p>One quick check: we serve US customers only — reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.</p>`].filter(Boolean);
+      const paras = [`Got it. We're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', ...assumed, v.countryUnconfirmed ? `One quick check: we serve US customers only, so reply if you're not in the US.` : '', `We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`].filter(Boolean);
+      const html = [`<p>Got it. We're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', ...assumed.map(para), v.countryUnconfirmed ? `<p>One quick check: we serve US customers only, so reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.</p>`].filter(Boolean);
       return wrap(paras, html);
     }
     case 'clarification': {
@@ -124,7 +131,7 @@ export function renderTemplate(
       ].filter(Boolean);
       const tail = options.length
         ? [
-            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window — reply "more" to see them, or tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
+            more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window. Reply "more" to see them, or tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
             v.single
               ? 'Want me to check prices? Just tell me how many tickets.'
               : v.quantity ? `Reply with the one you want, and I’ll check prices for ${String(v.quantity)} tickets.` : 'Reply with the one you want and how many tickets, and I’ll check the prices.',
@@ -141,7 +148,7 @@ export function renderTemplate(
       const lead = v.kind === 'on_sale'
         ? `${what} isn't on general sale yet.${v.saleOpens ? ` Ticketmaster lists the general sale opening ${String(v.saleOpens)}.` : ''} I'll email you the moment it opens, with the link.`
         : `Nothing's scheduled for ${what} yet. I'll email you as soon as a date is announced.`;
-      const tail = ['Nothing else to do — just keep an eye on this thread.', v.countryUnconfirmed ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
+      const tail = ['Nothing else to do. Just keep an eye on this thread.', v.countryUnconfirmed ? COUNTRY_CHECK_LINE : ''].filter(Boolean);
       const text = ['Hey,', lead, ...tail];
       return wrap(text, text.map(para));
     }
@@ -149,8 +156,8 @@ export function renderTemplate(
       // The alert itself: what happened, and the link. On sale: the one event. New date: up to three.
       const events = (v.events as unknown as Array<{ title: string; when: string; venue: string; url: string | null }>) ?? [];
       const seller = String(v.seller ?? 'Ticketmaster');
-      const lead = v.kind === 'on_sale' ? `Good news — ${String(v.what)} is on general sale now on ${seller}.` : `${String(v.what)} just announced ${events.length === 1 ? 'a date' : 'dates'}${v.where ? ` in ${String(v.where)}` : ''}:`;
-      const lines = events.map((e) => `${e.title} — ${e.when}, ${e.venue}${e.url ? `: ${e.url}` : ''}`);
+      const lead = v.kind === 'on_sale' ? `Good news: ${String(v.what)} is on general sale now on ${seller}.` : `${String(v.what)} just announced ${events.length === 1 ? 'a date' : 'dates'}${v.where ? ` in ${String(v.where)}` : ''}:`;
+      const lines = events.map((e) => `${e.title}, ${e.when}, ${e.venue}${e.url ? `: ${e.url}` : ''}`);
       const tail = [
         v.kind === 'on_sale' ? '' : 'Want tickets for one of these? Reply with which one and how many.',
         v.affiliate ? AFFILIATE_DISCLOSURE : '',
@@ -159,7 +166,7 @@ export function renderTemplate(
       const html = [
         para('Hey,'),
         para(lead),
-        ...events.map((e) => `<p style="margin:0 0 12px;">${e.url ? link(e.title, e.url, true) : esc(e.title)} — ${esc(`${e.when}, ${e.venue}`)}</p>`),
+        ...events.map((e) => `<p style="margin:0 0 12px;">${e.url ? link(e.title, e.url, true) : esc(e.title)}, ${esc(`${e.when}, ${e.venue}`)}</p>`),
         ...tail.map(para),
       ];
       return wrap(text, html);
@@ -173,7 +180,7 @@ export function renderTemplate(
       const seller = String(v.seller);
       const title = String(v.eventTitle ?? v.eventLabel);
       const where = [v.eventWhen ? String(v.eventWhen) : '', v.venueName ? `at ${String(v.venueName)}` : ''].filter(Boolean).join(' ');
-      const rest = ` is still on general sale on ${seller} — that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+      const rest = ` is still on general sale on ${seller}, and that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
       const lead = `${title}${where ? ` (${where})` : ''}${rest}`;
       const tail = [
         ...notes,
@@ -184,7 +191,7 @@ export function renderTemplate(
       const text = ['Hey,', lead, `Buy tickets on ${seller}: ${String(v.url)}`, ...tail];
       // The seller's name is the link to buy; the event title links to the event's page.
       const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
-      const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)} —`, `on ${link(seller, String(v.url), true)} —`)}`;
+      const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)},`, `on ${link(seller, String(v.url), true)},`)}`;
       const html = [para('Hey,'), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...tail.map(para)];
       return wrap(text, html);
     }
@@ -192,8 +199,8 @@ export function renderTemplate(
       // Sent when only a person can move the request; it promises a person, never a time or a result.
       const paras = [
         'Hey,',
-        'Thanks for bearing with me — this one needs a person, so I’ve passed it to the team.',
-        `You’ll hear back in this thread. The team replies between ${String(v.hours ?? '9am–9pm ET')}.`,
+        'Thanks for bearing with me. This one needs a person, so I’ve passed it to the team.',
+        `You’ll hear back in this thread. The team replies from ${String(v.hours ?? '9am to 9pm ET')}.`,
       ];
       return wrap(paras, paras.map(para));
     }

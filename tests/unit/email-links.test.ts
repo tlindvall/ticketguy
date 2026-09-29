@@ -53,13 +53,13 @@ describe('picks', () => {
 
 describe('the emails', () => {
   const ctx = { appUrl: 'https://ticketguy.now', postalAddress: null };
-  const pick = { line: 'Sat, Oct 3 — Big Thief at Brooklyn Steel', title: 'Big Thief', reason: 'Indie rock.', eventUrl: 'https://www.ticketmaster.com/e/1', links: [{ label: 'Listen', url: 'https://open.spotify.com/a' }, { label: 'Tickets', url: 'https://www.ticketmaster.com/e/1' }] };
+  const pick = { line: 'Sat, Oct 3: Big Thief at Brooklyn Steel', title: 'Big Thief', reason: 'Indie rock.', eventUrl: 'https://www.ticketmaster.com/e/1', links: [{ label: 'Listen', url: 'https://open.spotify.com/a' }, { label: 'Tickets', url: 'https://www.ticketmaster.com/e/1' }] };
 
   it('a discovery email is picks with why and two links, and the disclosure only when a link pays us', () => {
-    const plain = renderTemplate('browse_options', { headline: 'Rock and indie in Brooklyn, Oct 1–7 — here are my two picks:', options: [pick.line], picks: [pick], moreCount: 0 }, ctx);
-    expect(plain.text).toContain('• Sat, Oct 3 — Big Thief at Brooklyn Steel. Indie rock.\n  Listen: https://open.spotify.com/a\n  Tickets: https://www.ticketmaster.com/e/1');
+    const plain = renderTemplate('browse_options', { headline: 'Rock and indie in Brooklyn, Oct 1 to 7. Here are my two picks:', options: [pick.line], picks: [pick], moreCount: 0 }, ctx);
+    expect(plain.text).toContain('• Sat, Oct 3: Big Thief at Brooklyn Steel. Indie rock.\n  Listen: https://open.spotify.com/a\n  Tickets: https://www.ticketmaster.com/e/1');
     // Inline links in an ordinary list: the title links to its page, then "Listen · Tickets". No cards or buttons.
-    expect(plain.html).toContain('<li style="margin:0 0 10px;">Sat, Oct 3 — <a href="https://www.ticketmaster.com/e/1"');
+    expect(plain.html).toContain('<li style="margin:0 0 10px;">Sat, Oct 3: <a href="https://www.ticketmaster.com/e/1"');
     expect(plain.html).toContain('>Big Thief</a> at Brooklyn Steel. Indie rock. <a href="https://open.spotify.com/a"');
     expect(plain.html).toContain('>Listen</a> · <a href="https://www.ticketmaster.com/e/1"');
     expect(plain.html).not.toMatch(/border-radius|display:inline-block|<div style="margin:0 0 14px;padding/);
@@ -70,11 +70,11 @@ describe('the emails', () => {
 
   it('a buying email is one recommendation and a direct link to buy, written as a sentence', () => {
     const r = renderTemplate('official_sale', { eventLabel: 'x', eventTitle: 'Big Thief', eventWhen: 'Sat, Oct 3 at 8pm', venueName: 'Brooklyn Steel', seller: 'Ticketmaster', url: 'https://www.ticketmaster.com/e/1', eventUrl: 'https://www.ticketmaster.com/e/1', quantity: 2 }, ctx);
-    expect(r.text).toContain("Big Thief (Sat, Oct 3 at 8pm at Brooklyn Steel) is still on general sale on Ticketmaster — that's where I'd buy your 2 tickets.");
+    expect(r.text).toContain("Big Thief (Sat, Oct 3 at 8pm at Brooklyn Steel) is still on general sale on Ticketmaster, and that's where I'd buy your 2 tickets.");
     expect(r.text).toContain('Buy tickets on Ticketmaster: https://www.ticketmaster.com/e/1');
-    expect(r.html).toContain('>Ticketmaster</a> — that');
+    expect(r.html).toContain('>Ticketmaster</a>, and that');
     expect(r.html).not.toMatch(/border-radius|display:inline-block/);
-    const body = r.text.split('\n\n—')[0]!; // before the sign-off
+    const body = r.text.split('\n\nTicket Guy')[0]!; // before the sign-off
     expect(body).not.toContain('ticketguy.now');
   });
 });

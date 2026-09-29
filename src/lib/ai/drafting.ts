@@ -20,7 +20,7 @@ export class FixtureDrafter implements Drafter {
     const groupWord = ctx.quantity > 1 ? `${ctx.togetherRequired ? 'seats together' : 'seats'} for your group` : 'a seat';
     const opening: Record<AdvicePacket['decision'], string> = {
       buy_now: `For ${groupWord}, I would be comfortable taking the option below.`,
-      wait_and_recheck: `For ${groupWord}, a bounded wait is reasonable — with a clear point to decide.`,
+      wait_and_recheck: `For ${groupWord}, a bounded wait is reasonable, with a clear point to decide.`,
       consider_alternative: `Nothing qualifying fits inside your budget right now; here is the closest verified alternative.`,
       insufficient_evidence: ids.has('C_QUOTE') ? 'Here’s what I can tell you about that price.' : 'Here’s what I can tell you so far.',
     };

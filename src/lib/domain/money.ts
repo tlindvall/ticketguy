@@ -12,6 +12,12 @@ export function formatUsd(cents: number): string {
   return `$${dollars.toLocaleString('en-US')}${rem === 0 ? '' : '.' + String(rem).padStart(2, '0')}`;
 }
 
+/** A price change: "+$12" or "-$8.50". formatUsd itself refuses negatives, so a fall must come through here. */
+export function formatUsdChange(cents: number): string {
+  const c = Math.round(cents);
+  return `${c < 0 ? '-' : '+'}${formatUsd(Math.abs(c))}`;
+}
+
 /** Whole-party cents are the source of truth; per-person is display only (rounded down to cents). */
 export function perPersonCents(wholePartyCents: number, quantity: number): number {
   assertCents(wholePartyCents);

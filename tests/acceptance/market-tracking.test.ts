@@ -125,7 +125,7 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     expect(rec!.bodyText).toContain('Resale listings for two tickets together currently start at $130 a ticket (listed price, before fees).');
-    expect(rec!.bodyText).toContain('the cheapest listed price for two together at this point before the game was typically $122.50–$147.50 (median $135)');
+    expect(rec!.bodyText).toContain('the cheapest listed price for two together at this point before the game was typically $122.50 to $147.50 (median $135)');
     expect(rec!.bodyText).not.toContain('enough comparable history');
     expect(rec!.bodyText).toContain('market statistics from SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');

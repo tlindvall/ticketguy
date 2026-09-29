@@ -123,7 +123,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       out.push({
         id: 'C_MARKET_TYPICAL',
         kind: 'market_benchmark',
-        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price for two together' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)}–${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
+        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price for two together' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)} to ${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
         values: { events: c.typical.events, p25Cents: c.typical.p25Cents, medianCents: c.typical.medianCents, p75Cents: c.typical.p75Cents },
         scope: { quantity: m.basis === 'pair' ? 2 : 1, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: obs },
         limitations: ['listed_prices_before_fees', 'comparable_games_same_venue'],
@@ -179,7 +179,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   if (a.quote) {
     const price = `${formatUsd(a.quote.perTicketCents)}${a.quote.assumedPerTicket ? ' (I’ve taken that as per ticket)' : ' a ticket'}`;
     const face = a.faceValue;
-    const range = face ? `${formatUsd(face.minCents)}–${formatUsd(face.maxCents)} a ticket before fees` : null;
+    const range = face ? `${formatUsd(face.minCents)} to ${formatUsd(face.maxCents)} a ticket before fees` : null;
     const verdictText = face
       ? {
           below: `That’s below the face value Ticketmaster lists (${range}), so it’s a good price if the seats suit you.`,
@@ -188,7 +188,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
           markup: `That’s well above the face value Ticketmaster lists (${range}), so you’d be paying a resale markup.`,
         }[quoteVerdict(a.quote.perTicketCents, face)]
       : a.official
-        ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value — but if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
+        ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. But if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
         : `I can’t see what sellers are charging for this show yet, so I can’t say whether that’s low or high.`;
     claims.push({
       id: 'C_QUOTE',
@@ -205,7 +205,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_FACE',
       kind: 'face_value',
-      text: `Ticketmaster lists face value for this show at ${formatUsd(a.faceValue.minCents)}–${formatUsd(a.faceValue.maxCents)} a ticket before fees.`,
+      text: `Ticketmaster lists face value for this show at ${formatUsd(a.faceValue.minCents)} to ${formatUsd(a.faceValue.maxCents)} a ticket before fees.`,
       values: { minCents: a.faceValue.minCents, maxCents: a.faceValue.maxCents },
       scope: { quantity: null, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: obs },
       evidenceIds: [],
@@ -280,7 +280,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_BENCH',
       kind: 'benchmark_range',
-      text: `${small ? `Across a small sample of ${n}` : `Across ${n}`} comparable past events, the best ${q}-seat options we observed at a similar point before the event were ${small ? '' : 'typically '}${formatUsd(roundToDollar(perPersonCents(Math.round(a.benchmark.p25Cents), q)))}–${formatUsd(roundToDollar(perPersonCents(Math.round(a.benchmark.p75Cents), q)))} per person (median ${formatUsd(roundToDollar(perPersonCents(Math.round(a.benchmark.medianCents), q)))}). These are observed asking prices, not sale prices.`,
+      text: `${small ? `Across a small sample of ${n}` : `Across ${n}`} comparable past events, the best ${q}-seat options we observed at a similar point before the event were ${small ? '' : 'typically '}${formatUsd(roundToDollar(perPersonCents(Math.round(a.benchmark.p25Cents), q)))} to ${formatUsd(roundToDollar(perPersonCents(Math.round(a.benchmark.p75Cents), q)))} per person (median ${formatUsd(roundToDollar(perPersonCents(Math.round(a.benchmark.medianCents), q)))}). These are observed asking prices, not sale prices.`,
       values: { events: n, p25Cents: a.benchmark.p25Cents, p75Cents: a.benchmark.p75Cents, medianCents: a.benchmark.medianCents },
       scope: { quantity: q, seatZone: null, feeBasis: 'verified_total', observedAt: null },
       evidenceIds: a.benchmark.representativeSnapshotIds,

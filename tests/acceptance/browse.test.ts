@@ -76,9 +76,9 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(req!.state).toBe('needs_clarification');
     const send = await lastSend(requestId);
     const body = send.bodyText;
-    expect(body).toContain('Live music in New York, Oct 1–7 — here are my two picks:');
-    expect(body).toContain('• Fri, Oct 2 — Jack White at Madison Square Garden');
-    expect(body).toContain('• Mon, Oct 5 — Phoebe Bridgers at Brooklyn Steel');
+    expect(body).toContain('Live music in New York, Oct 1 to 7. Here are my two picks:');
+    expect(body).toContain('• Fri, Oct 2: Jack White at Madison Square Garden');
+    expect(body).toContain('• Mon, Oct 5: Phoebe Bridgers at Brooklyn Steel');
     expect(body.match(/Jack White at/g)).toHaveLength(1); // duplicate, parking and next week's show left out
     expect(body).not.toContain('Chicago');
     expect(body).toContain('Reply with the one you want and how many tickets');
@@ -109,10 +109,10 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any hockey games coming up?', 'hockey@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toMatch(/^Hey,\n\nHockey in New York, Sep 22 – Oct 5 — there’s one on:/);
+    expect(body).toMatch(/^Hey,\n\nHockey in New York, Sep 22 to Oct 5. There’s one on:/);
     expect(body).toContain('Want me to check prices? Just tell me how many tickets.'); // one option is not "the one you want"
     expect(body).not.toContain('Reply with the one you want');
-    expect(body).toContain("I've looked at the next two weeks, in New York — tell me if you had something else in mind.");
+    expect(body).toContain("I've looked at the next two weeks, in New York. Tell me if you had something else in mind.");
     expect(body).toContain('New York Rangers vs. New York Islanders (preseason) at Madison Square Garden');
   });
 
@@ -120,7 +120,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any gigs in New York the last week of November?', 'empty@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain("I don't have any live music in New York on file for Nov 24–30.");
+    expect(body).toContain("I don't have any live music in New York on file for Nov 24 to 30.");
     expect(body).toContain('Want me to look at different dates, or is there an artist or a kind of music you have in mind?');
     expect(body).not.toContain('official listings'); // no provider was asked, so no claim that it was
   });
@@ -153,7 +153,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const show = (name: string, venueId: string, at: string) => ({ name, category: 'concert', genre: null, venueId, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
     await h.db.insert(t.events).values([show('Forum Headliner', FORUM, '2026-10-03T03:00:00Z'), show('Anaheim Act', HONDA, '2026-10-04T03:00:00Z'), show('San Diego Act', SD, '2026-10-03T03:00:00Z')]);
     const body = (await lastSend(await ask(makeConcierge(h), 'Any concerts in LA the first week of October?', 'la@customer.example'))).bodyText;
-    expect(body).toContain('Live music in Los Angeles, Oct 1–7');
+    expect(body).toContain('Live music in Los Angeles, Oct 1 to 7');
     expect(body).toContain('Forum Headliner at Kia Forum');
     expect(body).toContain('Anaheim Act at Honda Center');
     expect(body).not.toContain('San Diego Act');
@@ -169,7 +169,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     ]);
     const body = (await lastSend(await ask(makeConcierge(h), 'Any Broadway musicals Oct 6-10?', 'hamilton@customer.example'))).bodyText;
     expect(body.match(/Hamilton at Richard Rodgers Theatre/g)).toHaveLength(1);
-    expect(body).toContain('• Tue, Oct 6 — Hamilton at Richard Rodgers Theatre. Musical. Also 3 more performances through Sat, Oct 10.');
+    expect(body).toContain('• Tue, Oct 6: Hamilton at Richard Rodgers Theatre. Musical. Also 3 more performances through Sat, Oct 10.');
     expect(body).not.toContain("gone ahead with it"); // one show over five nights is not one match: the night is theirs to pick
   });
 
@@ -179,7 +179,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const again = await ask(c, 'Any gigs next week?', 'regular@customer.example', { subject: 'More gigs' });
     const body = (await lastSend(again)).bodyText;
     expect(body).toContain('Chicago Band at Thalia Hall');
-    expect(body).toContain("I've looked at Chicago — tell me if you had something else in mind.");
+    expect(body).toContain("I've looked at Chicago. Tell me if you had something else in mind.");
   });
 
   it('answers "an american football game" with the NFL games that week, not every sport', async () => {
@@ -199,9 +199,9 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const [event] = await h.db.select().from(t.events).where(eq(t.events.id, req!.eventId!));
     expect(event!.name).toBe('New York Giants vs. Philadelphia Eagles');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('checking options for New York Giants vs. Philadelphia Eagles — MetLife Stadium');
+    expect(body).toContain('checking options for New York Giants vs. Philadelphia Eagles at MetLife Stadium');
     expect(body).toContain('Tickets: 4');
-    expect(body).toContain("That's the only football game in New York for Oct 8–14, so I've gone ahead with it — tell me if you had something else in mind.");
+    expect(body).toContain("That's the only football game in New York for Oct 8 to 14, so I've gone ahead with it. Tell me if you had something else in mind.");
     expect(body).not.toContain('how many tickets');
     expect(body).not.toContain('Reply with the one you want');
     expect(body).not.toContain("isn't something I cover");
@@ -211,8 +211,8 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any NFL games in New York Oct 12-18?', 'nfl-later@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('Football in New York: nothing on Oct 12–18, but here are the next ones after that:');
-    expect(body).toContain('• Sun, Oct 25 — New York Jets vs. Buffalo Bills at MetLife Stadium');
+    expect(body).toContain('Football in New York: nothing on Oct 12 to 18, but here are the next ones after that:');
+    expect(body).toContain('• Sun, Oct 25: New York Jets vs. Buffalo Bills at MetLife Stadium');
   });
 
   it('shows one line per game when the provider lists premium and package versions of it', async () => {
@@ -228,8 +228,8 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any baseball in New York Oct 8-9?', 'mlb@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('• Thu, Oct 8 — 2026 NY Yankees Division Series Home Game 2 at Yankee Stadium');
-    expect(body).toContain('• Fri, Oct 9 — 2026 NY Yankees Division Series Home Game 3 at Yankee Stadium');
+    expect(body).toContain('• Thu, Oct 8: 2026 NY Yankees Division Series Home Game 2 at Yankee Stadium');
+    expect(body).toContain('• Fri, Oct 9: 2026 NY Yankees Division Series Home Game 3 at Yankee Stadium');
     expect(body).not.toContain('Premium Seating');
     expect(body).not.toContain('Pinstripe Pass');
     expect(body).toContain('Reply with the one you want and how many tickets');
@@ -262,13 +262,13 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     await c.ingestInbound(inbound({ text: 'I like indie rock and roll. We are staying in brooklyn.', from: 'indie@customer.example', subject: 'Re: Gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
     await interpretAll(h, c);
     const body = (await lastSend((r as { requestId: string }).requestId)).bodyText;
-    expect(body).toContain('Rock and indie in Brooklyn, Oct 1–7 — here are my two picks:');
+    expect(body).toContain('Rock and indie in Brooklyn, Oct 1 to 7. Here are my two picks:');
     expect(body).toContain('The Walkmen at Union Pool');
     expect(body).toContain('Big Thief at Brooklyn Steel');
     expect(body).not.toContain('Jazz Trio'); // Brooklyn, but not the music asked for
     expect(body).not.toContain('Manhattan Indie Night'); // the music, but not Brooklyn
     expect(body).not.toContain('Jack White');
-    expect(body).toContain("I've kept it to Brooklyn venues — say if you'd go further.");
+    expect(body).toContain("I've kept it to Brooklyn venues. Say if you'd go further.");
     expect(body).not.toContain("kind of music and I'll narrow"); // the kind of music is already known
   });
 
@@ -276,7 +276,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any reggaeton gigs in Brooklyn the first week of October?', 'latin@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('Live music in Brooklyn, Oct 1–7 — here are my three picks:');
+    expect(body).toContain('Live music in Brooklyn, Oct 1 to 7. Here are my three picks:');
     expect(body).toContain("I couldn't find any Latin music listed for those dates, so here's everything that's on.");
   });
 
@@ -292,15 +292,15 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const requestId = (r as { requestId: string }).requestId;
     const listed = (body: string) => names.filter((n) => body.includes(`${n} at`));
     const one = (await lastSend(requestId)).bodyText;
-    expect(one).toContain('here are my three picks:');
-    expect(one).toContain('There are 4 more in that window — reply "more" to see them');
+    expect(one).toContain('Here are my three picks:');
+    expect(one).toContain('There are 4 more in that window. Reply "more" to see them');
     const page1 = listed(one);
     expect(page1).toHaveLength(3);
     const reply = (text: string) => c.ingestInbound(inbound({ text, from: 'more@customer.example', subject: 'Re: Brooklyn gigs', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
     await reply('can you give me the other 4');
     await interpretAll(h, c);
     const two = (await lastSend(requestId)).bodyText;
-    expect(two).toContain('More live music in Brooklyn, Oct 10–11:');
+    expect(two).toContain('More live music in Brooklyn, Oct 10 to 11:');
     const page2 = listed(two);
     expect(page2).toHaveLength(3);
     expect(page2.some((n) => page1.includes(n))).toBe(false); // nothing from the first page again
@@ -312,7 +312,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect([...page1, ...page2, ...page3].sort()).toEqual([...names].sort());
     await reply('any others?');
     await interpretAll(h, c);
-    expect((await lastSend(requestId)).bodyText).toContain("That's everything I have for live music in Brooklyn, Oct 10–11.");
+    expect((await lastSend(requestId)).bodyText).toContain("That's everything I have for live music in Brooklyn, Oct 10 to 11.");
   });
 
   it('asks the provider by classification and place, with no keyword', async () => {
