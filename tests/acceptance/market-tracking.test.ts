@@ -203,6 +203,19 @@ describe('resale market tracking', () => {
     }
   });
 
+  it('while testing, the numbers reach the test addresses with only tracking licensed, and the reply leads with them', async () => {
+    await setLicence('approved', ['tracking', 'benchmark']);
+    const c = new Concierge({ db: h.db, env: env({ EMAIL_TEST_RECIPIENT_ALLOWLIST: 'rangers5@customer.example' }), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: null, marketFetch: fetchImpl });
+    const requestId = await ask(c, '5 Testers tickets Oct 30 together, should I buy now or hold off?', 'rangers5@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    expect(rec!.bodyText).toContain('Resale listings with 5 or more tickets');
+    expect(rec!.bodyText).toContain('listings have 5 or more tickets');
+    expect(rec!.bodyText).toContain('market statistics from SeatData');
+    expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
+    await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
+  });
+
   it('a failed listings read is logged and the stats poll still runs', async () => {
     const saved = groupListings;
     groupListings = () => new Response('{"error":"boom"}', { status: 500 });

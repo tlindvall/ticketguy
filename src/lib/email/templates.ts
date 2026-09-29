@@ -99,13 +99,16 @@ function renderBody(
     html: `${BODY_OPEN}${htmlParas.join('\n')}${defaultSig.html}${disclosureHtml(disclosure)}${BODY_CLOSE}`,
   });
   const list = (items: string[]) => items.map((i) => `• ${i}`).join('\n');
-  const htmlList = (items: string[]) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`;
   switch (name) {
     case 'acknowledgment': {
       const known = (v.knownFacts as string[]) ?? [];
       const assumed = (v.assumptions as string[] | undefined) ?? [];
-      const paras = [`Got it. We're checking options for ${String(v.eventLabel ?? 'your request')}.`, known.length ? `What we understood:\n${list(known)}` : '', ...assumed, v.countryUnconfirmed ? `One quick check: we serve US customers only, so reply if you're not in the US.` : '', `We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`].filter(Boolean);
-      const html = [`<p>Got it. We're checking options for ${esc(String(v.eventLabel ?? 'your request'))}.</p>`, known.length ? `<p>What we understood:</p>${htmlList(known)}` : '', ...assumed.map(para), v.countryUnconfirmed ? `<p>One quick check: we serve US customers only, so reply if you're not in the US.</p>` : '', `<p>We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.</p>`].filter(Boolean);
+      // A person's quick note back: what I have, laid out; what I'll do next. It promises no prices and no review.
+      const intro = known.length ? "Got it. Here's what I have:" : `Got it. I'm looking into ${String(v.eventLabel ?? 'your request')}.`;
+      const next = "I'll look at how the tickets are trading and come back to you shortly. If anything above is off, just reply.";
+      const country = v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '';
+      const paras = ['Hey,', known.length ? `${intro}\n${list(known)}` : intro, ...assumed, next, country].filter(Boolean);
+      const html = [para('Hey,'), para(intro), known.length ? `<ul style="margin:0 0 18px;padding-left:20px;">${known.map((k) => `<li style="margin:0 0 4px;">${esc(k)}</li>`).join('')}</ul>` : '', ...assumed.map(para), para(next), country ? para(country) : ''].filter(Boolean);
       return wrap(paras, html);
     }
     case 'clarification': {

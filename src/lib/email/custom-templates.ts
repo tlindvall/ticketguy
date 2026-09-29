@@ -26,7 +26,7 @@ export const SLOTS: SlotSpec[] = [
     description: 'First automatic reply after a request arrives. Sent without human review, so it must not promise prices or availability.',
     variables: [
       { name: 'eventLabel', kind: 'text', description: 'What we think they asked for', sample: 'the New York Rangers vs. New Jersey Devils game' },
-      { name: 'knownFacts', kind: 'list', description: 'What we understood, one per line', sample: ['5 tickets', 'Seated together', 'Madison Square Garden'] },
+      { name: 'knownFacts', kind: 'list', description: 'What we understood, one per line: the game or show, when, where, tickets, budget, their question', sample: ['Game: New York Rangers vs. Tampa Bay Lightning', 'When: Thu, Oct 1, 7:00 PM EDT', 'Where: Madison Square Garden, New York', 'Tickets: 5', 'You asked: whether to buy now or hold off'] },
       { name: 'assumptions', kind: 'list', description: 'What we assumed instead of asking (quantity, budget basis), one line each; empty when nothing was', sample: ["I've assumed two tickets. Just tell me if you need a different number."] },
       { name: 'countryUnconfirmed', kind: 'flag', description: 'True when we could not confirm the customer is in the US', sample: true },
     ],
@@ -226,14 +226,16 @@ export type TemplateOverrides = Partial<Record<SlotName, ActiveTemplate>>;
 
 /** Starter copy shown in the editor: the built-in wording, in the authoring syntax. */
 export const STARTER_BODY: Record<SlotName, string> = {
-  acknowledgment: `Got it. We're checking options for {{eventLabel}}.
+  acknowledgment: `Hey,
 
-What we understood:
+Got it. Here's what I have:
 {{knownFacts}}
 
-{{countryUnconfirmed}}One quick check: we serve US customers only, so reply if you're not in the US.
+{{assumptions}}
 
-We'll reply in this thread shortly; a person checks every answer before it goes out. No purchases happen on our side.`,
+I'll look at how the tickets are trading and come back to you shortly. If anything above is off, just reply.
+
+{{countryUnconfirmed}}Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.`,
   clarification: `Hey,
 
 {{acknowledgement}}

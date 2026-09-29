@@ -12,7 +12,8 @@ import { newIdempotencyKey, nowMs } from '@/lib/util/clock';
 import { sourcePlan } from '@/lib/sources/routing';
 import { researchLinksFor, type ResearchLink } from '@/lib/catalog/research-links';
 import { eventLocalDate } from '@/lib/domain/dates';
-import { marketForGroup, marketLicence } from '@/lib/market/tracker';
+import { marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
+import { env as appEnv } from '@/lib/config/env';
 import type { MarketContext } from '@/lib/market/series';
 import { ago, briefLines, type Tone, reasonText, sendClassLabel, sendStateInfo, stateInfo, toneClass, whenLocal, whenStaff } from '@/lib/admin/labels';
 
@@ -158,7 +159,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
               </div>
             ) : <p className="mt-1 text-sm text-gray-500">Not matched to an event yet, so no prices can be checked.</p>}
           </div>
-          {event ? <MarketCard market={market} tracked={tracked ?? null} licensed={licence.allows('tracking')} shown={licence.allows('customer_display')} quantity={Number(brief?.quantity ?? 2)} now={now} /> : null}
+          {event ? <MarketCard market={market} tracked={tracked ?? null} licensed={licence.allows('tracking')} shown={marketUses(licence, appEnv()).display} quantity={Number(brief?.quantity ?? 2)} now={now} /> : null}
         </aside>
       </div>
 
@@ -315,7 +316,7 @@ function MarketCard({ market, tracked, licensed, shown, quantity, now }: { marke
           {quantity > 2 ? <p className="text-xs text-gray-500">From SeatData&rsquo;s listings, read at each check while this request is open. A listing with more tickets may not sell exactly {quantity}.</p> : null}
           {market.supply.now !== null ? <p>{market.supplyScope === 'group' ? `Listings with ${Math.min(quantity, 12)} or more tickets` : 'Listings'}: {market.supply.now}{market.supply.before !== null ? ` (was ${market.supply.before}${market.supply.hours ? ` ${market.supply.hours}h ago` : ''})` : ''}{market.supply.trend === 'shrinking' ? <span className="tg-badge tg-badge-warn ml-1">shrinking</span> : null}</p> : null}
           {market.single.typical ? <p className="text-gray-600">Past games here at this point: {formatUsd(market.single.typical.p25Cents)}–{formatUsd(market.single.typical.p75Cents)} a ticket ({market.single.typical.events} games)</p> : null}
-          <p className="text-xs text-gray-500">Listed prices before fees{market.single.current ? `, as of ${ago(market.single.current.at.getTime(), now)}` : ''}. {shown ? 'Shown to customers in replies.' : 'Staff only: not in customer emails until customer display is licensed.'}</p>
+          <p className="text-xs text-gray-500">Listed prices before fees{market.single.current ? `, as of ${ago(market.single.current.at.getTime(), now)}` : ''}. {shown ? 'In the reply emails.' : 'Staff only: not in customer emails until customer display is licensed.'}</p>
         </div>
       )}
     </div>

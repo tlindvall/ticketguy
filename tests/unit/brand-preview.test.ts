@@ -23,7 +23,7 @@ describe('brand direction 01 previews', () => {
     expect(renderSignature('full', 'https://ticketguy.now').html).toContain('width="40" height="32"');
   });
 
-  it('answers 404 outside local development', () => {
-    expect(() => PreviewLayout({ children: null })).toThrow();
+  it('answers 404 outside local development to anyone who is not signed-in staff', async () => {
+    await expect(PreviewLayout({ children: null })).rejects.toThrow();
   });
 });

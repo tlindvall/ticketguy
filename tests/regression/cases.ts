@@ -25,7 +25,7 @@ const ASKS_BASIS = 'per ticket or for everyone combined';
 
 export const REGRESSION_CASES: RegressionCase[] = [
   // ── One named event ──────────────────────────────────────────────────────────────────────────────────
-  { id: 'find.plain', type: 'find', text: 'Two tickets for the Rangers on Oct 3, $300 total.', brief: { quantity: 2, budgetCents: 30000, budgetBasis: 'whole_party' }, reply: { contains: ['checking options for New York Rangers vs. New York Islanders'] } },
+  { id: 'find.plain', type: 'find', text: 'Two tickets for the Rangers on Oct 3, $300 total.', brief: { quantity: 2, budgetCents: 30000, budgetBasis: 'whole_party' }, reply: { contains: ['Game: New York Rangers vs. New York Islanders'] } },
   { id: 'find.matchup', type: 'find', text: 'Rangers vs Islanders, 2 tickets, Oct 3', brief: { quantity: 2 }, reply: { contains: ['New York Rangers vs. New York Islanders'] } },
   { id: 'find.per_ticket', type: 'find', text: 'Need 4 Knicks tickets for October 24, $150 each, together', brief: { quantity: 4, budgetCents: 15000, budgetBasis: 'per_ticket', togetherRequired: true }, reply: { contains: ['New York Knicks vs. Fixture Opponent'], notContains: [ASKS_BASIS, ASKS_HOW_MANY] } },
   { id: 'find.family_phrase', type: 'find', text: 'Knicks game on October 24 for me and my son', brief: { quantity: 2 }, reply: { contains: ['New York Knicks vs. Fixture Opponent'], notContains: ["I've assumed two tickets"] } },
@@ -78,10 +78,10 @@ export const REGRESSION_CASES: RegressionCase[] = [
 
   // ── Where the customer lives ─────────────────────────────────────────────────────────────────────────
   { id: 'residence.hurry', type: 'find', text: "I'm in a hurry — two Rangers tickets Oct 3, $300 total.", reply: { contains: ['New York Rangers vs. New York Islanders'], notContains: ['US-only'] } },
-  { id: 'residence.brooklyn', type: 'find', text: "I'm in Brooklyn, 2 Knicks tickets Oct 24", reply: { notContains: ['One quick check: we serve US customers only'] } },
+  { id: 'residence.brooklyn', type: 'find', text: "I'm in Brooklyn, 2 Knicks tickets Oct 24", reply: { notContains: ['Ticket Guy is for US-based fans for now'] } },
   { id: 'residence.uk', type: 'find', text: "I'm based in the UK. Two Rangers tickets Oct 3, $300 total.", reply: { state: 'unsupported', contains: ['US customers'] } },
   { id: 'residence.visiting_from', type: 'find', text: "We're visiting from London, 2 Rangers tickets Oct 3", reply: { state: 'unsupported' } },
-  { id: 'residence.tourist_in_ny', type: 'find', text: "I'm in New York for the weekend, 2 Rangers tickets Oct 3", reply: { contains: ['One quick check: we serve US customers only'] } },
+  { id: 'residence.tourist_in_ny', type: 'find', text: "I'm in New York for the weekend, 2 Rangers tickets Oct 3", reply: { contains: ['Ticket Guy is for US-based fans for now'] } },
   { id: 'event.outside_us', type: 'find', text: 'Two Leafs tickets in Toronto', reply: { state: 'unsupported', contains: ['outside the US'] } },
 
   // ── Seats and budget ─────────────────────────────────────────────────────────────────────────────────

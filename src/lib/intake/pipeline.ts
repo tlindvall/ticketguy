@@ -26,7 +26,7 @@ import { deriveInterestObservations } from '@/lib/domain/interests';
 import { classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppression';
 import { sourcePlan } from '@/lib/sources/routing';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
-import { MarketTracker, marketForGroup, marketLicence } from '@/lib/market/tracker';
+import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, type Market } from '@/lib/domain/markets';
@@ -428,7 +428,7 @@ export class Concierge {
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
     // a "compare" after the official-sale reply.
     if (revision === 1 || picked || cameFromReferral) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: describeKnown(merged, { eventResolved: true }), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1160,12 +1160,13 @@ export class Concierge {
     // Resale market statistics (DECISION_LOG #44): brought up to date for this event now, used in the decision
     // only when the licence allows it in advice, and shown only when it allows customer display.
     const licence = await marketLicence(this.db);
+    const uses = marketUses(licence, this.env);
     let market: Awaited<ReturnType<typeof marketForGroup>> | null = null;
     if (licence.allows('tracking')) {
       await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).refreshEvent(event.id);
       market = await marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now });
     }
-    const marketSignal = market && licence.allows('advice') ? { basisMatchesGroup: !!market.context && market.context.adequacy === 'sufficient', direction: market.context?.direction ?? 'insufficient', supply: market.supplyScope === 'group' && market.supply.trend === 'unknown' ? market.single.supply.trend : market.supply.trend } : null;
+    const marketSignal = market && uses.advice ? { basisMatchesGroup: !!market.context && market.context.adequacy === 'sufficient', direction: market.context?.direction ?? 'insufficient', supply: market.supplyScope === 'group' && market.supply.trend === 'unknown' ? market.single.supply.trend : market.supply.trend } : null;
     const policy = decide({ market: marketSignal, now, eventStartAt: event.localStartAt, offers: { bestEligibleTotalCents: best?.comparableTotalCents ?? null, bestEligibleObservationId: best?.offer.id ?? null, eligibleCount: cmp.eligible.length, needsReviewCount: cmp.needsReview.length, alternativeAvailable: alternatives.length > 0 || cmp.needsReview.length > 0, deliveryFeasible: best ? (best.offer.deliveryMethod ? true : null) : null, safeDeliveryBufferMinutes: null }, benchmark, trend, priorities, monitoringCoverageAvailable: monitoringCoverage, staffedUntil: null });
 
     const isFixtureRun = allOffers.some((o) => o.collectionMode === 'fixture') || this.env.APP_MODE === 'fixture';
@@ -1176,7 +1177,7 @@ export class Concierge {
     const quote = brief.quotedPriceCents != null
       ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null }
       : null;
-    const packet = buildPacket({ market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: licence.allows('customer_display') } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 
@@ -1695,6 +1696,25 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  * What we understood, one line each. Once the event is resolved the email already names it exactly, so the
  * customer's own looser wording ("Miami Dolphins in Miami (in october)") is left out rather than repeated.
  */
+/**
+ * What the acknowledgment says we understood, as a person would jot it down: the game or show, when, where,
+ * how many, the budget, and the question they asked. Every line is something they told us or we found.
+ */
+export function acknowledgedFacts(e: { name: string; category: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }, x: RequestExtraction, text: string): string[] {
+  const sports = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(e.category);
+  const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
+  const out = [`${sports ? 'Game' : 'Show'}: ${e.name}`, `When: ${when}`, `Where: ${v.name}${v.city ? `, ${v.city}` : ''}`];
+  if (x.quantity) out.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
+  if (x.budgetCents !== null && x.budgetBasis) out.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'a ticket'}`);
+  const question = x.quotedPriceCents != null
+    ? `whether ${formatUsd(x.quotedPriceCents)} is a good price`
+    : /\b(buy now|hold off|wait (?:until|till|for|closer)|should i (?:buy|wait)|good time to buy|now or later|buy or wait)\b/i.test(text)
+      ? 'whether to buy now or hold off'
+      : x.resaleAsked ? 'whether resale is cheaper' : null;
+  if (question) out.push(`You asked: ${question}`);
+  return out;
+}
+
 export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {
   const parts: string[] = [];
   if (x.performerOrTeam && !opts.eventResolved) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);

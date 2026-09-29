@@ -73,7 +73,7 @@ describe('override wiring', () => {
 
   it('uses the built-in template when no override is active', () => {
     const r = renderTemplate('acknowledgment', { eventLabel: 'the Rangers game', knownFacts: [] }, ctx);
-    expect(r.text).toContain("Got it. We're checking options for the Rangers game.");
+    expect(r.text).toContain("Got it. I'm looking into the Rangers game.");
   });
 
   it('uses staff copy when a slot is overridden, and still appends the disclosure', () => {
