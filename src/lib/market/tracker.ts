@@ -200,6 +200,9 @@ export class MarketTracker {
       if (!ev0 || ev0.e.localStartAt <= now) return { refreshed: false, reason: 'past' };
       try {
         await this.readGroups(tr.providerEventId, ev0, sizes);
+        // The read prompted a rescan: pick up the fresh stats soon rather than at the next scheduled check.
+        const soon = new Date(now.getTime() + 45 * 60_000);
+        if ((!tr.lastObservedAt || now.getTime() - tr.lastObservedAt.getTime() > 2 * 3_600_000) && tr.nextPollAt > soon) await this.db.update(t.trackedEvents).set({ nextPollAt: soon }).where(eq(t.trackedEvents.id, tr.id));
         return { refreshed: true };
       } catch (e) {
         const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
@@ -271,14 +274,20 @@ export class MarketTracker {
         await this.log('listings', ev.e.id, 'error', 1, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       }
     }
-    if (!groupsRead) await this.prioritize(tr.providerEventId, ev.e.id);
+    const prompted = groupsRead || (await this.prioritize(tr.providerEventId, ev.e.id));
     const { snapshots } = await api.eventStats(tr.providerEventId, { start_date: tr.lastObservedAt ? tr.lastObservedAt.toISOString().slice(0, 10) : undefined });
     const points = snapshots.flatMap(pointsFromSnapshot).filter((p) => !tr.lastObservedAt || p.observedAt > tr.lastObservedAt);
     await this.storePoints(ev, points);
     const newest = points.reduce<Date | null>((m, p) => (!m || p.observedAt > m ? p.observedAt : m), tr.lastObservedAt);
     const ctx = await this.context(ev.e.id, 'single', ev.e.localStartAt);
     const lead = Math.round((ev.e.localStartAt.getTime() - now.getTime()) / 60_000);
-    await this.db.update(t.trackedEvents).set({ lastPolledAt: now, lastObservedAt: newest, lastError: null, nextPollAt: new Date(now.getTime() + pollIntervalMinutes(lead, ctx.h24?.pct ?? null) * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
+    // Prompting SeatData puts the event on its ~30-minute rescan, but the stats read a moment later can't include
+    // it. When what we hold is already hours old, come back once shortly after to pick up the fresh snapshot;
+    // a follow-up never schedules another (the previous poll was under 2 hours ago).
+    const oldData = !newest || now.getTime() - newest.getTime() > 2 * 3_600_000;
+    const followUp = prompted && oldData && (!tr.lastPolledAt || now.getTime() - tr.lastPolledAt.getTime() > 2 * 3_600_000);
+    const next = followUp ? 45 : pollIntervalMinutes(lead, ctx.h24?.pct ?? null);
+    await this.db.update(t.trackedEvents).set({ lastPolledAt: now, lastObservedAt: newest, lastError: null, nextPollAt: new Date(now.getTime() + next * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
     await this.log('stats', ev.e.id, 'success', api.calls - before, points.length);
     return points.length;
   }
@@ -288,17 +297,20 @@ export class MarketTracker {
    * it on a ~30-minute rescan (the probe measured a 479-minute median gap). One small sales call a day keeps
    * a followed event fresh. Failures are ignored: the stats poll still runs on what exists.
    */
-  private async prioritize(providerEventId: string, eventId: string): Promise<void> {
+  /** True when this call prompted a rescan (false when one was sent in the last 20 hours or it failed). */
+  private async prioritize(providerEventId: string, eventId: string): Promise<boolean> {
     const since = new Date(this.now().getTime() - 20 * 3_600_000);
     const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), inArray(t.marketFetches.kind, ['prioritize', 'listings']), eq(t.marketFetches.eventId, eventId), gte(t.marketFetches.at, since))).limit(1);
-    if (recent) return;
+    if (recent) return false;
     const api = this.api();
     const before = api.calls;
     try {
       await api.eventSales(providerEventId, { limit: 1 });
       await this.log('prioritize', eventId, 'success', api.calls - before);
+      return true;
     } catch {
       await this.log('prioritize', eventId, 'error', api.calls - before);
+      return false;
     }
   }
 

@@ -125,6 +125,16 @@ const rawSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v === undefined ? true : v.trim().toLowerCase() !== 'false' && v.trim() !== '0')),
+  /**
+   * While the test allowlist is in force (only named testers can be emailed), a draft is approved and sent by
+   * the system as soon as it is written, instead of waiting in the review queue. The approval step itself is
+   * unchanged. Emptying the allowlist (the launch) brings review back without touching this. "false" keeps
+   * review during testing too.
+   */
+  AUTO_APPROVE_WHILE_TESTING: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? true : v.trim().toLowerCase() !== 'false' && v.trim() !== '0')),
   EMAIL_TEST_RECIPIENT_ALLOWLIST: csv,
 
   /** 'rules' runs the deterministic extractor/drafter deliberately; it is never a silent fallback. */

@@ -63,10 +63,13 @@ function checkProse(label: string, prose: string, errors: string[]): void {
   }
 }
 
-/** The sign-off says what is true of the message: "human-reviewed" only when a person approved it. */
-function signOff(reviewed: boolean): string {
-  return reviewed ? 'Ticket Guy (AI-assisted, human-reviewed). Buying happens with the seller; we never hold tickets or payments.' : 'Ticket Guy (AI-assisted). Buying happens with the seller; we never hold tickets or payments.';
-}
+/**
+ * The body reads like our other emails: "Hey," then the answer. The signature and the one disclosure line
+ * ("human-reviewed" only when a person approved it) are added when it is sent (the raw templates), so the
+ * body carries neither; it used to carry its own, and the email said it twice.
+ */
+const GREETING = 'Hey,';
+const P = (inner: string) => `<p style="margin:0 0 18px;">${inner}</p>`;
 
 const words = (s: string) => new Set(s.toLowerCase().replace(/[’']/g, '').match(/[a-z]+/g) ?? []);
 
@@ -113,8 +116,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
 
   const lines: string[] = [];
   const html: string[] = [];
-  lines.push(b.opening.trim());
-  html.push(`<p>${esc(b.opening.trim())}</p>`);
+  lines.push(GREETING, b.opening.trim());
+  html.push(P(GREETING), P(esc(b.opening.trim())));
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.map((id) => claimsById.get(id)!);
     // The model sometimes paraphrases the claim it cites ("I can't see live resale listings…" twice in a row).
@@ -123,30 +126,28 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     const text = [prose, ...claimTexts.map((c) => c.text)].filter(Boolean).join(' ');
     lines.push(text);
     const htmlClaims = claimTexts.map((c) => (c.url ? `${esc(c.text)} <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : esc(c.text)));
-    html.push(`<p>${[esc(prose), ...htmlClaims].filter(Boolean).join(' ')}</p>`);
+    html.push(P([esc(prose), ...htmlClaims].filter(Boolean).join(' ')));
   }
   // Always append the coverage footer and observation caveat from the packet (never model-authored).
   const coverage = claimsById.get('C_COVERAGE');
   if (coverage && !used.has('C_COVERAGE')) {
     lines.push(coverage.text);
-    html.push(`<p><small>${esc(coverage.text)}</small></p>`);
+    html.push(P(esc(coverage.text)));
   }
   for (const c of packet.claimRecords.filter((c) => c.url && used.has(c.id))) {
     lines.push(`${c.linkLabel ?? 'Link'}: ${c.url}`);
   }
   if (opts.affiliateDisclosure) {
     lines.push(opts.affiliateDisclosure);
-    html.push(`<p><small>${esc(opts.affiliateDisclosure)}</small></p>`);
+    html.push(P(esc(opts.affiliateDisclosure)));
   }
   lines.push(b.closing.trim());
-  html.push(`<p>${esc(b.closing.trim())}</p>`);
-  lines.push(signOff(opts.reviewed !== false));
-  html.push(`<p><small>${esc(signOff(opts.reviewed !== false))}</small></p>`);
+  html.push(P(esc(b.closing.trim())));
   return { ok: true, textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
 }
 
 /** Safe evidence-only fallback when generation fails repeatedly (no model prose at all). */
-export function renderEvidenceOnly(packet: AdvicePacket, opts: { reviewed?: boolean } = {}): { textBody: string; htmlBody: string } {
+export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boolean } = {}): { textBody: string; htmlBody: string } {
   const visible: ClaimRecord[] = packet.claimRecords.filter((c) => c.customerVisible);
   const decisionLine: Record<AdvicePacket['decision'], string> = {
     buy_now: 'Given your priorities, securing the option below is reasonable.',
@@ -154,7 +155,7 @@ export function renderEvidenceOnly(packet: AdvicePacket, opts: { reviewed?: bool
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
-  const text = [decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : '')), signOff(opts.reviewed !== false)].join('\n\n');
-  const html = [`<p>${esc(decisionLine[packet.decision])}</p>`, ...visible.map((c) => `<p>${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}</p>`), `<p><small>${esc(signOff(opts.reviewed !== false))}</small></p>`].join('\n');
+  const text = [GREETING, decisionLine[packet.decision], ...visible.map((c) => c.text + (c.url ? `\n${c.linkLabel ?? 'Link'}: ${c.url}` : ''))].join('\n\n');
+  const html = [P(GREETING), P(esc(decisionLine[packet.decision])), ...visible.map((c) => P(`${esc(c.text)}${c.url ? ` <a href="${esc(c.url)}">${esc(c.linkLabel ?? 'View this offer')}</a>` : ''}`))].join('\n');
   return { textBody: text, htmlBody: html };
 }

@@ -92,8 +92,13 @@ export const MARKET_MIN_SPAN_HOURS = 12;
 /** A move counts when it is both this share and this many cents per ticket. */
 export const MARKET_MOVE_PCT = 0.05;
 export const MARKET_MOVE_CENTS = 300;
-/** The newest point must be this fresh to describe the market "now". */
-export const MARKET_STALE_HOURS = 12;
+/**
+ * The newest point must be this fresh to describe the market. SeatData rescans an event about every 8 hours
+ * and we check it every 6 to 24, so a 12-hour cut-off called most live series stale; wording says the age
+ * whenever the newest point isn't recent (MARKET_RECENT_HOURS).
+ */
+export const MARKET_STALE_HOURS = 24;
+export const MARKET_RECENT_HOURS = 3;
 /** Listings are shrinking when the count falls by this share and this many listings over the window. */
 export const SUPPLY_DROP_PCT = 0.25;
 export const SUPPLY_DROP_MIN = 10;

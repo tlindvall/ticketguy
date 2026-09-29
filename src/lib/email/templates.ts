@@ -226,9 +226,9 @@ function renderBody(
     }
     case 'raw':
     case 'raw_auto':
-      // The advice renderer signs its own body, so no second signature here. 'raw_auto' is the same body sent
-      // without review (a price check with no listings of ours), so it carries the automated disclosure.
-      return { text: `${String(v.text)}\n\n${disclosure}`, html: `${BODY_OPEN}${String(v.html)}${disclosureHtml(disclosure)}${BODY_CLOSE}` };
+      // The advice body gets the same signature and one disclosure as every other email. 'raw_auto' is the same
+      // body sent without review (a price check, or any draft while testing), so it says so.
+      return { text: [String(v.text), defaultSig.text, disclosure].join('\n\n'), html: `${BODY_OPEN}${String(v.html)}\n${defaultSig.html}${disclosureHtml(disclosure)}${BODY_CLOSE}` };
     default:
       throw new Error(`unknown template ${name}`);
   }

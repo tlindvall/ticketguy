@@ -92,6 +92,14 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | 
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
 
+/** Who approves a draft when review is off during testing; its emails carry the automated disclosure. */
+export const AUTO_APPROVER = 'system:auto-approve';
+
+/** Drafts approve themselves while only named testers can be emailed (env AUTO_APPROVE_WHILE_TESTING). */
+export function autoApproveActive(e: Pick<Env, 'AUTO_APPROVE_WHILE_TESTING' | 'EMAIL_TEST_RECIPIENT_ALLOWLIST'>): boolean {
+  return e.AUTO_APPROVE_WHILE_TESTING && e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0;
+}
+
 export class Concierge {
   private readonly db: Db;
   private readonly env: Env;
@@ -1176,7 +1184,9 @@ export class Concierge {
     // it compares the customer's own number with the provider's published face value and names the official
     // sale, and recommends no listing. Anything carrying a verified offer still waits for a person.
     const autoSend = packet.verifiedOfferObservationIds.length === 0 && quote !== null;
-    const renderOpts = { reviewed: !autoSend };
+    // During testing every other draft is approved by the system too; it then says it wasn't reviewed.
+    const autoApprove = !autoSend && autoApproveActive(this.env);
+    const renderOpts = { reviewed: !autoSend && !autoApprove };
     // Draft via drafter (fixture or model) with bounded retries → evidence-only fallback.
     let body: { textBody: string; htmlBody: string } | null = null;
     let draftNote: string | null = null;
@@ -1231,6 +1241,13 @@ export class Concierge {
       return { recommendationId: rec!.id, state: 'recommendation_sent' };
     }
     await this.transition(req.id, 'awaiting_review', isNoResult ? 'no_verified_result_pending_review' : 'draft_ready');
+    if (autoApprove) {
+      // The ordinary approval, by the system: the same freshness, revision and fixture checks apply, and a
+      // draft that fails them stays in the queue for a person.
+      const r = await this.approveRecommendation({ recommendationId: rec!.id, reviewerUserId: AUTO_APPROVER, expectedRevision: args.revision, draftHash, note: 'auto-approved while testing' });
+      if (r.ok) return { recommendationId: rec!.id, state: 'awaiting_review' };
+      await this.db.update(t.recommendations).set({ reviewNote: `auto-approve skipped: ${r.reason}` }).where(eq(t.recommendations.id, rec!.id));
+    }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'recommendation.review_ready', eventKey: `review:${rec!.id}`, entityId: rec!.id, revision: args.revision, payload: { recommendationId: rec!.id, requestId: req.id }, now }));
     return { recommendationId: rec!.id, state: 'awaiting_review' };
   }
@@ -1291,7 +1308,7 @@ export class Concierge {
     const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
     await this.db.update(t.recommendations).set({ reviewStatus: 'approved', reviewerUserId: args.reviewerUserId, reviewNote: args.note, approvedAt: now }).where(eq(t.recommendations.id, rec.id));
     const containsFixture = obs.some((o) => o.verificationMethod === 'fixture');
-    const intent = await this.queueSend({ messageClass: obs.length ? 'recommendation' : 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(lastInbound?.subject ?? null, rec.subject), template: 'raw', vars: { text: rec.bodyText, html: rec.bodyHtml }, inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: rec.id, approvedHash: rec.draftHash, dedupeKey: `rec:${rec.id}:${rec.draftHash}`, containsFixtureData: containsFixture });
+    const intent = await this.queueSend({ messageClass: obs.length ? 'recommendation' : 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(lastInbound?.subject ?? null, rec.subject), template: args.reviewerUserId === AUTO_APPROVER ? 'raw_auto' : 'raw', vars: { text: rec.bodyText, html: rec.bodyHtml }, inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: rec.id, approvedHash: rec.draftHash, dedupeKey: `rec:${rec.id}:${rec.draftHash}`, containsFixtureData: containsFixture });
     await audit(this.db, { actor: args.reviewerUserId, action: 'recommendation.approved', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision, diff: { draftHash: rec.draftHash, observationIds: rec.chosenObservationIds } });
     return { ok: true, sendIntentId: intent.id };
   }
