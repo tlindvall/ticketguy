@@ -664,3 +664,20 @@ wrapped over two lines, and html-only replies, were not cut. The link itself was
 - Links to StubHub, Ticketmaster, SeatGeek, Vivid Seats, Gametime, TickPick and AXS are read from the URL
   alone, never fetched: the date in the path, `quantity`/`qty`, the listing id and the team in the slug. The
   link's date wins over a looser phrase; a quantity or team the customer typed wins over the link.
+
+## 48. Boundaries: off-topic mail and floods
+
+**What went wrong.** "Can you tell me something interesting about New York city? also, are you an idiot?" was
+answered as a ticket request: "Two tickets. Got it. Which event…? I've assumed two tickets."
+
+**The rules** (`src/lib/intake/boundaries.ts`).
+- A first message counts as off-topic when it names no one and nothing, no kind of event, no quantity, budget,
+  price, date or link, asks for no action, and uses none of the words people use for tickets. A city on its own
+  doesn't make it a request. Whatever the model calls the intent, the same checks decide. The sender gets one
+  short "I only do tickets" reply, at most once every 24 hours, and the request is closed. Nothing is assumed
+  and the content is not engaged with. A later real request, in the same thread or a new one, is answered
+  as usual. Replies inside an existing request are never treated as off-topic: a bare "Either." or "Thursday!"
+  answers our question.
+- A sender over 10 inbound emails an hour or 30 a day gets no model call and no reply until the window
+  passes. The count covers this email and those stored before it. Staff are alerted once a day (the request
+  goes to manual attention). Nothing is sent to the sender.

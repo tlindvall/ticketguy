@@ -223,6 +223,16 @@ function renderBody(
       ];
       return wrap(paras, paras.map(para));
     }
+    case 'off_topic': {
+      // A first message with nothing about tickets in it (a general question, a test, a jibe): say what we do,
+      // once, without assuming a request. It never engages with the content.
+      const paras = [
+        'Hey,',
+        'I only do tickets: sports, concerts and shows in the US. I’ll leave that one to someone else.',
+        'If you’re after tickets, tell me what you want to see, roughly when, and how many. A link or a screenshot works too.',
+      ];
+      return wrap(paras, paras.map(para));
+    }
     case 'unsupported':
       return wrap([String(v.reason ?? ''), `We're sorry we can't help with this one yet.`], [`<p>${esc(String(v.reason ?? ''))}</p>`, `<p>We're sorry we can't help with this one yet.</p>`]);
     case 'deletion_verification':

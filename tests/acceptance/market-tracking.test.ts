@@ -136,8 +136,32 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('Resale listings for two tickets together currently start at $130 a ticket (listed price, before fees).');
     expect(rec!.bodyText).toContain('the cheapest listed price for two together at this point before the game was typically $122.50 to $147.50 (median $135)');
     expect(rec!.bodyText).not.toContain('enough comparable history');
-    expect(rec!.bodyText).toContain('market statistics from SeatData');
+    expect(rec!.bodyText).toContain('Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked');
+    expect(rec!.bodyText).not.toContain('SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
+    // Advice, not only figures: what a fair price is for the group, and whether to hurry (prices are easing).
+    expect(rec!.bodyText).toContain('My read: for two together, up to about $150 a ticket before fees is a fair price');
+    expect(rec!.bodyText).toContain('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush.');
+    // And it ends with the questions that would change the answer, not a request for things already sent.
+    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link, or the price and section, and I’ll tell you if it’s a good deal.\n- What’s the most you’d want to pay per ticket?\n- When do you need to have tickets sorted by?');
+    expect(rec!.bodyHtml).toContain('<ul');
+  });
+
+  // Live: a reply that was only a StubHub link came back with market figures, a sentence naming SeatData, and
+  // "send me the listing you are considering". It now says it went by their link, gives the read, and asks
+  // for what the link can't tell us (the listing's price and section).
+  it('a StubHub link gets an answer about that game, advice, and the questions the link can’t answer', async () => {
+    const c = concierge();
+    const link = 'https://www.stubhub.com/metro-testers-new-york-tickets-10-30-2026/event/555/?quantity=2&listingId=123456';
+    const requestId = await ask(c, link, 'link-advice@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const body = rec!.bodyText;
+    expect(body.startsWith('Hey,\n\nGoing by the StubHub link you sent, here’s what I have for two tickets to Metro Testers vs. Boston at Test Garden')).toBe(true);
+    expect(body).toContain('Resale listings for two tickets together currently start at $130');
+    expect(body).toContain('up to about $150 a ticket before fees is a fair price');
+    expect(body).toContain('- What price per ticket does that StubHub listing show, and which section? I’ll tell you if it’s a good deal.');
+    expect(body).not.toMatch(/send me the (link|listing)/i);
   });
 
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {
@@ -155,7 +179,7 @@ describe('resale market tracking', () => {
     const m = claims.find((x) => x.id === 'C_MARKET')!;
     expect(m.kind).toBe('market_price');
     expect(m.scope.quantity).toBe(5);
-    expect(m.text).toBe('Resale listings with 5 or more tickets currently start at $140 a ticket (listed price, before fees). About 2 listings have 5 or more tickets. A listing with more tickets may not sell exactly 5.');
+    expect(m.text).toBe('Resale listings with 5 or more tickets currently start at $140 a ticket (listed price, before fees). About 2 listings have 5 or more tickets. Some are bigger blocks that may not split into exactly 5.');
     // One read is a price, not a trend: nothing here can say "wait".
     expect(adv!.decision).not.toBe('wait_and_recheck');
     // Asked again within the hour: the read is fresh, no second call.
@@ -211,7 +235,7 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     expect(rec!.bodyText).toContain('Resale listings with 5 or more tickets');
     expect(rec!.bodyText).toContain('listings have 5 or more tickets');
-    expect(rec!.bodyText).toContain('market statistics from SeatData');
+    expect(rec!.bodyText).toContain('StubHub and Vivid Seats resale prices before fees');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
   });

@@ -1,6 +1,7 @@
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
-import { ticketLinksIn } from '@/lib/domain/ticket-links';
+import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
 import { raPointer } from '@/lib/sources/resident-advisor';
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -259,6 +260,21 @@ export class Concierge {
     }
     if (!venueTz && /\b(new york|nyc|manhattan|brooklyn|msg)\b/i.test(msg.sanitizedText ?? '')) venueTz = 'America/New_York';
 
+    // A sender over the inbound limits gets no model call and no reply until the window passes; staff hear once a day.
+    if (contact) {
+      const over = await this.inboundLimitHit(contact.id, msg);
+      if (over) {
+        const told = await this.recentAudit('intake.rate_limited', contact.id, msg.receivedAt, 24);
+        await audit(this.db, { actor: 'system', action: 'intake.rate_limited', entityKind: 'contact', entityId: contact.id, diff: { at: msg.receivedAt.toISOString(), window: over, messageId: msg.id, staffTold: !told } });
+        if (!told) {
+          await this.transition(req.id, 'manual_attention', `rate_limited:${over}`);
+          await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${req.id}:${req.currentRevision}:rate_limited`, entityId: req.id, payload: { requestId: req.id, revision: req.currentRevision }, now });
+          return { state: 'manual_attention', revision: req.currentRevision, extraction: null };
+        }
+        return { state: req.state, revision: req.currentRevision, extraction: null };
+      }
+    }
+
     let extraction: RequestExtraction;
     try {
       extraction = await this.runExtractor({ messageId: msg.id, text: msg.sanitizedText ?? '', subject: msg.subject, receivedAt: msg.receivedAt, venueTimeZone: venueTz, knownEntities: known }, req);
@@ -279,6 +295,20 @@ export class Concierge {
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
     extraction = applyTicketLinks(extraction, known);
+
+    // A first message that isn't about tickets ("tell me something about New York", "are you an idiot?") gets
+    // one short "I only do tickets" reply a day, and nothing is assumed about a request that isn't there.
+    if (!priorVersion && isOffTopic(extraction, msg.sanitizedText ?? '')) {
+      const replied = await this.recentAudit('intake.off_topic_replied', contact!.id, msg.receivedAt, OFF_TOPIC_REPLY_EVERY_HOURS);
+      if (!replied) {
+        await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy does tickets'), template: 'off_topic', vars: {}, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `off_topic:${req.id}` });
+        await audit(this.db, { actor: 'system', action: 'intake.off_topic_replied', entityKind: 'contact', entityId: contact!.id, diff: { at: msg.receivedAt.toISOString(), messageId: msg.id } });
+      } else {
+        await audit(this.db, { actor: 'system', action: 'intake.off_topic_ignored', entityKind: 'contact', entityId: contact!.id, diff: { at: msg.receivedAt.toISOString(), messageId: msg.id } });
+      }
+      await this.transition(req.id, 'closed', replied ? 'off_topic_repeat' : 'off_topic');
+      return { state: 'closed', revision: req.currentRevision, extraction };
+    }
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
@@ -544,6 +574,30 @@ export class Concierge {
    * staff, found only by someone opening the inbox. Now the customer is told once per request that a person
    * has it, and staff are alerted once per revision with the reason and a link — never the message itself.
    */
+  /**
+   * Which inbound limit this sender is over, counting this message and the ones stored before it (a backlog
+   * interpreted late must not count the emails that came after); null when within both.
+   */
+  private async inboundLimitHit(contactId: string, msg: { receivedAt: Date; createdAt: Date }): Promise<'hour' | 'day' | null> {
+    const at = msg.receivedAt;
+    const since = (h: number) => new Date(at.getTime() - h * 3_600_000);
+    const count = async (h: number) => {
+      const [r] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.messages).innerJoin(t.conversations, eq(t.conversations.id, t.messages.conversationId)).where(and(eq(t.conversations.contactId, contactId), eq(t.messages.direction, 'inbound'), gte(t.messages.receivedAt, since(h)), lte(t.messages.receivedAt, at), lte(t.messages.createdAt, msg.createdAt)));
+      return r?.n ?? 0;
+    };
+    return overInboundLimit({ lastHour: await count(1), lastDay: await count(24) });
+  }
+
+  /** Whether this action was recorded for the contact within the last `hours`, by the message time it carries. */
+  private async recentAudit(action: string, contactId: string, at: Date, hours: number): Promise<boolean> {
+    const rows = await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.action, action), eq(t.auditLog.entityKind, 'contact'), eq(t.auditLog.entityId, contactId))).orderBy(desc(t.auditLog.createdAt)).limit(20);
+    const from = at.getTime() - hours * 3_600_000;
+    return rows.some((r) => {
+      const when = Date.parse(String((r.diff as { at?: string } | null)?.at ?? ''));
+      return Number.isFinite(when) && when >= from && when <= at.getTime();
+    });
+  }
+
   private async parkForStaff(a: { req: typeof t.requests.$inferSelect; revision: number; reason: string; contact: typeof t.contacts.$inferSelect; msg: typeof t.messages.$inferSelect }): Promise<void> {
     const { req, revision, reason, contact, msg } = a;
     await this.transition(req.id, 'manual_attention', reason.slice(0, 500));
@@ -1203,7 +1257,9 @@ export class Concierge {
     const quote = brief.quotedPriceCents != null
       ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null }
       : null;
-    const packet = buildPacket({ market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
+    const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
+    const packet = buildPacket({ link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
 
