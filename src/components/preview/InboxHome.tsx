@@ -2,11 +2,12 @@ import Link from 'next/link';
 import type { LaunchState } from '@/lib/config/launch';
 import { SvgLibrary } from '@/components/public/Landing';
 import { ComposeDemo } from './ComposeDemo';
+import { HeroVideo } from './HeroVideo';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
 /**
- * Brand direction 01, "Your guy in the inbox": the homepage as a preview (docs/brand/y2k-01). Email is the
+ * Brand direction 01, "Your guy in the inbox": the homepage (docs/brand/y2k-01), also shown at /preview/home. Email is the
  * way in, so the page is built from email parts: a working compose window, subject lines that start a
  * draft, and the address as the brand. It keeps what the live page does: the launch state sets the calls
  * to action and subjects, every example opens a draft (nothing is sent until the visitor sends it), and
@@ -15,7 +16,8 @@ import './inbox.css';
  * Left out on purpose (README production notes): window controls, an Events page we don't have, and
  * figures, prices or review claims that would read as real.
  */
-type Props = { state: LaunchState; address: string };
+/** `preview` marks the page as the staff-only preview (a banner, and the logo links back to the preview). */
+type Props = { state: LaunchState; address: string; preview?: boolean };
 
 type Starter = { tone: 'cream' | 'navy' | 'gray'; titlebar: string; subject: string; lines: string[]; footer: 'cta' | 'ask' | 'address' };
 const STARTERS: Starter[] = [
@@ -24,7 +26,7 @@ const STARTERS: Starter[] = [
   { tone: 'gray', titlebar: 'Fwd: Tickets I found', subject: 'Fwd: Tickets I found', lines: ['Before you buy,', 'forward it to your guy.'], footer: 'address' },
 ];
 
-export function InboxHome({ state, address }: Props) {
+export function InboxHome({ state, address, preview = false }: Props) {
   const live = state === 'live';
   // The visitor's own subject is sent as written; only the plain address links carry the pre-launch subject.
   const general = live ? 'Tickets' : 'Ticket Guy early access';
@@ -33,9 +35,9 @@ export function InboxHome({ state, address }: Props) {
     <div className="tgx">
       <SvgLibrary />
       <a className="skip-link" href="#main">Skip to content</a>
-      <p className="preview-flag">Preview of brand direction 01. Not the live site.</p>
+      {preview ? <p className="preview-flag">Preview of brand direction 01. Not the live site.</p> : null}
       <header className="tgx-header wrap">
-        <Link className="brand" href="/preview/home" aria-label="Ticket Guy home">
+        <Link className="brand" href={preview ? '/preview/home' : '/'} aria-label="Ticket Guy home">
           <svg className="brand-mark" aria-hidden="true"><use href="#ticket-mark" /></svg>
           <span>ticket guy</span>
         </Link>
@@ -47,9 +49,13 @@ export function InboxHome({ state, address }: Props) {
       </header>
 
       <main id="main">
+        <div className="wrap">
+          <HeroVideo />
+        </div>
         <section className="hero wrap" aria-labelledby="hero-title">
-          <h1 id="hero-title">You’ve got a ticket guy.</h1>
-          <p className="hero-sub">Send the link. Ask the question. Tell me what you’re after.</p>
+          {/* The animation above says both lines, so here they are for screen readers and search only. */}
+          <h1 id="hero-title" className="sr-only">You’ve got a ticket guy.</h1>
+          <p className="sr-only">Send the link. Ask the question. Tell me what you’re after.</p>
           <div className="hero-demo">
             <ComposeDemo address={address} subject="Knicks next Saturday" body={'Four of us. Under $150 each.\nCan you find something decent?'} cta={live ? 'Email your ticket guy' : 'Email for early access'} />
             <svg className="mascot" aria-hidden="true"><use href="#ticket-friend" /></svg>

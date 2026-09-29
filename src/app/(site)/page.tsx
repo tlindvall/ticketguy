@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { env } from '@/lib/config/env';
 import { launchState } from '@/lib/config/launch';
-import { Landing } from '@/components/public/Landing';
+import { InboxHome } from '@/components/preview/InboxHome';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,5 +17,7 @@ export function generateMetadata(): Metadata {
 
 export default function Home() {
   const e = env();
-  return <Landing state={launchState(e)} address={e.CONCIERGE_INBOUND_ADDRESS} />;
+  // Brand direction 01 (docs/brand/y2k-01), with the brand animation at the top. The earlier page is still
+  // `Landing`, one import away, if this has to be rolled back.
+  return <InboxHome state={launchState(e)} address={e.CONCIERGE_INBOUND_ADDRESS} />;
 }

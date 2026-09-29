@@ -6,5 +6,5 @@ export default async function HomePreview({ searchParams }: { searchParams: Prom
   const e = env();
   // ?state=live or ?state=coming_soon shows either version; otherwise the page follows the real launch state.
   const { state } = await searchParams;
-  return <InboxHome state={state === 'live' || state === 'coming_soon' ? state : launchState(e)} address={e.CONCIERGE_INBOUND_ADDRESS} />;
+  return <InboxHome state={state === 'live' || state === 'coming_soon' ? state : launchState(e)} address={e.CONCIERGE_INBOUND_ADDRESS} preview />;
 }
