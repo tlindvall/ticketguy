@@ -238,6 +238,7 @@ export class MarketTracker {
     const now = this.now();
     const api = this.api();
     const before = api.calls;
+    await this.prioritize(tr.providerEventId, ev.e.id);
     const { snapshots } = await api.eventStats(tr.providerEventId, { start_date: tr.lastObservedAt ? tr.lastObservedAt.toISOString().slice(0, 10) : undefined });
     const points = snapshots.flatMap(pointsFromSnapshot).filter((p) => !tr.lastObservedAt || p.observedAt > tr.lastObservedAt);
     await this.storePoints(ev, points);
@@ -247,6 +248,25 @@ export class MarketTracker {
     await this.db.update(t.trackedEvents).set({ lastPolledAt: now, lastObservedAt: newest, lastError: null, nextPollAt: new Date(now.getTime() + pollIntervalMinutes(lead, ctx.h24?.pct ?? null) * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
     await this.log('stats', ev.e.id, 'success', api.calls - before, points.length);
     return points.length;
+  }
+
+  /**
+   * SeatData rescans an event about every 8 hours unless someone asks for its sales or listings, which puts
+   * it on a ~30-minute rescan (the probe measured a 479-minute median gap). One small sales call a day keeps
+   * a followed event fresh. Failures are ignored: the stats poll still runs on what exists.
+   */
+  private async prioritize(providerEventId: string, eventId: string): Promise<void> {
+    const since = new Date(this.now().getTime() - 20 * 3_600_000);
+    const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'prioritize'), eq(t.marketFetches.eventId, eventId), gte(t.marketFetches.at, since))).limit(1);
+    if (recent) return;
+    const api = this.api();
+    const before = api.calls;
+    try {
+      await api.eventSales(providerEventId, { limit: 1 });
+      await this.log('prioritize', eventId, 'success', api.calls - before);
+    } catch {
+      await this.log('prioritize', eventId, 'error', api.calls - before);
+    }
   }
 
   private async storePoints(ev: EventRow, points: SeriesPoint[]): Promise<void> {

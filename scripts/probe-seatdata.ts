@@ -30,9 +30,12 @@ async function step<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
 }
 
 const account = await step('account', () => api.account());
-if (account) console.log(`  plans: ${(account.plans ?? []).map((p) => `${p.name} (${p.status})`).join('; ') || 'none'} · rate limits for: ${Object.keys(account.rate_limits ?? {}).join(', ') || 'none'}`);
+if (account) {
+  console.log(`  plans: ${(account.plans ?? []).map((p) => `${p.name} (${p.status}${(p as { renews_at?: string }).renews_at ? `, renews ${(p as { renews_at?: string }).renews_at}` : ''})`).join('; ') || 'none'}`);
+  for (const [k, v] of Object.entries(account.rate_limits ?? {})) console.log(`  rate limit ${k}: ${v.limit} per ${v.window_seconds}s`);
+}
 const usage = await step('usage', () => api.usage());
-if (usage) console.log(`  period ${usage.period_start} → ${usage.period_end} · totals keys: ${keys(usage.totals)}`);
+if (usage) console.log(`  period ${usage.period_start} → ${usage.period_end} · used so far: ${Object.entries(usage.totals ?? {}).map(([k, v]) => `${k} ${v}`).join(', ')}`);
 
 const search = await step(`search "${name}"`, () => api.searchEvents({ event_name: name, limit: 5 }));
 const first = search?.data?.[0];
