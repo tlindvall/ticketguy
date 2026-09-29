@@ -601,3 +601,29 @@ date purges the raw series in the nightly sweep.
 **In the reply** (with customer_display): the claims `C_MARKET`, `C_MARKET_TYPICAL` and `C_QUOTE_MARKET`.
 Each says "listed price, before fees" and names SeatData as market statistics, not tickets we checked.
 "Past movement does not predict" still holds.
+
+## 45. Groups of three or more get a price series built from SeatData's listings
+
+**Why.** SeatData's statistics give a price for one ticket and for two or more, nothing larger. A five-ticket
+request (the real Rangers one) therefore got no price and no trend: only the count of all listings, which
+says nothing about blocks of five. The engine could neither buy nor wait and asked for the listing.
+
+**What.** SeatData's listings endpoint (`/api/v0.1/listings/get`) returns each active listing with its price
+and how many tickets it still has. For every group size an open request is asking about (three to twelve;
+larger groups read twelve), each read stores one point: the cheapest listed price among active listings with
+at least that many tickets, their median, and how many such listings there are (`market_snapshots`, basket
+`group:N`, quantity N, fee basis `listed_price`).
+
+- **When.** At each scheduled check of a followed event while such a request is open (the read replaces the
+  daily sales call: it also puts the event on SeatData's fast rescan), and when research runs for the request
+  if the last read is over 3 hours old. One paid request per read, counted in the daily cap. A failed read is
+  logged and the stats poll carries on.
+- **What it means.** The series behaves like the single and pair series: trend and supply need four points
+  over at least 12 hours, so a new request sees the current floor and count, and the trend follows as checks
+  accumulate. The count of listings that can seat the group is the group's supply signal once it has a trend;
+  until then the rule uses the all-listings trend.
+- **What it doesn't mean.** A listing of six may not sell exactly five, because sellers set split rules. Every
+  line says "listings with 5 or more tickets" and adds that a larger listing may not sell exactly that many.
+  Groups have no past-game "typical" and are not in the shadow scorecard yet.
+- **Same licence gates.** Staff see it with tracking; advice and customer display still need SeatData's
+  written OK.

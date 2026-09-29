@@ -31,6 +31,14 @@ describe('resale market tracking', () => {
       const f = i / (hours / 2);
       return { timestamp: new Date(from.getTime() + i * 2 * H).toISOString(), total_listings_all: 600, total_listings_active: listings(i), listing_fill_rate: 0.6, avg_price: 200, median_price: 180, get_in: a + (b - a) * f, get_in_qty2plus: a2 + (b2 - a2) * f, zones: [{ zone_name: 'Lower Bowl', avg_price: 300, median_price: 280, get_in: a + 50, get_in_qty2plus: a2 + 60 }] };
     });
+  // Current listings: two can seat five (from $140), one more seats four; an inactive one is ignored.
+  let groupListings = () => new Response(JSON.stringify({ has_refreshed: true, listings: [
+    { active: true, listing_id: 1, price: 95, quantity: 2, quantity_start: 2, row: '10', section: '101', zone: 'Lower Bowl' },
+    { active: true, listing_id: 2, price: 140, quantity: 6, quantity_start: 8, row: '4', section: '210', zone: 'Upper' },
+    { active: true, listing_id: 3, price: 155, quantity: 5, quantity_start: 5, row: '2', section: '112', zone: 'Lower Bowl' },
+    { active: true, listing_id: 4, price: 120, quantity: 4, quantity_start: 4, row: '8', section: '215', zone: 'Upper' },
+    { active: false, listing_id: 5, price: 60, quantity: 8, quantity_start: 8, row: '1', section: '220', zone: 'Upper' },
+  ] }), { status: 200 });
   let liveStats: () => unknown[] = () => statsFor(new Date(now.getTime() - 96 * H), 96, 150, 110, 170, 130);
   const past = [1, 2, 3, 4, 5, 6].map((i) => ({ event_id: 900 + i, event_name: `Metro Testers vs. Team ${i}`, event_date: `2026-0${i < 4 ? 3 : 4}-${String(10 + i).padStart(2, '0')}`, event_time: '19:00:00', venue_name: 'Test Garden', venue_city: 'New York', venue_state: 'NY' }));
   const fetchImpl = (async (input: string) => {
@@ -54,6 +62,7 @@ describe('resale market tracking', () => {
       const base = 80 + (Number(m[1]) - 900) * 10;
       return json({ event_id: Number(m[1]), data: statsFor(new Date(start.getTime() - 40 * 24 * H), 40 * 24, base, base, base + 20, base + 20), has_more: false, next_cursor: null });
     }
+    if (url.pathname === '/api/v0.1/listings/get' && url.searchParams.get('event_id') === '777') return groupListings();
     if (url.pathname === '/api/v1/events/777/sales') return json({ event_id: 777, data: [], has_more: false, next_cursor: null });
     if (url.pathname === '/api/v0.4/events/event-request-add') return json({ job_id: 'job-1' });
     return new Response('{}', { status: 404 });
@@ -131,16 +140,28 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
   });
 
-  it('five together get the listing count, never a price trend', async () => {
+  it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {
     const c = concierge();
+    calls.length = 0;
     const requestId = await ask(c, '5 Testers tickets Oct 30 together — is resale cheaper?', 'five@customer.example');
     await c.research({ requestId, revision: 1 });
+    // The stats were fresh, but the group had never been read: one listings call, nothing else.
+    expect(calls).toEqual(['/api/v0.1/listings/get?event_id']);
+    const group = await h.db.select().from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, GAME), eq(t.marketSnapshots.basketKey, marketBasketKey(GAME, 'group:5', null))));
+    expect(group).toHaveLength(1);
+    expect(group[0]).toMatchObject({ quantity: 5, cheapestEligibleTotalCents: 14000, eligibleOptionCount: 2, feeBasis: 'listed_price' });
     const [adv] = await h.db.select().from(t.adviceRuns).where(eq(t.adviceRuns.requestId, requestId));
-    const claims = (adv!.packet as { claimRecords: Array<{ id: string; kind: string; text: string }> }).claimRecords;
+    const claims = (adv!.packet as { claimRecords: Array<{ id: string; kind: string; text: string; scope: { quantity: number } }> }).claimRecords;
     const m = claims.find((x) => x.id === 'C_MARKET')!;
-    expect(m.kind).toBe('market_supply');
-    expect(m.text).toContain('That counts all listings, not blocks of 5 seats together.');
+    expect(m.kind).toBe('market_price');
+    expect(m.scope.quantity).toBe(5);
+    expect(m.text).toBe('Resale listings with 5 or more tickets currently start at $140 a ticket (listed price, before fees). About 2 listings have 5 or more tickets. A listing with more tickets may not sell exactly 5.');
+    // One read is a price, not a trend: nothing here can say "wait".
     expect(adv!.decision).not.toBe('wait_and_recheck');
+    // Asked again within the hour: the read is fresh, no second call.
+    calls.length = 0;
+    await c.research({ requestId, revision: 1 });
+    expect(calls).toEqual([]);
   });
 
   it('the hourly pass asks only for new snapshots, records shadow advice, and scores it a day later', async () => {
@@ -180,6 +201,17 @@ describe('resale market tracking', () => {
       expect(s.decision).toBe('buy');
       expect(s.reasons).toContain('listings_shrinking');
     }
+  });
+
+  it('a failed listings read is logged and the stats poll still runs', async () => {
+    const saved = groupListings;
+    groupListings = () => new Response('{"error":"boom"}', { status: 500 });
+    await h.db.update(t.trackedEvents).set({ nextPollAt: now }).where(eq(t.trackedEvents.eventId, GAME));
+    const r = await tracker().run();
+    expect(r.polled).toBe(1);
+    const [err] = await h.db.select().from(t.marketFetches).where(and(eq(t.marketFetches.kind, 'listings'), eq(t.marketFetches.status, 'error')));
+    expect(err).toBeTruthy();
+    groupListings = saved;
   });
 
   it('stops at the daily call budget', async () => {

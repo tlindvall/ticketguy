@@ -7,22 +7,33 @@ import type { SeatDataStatsSnapshot } from './seatdata';
  * plus how many listings are active. These are LISTED prices before fees, per ticket: never a checkout
  * total, never an offer, and never compared with an all-in price.
  *
- * Group sizes: a single ticket reads the any-quantity series, a pair the two-or-more series. Nothing here
- * says whether three, four or five seats together exist, so those groups get no market price trend — only
- * the listing-count signal, which can only ever argue for buying sooner.
+ * Group sizes: a single ticket reads the any-quantity series, a pair the two-or-more series. Three or more
+ * read a series we build ourselves from SeatData's current listings (DECISION_LOG #45): at each check, the
+ * cheapest listing that has at least that many tickets, and how many listings do. A listing of six may not
+ * sell exactly five (sellers set split rules), so it is "listed with 5 or more", never "5 together".
  */
 export const MARKET_METHOD_VERSION = 'market-1.0';
 export const SEATDATA_PROVIDER = 'seatdata';
 /** Fixed id so the licence record survives re-seeding and every row can point at it. */
 export const SEATDATA_DATASET_ID = '5ea7da7a-0000-4000-8000-000000000001';
 
-export type MarketBasis = 'single' | 'pair';
+export type MarketBasis = 'single' | 'pair' | `group:${number}`;
 
-export function basisForQuantity(quantity: number): MarketBasis | null {
+/** Groups larger than this read the largest size's series: listings that big are rare and the count says so. */
+export const MAX_GROUP_SIZE = 12;
+
+export function basisForQuantity(quantity: number): MarketBasis {
   if (quantity <= 1) return 'single';
   if (quantity === 2) return 'pair';
-  return null;
+  return `group:${Math.min(Math.floor(quantity), MAX_GROUP_SIZE)}`;
 }
+
+/** How many tickets a basis is about: 1, 2, or the group's size. */
+export function basisSize(basis: MarketBasis): number {
+  return basis === 'single' ? 1 : basis === 'pair' ? 2 : Number(basis.slice(6));
+}
+
+export const isGroupBasis = (basis: MarketBasis | null): basis is `group:${number}` => !!basis && basis.startsWith('group:');
 
 export function marketBasketKey(eventKey: string, basis: MarketBasis, zone: string | null): string {
   return createHash('sha256').update(`${eventKey}|market|${basis}|zone=${zone ?? 'any'}|listed`).digest('hex').slice(0, 24);
@@ -49,6 +60,25 @@ export function pointsFromSnapshot(s: SeatDataStatsSnapshot): SeriesPoint[] {
     const z2 = cents(z.get_in_qty2plus);
     if (z1) out.push({ basis: 'single', zone: name, observedAt: at, priceCents: z1, medianCents: cents(z.median_price), activeListings: null });
     if (z2) out.push({ basis: 'pair', zone: name, observedAt: at, priceCents: z2, medianCents: cents(z.median_price), activeListings: null });
+  }
+  return out;
+}
+
+/**
+ * Current listings → one point per group size: the cheapest listed price among active listings with at least
+ * that many tickets, their median, and how many there are. The listing shape is undocumented, so every field
+ * is read defensively; a listing without a usable price or quantity is left out. No eligible listing, no point.
+ */
+export function pointsFromListings(listings: Array<Record<string, unknown>>, sizes: number[], at: Date): SeriesPoint[] {
+  const rows = listings
+    .map((l) => ({ active: l.active === undefined || l.active === null || l.active === true || l.active === 1 || l.active === 'true', price: Number(l.price), qty: Number(l.quantity) }))
+    .filter((r) => r.active && Number.isFinite(r.price) && r.price > 0 && Number.isInteger(r.qty) && r.qty > 0);
+  const out: SeriesPoint[] = [];
+  for (const n of [...new Set(sizes.map((q) => Math.min(Math.floor(q), MAX_GROUP_SIZE)))].filter((q) => q >= 3).sort((a, b) => a - b)) {
+    const prices = rows.filter((r) => r.qty >= n).map((r) => r.price).sort((a, b) => a - b);
+    const cheapest = cents(prices[0]);
+    if (!cheapest) continue;
+    out.push({ basis: `group:${n}`, zone: null, observedAt: at, priceCents: cheapest, medianCents: cents(prices[Math.floor(prices.length / 2)]), activeListings: prices.length });
   }
   return out;
 }

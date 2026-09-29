@@ -5,7 +5,7 @@ import * as t from '@/lib/db/schema';
 import { eventLocalDate, localToInstant } from '@/lib/domain/dates';
 import { audit } from '@/lib/util/audit';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
-import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, computeMarketContext, marketBasketKey, pointsFromSnapshot, type MarketBasis, type MarketContext, type SeriesPoint } from './series';
+import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, marketBasketKey, pointsFromListings, pointsFromSnapshot, type MarketBasis, type MarketContext, type SeriesPoint } from './series';
 
 /**
  * Market tracking (DECISION_LOG #44): every event a customer asks about, and the cohort named in
@@ -48,6 +48,9 @@ const SHADOW_PROFILES: Array<{ profile: string; basis: MarketBasis; quantity: nu
   { profile: 'single_flexible', basis: 'single', quantity: 1 },
   { profile: 'pair_flexible', basis: 'pair', quantity: 2 },
 ];
+/** A customer's request re-reads listings for its group when the last read is older than this. */
+const GROUP_FRESH_HOURS = 3;
+const OPEN_STATES = ['received', 'interpreting', 'needs_clarification', 'resolving_event', 'researching', 'awaiting_review', 'manual_attention', 'recommendation_sent', 'monitoring', 'referred'];
 const HISTORY_EVENTS = 8;
 const HISTORY_SAMPLE_HOURS = 6;
 const HISTORY_REFRESH_DAYS = 30;
@@ -187,8 +190,23 @@ export class MarketTracker {
     await this.db.insert(t.trackedEvents).values({ eventId, provider: SEATDATA_PROVIDER, reasons: ['request'], nextPollAt: now }).onConflictDoNothing();
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || !['pending_match', 'requested', 'active'].includes(tr.state)) return { refreshed: false, reason: tr?.state ?? 'missing' };
-    if (tr.nextPollAt > now) return { refreshed: false, reason: 'fresh' };
     if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return { refreshed: false, reason: 'budget' };
+    if (tr.nextPollAt > now) {
+      // The stats are current, but a group of three or more reads listings, and those are only as fresh as the last read.
+      if (tr.state !== 'active' || !tr.providerEventId) return { refreshed: false, reason: 'fresh' };
+      const sizes = await this.groupSizes(eventId);
+      if (!sizes.length || (await this.groupsReadSince(eventId, new Date(now.getTime() - GROUP_FRESH_HOURS * 3_600_000)))) return { refreshed: false, reason: 'fresh' };
+      const [ev0] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
+      if (!ev0 || ev0.e.localStartAt <= now) return { refreshed: false, reason: 'past' };
+      try {
+        await this.readGroups(tr.providerEventId, ev0, sizes);
+        return { refreshed: true };
+      } catch (e) {
+        const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
+        await this.log('listings', eventId, 'error', 1, 0, msg);
+        return { refreshed: false, reason: msg };
+      }
+    }
     const [ev] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
     if (!ev || ev.e.localStartAt <= now) return { refreshed: false, reason: 'past' };
     try {
@@ -241,7 +259,19 @@ export class MarketTracker {
     const now = this.now();
     const api = this.api();
     const before = api.calls;
-    await this.prioritize(tr.providerEventId, ev.e.id);
+    // Listings for any group of three or more following the event; the read also puts it on SeatData's fast rescan.
+    // A failed read is logged and the stats poll goes on: singles and pairs don't depend on it.
+    const sizes = await this.groupSizes(ev.e.id);
+    let groupsRead = false;
+    if (sizes.length) {
+      try {
+        await this.readGroups(tr.providerEventId, ev, sizes);
+        groupsRead = true;
+      } catch (e) {
+        await this.log('listings', ev.e.id, 'error', 1, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (!groupsRead) await this.prioritize(tr.providerEventId, ev.e.id);
     const { snapshots } = await api.eventStats(tr.providerEventId, { start_date: tr.lastObservedAt ? tr.lastObservedAt.toISOString().slice(0, 10) : undefined });
     const points = snapshots.flatMap(pointsFromSnapshot).filter((p) => !tr.lastObservedAt || p.observedAt > tr.lastObservedAt);
     await this.storePoints(ev, points);
@@ -260,7 +290,7 @@ export class MarketTracker {
    */
   private async prioritize(providerEventId: string, eventId: string): Promise<void> {
     const since = new Date(this.now().getTime() - 20 * 3_600_000);
-    const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'prioritize'), eq(t.marketFetches.eventId, eventId), gte(t.marketFetches.at, since))).limit(1);
+    const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), inArray(t.marketFetches.kind, ['prioritize', 'listings']), eq(t.marketFetches.eventId, eventId), gte(t.marketFetches.at, since))).limit(1);
     if (recent) return;
     const api = this.api();
     const before = api.calls;
@@ -272,12 +302,39 @@ export class MarketTracker {
     }
   }
 
+  /** Group sizes (three or more) that open requests for this event are asking about. */
+  async groupSizes(eventId: string): Promise<number[]> {
+    const reqs = await this.db.select({ id: t.requests.id, rev: t.requests.currentRevision }).from(t.requests).where(and(eq(t.requests.eventId, eventId), inArray(t.requests.state, OPEN_STATES)));
+    if (!reqs.length) return [];
+    const versions = await this.db.select({ requestId: t.requestVersions.requestId, revision: t.requestVersions.revision, brief: t.requestVersions.brief }).from(t.requestVersions).where(inArray(t.requestVersions.requestId, reqs.map((r) => r.id)));
+    const current = new Map(reqs.map((r) => [r.id, r.rev]));
+    const sizes = versions.filter((v) => current.get(v.requestId) === v.revision).map((v) => Number((v.brief as { quantity?: unknown } | null)?.quantity)).filter((q) => Number.isInteger(q) && q >= 3);
+    return [...new Set(sizes.map((q) => basisSize(basisForQuantity(q))))].sort((a, b) => a - b);
+  }
+
+  private async groupsReadSince(eventId: string, since: Date): Promise<boolean> {
+    const [r] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'listings'), eq(t.marketFetches.eventId, eventId), eq(t.marketFetches.status, 'success'), gte(t.marketFetches.at, since))).limit(1);
+    return !!r;
+  }
+
+  /** Current listings → one point per group size (DECISION_LOG #45). One paid request. */
+  private async readGroups(providerEventId: string, ev: EventRow, sizes: number[]): Promise<number> {
+    const api = this.api();
+    const before = api.calls;
+    const r = await api.listings(providerEventId);
+    const listings = Array.isArray(r.listings) ? r.listings : [];
+    const points = pointsFromListings(listings, sizes, this.now());
+    await this.storePoints(ev, points);
+    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}`);
+    return points.length;
+  }
+
   private async storePoints(ev: EventRow, points: SeriesPoint[]): Promise<void> {
     const rows = points.map((p) => ({
       datasetId: SEATDATA_DATASET_ID,
       eventId: ev.e.id,
       basketKey: marketBasketKey(ev.e.id, p.basis, p.zone),
-      quantity: p.basis === 'single' ? 1 : 2,
+      quantity: basisSize(p.basis),
       seatZone: p.zone,
       observedAt: p.observedAt,
       providerAsOf: p.observedAt,
@@ -393,21 +450,27 @@ export async function loadMarketContext(db: DbOrTx, a: { eventId: string; basis:
   const basketKey = marketBasketKey(a.eventId, a.basis, a.zone ?? null);
   const rows = await db.select({ at: t.marketSnapshots.observedAt, price: t.marketSnapshots.cheapestEligibleTotalCents, count: t.marketSnapshots.eligibleOptionCount }).from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, a.eventId), eq(t.marketSnapshots.basketKey, basketKey), gte(t.marketSnapshots.observedAt, since), lte(t.marketSnapshots.observedAt, a.now))).orderBy(asc(t.marketSnapshots.observedAt));
   const [ev] = await db.select({ ent: t.events.primaryEntityId, venue: t.events.venueId }).from(t.events).where(eq(t.events.id, a.eventId));
-  const hist = ev?.ent
-    ? await db.select({ eventKey: t.marketHistory.providerEventId, lead: t.marketHistory.leadTimeMinutes, price: t.marketHistory.priceCents }).from(t.marketHistory).where(and(eq(t.marketHistory.entityId, ev.ent), eq(t.marketHistory.venueId, ev.venue), eq(t.marketHistory.quantity, a.basis === 'single' ? 1 : 2), a.zone ? eq(t.marketHistory.seatZone, a.zone) : isNull(t.marketHistory.seatZone)))
+  // Past games' history is kept for singles and pairs only; groups have no "typical" yet.
+  const hist = ev?.ent && !isGroupBasis(a.basis)
+    ? await db.select({ eventKey: t.marketHistory.providerEventId, lead: t.marketHistory.leadTimeMinutes, price: t.marketHistory.priceCents }).from(t.marketHistory).where(and(eq(t.marketHistory.entityId, ev.ent), eq(t.marketHistory.venueId, ev.venue), eq(t.marketHistory.quantity, basisSize(a.basis)), a.zone ? eq(t.marketHistory.seatZone, a.zone) : isNull(t.marketHistory.seatZone)))
     : [];
   return computeMarketContext({ basis: a.basis, zone: a.zone ?? null, points: rows.filter((r) => r.price !== null).map((r) => ({ observedAt: r.at, priceCents: r.price!, activeListings: r.count })), now: a.now, eventStartAt: a.eventStartAt, comparables: hist.map((h) => ({ eventKey: h.eventKey, leadMinutes: h.lead, priceCents: h.price })) });
 }
 
 /**
- * Market signal for a customer's group. A single or a pair reads its own price series; three or more get
- * only the listing-count signal, because nothing in the data says whether that many seats together exist.
+ * Market signal for a customer's group. A single or a pair reads its own price series; three or more read the
+ * series built from listings with at least that many tickets, whose count is also the group's supply signal.
+ * Until that series has data, a group falls back to the count of all listings, labelled as such.
  */
-export async function marketForGroup(db: DbOrTx, a: { eventId: string; quantity: number; eventStartAt: Date; now: Date }): Promise<{ basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; single: MarketContext }> {
-  const single = await loadMarketContext(db, { eventId: a.eventId, basis: 'single', eventStartAt: a.eventStartAt, now: a.now });
+export async function marketForGroup(db: DbOrTx, a: { eventId: string; quantity: number; eventStartAt: Date; now: Date }): Promise<{ basis: MarketBasis; context: MarketContext | null; supply: MarketContext['supply']; supplyScope: 'all' | 'group'; single: MarketContext; pair: MarketContext }> {
+  const load = (basis: MarketBasis) => loadMarketContext(db, { eventId: a.eventId, basis, eventStartAt: a.eventStartAt, now: a.now });
+  const [single, pair] = await Promise.all([load('single'), load('pair')]);
   const basis = basisForQuantity(a.quantity);
-  const context = basis === 'single' ? single : basis === 'pair' ? await loadMarketContext(db, { eventId: a.eventId, basis: 'pair', eventStartAt: a.eventStartAt, now: a.now }) : null;
-  return { basis, context, supply: single.supply, single };
+  const context = basis === 'single' ? single : basis === 'pair' ? pair : await load(basis);
+  // A group's count from a single read is a count without a trend yet; it is still the number that matters.
+  const n = context.current?.activeListings ?? null;
+  const groupSupply: MarketContext['supply'] | null = !isGroupBasis(basis) ? null : context.supply.now !== null ? context.supply : n !== null && context.current && !context.reasons.some((r) => r.startsWith('stale')) ? { trend: 'unknown', now: n, before: null, hours: null } : null;
+  return { basis, context, supply: groupSupply ?? single.supply, supplyScope: groupSupply ? 'group' : 'all', single, pair };
 }
 
 function norm(s: string | null | undefined): string {
