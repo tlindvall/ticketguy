@@ -35,19 +35,28 @@ function hashKey(s: string): number {
 }
 
 /** Reserve estimated spend BEFORE the call. Throws BudgetExceededError when the hard/global/call limits would be exceeded. */
+/**
+ * Spend counts what a finished call actually used (its tokens at the configured rate), and a reservation only
+ * while its call is in flight: counting every call at its up-front estimate filled the daily cap with spend
+ * that never happened (post-#56 QA: two budget stops while the provider bill was a few dollars in total).
+ */
+export const SPEND_SQL = sql.raw(`coalesce(sum(case when kind = 'released' then -estimated_usd_micros when kind = 'settled' and actual_usd_micros is not null then actual_usd_micros else estimated_usd_micros end),0)::bigint`);
+
 export async function reserveBudget(db: DbOrTx, args: { requestId: string; revision: number; runId: string | null; jobName: string; model: string; estimatedUsdMicros: number; limits: BudgetLimits; now: Date }): Promise<Reservation> {
   return await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${hashKey('ai-budget:' + args.requestId)})`);
     const dayStart = new Date(Date.UTC(args.now.getUTCFullYear(), args.now.getUTCMonth(), args.now.getUTCDate()));
     const [req] = await tx
-      .select({ total: sql<number>`coalesce(sum(case when kind = 'released' then -estimated_usd_micros else estimated_usd_micros end),0)::bigint`, calls: sql<number>`count(*) filter (where kind = 'reservation')::int` })
+      .select({ total: sql<number>`coalesce(sum(case when kind = 'released' then -estimated_usd_micros when kind = 'settled' and actual_usd_micros is not null then actual_usd_micros else estimated_usd_micros end),0)::bigint`, calls: sql<number>`(count(*) filter (where kind in ('reservation', 'settled')) - count(*) filter (where kind = 'released'))::int` })
       .from(usageLedger)
       .where(and(eq(usageLedger.requestId, args.requestId), eq(usageLedger.revision, args.revision)));
     const [glob] = await tx
-      .select({ total: sql<number>`coalesce(sum(case when kind = 'released' then -estimated_usd_micros else estimated_usd_micros end),0)::bigint` })
+      .select({ total: sql<number>`coalesce(sum(case when kind = 'released' then -estimated_usd_micros when kind = 'settled' and actual_usd_micros is not null then actual_usd_micros else estimated_usd_micros end),0)::bigint` })
       .from(usageLedger)
       .where(gte(usageLedger.createdAt, dayStart));
     const reqTotal = Number(req?.total ?? 0) + args.estimatedUsdMicros;
+    // Every call made counts, finished (settled) or in flight; one that never reached the model (released) doesn't.
+    // Counting only open reservations let settled calls fall out of the per-revision cap.
     const calls = Number(req?.calls ?? 0) + 1;
     const globTotal = Number(glob?.total ?? 0) + args.estimatedUsdMicros;
     if (calls > args.limits.maxCallsPerRevision) throw new BudgetExceededError('call_count', `${calls} > ${args.limits.maxCallsPerRevision}`);
@@ -72,6 +81,6 @@ export async function releaseBudget(db: DbOrTx, args: { requestId: string; revis
 }
 
 export async function requestSpendUsd(db: DbOrTx, requestId: string): Promise<number> {
-  const [r] = await db.select({ total: sql<number>`coalesce(sum(case when kind = 'released' then -estimated_usd_micros else estimated_usd_micros end),0)::bigint` }).from(usageLedger).where(eq(usageLedger.requestId, requestId));
+  const [r] = await db.select({ total: sql<number>`coalesce(sum(case when kind = 'released' then -estimated_usd_micros when kind = 'settled' and actual_usd_micros is not null then actual_usd_micros else estimated_usd_micros end),0)::bigint` }).from(usageLedger).where(eq(usageLedger.requestId, requestId));
   return Number(r?.total ?? 0) / 1e6;
 }

@@ -76,8 +76,16 @@ export async function markDispatched(db: DbOrTx, id: string, leaseToken: string,
   return rows.length > 0;
 }
 
+/**
+ * Work a customer is waiting on (reading their email, researching the answer) is retried a few times, about
+ * two and a half minutes, then handed to a person and dead-lettered for replay: retrying quietly for 40
+ * minutes and then dropping it left five live sends unanswered (post-#56 QA). Other work keeps the long budget.
+ */
+export const CUSTOMER_WORK_MAX_ATTEMPTS = 4;
+export const CUSTOMER_WORK: readonly string[] = ['request.interpret', 'research.requested'];
+
 export async function markFailed(db: DbOrTx, ev: LeasedEvent, error: string, now: Date): Promise<'retry' | 'dead'> {
-  const dead = ev.attempts >= OUTBOX_MAX_ATTEMPTS;
+  const dead = ev.attempts >= (CUSTOMER_WORK.includes(ev.eventType) ? CUSTOMER_WORK_MAX_ATTEMPTS : OUTBOX_MAX_ATTEMPTS);
   await db
     .update(outboxEvents)
     .set({

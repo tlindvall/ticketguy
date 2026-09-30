@@ -911,3 +911,24 @@ An offer with unknown fees is compared by break-even, never called a fit. When n
 - The API reads only conversations a test customer wrote in.
 - Such a conversation stays test-only when test mode is turned off: nothing in it is ever emailed, so an invented address never gets real mail.
 - Test mode stops real customers' replies too. The banner on every admin page is there so nobody forgets it is on.
+
+## 58. A spent or refused AI budget still answers; customer work that keeps failing goes to a person, saying why
+
+**Budget.** Spend is what calls actually cost: a settled call at its tokens times the configured rate, and a reservation only while its call is running. Every finished call counts toward the per-revision call cap. The operations page shows the model's configured price, or a red badge when it is costed at the high fallback.
+
+**What happens when the model can't be used.**
+- **Budget used up:** the email is read by the deterministic rules reader and answered from what the customer wrote. The stop is audited and counted.
+- **Provider refuses the call** (unknown model, bad key, no quota or billing, invalid request): the same, with a red count on /admin/operations, because the setting is wrong for every email, not this one.
+- **Timeouts and rate limits:** retried, but customer work gets four tries. After that the request goes to a person with the provider's error in the staff alert, and the customer gets the holding reply once.
+- **A refusal, malformed or truncated output:** about this message, so it still goes to a person.
+
+A parked request can be re-read from its admin page ("Read the latest email again"), and dead events can be replayed from /admin/operations. Both are idempotent.
+
+**Holding reply.** It says the request needs a manual check and that the answer will come in the thread. It gives no hours or reply time that nothing enforces.
+
+**Offers.**
+- A follow-up that keeps one offer from an earlier comparison ("ignore A, only B") is judged alone, and the reply says so.
+- Named offers ("the green listing", "the first seller"), per-ticket fees, "$X all-in for both" totals and seller time zones are read.
+- Offer lines give the reason, not a status label.
+
+**Synthetic examples** get what they show and the arithmetic, never market, checkout or availability advice. A hypothetical price comparison is answered from the customer's own two numbers.

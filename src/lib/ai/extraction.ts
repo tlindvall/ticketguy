@@ -35,7 +35,7 @@ export type ExtractionSchema = z.infer<typeof EXTRACTION_SCHEMA>;
 const NUM_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, a: 1, single: 1, pair: 2, couple: 2 };
 
 /** "my wife and I" states a party of two as plainly as "two tickets" does. */
-const COUPLE = /\b(?:my (?:wife|husband|partner|girlfriend|boyfriend) and (?:i|me)|(?:me|myself) and my (?:wife|husband|partner|girlfriend|boyfriend))\b/i;
+const COUPLE = /\b(?:my (?:wife|husband|partner|girlfriend|boyfriend) and (?:i|me)|(?:me|myself) and my (?:wife|husband|partner|girlfriend|boyfriend)|both of us)\b/i;
 
 function parseQuantity(t: string): { value: number | null; quote: string | null } {
   // Up to three words may sit between the number and the noun: "4 Knicks tickets", "two lower bowl seats".
@@ -50,11 +50,17 @@ function parseQuantity(t: string): { value: number | null; quote: string | null 
   }
   const raw = m[1]!.toLowerCase();
   const v = NUM_WORDS[raw] ?? Number(raw);
-  return Number.isFinite(v) && v > 0 ? { value: v, quote: m[0] } : { value: null, quote: null };
+  // "I want to go with a friend" is two tickets, not one; "me and three friends" is four. "A ticket for a friend"
+  // stays one: only friends someone goes *with* add the sender.
+  const withFriends = /friends?$/i.test(m[0]) && /\b(?:with|me and|myself and|and I)\s*$/i.test(t.slice(Math.max(0, m.index - 12), m.index));
+  // "two adults and our 16-year-old" is three; "two adults and two kids" is four (live G02).
+  const after = /adults?$/i.test(m[0]) ? /^\s*(?:,|and|plus|\+)\s*(?:(?:our|my|a|one|their)\s+(?:\d{1,2}[- ]?(?:year[- ]?old|yo)|son|daughter|kid|child|teen(?:ager)?|boy|girl|nephew|niece|grand(?:son|daughter))\b|(\d{1,2}|two|three|four|five)\s+(?:kids|children|teens|teenagers|boys|girls)\b)/i.exec(t.slice(m.index + m[0].length)) : null;
+  const plus = after ? (after[1] ? NUM_WORDS[after[1].toLowerCase()] ?? Number(after[1]) : 1) : 0;
+  return Number.isFinite(v) && v > 0 ? { value: (withFriends ? v + 1 : v) + plus, quote: after ? m[0] + after[0] : m[0] } : { value: null, quote: null };
 }
 
 function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | 'whole_party' | null; quote: string | null } {
-  const m = /(?:under|below|max(?:imum)?|budget(?: is| of)?|up to|no more than|around|about|<|≤)?\s*\$\s?(\d{1,5}(?:[.,]\d{2})?)\s*(total|all[- ]in|for (?:all|both|the (?:two|three|four|five|six|group|pair))|combined|altogether|each|per (?:ticket|person|seat)|a (?:ticket|seat|person)|apiece|pp)?/i.exec(t);
+  const m = /(?:under|below|max(?:imum)?|budget(?: is| of)?|up to|no more than|around|about|<|≤)?\s*\$\s?(\d{1,5}(?:[.,]\d{2})?)\s*(total|all[- ]in|for (?:all|both|everyone|the (?:two|three|four|five|six|group|pair)|the (?:whole |entire )?(?:order|lot|block|party|group))|combined|altogether|each|per (?:ticket|person|seat)|a (?:ticket|seat|person)|apiece|pp)?/i.exec(t);
   if (!m) return { cents: null, basis: null, quote: null };
   const cents = Math.round(Number(m[1]!.replace(',', '.')) * 100);
   const q = (m[2] ?? '').toLowerCase();

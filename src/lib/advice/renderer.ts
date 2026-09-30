@@ -188,7 +188,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [claim('C_CORRECTION'), watch, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [claim('C_CORRECTION'), watch, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
     const fmt = lead ? leadRich : rich;
@@ -210,11 +210,27 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   }
   for (const c of primary.slice(1)) put(c);
 
-  if (subject) {
+  // A made-up example's details are short points (A11), anything else one sentence.
+  if (subject?.items?.length) {
+    lines.push(subject.items.map((i) => `- ${i}`).join('\n'));
+    html.push(`<ul style="margin:0 0 18px;padding-left:22px;">${subject.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
+  } else if (subject) {
     lines.push(subject.text);
     html.push(P(rich(subject.text)));
   }
-  if (catches) section(lines, html, CATCHES_LEAD, catches.text.split('\n').filter(Boolean));
+  // Their hypothetical about another price, answered right after the listing it's measured against.
+  const gap = claim('C_GAP');
+  if (gap) {
+    lines.push(gap.text);
+    html.push(P(rich(gap.text)));
+  }
+  const synthetic = claim('C_SYNTHETIC');
+  // A made-up example has nothing to check before buying: its catches are just what it says.
+  if (catches && catches.text.trim()) section(lines, html, synthetic ? 'It also shows:' : CATCHES_LEAD, catches.text.split('\n').filter(Boolean));
+  if (synthetic) {
+    lines.push(synthetic.text);
+    html.push(P(rich(synthetic.text)));
+  }
   for (const c of alternatives) {
     lines.push(c.text);
     html.push(P(rich(c.text)));
@@ -244,7 +260,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set(['C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set(['C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -265,7 +281,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   if (asks.length) section(lines, html, questionsLead(asks.length), asks);
   // Nor over their own question (delivery, their offers, access, sales): a model closing there drifted into
   // generic buy-or-wait advice (post-#54 QA, R3-B03).
-  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES'].some((id) => claimsById.has(id))) {
+  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING'].some((id) => claimsById.has(id))) {
     // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
     // worse, ask for the listing they already sent.
     lines.push(b.closing.trim());
