@@ -38,7 +38,7 @@ import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOU
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
-import { cleanSeatField, offersInText } from '@/lib/advice/text-offers';
+import { cleanSeatField, offersInText, statedFeeBasis } from '@/lib/advice/text-offers';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -222,6 +222,7 @@ export class Concierge {
         }
         await tx.insert(t.attachments).values({ messageId, providerAttachmentId: x.a.providerAttachmentId, filename: x.a.filename, declaredMimeType: x.a.declaredMimeType, detectedMimeType: x.insp.ok ? x.insp.mimeType : null, byteLength: x.byteLength, width: x.insp.ok ? x.insp.width : null, height: x.insp.ok ? x.insp.height : null, mediaId, validationState, validationReason: reason, purgeAt: new Date(now.getTime() + RAW_RETENTION_DAYS * 86_400_000) });
       }
+      for (const u of msg.unretrieved ?? []) await tx.insert(t.attachments).values({ messageId, providerAttachmentId: u.id, filename: u.filename, declaredMimeType: u.declaredMimeType, detectedMimeType: null, byteLength: null, mediaId: null, validationState: 'rejected', validationReason: `not_retrieved:${u.reason}`, purgeAt: new Date(now.getTime() + RAW_RETENTION_DAYS * 86_400_000) });
 
       if (auto.autoResponse) {
         await audit(tx, { actor: 'system', action: 'inbound.auto_response_suppressed', entityKind: 'message', entityId: messageId, diff: { reasons: auto.reasons } });
@@ -326,6 +327,12 @@ export class Concierge {
     const latestText = msg.sanitizedText ?? '';
     if (asksToCancelWatch(latestText)) extraction = { ...extraction, intent: 'cancel_watch' };
     if (extraction.accessibilityNeeds && NO_ACCESS_NEED.test(latestText)) extraction = { ...extraction, accessibilityNeeds: null };
+    // An offer's price is not their budget: "Offer A: $90 per ticket" read as "Budget: $90 a ticket" ruled out
+    // every offer they sent (post-#54 replay). A budget is kept only when it isn't one of their offers' prices.
+    const latestOffers = offersInText(latestText);
+    if (latestOffers.length >= 2 && extraction.budgetCents !== null && latestOffers.some((o) => o.perTicketCents === extraction.budgetCents || o.totalCents === extraction.budgetCents)) extraction = { ...extraction, budgetCents: null, budgetBasis: null };
+    // Likewise a quoted price: with offers side by side there is no single price they're asking about.
+    if (latestOffers.length >= 2 && extraction.quotedPriceCents != null) extraction = { ...extraction, quotedPriceCents: null, quotedPriceBasis: null };
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
     extraction = applyTicketLinks(extraction, known);
@@ -334,10 +341,14 @@ export class Concierge {
     const listing = await this.readListingEvidence(msg, req);
     if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known);
     const listingNotes = listing.redacted ? [REDACTED_NOTE] : [];
+    // An image they sent (or say they attached) that we couldn't read is said plainly, and nothing is assumed
+    // in its place: "Two tickets. Got it" to a screenshot of three was answering an email they didn't send
+    // (post-#54 QA, R3-B09).
+    const imageUnread = !listing.fields && !listing.redacted && (await this.unreadImage(msg));
 
     // A first message that isn't about tickets ("tell me something about New York", "are you an idiot?") gets
     // one short "I only do tickets" reply a day, and nothing is assumed about a request that isn't there.
-    if (!priorVersion && !listing.images && isOffTopic(extraction, msg.sanitizedText ?? '')) {
+    if (!priorVersion && !listing.images && !imageUnread && isOffTopic(extraction, msg.sanitizedText ?? '')) {
       const replied = await this.recentAudit('intake.off_topic_replied', contact!.id, msg.receivedAt, OFF_TOPIC_REPLY_EVERY_HOURS);
       if (!replied) {
         await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy does tickets'), template: 'off_topic', vars: {}, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `off_topic:${req.id}` });
@@ -449,7 +460,7 @@ export class Concierge {
 
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
-    const { brief: withDefaults, assumed } = applyDefaults(merged);
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged);
     merged = withDefaults;
     const assumptions = [...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
@@ -538,7 +549,11 @@ export class Concierge {
       const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
       const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')));
       if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
-      const questions = [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
+      // They named the act, the date and the place and nothing is scheduled: asking "which date and venue?" asks
+      // for what they already gave (post-#54 QA, R3-B10). One next step instead.
+      const gaveWhenWhere = resolution.kind === 'no_match' && !!merged.performerOrTeam && !!(merged.resolvedLocalDate || merged.dateExpression) && !!(merged.city || merged.state) && !elsewhere.length;
+      const nextStep = gaveWhenWhere ? `If you’ve seen a ${titleCaseName(merged.performerOrTeam!)} show announced for then, send me the link and I’ll check it. Or tell me another date or city and I’ll look there.` : null;
+      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && k !== 'performer_ambiguous'), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       const countryCheck = !contact!.countryConfirmed && count === 1;
@@ -552,7 +567,7 @@ export class Concierge {
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, assumptions, countryCheck, knownFacts, ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -680,6 +695,17 @@ export class Concierge {
    * size). One that shows a barcode, payment card or ID is deleted and quarantined, and nothing read from it is
    * kept. A read that fails never fails the request; the customer is asked for the details instead.
    */
+  /**
+   * Whether this message carries an image we didn't read: one attached (fetched or not) with nothing usable
+   * read from it, or an email that says it attaches one when none reached us. 'missing' when it never arrived.
+   */
+  private async unreadImage(msg: typeof t.messages.$inferSelect): Promise<'unread' | 'missing' | null> {
+    const rows = await this.db.select().from(t.attachments).where(eq(t.attachments.messageId, msg.id));
+    const images = rows.filter((a) => a.validationState !== 'quarantined' && (/^image\//i.test(a.detectedMimeType ?? a.declaredMimeType ?? '') || /\.(png|jpe?g|gif|webp|heic)$/i.test(a.filename ?? '')));
+    if (images.length) return 'unread';
+    return SAYS_ATTACHED.test(msg.sanitizedText ?? '') ? 'missing' : null;
+  }
+
   private async readListingEvidence(msg: typeof t.messages.$inferSelect, req: typeof t.requests.$inferSelect): Promise<{ fields: ListingFields | null; source: 'screenshot' | 'listing_text' | null; images: number; redacted: number }> {
     const atts = await this.db.select().from(t.attachments).where(and(eq(t.attachments.messageId, msg.id), eq(t.attachments.validationState, 'accepted')));
     const images = atts.filter((a) => a.mediaId);
@@ -739,10 +765,15 @@ export class Concierge {
       }
     }
     const text = msg.sanitizedText ?? '';
-    if (!best && looksLikeListingText(text) && reader.name !== 'none') {
+    // Two or more offers in their words are compared one by one (text-offers); read as one listing, their fields
+    // run together (post-#54 QA, R3-B01).
+    if (!best && looksLikeListingText(text) && reader.name !== 'none' && offersInText(text).length < 2) {
       try {
         const r = await read({ text });
-        const fields = usableListing(r) ? fieldsFromRead(r) : null;
+        let fields = usableListing(r) ? fieldsFromRead(r) : null;
+        // "Neither seat is a wheelchair or companion space": their correction wins over any reading of the
+        // word itself (post-#54 QA, R3-B08).
+        if (fields && SEATS_NOT_ACCESSIBLE.test(text)) fields = { ...fields, restrictionCodes: fields.restrictionCodes.filter((c) => c !== 'accessible_seating'), restrictions: fields.restrictions.filter((x) => !/\b(wheelchair|accessible|accessibility|ada|companion)\b/i.test(x)) };
         await this.db.insert(t.listingEvidence).values({ requestId: req.id, messageId: msg.id, source: 'listing_text', observedAt: msg.receivedAt, kind: r.kind, confidence: r.confidence, fields: fields as unknown as Record<string, unknown> | null, readBy: reader.name });
         if (fields) {
           best = fields;
@@ -998,6 +1029,8 @@ export class Concierge {
     // Ask the provider about a window once per city (fresh results are reused), then read the catalog. A kind
     // of music is also asked for by name, so a busy week's first hundred shows do not crowd it out.
     const discovery = await this.discoveryAvailability();
+    const threadText = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
+    const ruledOut = exclusionsIn(threadText);
     const lookIn = async (w: { from: string; to: string }) => {
       let providerChecked = false;
       if (discovery && w.from <= w.to) {
@@ -1039,9 +1072,12 @@ export class Concierge {
       const areaUsed = !area ? null : inArea.length ? area : inParent.length ? area.parent! : null;
       const areaKept = !area || areaUsed === area;
       const placed = !area ? all : inArea.length ? inArea : inParent.length ? inParent : all;
-      const ofGenre = genre ? placed.filter(({ e }) => genreMatches(genre, e.genre)) : placed;
+      // What they ruled out ("no pop concerts, tribute acts or kids' events") goes before any ranking, so an
+      // excluded show is never one of the picks (post-#54 QA, R3-B07).
+      const allowed = ruledOut.length ? placed.filter(({ e }) => !ruledOut.some((k) => excludedBy(k, e))) : placed;
+      const ofGenre = genre ? allowed.filter(({ e }) => genreMatches(genre, e.genre)) : allowed;
       const genreKept = !genre || ofGenre.length > 0;
-      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : placed };
+      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : allowed };
     };
     // Nothing in the window is not a dead end: a team that plays at home every other week, or a quiet week,
     // gets the next few after it (six weeks on), said as such.
@@ -1579,18 +1615,27 @@ export class Concierge {
     // price the customer asked about (per ticket; a total is divided by the party size).
     const official = await this.officialSale(event, now);
     const faceValue = event.faceMinCents != null && event.faceMaxCents != null ? { minCents: event.faceMinCents, maxCents: event.faceMaxCents } : null;
+    // What they asked in the message behind this revision, not anywhere in the thread: a question answered
+    // before, or quoted back, is not asked again (remediation review §1). Quoted history is already stripped.
+    const latestIds = version?.sourceMessageIds ?? [];
+    const said = latestIds.length ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, latestIds))).map((m) => m.text ?? '').join('\n') : '';
+    const asks = questionsAsked(said);
+    // Two or more offers laid out in their words: compared as the question, each kept apart (retest R2-B02).
+    const textOffers = offersInText(said);
+    const saidInThread = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
     // The listing they showed us, newest first: what it displayed is the price being checked, with its source.
     const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), sql`${t.listingEvidence.fields} is not null`)).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
     // "section Offer B: 211" was the label read as the seat (retest R2-B06): the seat fields keep the value only.
     const evFields = ev ? (ev.fields as unknown as ListingFields) : null;
-    const shown: SubjectListing | null = ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    // With two or more of their offers, the comparison is the answer: a single-listing read of the same email
+    // mixes their fields (A's price and access with B's seat) and contradicts it (post-#54 QA, R3-B01).
+    const shown: SubjectListing | null = textOffers.length >= 2 ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
     const quote: QuotedPrice | null = shown?.perTicketCents != null
       ? { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
-      : brief.quotedPriceCents != null
-        ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported' }
+      : brief.quotedPriceCents != null && textOffers.length < 2
+        ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported', feeBasis: statedFeeBasis(said, brief.quotedPriceCents) ?? statedFeeBasis(saidInThread, brief.quotedPriceCents) ?? undefined }
         : null;
     // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
-    const saidInThread = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
     const travelling = TRAVELLING.test(saidInThread);
     // The market around the listing they showed us: cheaper seats for their group, from one fresh listings read.
     const around = shown?.perTicketCents != null && licence.allows('tracking') ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
@@ -1603,13 +1648,6 @@ export class Concierge {
       const [w] = await this.db.select().from(t.watches).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).orderBy(desc(t.watches.createdAt)).limit(1);
       watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt } : { running: false };
     }
-    // What they asked in the message behind this revision, not anywhere in the thread: a question answered
-    // before, or quoted back, is not asked again (remediation review §1). Quoted history is already stripped.
-    const latestIds = version?.sourceMessageIds ?? [];
-    const said = latestIds.length ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, latestIds))).map((m) => m.text ?? '').join('\n') : '';
-    const asks = questionsAsked(said);
-    // Two or more offers laid out in their words: compared as the question, each kept apart (retest R2-B02).
-    const textOffers = offersInText(said);
     // Cheaper offers the comparison rejected for a hard requirement: named with the reason, never offered.
     const perSeat = (o: Offer) => { const tot = o.payableTotalCents ?? o.baseTotalCents; return tot === null ? null : tot / o.quantity; };
     const ref = best?.comparableTotalCents != null ? best.comparableTotalCents / quantity : constraints.budgetTotalCents != null ? constraints.budgetTotalCents / quantity : Infinity;
@@ -1632,7 +1670,8 @@ export class Concierge {
     const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && textOffers.length < 2
       ? await this.takeForStaffComparison({ requestId: req.id, contactEmail: contact?.emailLookup ?? '', requirements })
       : null;
-    const packet = buildPacket({ staffFollowUp, requirements, textOffers, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const offerNeeds = textOffers.length >= 2 ? { noObstructed: NO_OBSTRUCTED.test(`${said}\n${brief.seatingPreference ?? ''}`), togetherRequired: !!brief.togetherRequired, baseline: comparedAgainst(said, textOffers.map((o) => o.label)) } : null;
+    const packet = buildPacket({ staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -2354,6 +2393,48 @@ export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: stri
 const TRAVELLING = /\b(fly(ing)? in|flight|flying (in|out|to)|travel(l)?ing (in|to|from|for)|driving in|coming in from|road trip|booked (a|our) hotel|hotel booked)\b/i;
 
 /** Told when a screenshot showed a barcode, card or ID: we deleted it and used nothing from it. */
+type Exclusion = 'pop' | 'tribute' | 'kids';
+/** Kinds of show they ruled out, from a "no …" / "not …" / "without …" clause. */
+export function exclusionsIn(text: string): Exclusion[] {
+  const out = new Set<Exclusion>();
+  const t = text.replace(/[’‘]/g, "'");
+  for (const m of t.matchAll(/\b(?:no|not|nothing|without|avoid|skip|exclude|excluding|none of)\b([^.!?;:]{0,80})/gi)) {
+    const clause = m[1]!;
+    if (/\b(?:k-?)?pop\b(?!-?up)/i.test(clause) && !/\bpop[- ]?punk\b/i.test(clause)) out.add('pop');
+    if (/\btribute/i.test(clause)) out.add('tribute');
+    if (/\b(?:kids?|kids'|children'?s?|family|families|all[- ]ages)\b/i.test(clause)) out.add('kids');
+  }
+  return [...out];
+}
+function excludedBy(k: Exclusion, e: { name: string; genre: string | null; category: string }): boolean {
+  const g = e.genre ?? '';
+  if (k === 'pop') return /\bpop\b/i.test(g) || /\bpop\b/i.test(e.name);
+  if (k === 'tribute') return /\btribute\b/i.test(g) || /\btribute\b|\bthe music of\b|\bsalute to\b/i.test(e.name);
+  return e.category === 'family' || /\b(?:children'?s?|kids|family)\b/i.test(g) || /\b(?:kids|children'?s|for kids|family show)\b/i.test(e.name);
+}
+
+/** They say the seats themselves aren't accessible spaces ("Neither seat is a wheelchair or companion space"). */
+export const SEATS_NOT_ACCESSIBLE = /\b(?:neither|none|no)\b[^.!?]{0,40}\b(?:is|are|seats?)\b[^.!?]{0,12}\b(?:an?\s+)?(?:wheelchair|accessible|companion|ada)\b|\b(?:seats?|spaces?|they|these|those|it)\s+(?:is|are)(?:n't| not)\s+(?:an?\s+)?(?:wheelchair|accessible|companion|ada)\b|\bnon-?accessible\b|\bordinary seats?\b[^.!?]{0,30}\bnot\s+(?:wheelchair|accessible)\b/i;
+
+/** "no obstructed views", "not an obstructed view", "without a limited view": a view they ruled out. */
+export const NO_OBSTRUCTED = /\b(?:no|not|never|without|avoid|can't have|cannot have|can’t have|don't want|don’t want|do not want|won't take|won’t take)\s+(?:an?\s+|any\s+)?(?:obstructed|limited|restricted|partial)(?:[\s-]+views?)?\b|\bunobstructed (?:only|views? only)\b|\bmust (?:be|have) (?:an? )?(?:unobstructed|clear view)\b/i;
+
+/** "how much less is it than A", "compared with Offer B": the offer they want the pick measured against. */
+export function comparedAgainst(text: string, labels: string[]): string | null {
+  // The label is a capital or digit: "cheaper than a ticket" isn't Offer A.
+  const m = /\b(?:[Tt]han|[Cc]ompared (?:to|with)|[Vv]ersus|vs\.?|[Aa]gainst|[Rr]elative to)\s+(?:[Oo]ffer\s+|[Oo]ption\s+|[Ll]isting\s+)?([A-Z1-9])\b/.exec(text);
+  const l = m?.[1] ?? null;
+  return l && labels.includes(l) ? l : null;
+}
+
+/** "the attached image", "see attachment", "this screenshot": they meant to send us a picture. */
+const SAYS_ATTACHED = /\b(?:attached|attachment|enclosed)\b|\b(?:this|the|my)\s+(?:screenshot|screen shot|image|picture|photo)\b/i;
+export const IMAGE_UNREAD_ASK = 'Could you type out what it shows: the event and date, how many tickets, the section and row, and the total including fees? Those few details are all I need.';
+export function imageUnreadLine(kind: 'unread' | 'missing'): string {
+  return kind === 'missing'
+    ? 'Your email mentions an attachment, but no image reached me, so I haven’t assumed anything about the tickets.'
+    : 'I couldn’t read the image you attached, so I haven’t used anything from it or assumed anything about the tickets.';
+}
 export const REDACTED_NOTE = 'One of your screenshots looked like it showed a ticket barcode, card details or an ID, so I deleted it and didn’t use it. A screenshot of the listing page (price, section, row) is all I need.';
 
 /** The name of a known team or artist inside some text, longest match first ("New York Rangers" over "New York"). */

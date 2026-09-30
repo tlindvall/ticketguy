@@ -6,7 +6,7 @@ import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
 import { leaseDueOutbox, markDispatched, markFailed } from '@/lib/intake/outbox';
-import { detailFromWebhookPayload, fetchReceivedEmail, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
+import { detailFromWebhookPayload, fetchReceivedEmail, withAttachmentUrls, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
 import { audit } from '@/lib/util/audit';
 import { prewarmCatalog } from '@/lib/catalog/prewarm';
 import { MarketTracker, purgeExpiredMarketData } from '@/lib/market/tracker';
@@ -98,12 +98,24 @@ export async function ingestFromProvider(inboundEventId: string): Promise<void> 
     detail = await fetchReceivedEmail(e.RESEND_API_KEY, emailId);
     retrievedVia = 'provider_api';
   }
+  // A failed URL lookup must not hold the email back: its attachments go through as not retrieved, and the
+  // reply says the image didn't reach us.
+  let attachmentUrlError: string | null = null;
+  if (e.RESEND_API_KEY) {
+    try {
+      detail = await withAttachmentUrls(e.RESEND_API_KEY, detail);
+    } catch (err) {
+      attachmentUrlError = err instanceof Error ? err.message.slice(0, 200) : 'error';
+    }
+  }
 
   const { attachments, skipped } = await downloadAttachments(detail);
-  const normalized = normalizeReceived(detail, attachments, ev.signatureVerified);
+  // What couldn't be fetched is still recorded on the message, so the reply can say the image didn't reach us
+  // instead of answering as if nothing was attached.
+  const normalized = normalizeReceived(detail, attachments, ev.signatureVerified, skipped.map((s) => ({ ...s, filename: detail.attachments.find((a) => a.id === s.id)?.filename ?? null, declaredMimeType: detail.attachments.find((a) => a.id === s.id)?.content_type ?? null })));
   const outcome = await c.ingestInbound(normalized);
   await db.update(t.inboundEvents).set({ processingState: 'processed', processedAt: new Date() }).where(eq(t.inboundEvents.id, ev.id));
-  await audit(db, { actor: 'system', action: 'inbound.provider_ingested', entityKind: 'inbound_event', entityId: ev.id, diff: { outcome: outcome.kind, skippedAttachments: skipped, retrievedVia } });
+  await audit(db, { actor: 'system', action: 'inbound.provider_ingested', entityKind: 'inbound_event', entityId: ev.id, diff: { outcome: outcome.kind, skippedAttachments: skipped, retrievedVia, attachmentUrlError } });
 }
 
 export const evaluateWatches = inngest.createFunction(

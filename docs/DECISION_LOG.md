@@ -847,3 +847,24 @@ Response to the review of round 2.
 - The "in London, UK" guard now fires only when the event is there. The city the extractor chose must be negated ("not New York") or not a US place, and the place must not follow "I live in", "my sister in", "visiting from" or similar.
 - "I live in London, UK, but want Hamilton in New York" is declined by the residence rule (US customers only, ENGINEERING_SPEC §1), with the residence reason. It is not refused as an event abroad.
 - "My sister in London, UK recommended…" is a New York request.
+
+## 55. Their offers, one record each; the screenshot that never arrived (post-#54 QA)
+
+**Their offers.** When a customer copies two or more offers, each becomes one record: quantity, can't-split, view, access, together, fee basis and a per-order fee. The comparison then:
+- works each whole-party total out once, with a per-order fee added once;
+- applies the hard requirements before comparing prices: the quantity they can actually buy, a view they ruled out, access, together, and the budget;
+- names each left-out offer with its reason;
+- measures the pick against the offer they asked about.
+
+That comparison is the whole answer. The same email is not also read as one listing, and there is no quote, market read or "send me a link" ask. An offer's price is never taken as their budget.
+
+**Screenshots.**
+- Resend's received email lists attachments without download URLs, so signed URLs are fetched from the attachments endpoint.
+- An attachment that can't be fetched is recorded on the message.
+- An image that isn't read is said plainly, and nothing is assumed in its place.
+
+**Other wording fixes.**
+- Market floors always carry their check time and scope, and never read as a minimum for every seat.
+- Discovery honours "no pop / tribute / kids".
+- A delivery or offer question gets no buy-or-wait passage.
+- A no-match with a date and place already given offers a next step instead of re-asking.

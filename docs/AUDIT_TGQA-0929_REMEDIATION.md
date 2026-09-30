@@ -295,3 +295,34 @@ The reviewer's copy of the round-1 report was cut off during TG-B06 (104 of 220 
 | Cancellation needs backend proof | Found and fixed: a customer's cancellation left approved alert sends queued; dispatch looked alert approvals up in the wrong table, which would have blocked valid alerts and ignored cancelled watches. | `tests/acceptance/cancellation-isolation.test.ts`, on two threads with queued alerts, an event alert and a repeated cancel on the closed thread. It fails when either fix is removed. |
 
 **Decision needed from the owner:** should non-US residents buying US events be served? The launch boundary says no. Tourists buying US shows may be a large share of demand, but changing it needs the privacy and legal review the spec calls for (§ "US-only scope still needs appropriate privacy/legal review").
+
+---
+
+# Round 4: the post-#54 full QA (23 sends)
+
+**Status:** on the same branch as PR #55, so #55 carries rounds 3 and 4. Not deployed.
+
+Every fix below is checked on the full rendered email, not the opening line. The replay (`tests/acceptance/post54-replay.test.ts`, fixture `tests/fixtures/qa-post54-cases.json`) sends all 23 emails in send order at the QA clock. Paths that go through the model listing reader are tested with a stand-in reader, including one that drops a negation (`tests/acceptance/post54-screenshot.test.ts`). Paraphrases and negative controls are in `tests/unit/post54-offers.test.ts`.
+
+| Bug | Cause (traced, not inferred from the email) | Fix | Evidence |
+|---|---|---|---|
+| R3-B04 X02 recommends unsuitable offers | The offer comparison applied only the access rule. It read no view, quantity or split rule, and never checked the budget. "$55 less" came from comparing only the first two offers left after the access filter (C and D). | One record per offer, with quantity, can't-split, view, access, together, fee basis and per-order fee. Hard requirements are applied first: quantity they can actually buy, view they ruled out, access, together, budget. Each left-out offer is named with its reason. The pick is measured against the offer they asked about ("than A"). | Replay X02: "Offer B is the only one that meets what you asked for: $585 … $65 less than Offer A and $15 under your $600 budget", plus A, C and D each left out for its reason |
+| R3-B05 X01 per-order fee dropped | The parser didn't read per-order fees, and "including every fee" didn't match the fee pattern. | A per-order fee is parsed and added once. "Including every/any fee" and "fees included" count as all-in. | Replay X01: A $220, B $210, "$10 less" |
+| R3-B01 R05 mixed offers, contradictory verdict | The same email was also read as one listing by the model reader, which mixed A's price and access with B's seats. That single-listing verdict, its catches and "You mentioned $80" were rendered after the comparison. | With two or more offers: no single-listing read, subject, quote, market read or "send me a link" ask. An offer's price is never taken as their budget or quoted price, a deterministic guard over either extractor. | Replay R05; screenshot test (the reader is never called for R05) |
+| R3-B02 R03 fee basis lost | A quoted price never carried the customer's fee wording. | "$220 total including fees" is recorded as all-in by their account, not as verified. | `audit-0929` R03 packet test; `statedFeeBasis` unit test |
+| R3-B08 R05-F1 stale accessible restriction | [Likely] The model's restriction text for "Neither seat is a wheelchair or companion space" contained the keyword, and the code mapping ignored negation. The live email alone can't show which. | Negation-aware restriction codes. Their own "neither seat is / not a wheelchair space" also clears it when the read keeps the word. | Screenshot test with a reader that drops the negation |
+| R3-B09 A11 screenshot ignored | [Certain] Resend's received-email detail has no `download_url` (SDK types: signed URLs come only from `GET /emails/receiving/{id}/attachments`). Every attachment was skipped as `no_download_url` before the reader ran. | Signed URLs are fetched from the attachments endpoint. An attachment that can't be fetched is recorded on the message. An unread or missing image gets "I couldn't read the image you attached…" plus a short ask for the typed details. Nothing is assumed: no default of two tickets. | Replay A11 (unfetched image); screenshot test (read image: three tickets, 212/18, $264, obstructed; "its total … includes the fees it lists" instead of "fees are extra") |
+| R3-B06 absolute floor, missing timestamp | Wording, plus bullets that carried no time when the data was fresh. | "The lowest asking price I saw among … (checked <time>) … StubHub and Vivid Seats only … can move either way". Every market bullet names its check time. The heading is "when I last checked", not "right now". | Replay: no "that or more" or "right now:" in any reply; `audit-0929` and `timing-advice` tests |
+| R3-B07 A04 "Dance pop" pick | Exclusions weren't read. | "No pop / tribute / kids' events" is read from the thread and applied before ranking. | `exclusionsIn` unit tests with controls (pop-up, pop-punk) |
+| R3-B03 R03 generic timing | The market read's buy/wait sentences and the model's closing ran after a delivery question. | Neither is added when the question was delivery or their offers. | `audit-0929` R03 packet test |
+| R3-B10 A06 re-asks date and city | The no-match fallback always asked "which date and venue". | Given an act, a date and a place, it offers one next step: send the announcement link, or name another date or city. | Replay A06 |
+| L01 limitation buried | — | "I can't open StubHub listings myself, so I haven't seen the one you sent…" now comes before any market figures. | Replay L01; market-tracking test |
+
+**Not done, and why:**
+- **R3-F01 (visitors):** a policy decision for the owner (see round 3).
+- **R3-F02 (verified comparison):** the staffed pilot in #55 is the path; it needs `STAFF_COMPARISON_OWNER` set.
+- **R3-F03 (alerts):** still off (`WATCH_SEND_ENABLED`); nothing new is claimed.
+
+**Not proven here:**
+- **The live Resend attachment path:** the signed URL host isn't documented, so it isn't held to a host list. It must be https, resolve to a public address and not redirect. Verify one real attachment in production; the audit log records `skippedAttachments` with reasons.
+- **The model extraction of these emails:** the replay uses the deterministic extractor. The deterministic guards (no budget taken from an offer price, negated access) are there because the model can make the same mistakes.

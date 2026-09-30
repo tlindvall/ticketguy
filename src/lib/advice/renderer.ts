@@ -84,7 +84,7 @@ function checkProse(label: string, prose: string, errors: string[]): void {
 const GREETING = 'Hey,';
 const CATCHES_LEAD = 'Worth checking before you buy:';
 const questionsLead = (n: number) => (n === 1 ? 'One thing that would help me:' : n === 2 ? 'Two things that would help me narrow it down:' : 'A few things that would help me narrow it down:');
-const MARKET_LEAD = 'The resale market right now:';
+const MARKET_LEAD = 'The resale market when I last checked:';
 const P = (inner: string) => `<p style="margin:0 0 18px;">${inner}</p>`;
 
 /** Escaped, with prices in bold and a leading "My read:" in bold: the numbers and the answer are what people scan for. */
@@ -182,7 +182,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [watch, claim('C_OFFERS'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [watch, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord) => {
     if (c.items?.length && c.text.includes('\n')) {
@@ -237,7 +237,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set(['C_LINK', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set(['C_LINK', 'C_LINK_UNREAD', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -256,7 +256,9 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // customer had already sent.
   const asks = packet.followUps ?? [];
   if (asks.length) section(lines, html, questionsLead(asks.length), asks);
-  else if (b.closing.trim() && !subject) {
+  // Nor over their own question (delivery, their offers, access, sales): a model closing there drifted into
+  // generic buy-or-wait advice (post-#54 QA, R3-B03).
+  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES'].some((id) => claimsById.has(id))) {
     // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
     // worse, ask for the listing they already sent.
     lines.push(b.closing.trim());
