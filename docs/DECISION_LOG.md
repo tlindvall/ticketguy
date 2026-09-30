@@ -886,3 +886,28 @@ An offer with unknown fees is compared by break-even, never called a fit. When n
 - "I already bought, will this barcode get us in?" gets sourced official-transfer guidance, not intake.
 - Doors are stored and shown apart from the start.
 - Writing: the decision comes first and is the only emphasis, and comparisons carry nothing that doesn't change the choice.
+
+## 57. Test mode: everything runs as live, and email is recorded instead of sent
+
+**Why.** Testing hit Resend's daily quota. Resend counts received mail against it as well as sent mail, so a tester writing in from Gmail uses it up from both sides.
+
+**What changes.** An admin turns test mode on at `/admin/test`. It is a `test_mode` row in the switch table: read at every dispatch, audited, and off when the row is missing.
+
+- The dispatcher runs as normal: claim, then the gate, then everything after a send (state changes, the staffed-comparison hand-off). The one step that changes is the provider call, which is replaced by a record:
+  - the send is marked `provider_accepted` with a `test_…` id;
+  - the email becomes an outbound message with provider `test` and its own Message-ID, so a reply can thread on it;
+  - the audit log gets `send.captured_test_mode`.
+- Staff alert emails are skipped with `test_mode`.
+- The tester allowlist does not apply to a recorded send, since it reaches nobody. Every other gate check still applies.
+
+**Test customers.** Test customers write in without real mail. They use the admin board, or `POST /api/test/inbound` with a bearer `TEST_AGENT_TOKEN`, so an agent needs neither an inbox nor a staff login. The message enters through the ordinary intake:
+
+- a reply carries the In-Reply-To and References a mail client would set for our latest email;
+- by default it quotes that email the way Gmail does, so the quote stripper is exercised;
+- screenshots go through the same image checks.
+
+**Safety.**
+- Writes are refused while test mode is off.
+- The API reads only conversations a test customer wrote in.
+- Such a conversation stays test-only when test mode is turned off: nothing in it is ever emailed, so an invented address never gets real mail.
+- Test mode stops real customers' replies too. The banner on every admin page is there so nobody forgets it is on.

@@ -16,6 +16,8 @@ import { eventLocalDate } from '@/lib/domain/dates';
 import { marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
 import { env as appEnv } from '@/lib/config/env';
 import type { MarketContext } from '@/lib/market/series';
+import { TestMessageForm } from '@/components/TestMessageForm';
+import { TEST_PROVIDER, testModeOn } from '@/lib/email/test-mode';
 import { ago, briefLines, type Tone, reasonText, sendClassLabel, sendStateInfo, stateInfo, toneClass, whenLocal, whenStaff } from '@/lib/admin/labels';
 
 export const dynamic = 'force-dynamic';
@@ -79,8 +81,11 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   // The conversation is what was actually sent and received, plus our emails that are queued or were held
   // back (those never become messages), so a reviewer sees every reply the customer got or is about to get.
   const sentIds = new Set(messages.map((m) => m.providerEmailId).filter(Boolean));
+  // Test mode: the customer is a test persona, and our "sent" emails were recorded, not delivered.
+  const testMode = await testModeOn(db);
+  const testThread = messages.some((m) => m.direction === 'inbound' && m.provider === TEST_PROVIDER);
   const timeline = [
-    ...messages.map((m) => ({ key: m.id, mine: m.direction === 'outbound', who: m.direction === 'outbound' ? 'Ticket Guy' : m.fromAddress, at: m.receivedAt, text: m.sanitizedText ?? '', status: null as null | [string, Tone], auto: m.autoSubmitted, messageId: m.id })),
+    ...messages.map((m) => ({ key: m.id, mine: m.direction === 'outbound', who: m.direction === 'outbound' ? 'Ticket Guy' : m.fromAddress, at: m.receivedAt, text: m.sanitizedText ?? '', status: m.provider === TEST_PROVIDER ? ((m.direction === 'outbound' ? ['Test mode: recorded, not sent', 'warn'] : ['Test customer', 'info']) as [string, Tone]) : null, auto: m.autoSubmitted, messageId: m.id })),
     ...intents.filter((i) => !i.providerMessageId || !sentIds.has(i.providerMessageId)).map((i) => ({ key: i.id, mine: true, who: `Ticket Guy · ${sendClassLabel(i.messageClass)}`, at: i.createdAt, text: i.bodyText, status: sendStateInfo(i.state), auto: false, messageId: null as string | null })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
@@ -137,6 +142,13 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
             ))}
           </ol>
           {!timeline.length ? <p className="mt-2 text-sm text-gray-500">No messages.</p> : null}
+          {testMode ? (
+            <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <h3 className="text-sm font-semibold">Reply as the customer <span className="font-normal text-gray-600">(test mode)</span></h3>
+              <p className="mt-1 text-xs text-gray-600">Arrives as their reply to our latest email in this thread{testThread ? '' : '. This thread then becomes test-only: nothing in it is ever emailed'}.</p>
+              <div className="mt-2"><TestMessageForm replyToRequestId={req.id} defaultFrom={contact!.emailOriginal} /></div>
+            </div>
+          ) : null}
         </section>
 
         <aside className="space-y-4">

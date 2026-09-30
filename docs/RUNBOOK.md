@@ -50,6 +50,7 @@ A send intent becomes `uncertain` when the provider call errored after possibly 
 - Source: `/admin/sources` → activation → `enabled=false` (admin). Running research records `not_integrated`/`access_not_approved` honestly rather than skipping the source silently.
 - Stop all outbound: `/admin/operations` → kill switch `all_outbound` → **Stop** (admin). Takes effect at the next dispatch gate evaluation, even for already-queued work. Per-class switches: `recommendations`, `marketing`, `watches`, `escalation_model`.
 - Environment-level stop: set `EMAIL_SEND_ENABLED=false` and redeploy; inbound intake continues.
+- Test mode (not a stop): `/admin/test` → **Turn test mode on** (admin). Everything runs as live, and each email is recorded on its request instead of being sent; staff alerts are skipped. See [TEST_MODE.md](TEST_MODE.md).
 - Caps: `AI_REQUEST_SOFT_BUDGET_USD` / `AI_REQUEST_HARD_BUDGET_USD` / `AI_GLOBAL_DAILY_BUDGET_USD` / `AI_MAX_CALLS_PER_REVISION`; `MEDIA_MAX_TOTAL_BYTES`; per-adapter `dailyCallLimit` in activation. Staffed hours: `STAFFED_HOURS_*`.
 
 ## 8. Approve a campaign

@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 /**
- * Application-normalized inbound email contract. The Resend normalizer (webhook + retrieval) and the local
- * simulator both produce this shape. Simulated payloads never claim provider signature verification.
+ * Application-normalized inbound email contract. The Resend normalizer (webhook + retrieval), the local
+ * simulator and test mode's customer (src/lib/email/test-mode.ts) all produce this shape. Simulated and test
+ * payloads never claim provider signature verification.
  */
 export const NormalizedAttachmentSchema = z.object({
   providerAttachmentId: z.string().nullable(),
@@ -13,7 +14,7 @@ export const NormalizedAttachmentSchema = z.object({
 });
 
 export const NormalizedInboundSchema = z.object({
-  provider: z.enum(['resend', 'simulator']),
+  provider: z.enum(['resend', 'simulator', 'test']),
   providerEmailId: z.string(),
   rfcMessageId: z.string().nullable(),
   inReplyTo: z.string().nullable(),
