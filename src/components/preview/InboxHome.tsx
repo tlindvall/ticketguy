@@ -6,6 +6,7 @@ import { CopyAddress } from './CopyAddress';
 import { HeroVideo } from './HeroVideo';
 import { SourceUniverse } from './SourceUniverse';
 import { PixelCursor } from './PixelCursor';
+import { FloatingGuy } from './FloatingGuy';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
@@ -234,6 +235,8 @@ export function InboxHome({ state, address, preview = false }: Props) {
           </div>
         </section>
       </main>
+
+      <FloatingGuy />
 
       <footer className="tgx-footer wrap">
         <p>Prices and availability can change.</p>

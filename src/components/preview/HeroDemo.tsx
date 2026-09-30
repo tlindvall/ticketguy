@@ -147,7 +147,6 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
       {cursor ? (
         <PixelCursor className={`hero-cursor${phase === 'press' ? ' is-down' : ''}`} style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} />
       ) : null}
-      <svg className="mascot" aria-hidden="true"><use href="#ticket-friend" /></svg>
     </div>
   );
 }
