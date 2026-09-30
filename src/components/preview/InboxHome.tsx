@@ -7,6 +7,7 @@ import { HeroVideo } from './HeroVideo';
 import { SourceUniverse } from './SourceUniverse';
 import { PixelCursor } from './PixelCursor';
 import { FloatingGuy } from './FloatingGuy';
+import { EventTypes } from './EventTypes';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
@@ -19,11 +20,10 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and an illustrative reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + composer → example reply → request starters → source universe → how it works → demo animation → FAQ →
+ * Order: promise + composer (with its demo reply) → event types → request starters → source universe → how it works → demo animation → FAQ →
  * closing invitation. The animation is an optional demonstration lower down; the headline and the composer
  * carry the first screen on their own.
  *
- * The example reply is labelled illustrative until there is an anonymized real exchange to use with permission.
  */
 /** `preview` marks the page as the staff-only preview (a banner, and the logo links back to the preview). */
 type Props = { state: LaunchState; address: string; preview?: boolean };
@@ -101,35 +101,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
           <HeroDemo address={address} cta={cta} />
         </section>
 
-        <section className="example wrap" aria-labelledby="example-title">
-          <div className="section-head">
-            <h2 id="example-title">What you get back.</h2>
-            <p>A straight answer, the real total, and what to watch for.</p>
-          </div>
-          <article className="reply" aria-label="Illustrative example of a Ticket Guy reply, not a live offer">
-            <div className="reply-titlebar"><span>Re: Knicks next Saturday</span><span className="reply-flag">Illustrative example</span></div>
-            <dl className="reply-meta">
-              <div><dt>From:</dt><dd>Ticket Guy &lt;{address}&gt;</dd></div>
-              <div><dt>You asked:</dt><dd>Four of us. Under $150 each. Can you find something decent?</dd></div>
-            </dl>
-            <div className="reply-body">
-              <p className="reply-call">I’d buy these.</p>
-              <div className="reply-offer">
-                <div>
-                  <strong>Section 224, Row 6, Seats 5–8</strong>
-                  <span>Four seats together, side by side</span>
-                </div>
-                <div className="reply-total">
-                  <strong>$548 total</strong>
-                  <span>$137 each, fees included</span>
-                </div>
-              </div>
-              <p className="reply-watch"><span className="mono">Worth knowing:</span> mobile transfer, and the seller says the tickets arrive 48 hours before tip-off. If you’re travelling in, that’s in time.</p>
-              <p className="reply-note">That’s under your budget, and it’s the cheapest listing I found with all four seats together. Group prices have dipped a little this week.</p>
-              <span className="link reply-link">View the seller’s listing <span aria-hidden="true">↗</span><span className="sr-only"> (illustrative, no live listing)</span></span>
-            </div>
-          </article>
-        </section>
+        <EventTypes address={address} />
 
         <section className="starters wrap" aria-labelledby="starters-title">
           <div className="section-head">
