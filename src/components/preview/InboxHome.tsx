@@ -179,7 +179,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
         <section className="catch wrap" aria-labelledby="catch-title">
           <div className="section-head">
             <h2 id="catch-title">Cheap for a reason?</h2>
-            <p className="mono">Spotting the catch before you pay.</p>
+            <p>Spotting the catch before you pay.</p>
           </div>
           <article className="catch-mail" aria-label="Ticket Guy’s reply, spotting the catch">
             <div className="reply-titlebar"><span>Re: These seats look cheap. What’s the catch?</span><span className="reply-flag">Replied in 3 min</span></div>
@@ -187,8 +187,8 @@ export function InboxHome({ state, address, preview = false }: Props) {
             <div className="catch-body">
               <p className="catch-call">Two catches.</p>
               <ul className="catch-list">
-                <li><span className="mono">Delivery</span> The seller sends the tickets 24 hours before the show, not now.</li>
-                <li><span className="mono">View</span> Listed as limited view, behind the sound desk.</li>
+                <li><span className="catch-label">Delivery</span> The seller sends the tickets 24 hours before the show, not now.</li>
+                <li><span className="catch-label">View</span> Listed as limited view, behind the sound desk.</li>
               </ul>
               <p className="catch-next">If you’re fine with both, $95 is fair for that section. If you’re travelling in or want a clear view, I’d skip these.</p>
             </div>

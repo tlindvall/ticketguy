@@ -16,7 +16,7 @@ export function EventTypes() {
     <section className="ticker" aria-labelledby="ticker-title">
       <div className="wrap ticker-head">
         <h2 id="ticker-title">Every kind of event.</h2>
-        <p className="mono">Anywhere in the US.</p>
+        <p>Anywhere in the US.</p>
       </div>
       <div className="ticker-rows">
         {ROWS.map((row, i) => (

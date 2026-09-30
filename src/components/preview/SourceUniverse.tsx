@@ -29,7 +29,7 @@ export function SourceUniverse() {
           <li><strong>Commission never does.</strong> Some links pay us; they don’t change what we recommend.</li>
           <li><strong>If we’re not sure, we say so.</strong> Every reply says what we checked and what we couldn’t.</li>
         </ul>
-        <p className="universe-how"><span className="mono">How we know:</span> the listing you send, live resale price data from StubHub and Vivid Seats, and a map of 135 US ticket sellers, so we know where an event sells and can send you there.</p>
+        <p className="universe-how"><span className="how-label">How we know:</span> the listing you send, live resale price data from StubHub and Vivid Seats, and a map of 135 US ticket sellers, so we know where an event sells and can send you there.</p>
       </div>
       <div className="universe" role="img" aria-label={`Ticket Guy at the centre of the ticket sources it knows. Live price data: SeatData, covering StubHub and Vivid Seats. Mapped: ${ORBITS.flatMap((o) => o.names).filter((n) => !LIVE.has(n)).join(', ')}, and more.`}>
         {ORBITS.map((o, oi) => (

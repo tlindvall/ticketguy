@@ -165,7 +165,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
             <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
           </div>
         ) : (
-          <p className="hero-reply-checking mono">Reading your listing and screenshot<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
+          <p className="hero-reply-checking">Reading your listing and screenshot<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
         )}
         {phase === 'done' ? <button type="button" className="hero-replay" onClick={play}>Replay</button> : null}
         {replied ? <button type="button" className="hero-reply-close" onClick={() => setComposeFront(true)} aria-label="Back to the message">×</button> : null}
