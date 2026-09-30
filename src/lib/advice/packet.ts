@@ -111,6 +111,13 @@ export type BuildPacketArgs = {
   accessibilityRequired?: boolean;
   /** The venue's time zone, for saying when something was checked. */
   timeZone?: string;
+  /**
+   * They asked us to watch prices: whether a watch is really running (a stored active watch whose alerts can be
+   * sent), with its terms, or that nothing is being monitored. From stored state, never from wording (TG-B10).
+   */
+  /** Questions they asked that aren't about price, answered first (TG-B02). */
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean } | null;
+  watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date } | { running: false } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
   /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
@@ -154,6 +161,9 @@ function subjectClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
 export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[] {
   const q = a.quantity;
   const out: string[] = [];
+  // What's missing is a fact about what we were given, not about the listing: a detail left out of an email
+  // may well be on the seller's page (TG-B08). A screenshot is closer to the page, and still only a crop of it.
+  const missing = (what: string) => (sub.source === 'screenshot' ? `The screenshot doesn’t show ${what}` : `You haven’t included ${what}`);
   if (sub.eventDate && a.eventLocalDate && sub.eventDate !== a.eventLocalDate) out.push(`The date on the listing (${shortDate(sub.eventDate)}) isn’t the date I have for this event (${shortDate(a.eventLocalDate)}). Make sure it’s the right game or show.`);
   if (sub.quantity && sub.quantity !== q) out.push(`It’s for ${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}, not the ${q} you asked about.`);
   const budget = a.priorities.budgetTotalCents;
@@ -161,14 +171,14 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
   if (sub.restrictionCodes.includes('accessible_seating') && !a.accessibilityRequired) out.push('These are accessible seats (wheelchair or companion spaces), meant for people who need them. If you don’t, pick other seats.');
   if (q > 1 && (sub.quantity ?? q) > 1) {
     if (sub.seatsTogether === false) out.push('It says the seats may not be together.');
-    else if (sub.seatsTogether === null) out.push('It doesn’t say the seats are together. Check before you buy if that matters.');
+    else if (sub.seatsTogether === null) out.push(`${missing('whether the seats are together')}. Check the listing before you buy if that matters.`);
   }
-  if (sub.feeBasis === 'unknown') out.push('It doesn’t say whether fees are included, so check the total at checkout before you pay.');
+  if (sub.feeBasis === 'unknown') out.push(`${missing('whether fees are included')}, so check the total at checkout before you pay.`);
   else if (sub.feeBasis === 'before_fees') out.push('Fees are extra, so the total at checkout will be higher than the listed price.');
   if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) out.push(`The tickets are delivered by ${shortDate(sub.deliveryBy)}, the day of the event. That’s common for resale, but it leaves no time to fix a problem.`);
-  else if (!sub.deliveryBy && !sub.deliveryText) out.push('It doesn’t say when the tickets will be delivered.');
+  else if (!sub.deliveryBy && !sub.deliveryText) out.push(`${missing('when the tickets will be delivered')}. Check the listing’s delivery date before you buy.`);
   if (sub.restrictionCodes.includes('obstructed_view')) out.push('It notes a limited or obstructed view.');
-  if (sub.section && !sub.seatNumbers) out.push('It doesn’t show seat numbers, so you won’t know exactly where you’re sitting until after you buy.');
+  if (sub.section && !sub.seatNumbers) out.push(`${missing('seat numbers')}. Check the listing if you want to know exactly where you’ll sit.`);
   const otherNotes = sub.restrictions.filter((r) => restrictionIsOther(r));
   if (otherNotes.length) out.push(`It also notes: ${listJoin(otherNotes.slice(0, 3))}.`);
   if (sub.includedBenefits.length) out.push(`It lists extras (${listJoin(sub.includedBenefits.slice(0, 3))}). Resale sellers can’t always pass those on, so confirm they’re included.`);
@@ -319,12 +329,26 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   const c = m?.context;
   if (!m || !c?.current) return null;
   const q = a.quantity;
-  const group = q > 1 ? `for ${countWord(q)} together` : 'for one ticket';
   const floor = c.current.priceCents;
-  const fairUpTo = roundToDollar(Math.round(floor * 1.15));
   const parts: string[] = [];
-  // A price they asked about already has its own verdict (C_QUOTE_MARKET).
-  if (!a.quote) parts.push(`For ${group.replace(/^for /, '')}, up to about ${formatUsd(fairUpTo)} a ticket before fees is a fair price; much more than that and you’re paying for a better section, not a better deal.`);
+  // The floor is the cheapest listing anywhere in the venue, before fees: where the market starts, never what
+  // particular seats are worth (TG-B04). What the customer can afford is a separate question, answered against
+  // their whole-party budget with the fee basis said, never by calling a floor-plus-markup "fair" (TG-B03).
+  if (!a.quote) {
+    const budget = a.priorities.budgetTotalCents;
+    const ageHours = Math.round((a.observedAt.getTime() - c.current.at.getTime()) / 3_600_000);
+    const when = ageHours >= MARKET_RECENT_HOURS ? ` (as of about ${ageHours} hours ago)` : '';
+    const party = q > 1 ? ` for ${countWord(q)}` : '';
+    const groupFloor = floor * q;
+    const where = isGroupBasis(m.basis) ? `listings with ${basisSize(m.basis!)} or more tickets` : m.basis === 'pair' ? 'listings for two together' : 'single tickets';
+    if (budget != null && groupFloor > budget) {
+      parts.push(`Your budget is ${formatUsd(budget)}${party}${q > 1 ? ` (${formatUsd(Math.floor(budget / q))} a ticket)` : ''}. The cheapest ${where} were ${formatUsd(floor)} a ticket before fees${when}, ${formatUsd(groupFloor)}${party}, so they were already over it before fees. Unless cheaper seats have been listed since, that budget won’t cover it.`);
+    } else if (budget != null) {
+      parts.push(`The cheapest ${where} come to ${formatUsd(groupFloor)}${party} before fees${when}, under your ${formatUsd(budget)} budget. Fees come on top and those seats could be anywhere in the venue, so check the all-in total at checkout before you count on it.`);
+    } else {
+      parts.push(`The cheapest ${where} start at ${formatUsd(floor)} a ticket before fees${when}${q > 1 ? ` (${formatUsd(groupFloor)}${party})` : ''}, anywhere in the venue. That’s where the market starts, not what particular seats are worth: any seats you pick will cost that or more, plus fees.`);
+    }
+  }
   const s = m.supply;
   // Timing is said only from a fresh series for this group size, for the seats they asked about, and waiting
   // is suggested only to someone who has said they can take the risk and by when they must decide. Otherwise
@@ -346,7 +370,7 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
     id: 'C_READ',
     kind: 'market_read',
     text: `My read: ${parts.join(' ').replace(/^./, (ch) => ch.toLowerCase())}`,
-    values: { floorCents: floor, fairUpToCents: fairUpTo, direction: c.direction, supplyTrend: s.trend, listings: s.now },
+    values: { floorCents: floor, budgetTotalCents: a.priorities.budgetTotalCents ?? null, direction: c.direction, supplyTrend: s.trend, listings: s.now },
     scope: { quantity: q, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
     evidenceIds: [],
     methodVersion: c.methodVersion ?? 'market-1.0',
@@ -546,7 +570,11 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       id: 'C_OFFICIAL',
       kind: 'official_sale',
       // "Unless resale is cheaper" only when there is resale in the email to be cheaper; otherwise it reads as a hedge we can't back.
-      text: a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}, and that’s where I’d buy.`,
+      // The sale being open says nothing about seats: with a budget, access needs or a seat preference, it's a
+      // place to look, not a recommendation (TG-B01).
+      text: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference
+        ? `It’s also on general sale on ${a.official.seller}. I haven’t seen those seats or their prices, so check the all-in total${a.accessibilityRequired ? ', the access you need' : ''}${a.seatingPreference ? ' and the seats' : ''} there before you buy.`
+        : a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}, and that’s where I’d buy.`,
       values: { seller: a.official.seller },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -554,7 +582,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: ['sale_window_not_inventory'],
       customerVisible: true,
       url: a.official.url,
-      linkLabel: `Buy on ${a.official.seller}`,
+      linkLabel: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference ? `Event page on ${a.official.seller}` : `Buy on ${a.official.seller}`,
     });
   }
 
@@ -682,6 +710,53 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       evidenceIds: [],
       methodVersion: null,
       limitations: ['link_read_from_url_only'],
+      customerVisible: true,
+    });
+  }
+  // Their own question, when it isn't "is this a good price": delivery against their travel, and wheelchair
+  // spaces weighed against ordinary seats. Neither answer promises delivery, entry or suitability.
+  if (a.asks?.deliveryRisk) {
+    const by = a.subject?.deliveryBy ? ` The listing says delivery by ${shortDate(a.subject.deliveryBy)}.` : '';
+    claims.push({
+      id: 'C_DELIVERY',
+      kind: 'catches',
+      text: `On delivery:${by} If the tickets might only arrive after you’ve set off, you could be travelling with nothing in hand, and a seller’s guarantee refunds the money if they never come; it doesn’t get you into the game. So pick a listing that says it delivers before you leave, and keep the seller’s support details with you.`,
+      values: { deliveryBy: a.subject?.deliveryBy ?? null },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['no_authenticity_or_delivery_guarantee'],
+      customerVisible: true,
+    });
+  }
+  if (a.asks?.accessibleSpaces) {
+    claims.push({
+      id: 'C_ACCESS',
+      kind: 'catches',
+      text: a.accessibilityRequired
+        ? 'On the accessible spaces: I can’t tell from a listing whether a space suits your needs (the route to it, a companion seat next to it), so check that with the seller or the venue before you buy.'
+        : 'On the wheelchair spaces: they’re for people who use a wheelchair and their companions, not a cheaper version of ordinary seats, so I wouldn’t weigh them against the others on price. If no one in your group needs one, the venue can ask you to move. If someone does, tell me and I’ll look at those spaces properly.',
+      values: { accessibilityRequired: a.accessibilityRequired ? 1 : 0 },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['venue_policy_varies'],
+      customerVisible: true,
+    });
+  }
+  if (a.watchStatus) {
+    const w = a.watchStatus;
+    claims.push({
+      id: 'C_WATCH',
+      kind: 'coverage',
+      text: w.running
+        ? `I’m watching this for you: ${w.quantity} tickets${w.togetherRequired ? ' together' : ''}, and I’ll email you if I find them for ${formatUsd(w.targetTotalCents)} or less in total, including fees. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
+        : 'I can’t watch prices for you yet, so nothing is being monitored for this request and no alert will come. Reply any time and I’ll check again.',
+      values: w.running ? { running: 1, quantity: w.quantity, targetTotalCents: w.targetTotalCents, expiresAt: w.expiresAt.toISOString() } : { running: 0 },
+      scope: { quantity: w.running ? w.quantity : q, seatZone: null, feeBasis: w.running ? 'verified_total' : null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: w.running ? [] : ['no_monitoring'],
       customerVisible: true,
     });
   }

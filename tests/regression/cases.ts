@@ -97,7 +97,8 @@ export const REGRESSION_CASES: RegressionCase[] = [
 
   // ── Other request types ──────────────────────────────────────────────────────────────────────────────
   { id: 'watch.drop', type: 'watch', text: 'Knicks Oct 24, 2 tickets, $300 total. Let me know if it drops.', brief: { intent: 'watch_request', notifyAsked: null } },
-  { id: 'stop.watch', type: 'stop', text: 'Please stop the watch, we bought tickets already.', brief: { intent: 'cancel_watch' } },
+  // TG-B10 (A07-R1): a cancellation is always answered, from what was stored: here nothing was running.
+  { id: 'stop.watch', type: 'stop', text: 'Please stop the watch, we bought tickets already.', brief: { intent: 'cancel_watch' }, reply: { contains: ['nothing was being monitored', 'your other requests and your email preferences are as they were'] } },
   { id: 'optout.marketing', type: 'stop', text: 'Unsubscribe me from marketing emails please', reply: { state: 'closed', sends: false } },
   { id: 'delete.data', type: 'stop', text: 'Please delete my data.', reply: { contains: ['CONFIRM'] } },
   { id: 'negation', type: 'find', text: 'Anything except the Knicks — Rangers on Oct 3 for two', brief: { performerOrTeam: 'New York Rangers' } },

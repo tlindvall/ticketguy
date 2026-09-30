@@ -191,4 +191,22 @@ describe('still on general sale: point at the official sale', () => {
     expect(officialSellerFor('https://www.stubhub.com/event/1')).toBeNull();
     expect(officialSellerFor(null)).toBeNull();
   });
+
+  // TG-B01 (audit A05, Hamilton): "that's where I'd buy your 3 tickets" with a $450 total and access needs,
+  // while the cheapest 3 on the page were $476. The sale being open is not a seat: nothing is endorsed, the
+  // needs are listed as still to check, and the page's default of 2 tickets is called out.
+  it('an open sale never stands in for their seats, budget or access: it lists what to check instead', async () => {
+    const c = makeConcierge(h);
+    const r = (await c.ingestInbound(inbound({ text: '3 Testers tickets Oct 30, together, $450 total. We need wheelchair accessible seats.', from: 'hard@customer.example', subject: 'Testers for three' }))) as { requestId: string };
+    await interpretAll(c);
+    const [send] = await sendsFor(r.requestId);
+    const body = send!.bodyText;
+    expect(body).not.toMatch(/where I'd buy/);
+    expect(body).toContain('is on general sale on Ticketmaster. I haven’t seen its seats or prices, so I can’t tell you yet whether any fit what you need.');
+    expect(body).toContain('Check these on the event page before you buy (set the number of tickets to 3 first; the page may start at 2):');
+    expect(body).toContain('- 3 seats together');
+    expect(body).toContain('- $450 in total for all 3, once fees are added');
+    expect(body).toMatch(/- Wheelchair/);
+    expect(body).toContain('Event page on Ticketmaster:');
+  });
 });

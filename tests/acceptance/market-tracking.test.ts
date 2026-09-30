@@ -141,8 +141,9 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked');
     expect(rec!.bodyText).not.toContain('SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
-    // Advice, not only figures: what a fair price is for the group, and whether to hurry (prices are easing).
-    expect(rec!.bodyText).toContain('My read: for two together, up to about $150 a ticket before fees is a fair price');
+    // Where the market starts, never a "fair price" from a venue-wide floor (TG-B04), and whether to hurry.
+    expect(rec!.bodyText).toContain('My read: the cheapest listings for two together start at $130 a ticket before fees ($260 for two), anywhere in the venue. That’s where the market starts, not what particular seats are worth');
+    expect(rec!.bodyText).not.toMatch(/fair price|better deal/);
     // Prices are easing, but nobody has said when they must decide or whether they can risk missing it, so the
     // email says the evidence doesn't settle waiting, and asks exactly that.
     expect(rec!.bodyText).toContain('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
@@ -181,7 +182,7 @@ describe('resale market tracking', () => {
     // The event and the link they sent in one line at the top, then the answer.
     expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston at Test Garden, New York, Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nMy read: ')).toBe(true);
     expect(body).toContain('- Cheapest for two together: $130 a ticket before fees');
-    expect(body).toContain('up to about $150 a ticket before fees is a fair price');
+    expect(body).not.toContain('fair price');
     expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
