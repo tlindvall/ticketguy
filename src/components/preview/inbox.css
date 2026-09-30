@@ -76,8 +76,14 @@
 .tgx .hero-alt a { color: var(--link-strong); font-weight: 600; text-underline-offset: 3px; }
 
 /* Hero demonstration: the reply window cascades under the composer; its space is reserved, so nothing shifts */
-.tgx .hero-reply { position: relative; z-index: 2; margin: -14px 0 0 48px; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .09); min-height: 236px; opacity: 0; transform: translateY(14px); transition: opacity .35s ease, transform .35s ease; }
+.tgx .hero-reply { position: relative; z-index: 2; margin: -214px 0 0 48px; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .09); min-height: 236px; opacity: 0; transform: translateY(14px); transition: opacity .35s ease, transform .35s ease; }
 .tgx .hero-reply.is-shown { opacity: 1; transform: none; }
+.tgx .compose-front .compose { z-index: 3; }
+.tgx .compose-front .hero-reply { z-index: 1; }
+.tgx .hero-reply-close { position: absolute; right: 10px; top: 6px; border: 0; padding: 0 4px; background: none; color: var(--cream); font: 18px/1 var(--mono); cursor: pointer; opacity: .8; }
+.tgx .hero-reply-close:hover, .tgx .hero-reply-close:focus-visible { opacity: 1; }
+.tgx .compose-front .hero-reply-close { display: none; }
+.tgx .hero-reply .reply-titlebar { padding-right: 36px; }
 .tgx .hero-reply-checking { padding: 22px 18px; font-size: 15px; color: var(--muted); }
 .tgx .hero-reply-checking .dots i { font-style: normal; animation: tgx-dot 1s steps(1) infinite; }
 .tgx .hero-reply-checking .dots i:nth-child(2) { animation-delay: .2s; }
@@ -354,7 +360,8 @@
   .tgx .compose-attach { margin-right: auto; }
   .tgx .starter-mark { top: 14px; width: 50px; height: 38px; }
   .tgx .starter-line { font-size: 30px; }
-  .tgx .hero-reply { margin-left: 16px; }
+  .tgx .hero-reply { margin: -14px 0 0 16px; }
+  .tgx .hero-reply-close { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .tgx .hero-reply, .tgx .hr-line, .tgx .hr-path, .tgx .hr-dot, .tgx .hr-punch span { animation: none; transition: none; opacity: 1; transform: none; stroke-dashoffset: 0; background-size: 100% 100%; }

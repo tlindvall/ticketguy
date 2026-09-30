@@ -26,6 +26,8 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const [body, setBody] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  // The reply overlaps the composer once it lands; touching the composer brings the composer back to the front.
+  const [composeFront, setComposeFront] = useState(false);
   const timers = useRef<number[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -48,7 +50,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const play = useCallback(() => {
     clear();
     handedOver.current = false;
-    setSubject(''); setBody(''); setCursor(null); setPhase('idle');
+    setSubject(''); setBody(''); setCursor(null); setPhase('idle'); setComposeFront(false);
     let t = 700;
     at(t, () => setPhase('subject'));
     for (let i = 1; i <= SUBJECT.length; i++) at(t + i * 55, () => setSubject(SUBJECT.slice(0, i)));
@@ -89,6 +91,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
 
   // The visitor takes over: stop the film, keep whatever is in the fields (filling any still empty).
   const takeOver = () => {
+    setComposeFront(true);
     if (handedOver.current || phase === 'done') return;
     handedOver.current = true;
     finish();
@@ -105,7 +108,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const [lx, ly] = pts[pts.length - 1]!.split(',');
 
   return (
-    <div className="hero-demo" ref={wrap}>
+    <div className={`hero-demo${composeFront ? ' compose-front' : ''}`} ref={wrap}>
       <form className="compose" aria-label="Write to your ticket guy" onSubmit={(e) => { e.preventDefault(); window.location.href = href; }} onPointerDown={takeOver} onFocus={takeOver}>
         <div className="compose-titlebar">New message</div>
         <div className="compose-row">
@@ -149,6 +152,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
           <p className="hero-reply-checking mono">Checking your listing<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
         )}
         {phase === 'done' ? <button type="button" className="hero-replay" onClick={play}>Replay</button> : null}
+        {replied ? <button type="button" className="hero-reply-close" onClick={() => setComposeFront(true)} aria-label="Back to the message">×</button> : null}
       </article>
 
       {cursor ? (
