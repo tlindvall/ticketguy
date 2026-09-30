@@ -45,6 +45,8 @@ export type TextOffer = {
   deliveryMinutes: number | null;
   /** The delivery time as they wrote it, when it was in another timezone ("10:30am Los Angeles time"). */
   deliveryAsWritten: string | null;
+  /** Another name they gave the same offer ("Offer A (Gold)"): matched to it across the thread. */
+  alias?: string | null;
 };
 
 const money = (s: string) => Math.round(Number(s.replace(/,/g, '')) * 100);
@@ -76,6 +78,13 @@ export function toVenueMinutes(minutes: number, zone: string | null, venueTz: st
   if (!zone) return minutes;
   const from = ZONE_BEHIND_NY[zone.toLowerCase()];
   const to = TZ_BEHIND_NY[venueTz];
+  return from === undefined || to === undefined ? minutes : minutes + (from - to) * 60;
+}
+/** The venue's local minutes as they read in a named zone ("New York"); unchanged when either is unknown. */
+export function fromVenueMinutes(minutes: number, zoneName: string | null, venueTz: string): number {
+  if (!zoneName) return minutes;
+  const to = ZONE_BEHIND_NY[zoneName.toLowerCase()];
+  const from = TZ_BEHIND_NY[venueTz];
   return from === undefined || to === undefined ? minutes : minutes + (from - to) * 60;
 }
 export function venueZoneName(venueTz: string): string | null {
@@ -134,18 +143,27 @@ export function timeLabel(minutes: number): string {
 /** Words that aren't names: "the whole order", "the same listing", "the cheapest option". */
 const NOT_A_NAME = /^(?:whole|same|other|cheapest|cheaper|best|original|old|new|seller's|official|only|exact|actual|first-row|entire|full|last)$/i;
 const ORDINAL = /^(?:first|second|third|fourth|fifth)$/i;
+/** Capitalised words after "Offer" that are not its name: "Offer Is", "Offer For", "Seller Sent". */
+const OFFER_WORD_NOT_NAME = /^(?:Is|Was|Has|Had|For|The|And|But|Costs?|Says|Sent|Only|Total|Price|Prices|Details|Terms|Here|That|This|Which|Includes?|Gives?|Now|Still|Seats?|Tickets?)$/;
 
 /**
  * Where each offer starts and what it is called: "Offer A"/"Option 2", or, when they name them another way,
  * "the green listing"/"the gold listing" or "First seller"/"Second seller" (post-#56 QA V01, V04). A name used
  * once is kept once; two or more names make a comparison.
  */
-function offerMarks(t: string, minimum = 2): Array<{ index: number; label: string; name: string }> {
-  const lettered = [...t.matchAll(/\b([Oo]ffer|[Oo]ption|[Ll]isting|[Ss]eller)\s+([A-Z]|[1-9])\b/g)].map((m) => ({ index: m.index!, label: m[2]!, name: `${m[1]!.charAt(0).toUpperCase()}${m[1]!.slice(1).toLowerCase()} ${m[2]}` }));
-  if (new Set(lettered.map((m) => m.label)).size >= minimum) return lettered;
-  // Bare letters: "A is five ordinary seats…, B is six together…", "A at $360 arrives by 5pm, B at $390…" (TGQA-R6 07, 09).
-  const bare = [...t.matchAll(/(?:^|[.;:!?]\s+|,\s+|\band\s+)([A-E])(?:\s+(?:is|has|costs|at|for|gives|says|copied offer says)\s|[, :]\s+)/g)].map((m) => ({ index: m.index! + m[0].indexOf(m[1]!), label: m[1]!, name: `Offer ${m[1]}` }));
-  if (new Set(bare.map((m) => m.label)).size >= minimum) return bare;
+function offerMarks(t: string, minimum = 2): Array<{ index: number; label: string; name: string; alias?: string }> {
+  // "Offer A", "Option 2", "Offer Gold", "Seller North": a letter, a number or a capitalised name after the word.
+  // A name in brackets after a letter is the same offer under its old name: "Offer A (Gold)" (TGQA-R8 S05).
+  const lettered = [...t.matchAll(/\b([Oo]ffer|[Oo]ption|[Ll]isting|[Ss]eller)\s+([A-Z][a-z]{2,}|[A-Z]|[1-9])\b(?:\s*\(([A-Z][a-z]{2,})\))?/g)]
+    .filter((m) => m[2]!.length === 1 || !OFFER_WORD_NOT_NAME.test(m[2]!))
+    .map((m) => ({ index: m.index!, label: m[2]!.length === 1 ? m[2]! : m[2]!.toLowerCase(), name: `${m[1]!.charAt(0).toUpperCase()}${m[1]!.slice(1).toLowerCase()} ${m[2]}`, alias: m[3]?.toLowerCase() }));
+  // Bare letters: "A is five ordinary seats…, B is six together…", "A at $360 arrives by 5pm, B at $390…" (TGQA-R6 07, 09),
+  // also beside a lettered one in the same message ("The same Offer B is immediate…; A is $360…", R8 14).
+  // "and B $220 TOTAL" in a list, but not "A $24 fee applies" opening a sentence.
+  const bare = [...t.matchAll(/(?:^|[.;:!?]\s+|,\s+|\band\s+|\bbut\s+)([A-E])(?:\s+(?:is|has|costs|at|for|gives|says|copied offer says|remains|still|now|would be|comes to|was|delivers|arrives)\s|[, :]\s+)|(?:,\s+|\band\s+|:\s+)([A-E])\s+(?=\$)/g)]
+    .map((m) => ({ index: m.index! + m[0].indexOf((m[1] ?? m[2])!), label: (m[1] ?? m[2])!, name: `Offer ${m[1] ?? m[2]}` }));
+  const letters = [...lettered, ...bare.filter((b) => !lettered.some((l) => l.label === b.label || Math.abs(l.index - b.index) < 8))].sort((a, b) => a.index - b.index);
+  if (new Set(letters.map((m) => m.label)).size >= minimum) return letters;
   // Named by the marketplace, each with its price: "StubHub $90 each plus $40…; TickPick $105 each…; Vivid Seats $95…".
   const sellers = [...t.matchAll(/\b(StubHub|TickPick|Vivid(?: Seats)?|SeatGeek|Gametime|Ticketmaster|AXS)\b(?=\s*(?:is\s+|now\s+|at\s+|:\s*|,\s*)?(?:shows\s+)?\$)/gi)].map((m) => {
     const name = m[1]!.toLowerCase().startsWith('vivid') ? 'Vivid Seats' : ({ stubhub: 'StubHub', tickpick: 'TickPick', seatgeek: 'SeatGeek', gametime: 'Gametime', ticketmaster: 'Ticketmaster', axs: 'AXS' } as Record<string, string>)[m[1]!.toLowerCase()]!;
@@ -160,7 +178,7 @@ function offerMarks(t: string, minimum = 2): Array<{ index: number; label: strin
 }
 
 /** `minimum` 1 reads the one offer kept from a comparison ("ignore Offer A, only B"); the default needs two. */
-export function offersInText(text: string, venueTz = 'America/New_York', minimum = 2): TextOffer[] {
+export function offersInText(text: string, venueTz = 'America/New_York', minimum = 2, opts: { priceless?: boolean } = {}): TextOffer[] {
   const t = flat(text);
   const marks = offerMarks(t, minimum);
   if (marks.length < minimum) return [];
@@ -171,9 +189,12 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   const out: TextOffer[] = [];
   for (let i = 0; i < marks.length; i++) {
     const label = marks[i]!.label;
-    if (out.some((o) => o.label === label)) continue;
+    // An offer already read with its price is done; one first mentioned without a price ("Vivid now shows $25 in
+    // fees for the order") is read again where its price is, and the two mentions are folded together.
+    const priced = (lab: string) => out.some((o) => o.label === lab && (o.totalCents !== null || o.perTicketCents !== null));
+    if (priced(label)) continue;
     // A later mention of an offer already read ("the gold listing is cheaper") is not a new offer, and doesn't cut it short.
-    const nextNew = marks.slice(i + 1).find((m) => m.label !== label && !out.some((o) => o.label === m.label));
+    const nextNew = marks.slice(i + 1).find((m) => m.label !== label && !priced(m.label));
     const raw = t.slice(marks[i]!.index, nextNew?.index ?? t.length);
     // The offer runs to the next label, or to the first sentence in their own voice.
     const kept: string[] = [];
@@ -192,7 +213,9 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       break;
     }
     const entitlement = admissionTerms(seg);
-    if (!price && !entitlement.admissionStated && !entryTerm(seg)) continue;
+    // Mentioned without a price ("Offer B is immediate transfer, all fees included") it still updates that offer
+    // when the thread's offers are merged; alone it isn't an offer.
+    if (!price && !entitlement.admissionStated && !entryTerm(seg) && !opts.priceless) continue;
     const priceFound = price;
     const quote = price ?? { 0: '', 1: '', 2: '', index: seg.length };
     const cents = priceFound ? money(priceFound[1]!) : null;
@@ -205,12 +228,15 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     const qty = new RegExp(`(?<!\\b(?:row|section|sec|seats?|aisle|block)\\s)(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:[a-z-]+\\s+){0,3}?(?:seats?|tickets?|admissions?|upgrades?|together|in a row)\\b`, 'i').exec(seg);
     const priceText = seg.slice(quote.index);
     const own = deliveryIn(seg) ?? sharedDelivery;
-    out.push({
+    const earlier = out.findIndex((o) => o.label === label);
+    const push = (o: TextOffer) => (earlier >= 0 ? (out[earlier] = mergeOffer(out[earlier]!, o)) : out.push(o));
+    push({
       ...entitlement,
       entry: entryTerm(seg),
       priceBasisStated: !!quote[2] || forTheBlock || forAllAfterFees,
       label,
       name: marks[i]!.name,
+      alias: marks[i]!.alias ?? null,
       quantity: qty ? num(qty[1]!) : null,
       mustBuyAll: /\b(?:cannot|can't|can ?not|won't|will not|doesn't|does not)\s+(?:be\s+)?split\b|\b(?:must|have to|has to)\s+(?:all\s+)?be\s+(?:bought|purchased|sold)\b|\ball\s+\w+\s+must be\b|\bno splits?\b|\bsold (?:only )?(?:as a (?:block|set)|together)\b|\b(?:must|have to|has to)\s+buy\s+all\b|\brequires?\s+(?:you\s+to\s+)?(?:buy(?:ing)?|purchas(?:e|ing))\s+all\b|\ball\s+\w+\s+or\s+none\b|\bwon't sell (?:fewer|less)\b|\bmust\s+(?:purchase|buy|take)\s+(?:every|all|the whole)\b/i.test(seg),
       perTicketCents: isTotal ? null : cents,
@@ -252,23 +278,116 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   return out.length >= minimum ? out : [];
 }
 
+/** The offer's own amount: its total when it has one, else its per-ticket price. */
+const amountOf = (o: TextOffer) => o.totalCents ?? o.perTicketCents;
+
+/**
+ * One offer, updated by a later mention of it. What the later mention states wins; what it leaves out keeps what
+ * was said before: "The same two-seat Offer B is immediate transfer, all fees included" keeps B's $390 total, and
+ * "C at $520 is over budget" doesn't turn C's $520 total into $520 a ticket (TGQA-R8 S05).
+ */
+export function mergeOffer(old: TextOffer, u: TextOffer): TextOffer {
+  const ua = amountOf(u);
+  const oa = amountOf(old);
+  const sameAmount = ua !== null && (ua === oa || ua === old.totalCents || ua === old.perTicketCents);
+  const takePrice = ua !== null && (!sameAmount || u.priceBasisStated && !(old.priceBasisStated && u.totalCents === null && old.totalCents === ua));
+  const price = takePrice
+    ? { totalCents: u.totalCents, perTicketCents: u.perTicketCents, feeBasis: u.feeBasis !== 'unknown' ? u.feeBasis : sameAmount ? old.feeBasis : 'unknown', orderFeeCents: u.orderFeeCents ?? (sameAmount ? old.orderFeeCents : null), perTicketFeeCents: u.perTicketFeeCents ?? (sameAmount ? old.perTicketFeeCents : null), priceBasisStated: u.priceBasisStated }
+    : { totalCents: old.totalCents, perTicketCents: old.perTicketCents, feeBasis: u.feeBasis !== 'unknown' && ua !== null ? u.feeBasis : old.feeBasis, orderFeeCents: old.orderFeeCents ?? u.orderFeeCents, perTicketFeeCents: old.perTicketFeeCents ?? u.perTicketFeeCents, priceBasisStated: old.priceBasisStated };
+  const delivery = u.deliveryMinutes !== null ? { deliveryStated: true, deliveryMinutes: u.deliveryMinutes, deliveryAsWritten: u.deliveryAsWritten } : { deliveryStated: old.deliveryStated || u.deliveryStated, deliveryMinutes: old.deliveryMinutes, deliveryAsWritten: old.deliveryAsWritten };
+  return {
+    ...old,
+    ...price,
+    ...delivery,
+    admission: u.admissionStated ? u.admission : old.admission,
+    admissionStated: old.admissionStated || u.admissionStated,
+    productKind: u.productKind !== 'unknown' ? u.productKind : old.productKind,
+    entry: u.entry ?? old.entry,
+    // The latest name is the one they use now; the old one stays as another name for it.
+    label: u.label,
+    name: u.name,
+    alias: u.label !== old.label ? old.label : u.alias ?? old.alias ?? null,
+    quantity: u.quantity ?? old.quantity,
+    mustBuyAll: old.mustBuyAll || u.mustBuyAll,
+    noOtherCharges: old.noOtherCharges || u.noOtherCharges,
+    accessible: old.accessible || u.accessible,
+    obstructed: u.obstructed ?? old.obstructed,
+    together: u.together ?? old.together,
+    pairs: u.together !== null ? u.pairs : old.pairs || u.pairs,
+    section: u.section ?? old.section,
+    row: u.row ?? old.row,
+  };
+}
+
+/** Same offer under either name: "Offer A (Gold)" is the Gold listing from before. */
+export function sameOffer(a: TextOffer, b: TextOffer): boolean {
+  const names = (o: TextOffer) => [o.label, o.alias].filter(Boolean) as string[];
+  return names(a).some((n) => names(b).includes(n));
+}
+
+/**
+ * Every offer in the thread, oldest first, one record each with its later mentions folded in. `fresh` keeps a new
+ * set of offers from inheriting an older one's terms: only a restatement at the same amount carries over.
+ */
+export function offerHistory(messagesOldestFirst: string[], venueTz: string, opts: { fresh?: boolean } = {}): TextOffer[] {
+  const out: TextOffer[] = [];
+  messagesOldestFirst.forEach((m, idx) => {
+    const last = idx === messagesOldestFirst.length - 1;
+    for (const u of offersInText(m, venueTz, 1, { priceless: true })) {
+      const i = out.findIndex((o) => sameOffer(o, u));
+      if (i < 0) out.push(u);
+      else if (last && opts.fresh && amountOf(u) !== null && amountOf(u) !== amountOf(out[i]!) && amountOf(u) !== out[i]!.totalCents) out[i] = u;
+      else out[i] = mergeOffer(out[i]!, u);
+    }
+  });
+  return out.filter((o) => amountOf(o) !== null || o.admissionStated);
+}
+
 /**
  * What the customer holds their offers to beyond access, view and budget, read across the thread oldest first
  * so the latest word wins: how many are going, whether they'll buy extra tickets, and the time the tickets must
  * arrive by. "I will not buy an extra ticket" then "I'm now happy to buy six even though only five of us are
  * going" ends as five going, six allowed (live M01 → M01-F1).
  */
-export type PartyTerms = { attendees: number | null; extra: 'refused' | 'allowed' | null; maxBuy: number | null; deadlineMinutes: number | null; seating?: 'pairs' | null; night?: NightTiming | null; concertAdmission?: boolean };
+export type PartyTerms = {
+  attendees: number | null;
+  extra: 'refused' | 'allowed' | null;
+  maxBuy: number | null;
+  /** When the tickets must be in their account, as the venue's local minutes on the event day. */
+  deadlineMinutes: number | null;
+  /** The zone they gave the deadline in ("New York"), when they named one: the reply speaks in it. */
+  deadlineZone?: string | null;
+  /**
+   * How the party must sit, as they last said it: all together; in adjacent pairs, each child beside an adult
+   * (TGQA-R8 S01); or anywhere ("scattered singles are now acceptable"). Null when they didn't say.
+   */
+  seating?: 'together' | 'pairs' | 'any' | null;
+  night?: NightTiming | null;
+  concertAdmission?: boolean;
+};
+
+/** "Each child must sit directly beside an adult; two adjacent adult-child pairs are fine." */
+const PAIRS_OK = /\bone adult (?:must |can |will |has to )?sits? (?:with|beside|next to) each (?:child|kid)\b|\bsplit into (?:2|two) and (?:2|two)\b|\bin pairs\b|\beach adult (?:can |must )?sits? (?:beside|with|next to) (?:a|one) (?:child|kid)\b|\beach (?:child|kid) (?:must |has to |needs to |should )?(?:sits? )?(?:directly )?(?:beside|next to|with) an? (?:adult|parent)\b|\b(?:adjacent |two |2 )*(?:adult[- ](?:child|kid) )?pairs (?:are|is) (?:fine|ok|okay|acceptable|allowed)\b|\b(?:two|2) adjacent (?:adult[- ](?:child|kid) )?pairs\b[^.;]{0,30}\b(?:fine|ok|okay|acceptable|allowed)\b/i;
+/** "We no longer require each child beside an adult", "scattered singles are now acceptable", "sitting separately". */
+const ANY_SEATS = /\bno longer (?:require|need)\b[^.;]{0,40}\b(?:beside|next to|with an adult|adjacent)\b|\b(?:scattered |separate )?singles are (?:now )?(?:acceptable|fine|ok|okay|allowed)\b|\bsitting separately\b|\bsit (?:apart|separately)\b|\bseparate seats are (?:fine|ok|okay|acceptable)\b/i;
+/** "We don't need to sit together": anywhere, unless the same message allows pairs. */
+const NOT_TOGETHER = /\b(?:don'?t|do not) (?:need|have) to sit together\b|\b(?:do not|don'?t|no longer) (?:require|need) (?:all )?(?:\w+ )?(?:seats )?together\b/i;
+/** "We must all sit together", "all five together", "four together please". */
+const ALL_TOGETHER = /\b(?:must|need to|have to|want to) (?:all )?sit together\b|\ball (?:\w+ )?(?:of us )?together\b|\bseats? (?:all )?together\b/i;
 
 export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New_York'): PartyTerms {
-  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, seating: null };
+  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null };
   for (const raw of messagesOldestFirst) {
     const t = flat(raw);
     const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\s+(?:are\\s+|will\\s+be\\s+)?(?:going|attending)\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
     if (going) out.attendees = num((going[1] ?? going[2] ?? going[3] ?? going[4])!);
     // Pairs are enough when each adult sits with a child: "we can split into 2 and 2 only if one adult sits with each
-    // child", "one adult must sit with each child" (TGQA-R6 18).
-    if (/\bone adult (?:must |can |will |has to )?sits? (?:with|beside|next to) each (?:child|kid)\b|\bsplit into (?:2|two) and (?:2|two)\b|\bin pairs\b|\beach adult (?:can |must )?sits? (?:beside|with|next to) (?:a|one) (?:child|kid)\b/i.test(t)) out.seating = 'pairs';
+    // child", "each child must sit directly beside an adult; two adjacent adult-child pairs are fine" (TGQA-R6 18,
+    // R8 S01). A later "we no longer require that" lifts it; the latest message wins.
+    if (ANY_SEATS.test(t)) out.seating = 'any';
+    else if (PAIRS_OK.test(t)) out.seating = 'pairs';
+    else if (NOT_TOGETHER.test(t)) out.seating = 'any';
+    else if (ALL_TOGETHER.test(t)) out.seating = 'together';
     const allowed = new RegExp(`\\b(?:happy|fine|ok|okay|willing|glad|prepared)\\s+(?:now\\s+)?to\\s+(?:buy|pay for)\\s+(?:an?\\s+)?(${NUMBER.slice(1, -1)}|extra|spare|sixth|seventh)\\b|\\b(?:the\\s+)?(?:extra|spare|sixth|seventh)\\s+(?:one|ticket)?\\s*can go unused\\b|\\bcan go unused\\b`, 'i').exec(t);
     const refused = /\b(?:will not|won't|do not want to|don't want to|not going to|refuse to)\s+(?:buy|pay for|purchase)(?:\s+or\s+\w+(?:\s+with)?)?\s+(?:an?\s+)?(?:extra|spare|sixth|seventh|additional|more than)\b|\bno extra tickets?\b|\bexactly\s+(?:one|two|three|four|five|six|seven|eight|\d{1,2})\s+(?:ordinary\s+)?(?:seats?|tickets?)\b/i.test(t);
     if (allowed) {
@@ -281,6 +400,19 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
     }
     // The time the tickets must arrive by: their own requirement, never an offer's delivery line.
     for (const s of sentences(t)) {
+      // Said as their own deadline, it counts wherever it sits, even beside an offer: "My delivery deadline is 1PM
+      // NEW YORK TIME, and you said Offer A arrives by 2PM" (TGQA-R8 S02), "I can now accept delivery until 3pm".
+      const own = new RegExp(`\\b(?:deadline|cut-?off)\\s+(?:is|of|:)?\\s*(?:now\\s+|still\\s+)?${TIME}${ZONE}|\\b(?:accept|take)\\s+delivery\\s+(?:until|up to|by|as late as)\\s+${TIME}${ZONE}|\\b(?:need|must have|have to have)\\s+(?:them|the tickets|it|both|the seats|all of them)\\s+(?:in (?:my|our) account\\s+)?(?:by|before|no later than)\\s+${TIME}${ZONE}`, 'i').exec(s);
+      if (own) {
+        const raw = (own[1] ?? own[4] ?? own[7])!;
+        const zone = own[2] ?? own[3] ?? own[5] ?? own[6] ?? own[8] ?? own[9] ?? null;
+        const at0 = minutesOf(raw);
+        if (at0 !== null) {
+          out.deadlineMinutes = toVenueMinutes(at0, zone, venueTz);
+          out.deadlineZone = zone ? ZONE_NAME[ZONE_BEHIND_NY[zone.toLowerCase()]!] ?? null : null;
+          continue;
+        }
+      }
       if (/\b(?:offer|option|listing|seller)\s+[A-Z1-9]\b/i.test(s) || /^(?:All|Both|Each)\b/.test(s) || /(?:^|,\s)[A-E]\s+(?:is|at|has)\s/.test(s)) continue;
       if (!/\b(?:need|must|have to|deadline|leave|hard|require|set off|head out)\b/i.test(s)) continue;
       const m = new RegExp(`\\b(?:before|by|no later than)\\s+(?:we\\s+(?:leave|set off|head out)(?:\\s+home)?\\s+(?:at\\s+)?)?${TIME}${ZONE}|\\b(?:leave|set off|head out)(?:\\s+home)?\\s+at\\s+${TIME}${ZONE}|\\b${TIME}${ZONE}\\s+(?:delivery\\s+)?deadline\\b`, 'i').exec(s);
@@ -288,7 +420,10 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
       const zone = m ? m[2] ?? m[3] ?? m[5] ?? m[6] ?? m[8] ?? m[9] ?? null : null;
       const at0 = raw ? minutesOf(raw) : null;
       const at = at0 === null ? null : toVenueMinutes(at0, zone, venueTz);
-      if (at !== null && /\b(?:deliver\w*|tickets?|transfer\w*|arriv\w*|deadline|leave|set off|head out)\b/i.test(s)) out.deadlineMinutes = at;
+      if (at !== null && /\b(?:deliver\w*|tickets?|transfer\w*|arriv\w*|deadline|leave|set off|head out)\b/i.test(s)) {
+        out.deadlineMinutes = at;
+        out.deadlineZone = zone ? ZONE_NAME[ZONE_BEHIND_NY[zone.toLowerCase()]!] ?? null : null;
+      }
     }
   }
   out.night = nightTiming(messagesOldestFirst);

@@ -12,6 +12,8 @@ export type TimeBound = { minutes: number; strict: boolean };
 export type EventConstraints = {
   /** Venues they named, as written in the catalog (name or alias, lowercase). Null when they named none. */
   venueTerms: string[] | null;
+  /** Venues they ruled out ("No Prudential Center or UBS Arena"): never a venue to search, always one to drop (TGQA-R8 S04). */
+  excludedVenues: string[];
   homeOnly: boolean;
   after: TimeBound | null;
   before: TimeBound | null;
@@ -30,7 +32,7 @@ export type EventConstraints = {
   next: boolean;
 };
 
-export const NO_CONSTRAINTS: EventConstraints = { venueTerms: null, homeOnly: false, after: null, before: null, exactTime: null, notTimes: [], partOfDay: null, weekdays: null, notWeekdays: [], window: null, next: false };
+export const NO_CONSTRAINTS: EventConstraints = { venueTerms: null, excludedVenues: [], homeOnly: false, after: null, before: null, exactTime: null, notTimes: [], partOfDay: null, weekdays: null, notWeekdays: [], window: null, next: false };
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const DAY_RE = '(sun|mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?)(?:day)?s?';
@@ -53,6 +55,28 @@ export function unglue(text: string): string {
             .replace(/\b(all)(two|three|four|five|six|seven|eight)\b/gi, '$1 $2'),
     )
     .join('');
+}
+
+/**
+ * What fans call the big venues, whether or not the catalog row carries it: a venue synced from Ticketmaster has no
+ * aliases, so "MSG" matched nothing live and a home-at-MSG request went to Philadelphia (TGQA-R8 S03).
+ */
+const KNOWN_VENUE_ALIASES: Array<[RegExp, string[]]> = [
+  [/^madison square garden$/i, ['MSG', 'the Garden']],
+  [/^barclays cent(?:er|re)$/i, ['Barclays']],
+  [/^ubs arena$/i, ['UBS']],
+  [/^prudential cent(?:er|re)$/i, ['Prudential', 'the Rock']],
+  [/^metlife stadium$/i, ['MetLife']],
+  [/^yankee stadium$/i, []],
+  [/^citi field$/i, []],
+  [/^crypto\.com arena$/i, ['Crypto.com', 'Staples Center']],
+  [/^td garden$/i, []],
+  [/^radio city music hall$/i, ['Radio City']],
+  [/^kia forum$/i, ['the Forum']],
+];
+export function withKnownAliases(v: { name: string; aliases: string[] }): { name: string; aliases: string[] } {
+  const extra = KNOWN_VENUE_ALIASES.find(([re]) => re.test(v.name.trim()))?.[1] ?? [];
+  return { name: v.name, aliases: [...new Set([...v.aliases, ...extra])] };
 }
 
 /** "7pm", "7:30 PM", "7" (read as evening), "noon": minutes after midnight. */
@@ -97,8 +121,9 @@ function weekdaysIn(t: string): { weekdays: number[] | null; notWeekdays: number
     for (const d of m[1]!.matchAll(new RegExp(DAY_RE, 'gi'))) notWeekdays.push(dayIndex(d[1]!));
   }
   if (/\bnot\s+(?:on\s+)?weekdays?\b|\bweekends?\s+only\b|\bonly\s+(?:on\s+)?(?:a\s+|the\s+)?weekends?\b|\b(?:a|the)\s+weekend\s+that works\b|\bsat(?:urday)?s?\s*(?:or|and|\/|&)\s*sun(?:day)?s?\b|\bany\s+weekend\b/i.test(t)) return { weekdays: [6, 0], notWeekdays };
-  // "Knicks tickets for next weekend": a weekend, Friday night to Sunday, not the Monday or Thursday game between.
-  if (/\b(?:this|next|the|that|a)\s+weekend\b|\bover the weekend\b/i.test(t)) return { weekdays: [5, 6, 0], notWeekdays };
+  // "Knicks tickets for next weekend": Saturday or Sunday, not the Monday or Thursday game between, and not a
+  // Friday called a weekend match (TGQA-R8 S04).
+  if (/\b(?:this|next|the|that|a)\s+weekend\b|\bover the weekend\b/i.test(t)) return { weekdays: [6, 0], notWeekdays };
   if (/\bweekdays?\s+only\b|\bnot\s+(?:on\s+)?(?:a\s+|the\s+)?weekends?\b/i.test(t)) return { weekdays: [1, 2, 3, 4, 5], notWeekdays };
   // "Saturday October 3 ONLY", "any Friday": that day of the week.
   const only = new RegExp(`\\b${DAY_RE}\\b[^.?!]{0,30}?\\bonly\\b|\\bonly\\s+(?:on\\s+)?${DAY_RE}\\b|\\bany\\s+${DAY_RE}\\b`, 'i').exec(t);
@@ -148,13 +173,34 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
   const out: EventConstraints = { ...NO_CONSTRAINTS, notTimes: [], notWeekdays: [] };
   // Each venue once, by its catalog name, however they wrote it ("MSG", "Madison Square Garden").
   const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const venues = ctx.venues.map((v) => ({ canonical: (v.name || v.aliases[0] || '').toLowerCase(), names: [v.name, ...v.aliases].filter((n) => n.length >= 3).map((n) => n.toLowerCase()) })).filter((v) => v.canonical && v.names.length);
+  const venues = ctx.venues.map((v0) => {
+    const v = v0.name ? withKnownAliases(v0) : v0;
+    return { canonical: (v.name || v.aliases[0] || '').toLowerCase(), names: [v.name, ...v.aliases].filter((n) => n.length >= 3).map((n) => n.toLowerCase()) };
+  }).filter((v) => v.canonical && v.names.length);
+  const nameRe = (n: string) => esc(n).replace(/ /g, '\\s+');
   for (const raw of messagesOldestFirst) {
     const t = unglue(raw).replace(/[’‘]/g, "'").replace(/\s+/g, ' ');
     const lower = t.toLowerCase();
     // A venue named as where the event is, not where they eat or stay ("dinner near MSG" is not a venue rule).
-    const named = [...new Set(venues.filter((v) => v.names.some((n) => new RegExp(`(?<![\\w-])${esc(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${esc(n)}`, 'i').test(lower))).map((v) => v.canonical))];
+    // Ruled out, not asked for: "No Prudential Center or UBS Arena", "Prudential Center and UBS Arena are EXCLUDED".
+    const excluded = new Set<string>();
+    // Only venues the message names at all: the catalog has thousands.
+    const mentioned = venues.filter((v) => v.names.some((n) => lower.includes(n)));
+    const any = mentioned.flatMap((x) => x.names).map(nameRe).join('|');
+    for (const v of mentioned) {
+      for (const n of v.names) {
+        const listed = `(?:the\\s+)?(?:${any})(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*`;
+        const before = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at)\\s+(?:at\\s+|in\\s+)?(?=${listed})(?:[^.;!?]*?)(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i');
+        const after = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*\\s+(?:are|is)\\s+(?:excluded|not (?:permitted|allowed|ok|okay|wanted|an option)|ruled out|out|off the table)`, 'i');
+        const m = before.exec(lower);
+        if ((m && new RegExp(`^(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at)\\s+(?:at\\s+|in\\s+)?${listed}$`, 'i').test(m[0])) || after.test(lower)) excluded.add(v.canonical);
+      }
+    }
+    if (excluded.size) out.excludedVenues = [...excluded];
+    const named = [...new Set(mentioned.filter((v) => !excluded.has(v.canonical) && v.names.some((n) => new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${nameRe(n)}`, 'i').test(lower))).map((v) => v.canonical))];
     if (named.length) out.venueTerms = named;
+    if (out.venueTerms) out.venueTerms = out.venueTerms.filter((n) => !out.excludedVenues.includes(n));
+    if (out.venueTerms && !out.venueTerms.length) out.venueTerms = null;
     if (/\bhome\s+(?:game|match|fixture|date|opener|games|matches)\b|\bnot\s+(?:an?\s+)?away\b|\bsubstitute an away\b|\bhome\s+only\b/i.test(t)) out.homeOnly = true;
     const times = timesIn(t);
     if (times.after || times.before || times.exactTime !== null) {
@@ -198,16 +244,19 @@ const timeLabel = (m: number) => {
  * Why an event breaks their rules, in words for the reply ("it's in Philadelphia, not at Madison Square
  * Garden", "it starts at 7pm, and you asked for after 7pm"), or [] when it fits them all.
  */
-export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boolean | null }, v: { name: string; aliases: string[]; city: string | null; timezone: string }, opts: { team: boolean }): string[] {
+export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boolean | null }, v: { name: string; aliases: string[]; city: string | null; timezone: string }, opts: { team: boolean; atHome?: boolean | null }): string[] {
   const why: string[] = [];
   const at = localStart(e.localStartAt, v.timezone);
-  if (c.venueTerms) {
-    const vn = [v.name, ...v.aliases].map((n) => n.toLowerCase());
+  const vn = [v.name, ...v.aliases].map((n) => n.toLowerCase());
+  if (c.excludedVenues?.some((n) => vn.includes(n))) why.push(`it's at ${v.name}, which you ruled out`);
+  if (c.venueTerms && !why.length) {
     const wanted = c.venueTerms.map(displayVenue).join(' or ');
     // The label already names the venue; the reason says what matters about it.
     if (!c.venueTerms.some((n) => vn.includes(n))) why.push(v.city && !/new york|brooklyn/i.test(v.city) ? `it's in ${v.city}, not at ${wanted}` : `it's at ${v.name}, not at ${wanted}`);
   }
-  if (c.homeOnly && opts.team && e.isHome === false && !why.length) why.push(`it's an away game${v.city ? `, in ${v.city}` : ''}`);
+  // Away is away whatever the catalog says: a synced "Knicks v 76ers" in Philadelphia is marked home (TGQA-R8 S03), so
+  // the team's own market decides when it is known.
+  if (c.homeOnly && opts.team && (e.isHome === false || opts.atHome === false) && !why.length) why.push(`it's an away game${v.city ? `, in ${v.city}` : ''}`);
   if (c.exactTime !== null && at.minutes !== c.exactTime) why.push(`it starts at ${timeLabel(at.minutes)}, not ${timeLabel(c.exactTime)}`);
   if (c.notTimes.includes(at.minutes)) why.push(`it starts at ${timeLabel(at.minutes)}, which you ruled out`);
   if (c.after && (c.after.strict ? at.minutes <= c.after.minutes : at.minutes < c.after.minutes)) why.push(`it starts at ${timeLabel(at.minutes)}, and you asked for ${c.after.strict ? 'after' : 'no earlier than'} ${timeLabel(c.after.minutes)}`);

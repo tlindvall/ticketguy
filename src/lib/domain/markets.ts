@@ -104,6 +104,11 @@ export function milesBetween(aLat: number, aLng: number, bLat: number, bLng: num
   return 3958.8 * 2 * Math.asin(Math.sqrt(h));
 }
 
+/** The market a team plays at home in, from its name ("Brooklyn Nets", "New York Knicks" → New York); null when unknown. */
+export function teamHomeMarket(teamName: string): Market | null {
+  return MARKETS.find((x) => x.teamNames.test(teamName.trim())) ?? null;
+}
+
 /** Whether a venue is in the market: within its radius when both have coordinates, else by city name. */
 export function inMarket(v: { city: string | null; latitude?: number | null; longitude?: number | null }, market: Market): boolean {
   if (market.lat !== null && market.lng !== null && v.latitude != null && v.longitude != null) return milesBetween(market.lat, market.lng, v.latitude, v.longitude) <= market.radiusMiles;

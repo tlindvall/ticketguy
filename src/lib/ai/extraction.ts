@@ -100,7 +100,13 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
     const n = NUM_WORDS[bills[1]!.toLowerCase()] ?? Number(bills[1]);
     return { cents: n * 10_000, basis: /each|apiece/i.test(bills[2] ?? '') ? 'per_ticket' : bills[2] ? 'whole_party' : null, quote: bills[0].trim() };
   }
-  const m = /(?:under|below|max(?:imum)?|budget(?: is| of)?|up to|no more than|around|about|<|≤)?\s*\$\s?(\d{1,5}(?:[.,]\d{2})?)\s*(?:is\s+|are\s+)?(total|all[- ]in|for (?:all|both|everyone|the (?:two|three|four|five|six|group|pair)|the (?:whole |entire )?(?:order|lot|block|party|group))|combined|altogether|each|per (?:ticket|person|seat)|a (?:ticket|seat|person)|apiece|pp)?/i.exec(t);
+  const AMOUNT = /(?:under|below|max(?:imum)?|budget(?: is| of)?|up to|no more than|around|about|<|≤)?\s*\$\s?(\d{1,5}(?:[.,]\d{2})?)\s*(?:is\s+|are\s+)?(total|all[- ]in|for (?:all|both|everyone|the (?:two|three|four|five|six|group|pair)|the (?:whole |entire )?(?:order|lot|block|party|group))|combined|altogether|each|per (?:ticket|person|seat)|a (?:ticket|seat|person)|apiece|pp)?/i;
+  // An amount they call a budget or cap beats the first price in the message: "Offer A is $190 TOTAL… Budget $230
+  // TOTAL" is a $230 budget (TGQA-R8 17). Otherwise the first amount, as before.
+  const worded = /\b(?:budget|cap|spend(?: up to)?|max(?:imum)?|no more than|at most|up to|under)\b(?:\s+(?:is|of|to|stays|now|still|remains|was))*\s*(?:\$|\bat\s+\$)/i.exec(t);
+  const inWorded = worded ? AMOUNT.exec(t.slice(worded.index)) : null;
+  const m = inWorded ?? AMOUNT.exec(t);
+  const at = inWorded ? worded!.index + inWorded.index : m?.index ?? 0;
   if (!m) return { cents: null, basis: null, quote: null };
   const cents = Math.round(Number(m[1]!.replace(',', '.')) * 100);
   const q = (m[2] ?? '').toLowerCase();
@@ -108,7 +114,7 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
   if (/total|all|combined|altogether|for/.test(q)) basis = 'whole_party';
   else if (/each|per|apiece|pp|a /.test(q)) basis = 'per_ticket';
   // "Raise the total budget to $720", "the total is under $450 with fees": the word comes before the amount.
-  else if (/\btotal\b/i.test(t.slice(Math.max(0, m.index - 30), m.index))) basis = 'whole_party';
+  else if (/\btotal\b/i.test(t.slice(Math.max(0, at - 30), at))) basis = 'whole_party';
   return { cents, basis, quote: m[0] };
 }
 
@@ -165,6 +171,42 @@ const CITIES: Array<[RegExp, string, string]> = [
 /** Someone saying no one in the party needs accessible seating: the word "wheelchair" is not a need. */
 export const NO_ACCESS_NEED = /\b(neither of us|none of us|no one|nobody|we don'?t|we do not|i don'?t|i do not)\s+(needs?|requires?|uses?)\b[^.;!?]{0,40}\b(wheelchair|accessible|accessibility|ada)\b/i;
 
+/**
+ * The date they name, read without a model: "Oct 3", "Monday October 5", "this coming Friday", "knicks fri".
+ * `resolvedLocalDate` is set only for one unambiguous day; a month, week or span leaves it null (the resolver uses
+ * the window). The pipeline also runs this over the model's reading when the model left the day unresolved
+ * (TGQA-R8 S03, S08).
+ */
+export function readDate(t: string, receivedAt: Date, venueTimeZone: string | null): { dateExpression: string | null; resolvedLocalDate: string | null; ambiguities: string[] } {
+  const ambiguities: string[] = [];
+  const input = { receivedAt, venueTimeZone };
+  // A calendar date anywhere in the message beats a looser phrase before it: in "I'm in New York for the
+  // weekend, 2 Rangers tickets Oct 3" the weekend is the trip, and Oct 3 is the game.
+  const explicitDay = new RegExp(`\\b(${MONTH_DAY_SRC})\\b`, 'i').exec(t);
+  // "knicks fri", "this coming Friday": the day, spelled out for the date reader.
+  const FULL: Record<string, string> = { fri: 'friday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', sat: 'saturday', sun: 'sunday', mon: 'monday' };
+  const td = t.replace(/\bthis coming\b/gi, 'this').replace(/\b(fri|thurs?|thu|tues?|wed)\b\.?/gi, (m) => FULL[m.replace('.', '').toLowerCase()] ?? m).replace(/\b(this|next|on|for)\s+(sat|sun|mon)\b\.?/gi, (_m, a: string, d: string) => `${a} ${FULL[d.toLowerCase()]}`);
+  const dateM = explicitDay ?? DATE_EXPR.exec(td);
+  const dateExpression = dateM ? dateM[1]! : null;
+  let resolvedLocalDate: string | null = null;
+  if (dateExpression) {
+    // A span is checked before a single date: "Oct 1-7" names a week, not the 1st.
+    const window = dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York');
+    const md = window ? null : resolveMonthDay(dateExpression, input.receivedAt);
+    if (md) resolvedLocalDate = md;
+    else if (window) {
+      // A named month, week or span narrows the search without picking a day; the resolver uses the window.
+    } else {
+      const r = resolveRelativeDate(dateExpression, input.receivedAt, input.venueTimeZone);
+      if (r.kind === 'resolved') {
+        resolvedLocalDate = r.ambiguous ? null : r.localDate;
+        if (r.ambiguous) ambiguities.push('date_near_midnight');
+      } else ambiguities.push(`date_${r.reason}`);
+    }
+  }
+  return { dateExpression, resolvedLocalDate, ambiguities };
+}
+
 export class FixtureExtractor implements Extractor {
   readonly name = 'fixture';
   async extract(input: ExtractionInput): Promise<RequestExtraction> {
@@ -207,31 +249,11 @@ export class FixtureExtractor implements Extractor {
     const ent = findEntity(t, input.knownEntities.filter((e) => !negated.includes(e.name)));
     ev('performerOrTeam', ent?.quote ?? null);
 
-    // A calendar date anywhere in the message beats a looser phrase before it: in "I'm in New York for the
-    // weekend, 2 Rangers tickets Oct 3" the weekend is the trip, and Oct 3 is the game.
-    const explicitDay = new RegExp(`\\b(${MONTH_DAY_SRC})\\b`, 'i').exec(t);
-    // "knicks fri", "this coming Friday": the day, spelled out for the date reader.
-    const FULL: Record<string, string> = { fri: 'friday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', sat: 'saturday', sun: 'sunday', mon: 'monday' };
-    const td = t.replace(/\bthis coming\b/gi, 'this').replace(/\b(fri|thurs?|thu|tues?|wed)\b\.?/gi, (m) => FULL[m.replace('.', '').toLowerCase()] ?? m).replace(/\b(this|next|on|for)\s+(sat|sun|mon)\b\.?/gi, (_m, a: string, d: string) => `${a} ${FULL[d.toLowerCase()]}`);
-    const dateM = explicitDay ?? DATE_EXPR.exec(td);
-    const dateExpression = dateM ? dateM[1]! : null;
+    const date = readDate(t, input.receivedAt, input.venueTimeZone);
+    const dateExpression = date.dateExpression;
     ev('dateExpression', dateExpression);
-    let resolvedLocalDate: string | null = null;
-    if (dateExpression) {
-      // A span is checked before a single date: "Oct 1-7" names a week, not the 1st.
-      const window = dateWindowFor(dateExpression, input.receivedAt, input.venueTimeZone ?? 'America/New_York');
-      const md = window ? null : resolveMonthDay(dateExpression, input.receivedAt);
-      if (md) resolvedLocalDate = md;
-      else if (window) {
-        // A named month, week or span narrows the search without picking a day; the resolver uses the window.
-      } else {
-        const r = resolveRelativeDate(dateExpression, input.receivedAt, input.venueTimeZone);
-        if (r.kind === 'resolved') {
-          resolvedLocalDate = r.ambiguous ? null : r.localDate;
-          if (r.ambiguous) ambiguities.push('date_near_midnight');
-        } else ambiguities.push(`date_${r.reason}`);
-      }
-    }
+    const resolvedLocalDate = date.resolvedLocalDate;
+    ambiguities.push(...date.ambiguities);
 
     let city: string | null = null;
     let state: string | null = null;
@@ -241,8 +263,10 @@ export class FixtureExtractor implements Extractor {
       city = hood.label.replace(/^the /, '');
       ev('city', hood.match.exec(t)?.[0] ?? hood.label);
     }
+    // "1pm NEW YORK time", "11am Los Angeles" name a clock, not where the event is (TGQA-R8 17).
+    const tc = t.replace(/\b(?:\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\s+)(?:new york|nyc|los angeles|la|chicago|denver|phoenix|seattle|boston)\b(?:\s+time)?|\b(?:new york|nyc|los angeles|la|chicago|denver|pacific|eastern|central|mountain)\s+time\b/gi, ' ');
     for (const [re, c, s] of hood ? [] : CITIES) {
-      const m = re.exec(t);
+      const m = re.exec(tc);
       if (m) {
         city = c;
         state = s;

@@ -535,8 +535,11 @@ export function entriesFor(field: LexiconEntry['field']): LexiconEntry[] {
 
 /** The first category entry whose pattern matches, in table order (so "hockey game" is hockey, not "a game"). */
 export function lexiconCategory(text: string): CategoryHint | null {
-  for (const e of entriesFor('categoryHint')) if (e.pattern.test(text)) return e.value as CategoryHint;
-  return null;
+  const hits = entriesFor('categoryHint').filter((e) => e.pattern.test(text)).map((e) => e.value as CategoryHint);
+  // "NBA or NHL home games": two sports named is sports, not the first one listed (TGQA-R8 16).
+  const SPORTS = ['nba', 'nhl', 'mlb', 'nfl', 'wnba', 'soccer', 'ncaaf', 'ncaab', 'sports'];
+  if (new Set(hits.filter((h) => SPORTS.includes(h))).size > 1) return 'sports' as CategoryHint;
+  return hits[0] ?? null;
 }
 
 /** The kind of music named ("indie rock and roll" is rock), as the family key the browse list filters by. */

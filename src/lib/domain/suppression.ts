@@ -36,7 +36,16 @@ export async function applyProviderComplaintOrBounce(db: DbOrTx, args: { emailLo
 export function classifyOptOutText(text: string): 'stop_all' | 'unsubscribe_marketing' | null {
   const t = text.toLowerCase();
   // "stop emailing me", "I don't want ticket suggestions, price-watch emails or marketing emails" (TGQA-R6 1014).
-  if (/\b(stop all( emails| messages)?|stop everything|no more emails at all|do not (email|contact) me (again|anymore)|stop (emailing|messaging|contacting|writing to) me|(don'?t|do not) (email|contact|message) me|don'?t want (any )?(more )?(ticket suggestions|emails from you)|no more emails)\b/.test(t.replace(/[’‘]/g, "'"))) return 'stop_all';
+  const u = t.replace(/[’‘]/g, "'");
+  if (/\b(stop all( emails| messages)?|stop everything|no more emails at all|do not (email|contact) me (again|anymore)|stop (emailing|messaging|contacting|writing to) me|(don'?t|do not) (email|contact|message) me|don'?t want (any )?(more )?(ticket suggestions|emails from you)|no more emails)\b/.test(u)) return 'stop_all';
+  // "I do not want ticket suggestions, price-watch emails or marketing emails": more than marketing is stopped (TGQA-R8 S09).
+  if (/\b(?:don'?t|do not|no longer) want\b[^.?!]{0,80}\b(?:ticket suggestions|suggestions|price[- ]watch(?:es| emails)?|alerts?|follow[- ]ups?)\b/.test(u)) return 'stop_all';
   if (/\bunsubscribe\b|\bopt[- ]?out\b|\bremove me from (your|the) (list|mailing)\b|\bno (more )?(promotions|marketing|deals)\b/.test(t)) return 'unsubscribe_marketing';
   return null;
+}
+
+/** "Please confirm what you stopped", "Have you recorded that preference?": a question about the stops on file. */
+export function asksAboutOptOut(text: string): boolean {
+  const t = text.toLowerCase().replace(/[’‘]/g, "'");
+  return /\b(?:confirm|recorded|what you(?:'ve)? stopped|have you stopped|did you stop|is (?:that|it) (?:recorded|saved|on file))\b/.test(t) && /\b(?:stop(?:ped)?|preferences?|emails?|suggestions|marketing|alerts?|unsubscribe[sd]?|opt(?:ed)?[- ]?out)\b/.test(t) && !/\b(?:delet\w*|erase)\b/.test(t);
 }

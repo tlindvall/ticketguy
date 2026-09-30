@@ -1,5 +1,5 @@
 import { entryFailure } from './concert-terms';
-import { offerTotal, timeLabel, venueZoneName, type PartyTerms, type TextOffer } from './text-offers';
+import { fromVenueMinutes, offerTotal, timeLabel, venueZoneName, type PartyTerms, type TextOffer } from './text-offers';
 import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
@@ -613,13 +613,17 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const Name = (o: TextOffer) => o.name.charAt(0).toUpperCase() + o.name.slice(1);
   const short = (o: TextOffer) => (/^[A-Z1-9]$/.test(o.label) ? o.label : o.name);
   // Times said in the venue's own zone, and in theirs when they wrote another ("1:30pm New York time (10:30am Los Angeles time)").
-  const zoned = offers.some((o) => o.deliveryAsWritten);
+  // Also when their deadline is in another zone than the venue's: "11am Los Angeles time" beside a New York deadline.
+  const zoned = offers.some((o) => o.deliveryAsWritten) || (!!terms.deadlineZone && terms.deadlineZone !== venueZoneName(a.timeZone ?? 'America/New_York'));
   const zoneName = zoned ? venueZoneName(a.timeZone ?? 'America/New_York') : null;
   const at = (m: number) => `${timeLabel(m)}${zoneName ? ` ${zoneName} time` : ''}`;
   const partyOf = (n: number) => (n === 1 ? 'one' : n === 2 ? 'both' : `all ${countWord(n)}`);
   const ticketsWord = (n: number) => (n === q ? partyOf(n) : `${countWord(n)} tickets`);
   const budget = a.priorities.budgetTotalCents ?? null;
   const deadline = terms.deadlineMinutes;
+  const tz = a.timeZone ?? 'America/New_York';
+  // Their deadline, in the zone they wrote it in: "your 1pm New York deadline".
+  const dl = (m: number) => (terms.deadlineZone ? `${timeLabel(fromVenueMinutes(m, terms.deadlineZone, tz))} ${terms.deadlineZone}` : at(m));
   const price = (o: TextOffer, tot: ReturnType<typeof offerTotal>) => {
     const fees = o.feeBasis === 'all_in' ? ' including fees' : o.feeBasis === 'before_fees' ? ' before fees' : '';
     if (o.totalCents === null && o.perTicketCents === null) return 'price not stated';
@@ -650,12 +654,24 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     }
     if (need.noObstructed && o.obstructed === true) why.push({ kind: 'view', text: 'it has an obstructed view, which you ruled out' });
     // Pairs are enough when each adult sits with a child (TGQA-R6 18): scattered singles fail that, adjacent pairs don't.
+    // How they said the party must sit decides, not a general "together" the reader inferred: adjacent pairs are
+    // enough when each child only needs an adult beside them, and nothing is required once they lift it (TGQA-R8 S01).
     if (terms.seating === 'pairs') {
-      if (o.together === false && !o.pairs) why.push({ kind: 'together', text: 'they’re separate seats, so each adult can’t sit with a child' });
-    } else if (need.togetherRequired && o.together === false) why.push({ kind: 'together', text: o.pairs ? 'they’re two pairs, not all together' : 'the seats aren’t together' });
+      if (o.together === false && !o.pairs) why.push({ kind: 'together', text: 'they’re separate seats, so each child can’t sit beside an adult' });
+    } else if (terms.seating !== 'any' && (need.togetherRequired || terms.seating === 'together') && o.together === false) why.push({ kind: 'together', text: o.pairs ? 'they’re two pairs, not all together' : 'the seats aren’t together' });
     if (deadline !== null) {
-      if (o.deliveryMinutes === null) why.push({ kind: 'no_time', text: `it doesn’t say the tickets arrive before ${at(deadline)}, your deadline` });
-      else if (o.deliveryMinutes > deadline) why.push({ kind: 'late', text: `delivery by ${at(o.deliveryMinutes)} misses your ${at(deadline)} deadline` });
+      if (o.deliveryMinutes === null) why.push({ kind: 'no_time', text: `it doesn’t say the tickets arrive before ${dl(deadline)}, your deadline` });
+      else if (o.deliveryMinutes > deadline) {
+        const late = o.deliveryMinutes - deadline;
+        const by = late % 60 ? `${late} minutes` : late === 60 ? 'an hour' : `${late / 60} hours`;
+        // In the zone they gave the deadline in, with the offer's own wording beside it (TGQA-R8 S02).
+        const promised = terms.deadlineZone ? `${timeLabel(fromVenueMinutes(o.deliveryMinutes, terms.deadlineZone, tz))} ${terms.deadlineZone} time` : at(o.deliveryMinutes);
+        // "11am Los Angeles time is 2pm New York time, an hour after your 1pm New York deadline": both clocks shown.
+        const venueZone = venueZoneName(tz);
+        const inVenue = `${timeLabel(o.deliveryMinutes)} ${venueZone ?? ''} time`.replace(/\s+/g, ' ');
+        const crossZone = !!terms.deadlineZone && !!venueZone && terms.deadlineZone !== venueZone;
+        why.push({ kind: 'late', text: crossZone ? `delivery by ${inVenue} is ${promised}, ${by} after your ${dl(deadline)} deadline` : `delivery by ${promised} misses your ${dl(deadline)} deadline by ${by}` });
+      }
     }
     const feesUnknown = !!tot && !tot.allIn && o.feeBasis !== 'all_in';
     if (budget !== null && tot && tot.cents > budget) why.push({ kind: 'budget', text: `over your ${formatUsd(budget)} budget by ${formatUsd(tot.cents - budget)}${tot.allIn ? '' : ' before its fees'}` });
@@ -673,7 +689,8 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     const verdict = r.why.length ? ` ${reasons.join('; ')}.` : r === best ? '' : fits.includes(r) && best ? ` Also fits${r.tot!.cents > best.tot!.cents ? `, ${formatUsd(r.tot!.cents - best.tot!.cents)} more` : ', at the same total'}.` : room;
     return `${Name(r.o)}${d ? ` (${d})` : ''}: ${price(r.o, r.tot)}.${verdict}`;
   });
-  const provenance = 'Based on the details you sent; I haven’t verified availability.';
+  // A promised transfer time is the seller's word, not a transfer that has happened (TGQA-R8 S02).
+  const provenance = deadline !== null ? 'Based on the terms you sent; I haven’t verified availability, and a promised transfer time isn’t a completed transfer.' : 'Based on the details you sent; I haven’t verified availability.';
   const vs = (x: OfferVerdict, y: OfferVerdict) => {
     const d = y.tot!.cents - x.tot!.cents;
     return d > 0 ? `${formatUsd(d)} less than ${y.o.name}` : d < 0 ? `${formatUsd(-d)} more than ${y.o.name}` : `the same as ${y.o.name}`;
