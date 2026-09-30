@@ -1,4 +1,4 @@
-import { concertBudget, concertQuestion, similarMusicGoal } from '@/lib/advice/concert-terms';
+import { concertBudget, concertQuestion, concertContext, similarMusicGoal } from '@/lib/advice/concert-terms';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
@@ -371,10 +371,18 @@ export class Concierge {
     // Likewise a quoted price: with offers side by side there is no single price they're asking about.
     if (latestOffers.length >= 2 && extraction.quotedPriceCents != null) extraction = { ...extraction, quotedPriceCents: null, quotedPriceBasis: null };
 
-    // Music quotes often put the real budget after several product prices. Bind it to its own words.
-    if (/\bconcert|festival|house night|entry|VIP|parking\b/i.test(latestText) && latestOffers.length) {
+    // The same safeguards run after either extractor. Quoted source prices and room names
+    // cannot change the party or invent a cap, even when a model assigns those fields.
+    const interpretationTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    if (concertContext(interpretationTexts)) {
       const budget = concertBudget(latestText);
-      if (budget) extraction = { ...extraction, budgetCents: budget.cents, budgetBasis: budget.basis ?? (priorBrief?.budgetCents === budget.cents ? priorBrief.budgetBasis : null), ambiguities: extraction.ambiguities.filter((x) => !x.startsWith('budget_basis')) };
+      const party = partyTerms(interpretationTexts).attendees;
+      extraction = { ...extraction,
+        budgetCents: budget?.cents ?? null,
+        budgetBasis: budget?.basis ?? (budget && priorBrief?.budgetCents === budget.cents ? priorBrief.budgetBasis : null),
+        quantity: party ?? extraction.quantity,
+        ambiguities: extraction.ambiguities.filter((x) => !x.startsWith('budget_basis') || budget && !budget.basis),
+      };
     }
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
@@ -555,21 +563,21 @@ export class Concierge {
       const terms = partyTerms(threadTexts, tz);
       const quantity = terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
       const threadFlat = flat(threadTexts.join('\n'));
+      const concertCap = concertContext(threadTexts) ? [...threadTexts].reverse().map(concertBudget).find((b) => b !== null) : null;
       const comparison = suppliedOffersAnswer({
         offers: supplied.textOffers, quantity, offersSetAside: supplied.offersSetAside, accessibilityRequired: !!merged.accessibilityNeeds, timeZone: tz, observedAt: now,
         // A budget only when they gave one: a price they quoted is not a cap (TGQA-R6 13: "$162 of your $412 budget").
-        budgetTotalCents: BUDGET_WORDS.test(threadFlat) ? wholePartyBudgetCents(merged.budgetCents, merged.budgetBasis, quantity) : null,
+        budgetTotalCents: concertCap ? wholePartyBudgetCents(concertCap.cents, concertCap.basis ?? (concertCap.cents === merged.budgetCents ? merged.budgetBasis : null), quantity) : BUDGET_WORDS.test(threadFlat) ? wholePartyBudgetCents(merged.budgetCents, merged.budgetBasis, quantity) : null,
         needs: { noObstructed: NO_OBSTRUCTED.test(`${threadFlat}\n${merged.seatingPreference ?? ''}`), togetherRequired: !!merged.togetherRequired, baseline: comparedAgainst(latestText, supplied.textOffers.map((o) => o.label)), terms },
       });
       const { lead } = comparison;
       const items = [...comparison.items];
-      if (/\b(?:correct|mixed up|exclude)\b/i.test(latestText) && supplied.textOffers.some((o) => o.admission === 'excluded')) items.push('To be clear: the non-admission product cannot beat an admission ticket at any fee level. Disregard any earlier comparison that treated it as admission.');
       if (/\bRed Rocks\b/i.test(threadFlat) && /\bMorrison\b/i.test(threadFlat)) items.push('The location you supplied is Red Rocks in Morrison, rather than Denver.');
       const links = musicSourceLinks(threadTexts);
-      const text = ['Hey,', lead, items.map((i) => `- ${i}`).join('\n'), ...links.map((url) => `Link you supplied: ${url}`)].join('\n\n');
+      const text = ['Hey,', lead, items.map((i) => `- ${i}`).join('\n'), ...links.map(({ url, label }) => `${label}: ${url}`)].join('\n\n');
       const first = /^(.+?[.!?])(\s|$)/.exec(lead)?.[1] ?? lead;
       const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-      const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(lead.slice(first.length))}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i)}</li>`).join('')}</ul>`, ...links.map((url) => `<p><a href="${esc(url)}">Link you supplied</a></p>`)].join('\n');
+      const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(lead.slice(first.length))}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i).replace(/^(Offer [A-E])/, '<strong>$1</strong>').replace(/(\$[\d,.]+)/g, '<strong>$1</strong>')}</li>`).join('')}</ul>`, ...links.map(({ url, label }) => `<p><a href="${esc(url)}">${esc(label)}</a></p>`)].join('\n');
       if (recordVersion) {
         await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
         await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
@@ -579,6 +587,7 @@ export class Concierge {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
       return { state: 'recommendation_sent', revision, extraction: merged };
     };
+    if (supplied.textOffers.length && concertContext(threadTexts)) return answerSupplied(true);
     const concert = concertQuestion(threadTexts);
     if (concert) {
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
@@ -586,12 +595,11 @@ export class Concierge {
       if (revision > 1) await this.invalidateForRevision(req.id, revision);
       const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const links = musicSourceLinks([latestText]);
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your concert question'), template: 'raw_auto', vars: { text: [concert.lead, ...concert.items, ...links.map((url) => `Link you supplied: ${url}`)].join('\n\n'), html: `<p><strong>${esc(concert.lead)}</strong></p>${concert.items.map((i) => `<p>${esc(i)}</p>`).join('')}${links.map((url) => `<p><a href="${esc(url)}">Link you supplied</a></p>`).join('')}` }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `concert:${msg.id}` });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your concert question'), template: 'raw_auto', vars: { text: [concert.lead, ...concert.items, ...links.map(({ url, label }) => `${label}: ${url}`)].join('\n\n'), html: `<p><strong>${esc(concert.lead)}</strong></p>${concert.items.map((i) => `<p>${esc(i)}</p>`).join('')}${links.map(({ url, label }) => `<p><a href="${esc(url)}">${esc(label)}</a></p>`).join('')}` }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `concert:${msg.id}` });
       await this.transition(req.id, 'recommendation_sent', 'concert_terms_answered');
       return { state: 'recommendation_sent', revision, extraction: merged };
     }
 
-    if (supplied.textOffers.length && partyTerms(threadTexts).concertAdmission) return answerSupplied(true);
 
     // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
     // instead of asking which event, how many tickets and which date.
@@ -2941,8 +2949,13 @@ export function withFaceValueCheck(reqs: string[], x: RequestExtraction, event: 
 }
 
 /** Keep supplied HTTPS references as references, without inventing a checkout or claiming a source was read. */
-function musicSourceLinks(messages: string[]): string[] {
-  return [...new Set(messages.flatMap((m) => flat(m).match(/https:\/\/[^\s<>"']+/g) ?? []))].slice(-3);
+function musicSourceLinks(messages: string[]): Array<{ url: string; label: string }> {
+  return [...new Set(messages.flatMap((m) => (flat(m).match(/https:\/\/[^\s<>"']+/g) ?? []).map((url) => url.replace(/[.,);]+$/, ''))))].slice(-3).flatMap((url) => {
+    let source: URL;
+    try { source = new URL(url); } catch { return []; }
+    const kind = /\/(?:events?|concerts?)\//i.test(source.pathname) ? 'Event page' : /\/(?:help|faq)(?:\/|$)/i.test(source.pathname) ? 'Venue FAQ' : /\/venues?\//i.test(source.pathname) ? 'Venue page' : 'Source';
+    return [{ url, label: `${kind} you sent (${source.hostname.replace(/^www\./, '')})` }];
+  });
 }
 
 /** Latest explicit concert facts win; omitted facts stay bound to the same product. */
@@ -2953,18 +2966,30 @@ function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
   const retainPrice = !hasPrice || samePrice && !next.priceBasisStated;
   const replaced = next.productKind !== 'unknown' && old.productKind !== 'unknown' && next.productKind !== old.productKind;
   if (replaced) return next;
+  const performanceChanged = !!next.performance && (next.performance.appearance !== null || next.performance.differentEvent || next.performance.sameEventStated);
+  const admissionsPerUnit = next.admissionStated && next.admission !== 'included' ? null : next.admissionsPerUnit ?? old.admissionsPerUnit;
+  const unitsAvailable = next.unitsAvailable ?? old.unitsAvailable;
+  const quantity = next.admissionStated && next.admission !== 'included' && old.productKind === 'package' ? null
+    : unitsAvailable != null && admissionsPerUnit != null ? unitsAvailable * admissionsPerUnit : next.quantity ?? old.quantity;
   return { ...next,
     admission: next.admissionStated ? next.admission : old.admission,
     admissionStated: next.admissionStated || old.admissionStated,
     productKind: next.productKind !== 'unknown' ? next.productKind : old.productKind,
     entry: next.entry ?? old.entry,
+    performance: {
+      description: performanceChanged ? next.performance!.description : old.performance?.description ?? next.performance?.description ?? '',
+      appearance: next.performance?.appearance ?? old.performance?.appearance ?? null,
+      differentEvent: next.performance?.sameEventStated ? false : next.performance?.differentEvent || old.performance?.differentEvent || false,
+    },
+    unitsAvailable,
+    admissionsPerUnit,
     totalCents: retainPrice ? old.totalCents : next.totalCents,
     perTicketCents: retainPrice ? old.perTicketCents : next.perTicketCents,
     feeBasis: next.feeBasis !== 'unknown' ? next.feeBasis : old.feeBasis,
     orderFeeCents: newAllInPrice ? next.orderFeeCents : next.orderFeeCents ?? old.orderFeeCents,
     perTicketFeeCents: newAllInPrice ? next.perTicketFeeCents : next.perTicketFeeCents ?? old.perTicketFeeCents,
     noOtherCharges: next.noOtherCharges || old.noOtherCharges,
-    quantity: next.quantity ?? old.quantity,
+    quantity,
     together: next.together ?? old.together,
     mustBuyAll: next.mustBuyAll || old.mustBuyAll,
     obstructed: next.obstructed ?? old.obstructed,
@@ -2988,8 +3013,11 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
     let retained: TextOffer[] = [];
     let offersSetAside: string[] = [];
     const history = threadMessages.at(-1) === said ? threadMessages : [...threadMessages, said];
+    let reset = false;
+    const year = Number(partyTerms(history).night?.eventDate?.slice(0, 4) ?? 0);
     for (const message of history) {
-      const updates = offersInText(message, tz, 1);
+      if (/\b(?:forget|discard|ignore|set aside) (?:all |both |those |these )(?:the )?(?:offers|quotes)|\b(?:new request|new search|start over)\b/i.test(message)) { retained = []; offersSetAside = []; reset = true; }
+      const updates = offersInText(message, tz, 1, year);
       if (!updates.length) continue;
       const only = /\b(?:only|just) (?:offer |option )?([A-E])\b/i.exec(message)?.[1]?.toUpperCase();
       if (only && updates.some((o) => o.label === only) && /\b(?:ignore|set aside|on its own|only|just)\b/i.test(message)) {
@@ -3004,8 +3032,12 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
       }
     }
     const latestNames = offersInText(said, tz, 1).length > 0;
-    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these)\b/i.test(said);
+    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these|unchanged|arrival|arriving|prices and budget)\b|\b[A-E]'s\b|\b[A-E] and [A-E]\b/i.test(said);
+    // A new discovery goal leaves the comparison. A room-access question with a new source
+    // and no offer update is answered directly, rather than repeating stale price quotes.
+    if (similarMusicGoal(said) || /\b(?:room-access|exact official)\b/i.test(said) && !latestNames) return { textOffers: [], offersSetAside: [] };
     if ((latestNames || referringBack) && (retained.length >= 2 || offersSetAside.length)) return { textOffers: retained, offersSetAside };
+    if (reset) return { textOffers: [], offersSetAside: [] };
   }
   let textOffers = offersInText(said, tz);
   // Restated offers keep what they said before: "A at $360 arrives by 5pm" after "Seller A is $360 total" is the same
