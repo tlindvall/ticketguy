@@ -176,6 +176,8 @@ export type DiscoveredEvent = {
   startAt: string | null;
   localDate: string | null;
   localTime: string | null;
+  /** Doors, when the provider publishes them apart from the start. */
+  doorsAt: string | null;
   timeTba: boolean;
   timezone: string | null;
   /** Provider sale status code, lower-cased: onsale | offsale | cancelled | postponed | rescheduled | unknown. */
@@ -255,6 +257,7 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
     startAt: str(start.dateTime),
     localDate: str(start.localDate),
     localTime: str(start.localTime),
+    doorsAt: str((dates as { doorsTimes?: { dateTime?: unknown } }).doorsTimes?.dateTime),
     timeTba: start.timeTBA === true || start.noSpecificTime === true,
     timezone: str(dates.timezone) ?? venue?.timezone ?? null,
     statusCode: (str(dates.status?.code) ?? 'unknown').toLowerCase(),

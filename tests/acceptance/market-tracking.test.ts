@@ -135,7 +135,9 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Answer first, then the market as bullets with its source under them.
     expect(rec!.bodyText).toContain('The resale market when I last checked:\n\n- Lowest asking price for two together, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees (about $260 for two). That’s down from $160 three days ago.\n- About 400 resale listings in all.');
-    expect(rec!.bodyHtml).toContain('<strong>$130</strong>');
+    // Emphasis is the answer's first sentence, not every amount (post-#55 writing review).
+    expect(rec!.bodyHtml).toMatch(/<p style="margin:0 0 18px;"><strong>[^<]+<\/strong>/);
+    expect(rec!.bodyHtml).not.toContain('<strong>$130</strong>');
     expect(rec!.bodyText).toContain('the cheapest listed price for two together at this point before the game was typically $122.50 to $147.50 (median $135)');
     expect(rec!.bodyText).not.toContain('enough comparable history');
     expect(rec!.bodyText).toContain('Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked');
@@ -282,7 +284,7 @@ describe('resale market tracking', () => {
     expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);
-    expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket (about $620 for all four), in your section. These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. Your price includes fees (or may), so after fees these may not be cheaper: compare the checkout totals. They aren’t your seats, and I haven’t checked they’re still for sale.');
+    expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket before fees (about $620 for all four), in your section (cheaper than yours only if its fees come to less than $220 in total). These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. Your price includes fees (or may), so after fees these may not be cheaper: compare the checkout totals. They aren’t your seats, and I haven’t checked they’re still for sale.');
     expect(body).toContain('I haven’t found a verified alternative I can link you to yet, with a checked all-in price.');
     // Recommendation first, the market figures after it, and nothing called a good deal.
     expect(body.indexOf('Before you buy it')).toBeLessThan(body.indexOf('Cheaper listings'));

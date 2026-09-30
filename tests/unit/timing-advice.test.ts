@@ -60,8 +60,9 @@ describe('the advice email reads at a glance', () => {
     expect(r.textBody).not.toContain('eyeing:');
     expect(r.textBody).not.toContain('yardstick');
     expect(r.textBody).not.toContain('not only No');
-    expect(r.htmlBody).toContain('<strong>My read:</strong>');
-    expect(r.htmlBody).toContain('<strong>$130</strong>');
+    // The opener's first sentence carries the emphasis; amounts elsewhere aren't each bolded.
+    expect(r.htmlBody).toMatch(/<strong>My read: [^<]+<\/strong>/);
+    expect(r.htmlBody).not.toContain('<strong>$130</strong>');
     expect(r.htmlBody).toContain('font-size:13px');
   });
 });

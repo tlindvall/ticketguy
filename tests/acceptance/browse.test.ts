@@ -202,7 +202,7 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).toContain('Game: New York Giants vs. Philadelphia Eagles');
     expect(body).toContain('Where: MetLife Stadium');
     expect(body).toContain('Tickets: 4');
-    expect(body).toContain("That's the only football game in New York for Oct 8 to 14, so I've gone ahead with it. Tell me if you had something else in mind.");
+    expect(body).toContain("It's the only football game I found in New York for Oct 8 to 14, so I've gone ahead with it. Tell me if you had something else in mind.");
     expect(body).not.toContain('how many tickets');
     expect(body).not.toContain('Reply with the one you want');
     expect(body).not.toContain("isn't something I cover");
