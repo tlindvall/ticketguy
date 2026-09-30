@@ -90,6 +90,8 @@ describe('corrections and positive controls', () => {
   });
   it('plain VIP upgrades remain unknown, and parking entry is not concert admission', () => {
     expect(admissionTerms('VIP upgrade, $50').admission).toBe('unknown');
+    expect(admissionTerms('VIP package, $50. Is concert admission included?').admission).toBe('unknown');
+    expect(admissionTerms('VIP package, concert ticket must be purchased separately').admission).toBe('excluded');
     expect(admissionTerms('Parking pass, anytime entry').admission).toBe('excluded');
   });
   it('a new live performance is not rejected because an earlier party excluded the artist', () => {
@@ -99,7 +101,7 @@ describe('corrections and positive controls', () => {
     expect(concertQuestion(['Dua Lipa herself will perform a DJ set. Should I buy tickets?'])).toBeNull();
   });
   it('a quote can establish conditional age/guardian facts without becoming verified policy', () => {
-    const quote = 'The event policy says 16+, no guardian required, government-issued ID. Both 16-year-olds will go without an adult. Can they enter?';
+    const quote = 'The concert event policy says 16+, no guardian required, government-issued ID. Both 16-year-olds will go without an adult. Can they enter?';
     expect(copiedAdmissionPolicy(quote)).toMatchObject({ minimumAge: 16, guardianRequired: false, acceptedId: 'government-issued ID', provenance: 'customer_supplied' });
     expect(concertQuestion([quote])?.lead).toContain('their ages meet the minimum');
     expect(concertQuestion([quote])?.items.join(' ')).toContain('haven’t independently verified');
@@ -107,7 +109,7 @@ describe('corrections and positive controls', () => {
     expect(concertQuestion([no])?.lead).toContain('cannot attend unaccompanied');
   });
   it('an all-ages label does not silently become guardian permission', () => {
-    const r = concertQuestion(['My two 16-year-olds will go without an adult. The event policy says all ages. Can they enter?']);
+    const r = concertQuestion(['My two 16-year-olds will go without an adult. The concert event policy says all ages. Can they enter?']);
     expect(r?.lead).toContain('haven’t verified');
   });
   it('doors are not a substitute for the event start, and unknown cutoff stays unknown', () => {

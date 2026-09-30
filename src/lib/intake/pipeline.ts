@@ -579,7 +579,6 @@ export class Concierge {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
       return { state: 'recommendation_sent', revision, extraction: merged };
     };
-    if (supplied.textOffers.length && partyTerms(threadTexts).concertAdmission) return answerSupplied(true);
     const concert = concertQuestion(threadTexts);
     if (concert) {
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
@@ -591,6 +590,8 @@ export class Concierge {
       await this.transition(req.id, 'recommendation_sent', 'concert_terms_answered');
       return { state: 'recommendation_sent', revision, extraction: merged };
     }
+
+    if (supplied.textOffers.length && partyTerms(threadTexts).concertAdmission) return answerSupplied(true);
 
     // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
     // instead of asking which event, how many tickets and which date.

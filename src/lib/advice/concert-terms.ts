@@ -7,8 +7,8 @@ export type ProductKind = 'admission' | 'parking' | 'shuttle' | 'upgrade' | 'pac
 export function admissionTerms(text: string): { admission: Admission; admissionStated: boolean; productKind: ProductKind } {
   const t = flat(text);
   const productKind: ProductKind = /\b(?:package|bundle)\b/i.test(t) ? 'package' : /\bparking\b/i.test(t) ? 'parking' : /\bshuttle\b/i.test(t) ? 'shuttle' : /\b(?:upgrade|merchandise)\b/i.test(t) ? 'upgrade' : /\b(?:admission|concert tickets?|festival pass|entry)\b/i.test(t) ? 'admission' : 'unknown';
-  const excluded = /\b(?:no|zero|0|without)\s+(?:(?:concert|event|festival)\s+)?admissions?\b|\b(?:concert|event|festival|admission) tickets? (?:is |are )?not included\b|\b(?:does not|doesn't|do not|don't) include (?:a |an |any )?(?:(?:concert|event|festival) )?(?:tickets?|admission)\b|\b(?:parking|shuttle|merchandise)[- ]only\b|\b(?:separate|additional) (?:concert |event )?(?:admission|ticket) (?:is )?required\b/i.test(t);
-  const uncertain = /\b(?:admission|ticket)\b[^.;]{0,30}\b(?:unknown|unclear|not stated|not specified|may|might)\b|\b(?:may|might) include\b/i.test(t);
+  const excluded = /\b(?:concert tickets?|event tickets?|admission)\b[^.;?]{0,25}\b(?:sold|purchased|bought) separately\b|\b(?:no|zero|0|without)\s+(?:(?:concert|event|festival)\s+)?admissions?\b|\b(?:concert|event|festival|admission) tickets? (?:is |are )?not included\b|\b(?:does not|doesn't|do not|don't) include (?:a |an |any )?(?:(?:concert|event|festival) )?(?:tickets?|admission)\b|\b(?:parking|shuttle|merchandise)[- ]only\b|\b(?:separate|additional) (?:concert |event )?(?:admission|ticket) (?:is )?required\b/i.test(t);
+  const uncertain = /\b(?:is|whether|unsure)\b[^.;?]{0,35}\badmission\b[^.;]{0,25}\?|\badmission (?:is )?included\?|\b(?:admission|ticket)\b[^.;]{0,30}\b(?:unknown|unclear|not stated|not specified|may|might)\b|\b(?:may|might) include\b/i.test(t);
   const included = /\b(?:concert|event|festival|general)[- ]admissions?\b|\b(?:concert|admission) (?:tickets?|seats?)\b|\bfestival pass\b|\bany[- ]?time entry\b|\bentry before (?:midnight|\d{1,2})\b|\b(?:includes?|including|with)\s+(?:(?:two|2|a|an)\s+)?(?:(?:GA|concert|event|festival)\s+)?admissions?\b/i.test(t);
   const explicitAdmission = /\b(?:concert|event|festival|general)[- ]admissions?\b|\bconcert tickets?\b/i.test(t);
   const ancillary = ['parking', 'shuttle', 'upgrade'].includes(productKind);
@@ -105,7 +105,7 @@ export function concertQuestion(messages: string[]): { lead: string; items: stri
   }
   const minor = /\b(?:1[0-7][- ]year[- ]olds?|minors?|both 1[0-7]|aged? 1[0-7])\b/i.test(all);
   const alone = /\bunaccompanied\b|\bwithout (?:an? )?(?:adult|guardian|parent)\b/i.test(all);
-  if (minor && alone && /\b(?:enter|admi\w*|policy|policies|guardian|adult|unaccompanied)\b/i.test(latest)) {
+  if (minor && alone && /\b(?:concert|pop|festival|music|artist)\b/i.test(all) && /\b(?:enter|admi\w*|policy|policies|guardian|adult|unaccompanied)\b/i.test(latest)) {
     const policy = copiedAdmissionPolicy(latest);
     const age = /\b(1[0-7])[- ]year[- ]old|\bboth (1[0-7])\b/i.exec(all);
     const youngest = age ? Number(age[1] ?? age[2]) : null;
