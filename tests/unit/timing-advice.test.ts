@@ -28,7 +28,40 @@ describe('timing advice follows the buyer, not just the market', () => {
   it('stale or venue-wide figures give no trend call for the seats they asked about', () => {
     expect(read(args({}, ctx({ reasons: ['stale_48h'] })))).not.toContain('easing');
     const lower = buildPacket(args({ seatingPreference: 'lower level' }));
-    expect(lower.claimRecords.find((c) => c.id === 'C_MARKET')!.text).toContain('That’s across the whole venue, not only lower level seats.');
+    expect(lower.claimRecords.find((c) => c.id === 'C_MARKET')!.text).toContain('These cover every seat in the venue, so they don’t reflect your preference (“lower level”).');
     expect(lower.claimRecords.find((c) => c.id === 'C_READ')!.text).not.toContain('easing');
+  });
+});
+
+/**
+ * "This needs to read better": a market-only reply was five paragraphs of block text, one of them a lead-in
+ * ("That points to a simple way to judge any seats you're eyeing:") with nothing after it, and "not only No
+ * obstructed views seats". It now reads answer first, the market as bullets, prices in bold.
+ */
+describe('the advice email reads at a glance', () => {
+  it('event line, the read first, market bullets, source in small print, and no prose left hanging', async () => {
+    const { validateAndRender } = await import('@/lib/advice/renderer');
+    const p = buildPacket(args({ quantity: 5, eventLabel: 'Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24', seatingPreference: 'No obstructed views' }));
+    const blocks = {
+      decision: p.decision,
+      opening: 'For five together, I’d use the current resale market as the yardstick rather than force a buy call yet.',
+      paragraphs: [{ claimIds: ['C_MARKET'], prose: 'Here’s the useful context:' }, { claimIds: ['C_READ'], prose: 'That points to a simple way to judge any seats you’re eyeing:' }],
+      closing: 'Send me what you find.',
+    };
+    const r = validateAndRender(p, blocks);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const parts = r.textBody.split('\n\n');
+    expect(parts[1]).toBe('Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24 · 5 tickets');
+    expect(parts[2]).toMatch(/^My read: for five together, up to about \$150 a ticket before fees is a fair price/);
+    expect(parts[3]).toBe('The resale market right now:');
+    expect(parts[4]!.split('\n').every((l) => l.startsWith('- '))).toBe(true);
+    expect(r.textBody).toContain('- These cover every seat in the venue, so they don’t reflect your preference (“no obstructed views”).');
+    expect(r.textBody).not.toContain('eyeing:');
+    expect(r.textBody).not.toContain('yardstick');
+    expect(r.textBody).not.toContain('not only No');
+    expect(r.htmlBody).toContain('<strong>My read:</strong>');
+    expect(r.htmlBody).toContain('<strong>$130</strong>');
+    expect(r.htmlBody).toContain('font-size:13px');
   });
 });

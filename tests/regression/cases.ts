@@ -82,7 +82,9 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'residence.uk', type: 'find', text: "I'm based in the UK. Two Rangers tickets Oct 3, $300 total.", reply: { state: 'unsupported', contains: ['US customers'] } },
   { id: 'residence.visiting_from', type: 'find', text: "We're visiting from London, 2 Rangers tickets Oct 3", reply: { state: 'unsupported' } },
   { id: 'residence.tourist_in_ny', type: 'find', text: "I'm in New York for the weekend, 2 Rangers tickets Oct 3", reply: { contains: ['Ticket Guy is for US-based fans for now'] } },
-  { id: 'event.outside_us', type: 'find', text: 'Two Leafs tickets in Toronto', reply: { state: 'unsupported', contains: ['outside the US'] } },
+  { id: 'event.outside_us', type: 'find', text: 'Two Leafs tickets in Toronto', reply: { state: 'unsupported', contains: ['only cover events in the US'] } },
+  // A performer we don't have on file, in a city abroad: said straight away, never "couldn't find it in London".
+  { id: 'event.outside_us_unknown_show', type: 'find', text: 'Can you find two tickets to Hamilton in London, UK, on Saturday October 3, 2026? Budget £180 total.', reply: { state: 'unsupported', contains: ['only cover events in the US'], notContains: ["couldn't find"] } },
 
   // ── Seats and budget ─────────────────────────────────────────────────────────────────────────────────
   { id: 'seats.apart_ok', type: 'find', text: "Four Rangers tickets Oct 3, we don't need to sit together", brief: { quantity: 4, togetherRequired: false } },

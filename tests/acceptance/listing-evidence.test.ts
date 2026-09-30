@@ -75,7 +75,7 @@ describe('reading the listing a customer sends', () => {
     expect(body).toContain('- It doesn’t say when the tickets will be delivered.');
     expect(body).toContain('- It doesn’t show seat numbers, so you won’t know exactly where you’re sitting until after you buy.');
     // A verified option (staff-checked here) that is cheaper comes first, with the difference for the whole party.
-    expect(body.startsWith('Hey,\n\nI’d look at the verified option below first: it’s $250 less for both.')).toBe(true);
+    expect(body.split('\n\n')[2]).toBe('I’d look at the verified option below first: it’s $250 less for both.');
     expect(body).toContain('including the verified charges, checked Sep 22, 11:00 AM EDT.');
     expect(body).not.toContain('I can’t see what sellers are charging');
   });
