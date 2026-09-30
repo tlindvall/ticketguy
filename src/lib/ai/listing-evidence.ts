@@ -82,7 +82,9 @@ const cents = (d: number | null) => (d == null ? null : Math.round(d * 100));
 export function restrictionCodesFrom(restrictions: string[]): string[] {
   const codes = new Set<string>();
   for (const r of restrictions) {
-    if (/\b(wheelchair|accessible|accessibility|ada|companion)\b/i.test(r)) codes.add('accessible_seating');
+    // "not wheelchair accessible", "no companion seats": a negation is not the restriction (post-#54 QA, R3-B08).
+    const m = /\b(wheelchair|accessible|accessibility|ada|companion)\b/i.exec(r);
+    if (m && !/\b(?:no|not|non|neither|nor|isn't|aren't|without)\b[\s\w-]{0,20}$/i.test(r.slice(0, m.index).replace(/[’‘]/g, "'"))) codes.add('accessible_seating');
     if (/\b(obstructed|limited|partial|restricted)\s+view\b|\bside view\b|\bview (is )?(obstructed|limited)\b/i.test(r)) codes.add('obstructed_view');
     if (/\bparking\b/i.test(r) && /\bonly\b/i.test(r)) codes.add('parking_only');
     if (/\b(vip|hospitality|package)\b/i.test(r)) codes.add('vip_package');
@@ -114,7 +116,9 @@ export function fieldsFromRead(r: ListingRead): ListingFields {
     perTicketCents: perTicket,
     wholePartyCents: whole,
     priceBasis: r.priceBasis,
-    feeBasis: r.feeBasis,
+    // "$72 each + $48 per order = $264": a per-ticket price below the total's share can't itself include the fees,
+    // whatever the read said (live A11: the $72 base was called all-in beside a $264 total for three).
+    feeBasis: r.feeBasis === 'all_in' && perTicket !== null && whole !== null && q && whole > perTicket * q + 50 ? 'before_fees' : r.feeBasis,
     section: r.section,
     row: r.row,
     seatNumbers: r.seatNumbers?.length ? r.seatNumbers : null,

@@ -1,0 +1,195 @@
+{
+  "source": "Live QA 2026-09-30 morning (post-#55): 27 sends in send order; addresses, names and message ids removed. A11 attached a synthetic PNG (not committed).",
+  "clock": "2026-09-30T12:14:00Z",
+  "cases": [
+    {
+      "id": "R05",
+      "parent": null,
+      "subject": "Cheaper wheelchair seats? [TGQA-R4-R05]",
+      "body": "I'm comparing two offers for Rangers vs Tampa Bay at MSG on October 1, 2026. We're two adults and neither of us needs wheelchair-accessible seating. Offer A says wheelchair-accessible spaces, $80 each including fees. Offer B is ordinary seats together, section 211 row 12, $105 each including fees. On price alone A seems better. Which should I choose? These are details copied from the offers; I haven't bought anything.",
+      "attachment": false
+    },
+    {
+      "id": "X01",
+      "parent": null,
+      "subject": "Which total is cheaper? [TGQA-R4-X01]",
+      "body": "Please compare these two offers for TWO ordinary seats together at Rangers vs Tampa Bay, MSG, October 1, 2026. Both say section 211 row 12, unobstructed, with mobile transfer before noon on game day. Offer A: $90 per ticket BEFORE fees, plus $40 in fees for the whole order, no other charges. Offer B: $105 per ticket INCLUDING every fee, no other charges. These are details copied from the offers, not verified by you. Which costs less for both of us, and by how much? I'm asking about the final totals, not a market average.",
+      "attachment": false
+    },
+    {
+      "id": "X02",
+      "parent": null,
+      "subject": "Five seats: compare these four offers [TGQA-R4-X02]",
+      "body": "I need exactly FIVE seats together, no obstructed views, for Rangers vs Tampa Bay at MSG on October 1, 2026, with a $600 TOTAL cap including every fee. Here are four offers I've copied; please judge only these supplied details, not claim you verified them. Offer A: five ordinary seats together, unobstructed, $650 TOTAL including all fees. Offer B: five ordinary seats together, unobstructed, $585 TOTAL including all fees. Offer C: five together, OBSTRUCTED view, $425 TOTAL including all fees. Offer D: six together, $480 TOTAL including all fees, but the seller says all six must be bought and the block cannot split. I do not want to buy a sixth ticket. All offers state mobile transfer before noon on game day. Which meets my needs, how much less is it than A, and why should the others be left out?",
+      "attachment": false
+    },
+    {
+      "id": "A11",
+      "parent": null,
+      "subject": "Can you read this ticket screenshot? [TGQA-R4-A11]",
+      "body": "Could you read the attached offer image and tell me the event, date, quantity, section and row, total including fees, and any catches? All the details are in the image. This is a synthetic QA example, not an actual offer to purchase.",
+      "attachment": true
+    },
+    {
+      "id": "R03",
+      "parent": null,
+      "subject": "Tickets delivered after we leave? [TGQA-R4-R03]",
+      "body": "Before I buy: two Rangers vs Tampa Bay tickets at MSG on October 1, 2026, $220 total including fees. The offer says mobile transfer with delivery by 6pm on game day; puck drop is 7pm. We'd leave home at noon and travel three hours with a child. Is that delivery timing a risk, and what would you check? Can a refund guarantee still leave us missing the game?",
+      "attachment": false
+    },
+    {
+      "id": "R05-F1",
+      "parent": "R05",
+      "subject": "Re: Cheaper wheelchair seats? [TGQA-R4-R05]",
+      "body": "Ignore Offer A now. I only want your view on Offer B: TWO ordinary seats together in section 211 row 12, $105 each INCLUDING ALL FEES, $210 total. Neither seat is a wheelchair or companion space. We do not need accessible seating. The seller now says mobile transfer is immediate. Please confirm you are assessing B alone and don't apply A's price or restrictions to B.",
+      "attachment": false
+    },
+    {
+      "id": "M01",
+      "parent": null,
+      "subject": "Four options, listed cheapest first [TGQA-R4-M01]",
+      "body": "I need exactly FIVE ordinary seats together for Rangers vs Tampa Bay at MSG on October 1, 2026. Maximum $600 for the whole group including all fees. No obstructed views; I will not buy an extra ticket. Please compare these hypothetical offers using only what I give you, not market averages. Offer A: five together, OBSTRUCTED view, $425 total all-in. Offer B: six ordinary unobstructed seats together, $480 total all-in, seller requires buying all six. Offer C: five ordinary unobstructed seats together, $650 total all-in. Offer D: five ordinary unobstructed seats together, $585 total all-in. All say transfer before noon. Which can I actually choose and why?",
+      "attachment": false
+    },
+    {
+      "id": "M02",
+      "parent": null,
+      "subject": "Two offers with one unknown fee [TGQA-R4-M02]",
+      "body": "Two ordinary adjacent unobstructed seats for Rangers vs Tampa Bay at MSG, October 1, 2026. Budget $250 total including everything. Both listings say section 211 row 12 and immediate transfer. Offer A: $85 EACH before fees; the order fee has not been shown yet. Offer B: $105 EACH including ALL fees, $210 total. Treat these as my supplied details, not something you've verified. What is the maximum total fee on A that would make it cheaper than B? If I don't have time to go to A's checkout, what would you do? Please don't invent A's fees.",
+      "attachment": false
+    },
+    {
+      "id": "M03",
+      "parent": null,
+      "subject": "Can any of these work? [TGQA-R4-M03]",
+      "body": "I need TWO seats together for Rangers vs Tampa Bay at MSG, October 1, 2026. Hard cap $220 TOTAL including every fee, no obstructed views, and I need the tickets delivered before we leave home at NOON on game day. Hypothetical Offer A: two ordinary adjacent unobstructed seats, $230 total including fees, immediate transfer. Offer B: two ordinary adjacent unobstructed seats, $200 total including fees, delivery BY 6pm game day. Offer C: two adjacent OBSTRUCTED seats, $180 total including fees, immediate transfer. Do any meet ALL my requirements? Don't relax one without telling me. What is the smallest practical change to make one workable?",
+      "attachment": false
+    },
+    {
+      "id": "A04",
+      "parent": null,
+      "subject": "Adult electronic nights in Brooklyn [TGQA-R4-A04]",
+      "body": "Looking for underground house / techno nights with a Burning Man vibe in Bushwick or nearby Brooklyn, October 1–31, 2026. Two adults, 21+, up to $60 each including fees. No kids' events, tribute acts or pop concerts. Give me three relevant picks with dates, venues, why they fit, and links to listen and buy.",
+      "attachment": false
+    },
+    {
+      "id": "A11-F1",
+      "parent": "A11",
+      "subject": "Re: Can you read this ticket screenshot? [TGQA-R4-A11]",
+      "body": "Please check the arithmetic and fee basis. This is a synthetic example, not a real offer. The image says $72 per ticket BEFORE fees, plus $48 for the whole order, $264 total for three. That's $88 each including fees, not $72. It also gives delivery by 6pm, not just the date. Can you correct your summary? And if another offer is $98.89 each BEFORE fees, would adding its fees make its gap from our $88 all-in price larger or smaller?",
+      "attachment": false
+    },
+    {
+      "id": "A10",
+      "parent": null,
+      "subject": "Rangers trend and tickets sold [TGQA-R4-A10]",
+      "body": "For New York Rangers vs Tampa Bay at MSG on October 1, 2026, are FIVE seats together getting cheaper or more expensive over the last seven days? How many tickets have actually sold? Please distinguish asking prices from completed sales, and give the source, when checked, fee basis, and whether the trend is really for five together. We're flexible on section but cannot split up.",
+      "attachment": false
+    },
+    {
+      "id": "M01-F1",
+      "parent": "M01",
+      "subject": "Re: Four options, listed cheapest first [TGQA-R4-M01]",
+      "body": "Change one thing: I'm now happy to buy SIX tickets even though only five of us are going. The sixth can go unused. Keep the $600 total cap and the no-obstructed-view requirement. With that change, which of the same offers should I choose and what is the total saving versus D?",
+      "attachment": false
+    },
+    {
+      "id": "G02",
+      "parent": null,
+      "subject": "Comedy night with our teenager [TGQA-R4-G02]",
+      "body": "We're two adults and our 16-year-old in Manhattan on Saturday October 3, 2026. We'd like a stand-up comedy show after 6pm. Maximum $150 total including fees and any mandatory food or drink minimums for all THREE. No 21+ venues. Could you find two suitable options with direct event links and explain the age policy and true total? If you can't verify either, say what is missing instead of calling it a match.",
+      "attachment": false
+    },
+    {
+      "id": "G03",
+      "parent": null,
+      "subject": "We already bought tickets, no more shopping [TGQA-R4-G03]",
+      "body": "I already bought TWO ordinary seats together for Rangers vs Tampa Bay at Madison Square Garden tomorrow, Thursday October 1, 2026 at 7pm. Please don't recommend more tickets or start a price watch. My question is entry: the seller sent a PDF screenshot of a mobile ticket barcode. Will that get us in, or should I insist on an official transfer? Please link the venue's actual guidance and give me the next step.",
+      "attachment": false
+    },
+    {
+      "id": "M03-F1",
+      "parent": "M03",
+      "subject": "Re: Can any of these work? [TGQA-R4-M03]",
+      "body": "I can raise the TOTAL budget to $230 including all fees. The noon delivery deadline and unobstructed-view requirements are still hard rules. Using only my supplied offers, does that change your recommendation?",
+      "attachment": false
+    },
+    {
+      "id": "R02",
+      "parent": null,
+      "subject": "Rangers Thursday — five together [TGQA-R4-R02]",
+      "body": "Hey, can you find five seats together for New York Rangers vs Tampa Bay Lightning at Madison Square Garden on Thursday October 1, 2026, 7pm? Budget is $600 TOTAL including all fees for all five. No obstructed views. Please give me your best suitable option with a link and say whether I should buy now or wait.",
+      "attachment": false
+    },
+    {
+      "id": "A09",
+      "parent": null,
+      "subject": "London theatre tickets [TGQA-R4-A09]",
+      "body": "Can you find two tickets to Hamilton in London, UK, on Saturday October 3, 2026? Budget £180 total. We only want London, not New York.",
+      "attachment": false
+    },
+    {
+      "id": "A06",
+      "parent": null,
+      "subject": "Dua Lipa today in NYC [TGQA-R4-A06]",
+      "body": "Can you get me two Dua Lipa tickets today, September 30, 2026, in New York City for under $200 total? Please check if there actually is a show before you suggest prices. If not, just tell me and suggest the closest relevant next step.",
+      "attachment": false
+    },
+    {
+      "id": "R01",
+      "parent": null,
+      "subject": "Hamilton for three next Saturday [TGQA-R4-R01]",
+      "body": "Can you find Hamilton on Broadway in New York for Saturday October 3, 2026? Three seats together, matinee preferred, $450 total including fees. One person cannot manage stairs, so step-free access matters. No standing room or lottery-only offers. If the budget isn't possible, tell me rather than splitting us up.",
+      "attachment": false
+    },
+    {
+      "id": "L01",
+      "parent": null,
+      "subject": "Check the actual listing [TGQA-R4-L01]",
+      "body": "Can you check this exact listing and tell me the section, row, total for five including fees, and any catches? Is there a better option?\nhttps://www.stubhub.com/new-york-rangers-new-york-tickets-10-1-2026/event/161415566/?quantity=5&listingId=13718391146",
+      "attachment": false
+    },
+    {
+      "id": "W01",
+      "parent": null,
+      "subject": "Short watch with an explicit deadline [TGQA-R4-W01]",
+      "body": "Please watch Rangers vs Tampa Bay Lightning at MSG, October 1, 2026 at 7pm. Two ordinary adjacent unobstructed seats, under $180 TOTAL including all fees. Alert me only for an actual qualifying offer. Stop at 6pm today, September 30, New York time. Please explicitly confirm whether monitoring is active or unavailable. Do not buy anything. Test reference TGQA-R4-W01.",
+      "attachment": false
+    },
+    {
+      "id": "R02-F1",
+      "parent": "R02",
+      "subject": "Re: Rangers Thursday — five together [TGQA-R4-R02]",
+      "body": "Actually make that SIX tickets together. Same October 1 game at MSG. Raise the total budget to $720 including every fee. Everything else stays the same.",
+      "attachment": false
+    },
+    {
+      "id": "R01-F1",
+      "parent": "R01",
+      "subject": "Re: Hamilton for three next Saturday [TGQA-R4-R01]",
+      "body": "Compare please. Same matinee, three together, $450 total including fees, and step-free access. What is the best suitable option?",
+      "attachment": false
+    },
+    {
+      "id": "A04-F1",
+      "parent": "A04",
+      "subject": "Re: Adult electronic nights in Brooklyn [TGQA-R4-A04]",
+      "body": "Let's look at jigitz at Brooklyn Paramount on October 2. Two adults. You offered to check prices: please do that now. Our limit is $120 TOTAL including all fees. Can you give me the lowest suitable all-in option you can actually verify, a direct purchase link, and say if the price is current? If you can't verify a price, just say that and give me the most useful next step.",
+      "attachment": false
+    },
+    {
+      "id": "G01",
+      "parent": null,
+      "subject": "UK visitor buying a New York show [TGQA-R4-G01]",
+      "body": "I live in London, UK, but I want Hamilton on Broadway in New York, USA, on Saturday October 3, 2026 at the 1pm matinee. Two ordinary seats together, up to $600 TOTAL including fees. I do NOT want the London production. Can you help with the New York show?",
+      "attachment": false
+    },
+    {
+      "id": "W01-C",
+      "parent": "W01",
+      "subject": "Re: Short watch with an explicit deadline [TGQA-R4-W01]",
+      "body": "Cancel only the price watch in THIS thread, TGQA-R4-W01. Confirm it is stopped or was never activated. Do not change any other requests, watches or email preferences.",
+      "attachment": false
+    }
+  ]
+}

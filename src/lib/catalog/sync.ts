@@ -242,7 +242,7 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
   const category = categoryFor(e);
   const subtype = subtypeFor(e);
   const genre = genreFor(e);
-  const sale = { saleStatus: e.statusCode === 'unknown' ? null : e.statusCode, publicSaleStartAt: e.publicSaleStart ? new Date(e.publicSaleStart) : null, publicSaleEndAt: e.publicSaleEnd ? new Date(e.publicSaleEnd) : null, faceMinCents: e.faceMinCents, faceMaxCents: e.faceMaxCents };
+  const sale = { saleStatus: e.statusCode === 'unknown' ? null : e.statusCode, publicSaleStartAt: e.publicSaleStart ? new Date(e.publicSaleStart) : null, publicSaleEndAt: e.publicSaleEnd ? new Date(e.publicSaleEnd) : null, faceMinCents: e.faceMinCents, faceMaxCents: e.faceMaxCents, doorsAt: e.doorsAt ? new Date(e.doorsAt) : null };
   const status = statusFor(e.statusCode);
 
   const existing = await db.select({ eventId: t.eventSourceMappings.eventId }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));

@@ -1,0 +1,167 @@
+{
+  "source": "TGQA-0929 live-email audit (synthetic QA requests), remediation-review/audit-replay-cases.json; retest-2026-09-30-0114/test-plan.json (live retest after PR #53)",
+  "clock": "2026-09-30T00:12:00Z",
+  "cases": [
+    {
+      "id": "A01",
+      "parent": null,
+      "subject": "Rangers Thursday — five together [TGQA-0929-A01]",
+      "body": "Hey, can you find five seats together for New York Rangers vs Tampa Bay Lightning at Madison Square Garden on Thursday October 1, 2026, 7pm? Budget is $600 TOTAL including all fees for all five. No obstructed views. Please give me your best suitable option with a link and say whether I should buy now or wait.",
+      "attachment": false
+    },
+    {
+      "id": "A02",
+      "parent": null,
+      "subject": "Is this listing a good deal? [TGQA-0929-A02]",
+      "body": "Can you check this exact listing and tell me the section, row, total for five including fees, and any catches? Is there a better option?\nhttps://www.stubhub.com/new-york-rangers-new-york-tickets-10-1-2026/event/161415566/?quantity=5&listingId=13718391146",
+      "attachment": false
+    },
+    {
+      "id": "A03",
+      "parent": null,
+      "subject": "Cheaper wheelchair seats? [TGQA-0929-A03]",
+      "body": "I'm comparing two offers for Rangers vs Tampa Bay at MSG on October 1, 2026. We're two adults and neither of us needs wheelchair-accessible seating. Offer A says wheelchair-accessible spaces, $80 each including fees. Offer B is ordinary seats together, section 211 row 12, $105 each including fees. On price alone A seems better. Which should I choose? These are details copied from the offers; I haven't bought anything.",
+      "attachment": false
+    },
+    {
+      "id": "A04",
+      "parent": null,
+      "subject": "Adult electronic nights in Brooklyn [TGQA-0929-A04]",
+      "body": "Looking for underground house / techno nights with a Burning Man vibe in Bushwick or nearby Brooklyn, October 1–31, 2026. Two adults, 21+, up to $60 each including fees. No kids' events, tribute acts or pop concerts. Give me three relevant picks with dates, venues, why they fit, and links to listen and buy.",
+      "attachment": false
+    },
+    {
+      "id": "A05",
+      "parent": null,
+      "subject": "Hamilton for three next Saturday [TGQA-0929-A05]",
+      "body": "Can you find Hamilton on Broadway in New York for Saturday October 3, 2026? Three seats together, matinee preferred, $450 total including fees. One person cannot manage stairs, so step-free access matters. No standing room or lottery-only offers. If the budget isn't possible, tell me rather than splitting us up.",
+      "attachment": false
+    },
+    {
+      "id": "A06",
+      "parent": null,
+      "subject": "Dua Lipa tomorrow in NYC [TGQA-0929-A06]",
+      "body": "Can you get me two Dua Lipa tickets tomorrow, September 30, 2026, in New York City for under $200 total? Please check if there actually is a show before you suggest prices. If not, just tell me and suggest the closest relevant next step.",
+      "attachment": false
+    },
+    {
+      "id": "A07",
+      "parent": null,
+      "subject": "Watch two Rangers seats under $180 [TGQA-0929-A07]",
+      "body": "Please watch New York Rangers vs Tampa Bay Lightning at MSG on October 1, 2026, 7pm. I need two seats together, unobstructed, under $180 TOTAL including all fees. Email me only when you find an actual qualifying offer. Stop this watch on September 30 at 6pm New York time. Can you confirm whether monitoring is active?",
+      "attachment": false
+    },
+    {
+      "id": "A08",
+      "parent": null,
+      "subject": "Tickets delivered after we leave? [TGQA-0929-A08]",
+      "body": "Before I buy: two Rangers vs Tampa Bay tickets at MSG on October 1, 2026, $220 total including fees. The offer says mobile transfer with delivery by 6pm on game day; puck drop is 7pm. We'd leave home at noon and travel three hours with a child. Is that delivery timing a risk, and what would you check? Can a refund guarantee still leave us missing the game?",
+      "attachment": false
+    },
+    {
+      "id": "A09",
+      "parent": null,
+      "subject": "London theatre tickets [TGQA-0929-A09]",
+      "body": "Can you find two tickets to Hamilton in London, UK, on Saturday October 3, 2026? Budget £180 total. We only want London, not New York.",
+      "attachment": false
+    },
+    {
+      "id": "A10",
+      "parent": null,
+      "subject": "Rangers trend and tickets sold [TGQA-0929-A10]",
+      "body": "For New York Rangers vs Tampa Bay at MSG on October 1, 2026, are FIVE seats together getting cheaper or more expensive over the last seven days? How many tickets have actually sold? Please distinguish asking prices from completed sales, and give the source, when checked, fee basis, and whether the trend is really for five together. We're flexible on section but cannot split up.",
+      "attachment": false
+    },
+    {
+      "id": "A11",
+      "parent": null,
+      "subject": "Can you read this ticket screenshot? [TGQA-0929-A11]",
+      "body": "Could you read the attached offer image and tell me the event, date, quantity, section and row, total including fees, and any catches? All the details are in the image. This is a synthetic QA example, not an actual offer to purchase.",
+      "attachment": true
+    },
+    {
+      "id": "A01-R1",
+      "parent": "A01",
+      "subject": "Re: Rangers Thursday — five together [TGQA-0929-A01]",
+      "body": "Actually make that SIX tickets together. Same October 1 game at MSG. Raise the total budget to $720 including every fee. Everything else stays the same.",
+      "attachment": false
+    },
+    {
+      "id": "A04-R1",
+      "parent": "A04",
+      "subject": "Re: Adult electronic nights in Brooklyn [TGQA-0929-A04]",
+      "body": "Let's narrow it to Bushwick only. Keep the same October dates, budget and house/techno preferences. No pop concerts please.",
+      "attachment": false
+    },
+    {
+      "id": "A05-R1",
+      "parent": "A05",
+      "subject": "Re: Hamilton for three next Saturday [TGQA-0929-A05]",
+      "body": "Before I buy: have you checked that three seats are together, that the total is under $450 with fees, and that the actual seats have step-free access? Those are requirements, not optional. Please compare if you can.",
+      "attachment": false
+    },
+    {
+      "id": "A07-R1",
+      "parent": "A07",
+      "subject": "Re: Watch two Rangers seats under $180 [TGQA-0929-A07]",
+      "body": "Cancel only the price watch requested in this thread (TGQA-0929-A07). Please confirm it is stopped, or confirm that it was never activated. This cancellation does not apply to other requests or my general email preferences.",
+      "attachment": false
+    },
+    {
+      "id": "A08-R1",
+      "parent": "A08",
+      "subject": "Re: Tickets delivered after we leave? [TGQA-0929-A08]",
+      "body": "My question is about delivery risk, not whether prices will fall. Delivery is promised by 6pm on October 1, the game is at 7pm, and we leave home at noon for a three-hour trip with a child. A refund could still mean missing the game, right? Please address that.",
+      "attachment": false
+    },
+    {
+      "id": "R01",
+      "parent": null,
+      "subject": "Hamilton for three next Saturday [TGQA-R2-R01]",
+      "body": "Can you find Hamilton on Broadway in New York for Saturday October 3, 2026? Three seats together, matinee preferred, $450 total including fees. One person cannot manage stairs, so step-free access matters. No standing room or lottery-only offers. If the budget isn't possible, tell me rather than splitting us up.",
+      "attachment": false
+    },
+    {
+      "id": "R02",
+      "parent": null,
+      "subject": "Rangers Thursday — five together [TGQA-R2-R02]",
+      "body": "Hey, can you find five seats together for New York Rangers vs Tampa Bay Lightning at Madison Square Garden on Thursday October 1, 2026, 7pm? Budget is $600 TOTAL including all fees for all five. No obstructed views. Please give me your best suitable option with a link and say whether I should buy now or wait.",
+      "attachment": false
+    },
+    {
+      "id": "R03",
+      "parent": null,
+      "subject": "Tickets delivered after we leave? [TGQA-R2-R03]",
+      "body": "Before I buy: two Rangers vs Tampa Bay tickets at MSG on October 1, 2026, $220 total including fees. The offer says mobile transfer with delivery by 6pm on game day; puck drop is 7pm. We'd leave home at noon and travel three hours with a child. Is that delivery timing a risk, and what would you check? Can a refund guarantee still leave us missing the game?",
+      "attachment": false
+    },
+    {
+      "id": "R01-F1",
+      "parent": "R01",
+      "subject": "Re: Hamilton for three next Saturday [TGQA-R2-R01]",
+      "body": "Compare please. Same matinee, three together, $450 total including fees, and step-free access. What is the best suitable option?",
+      "attachment": false
+    },
+    {
+      "id": "R02-F1",
+      "parent": "R02",
+      "subject": "Re: Rangers Thursday — five together [TGQA-R2-R02]",
+      "body": "Actually make that SIX tickets together. Same October 1 game at MSG. Raise the total budget to $720 including every fee. Everything else stays the same.",
+      "attachment": false
+    },
+    {
+      "id": "R04",
+      "parent": "A07",
+      "subject": "Re: Watch two Rangers seats under $180 [TGQA-0929-A07]",
+      "body": "Cancel only the price watch requested in this thread (TGQA-0929-A07). Please confirm it is stopped, or confirm that it was never activated. This cancellation does not apply to other requests or my general email preferences. Test reference: TGQA-R2-R04.",
+      "attachment": false
+    },
+    {
+      "id": "R05",
+      "parent": null,
+      "subject": "Cheaper wheelchair seats? [TGQA-R2-R05]",
+      "body": "I'm comparing two offers for Rangers vs Tampa Bay at MSG on October 1, 2026. We're two adults and neither of us needs wheelchair-accessible seating. Offer A says wheelchair-accessible spaces, $80 each including fees. Offer B is ordinary seats together, section 211 row 12, $105 each including fees. On price alone A seems better. Which should I choose? These are details copied from the offers; I haven't bought anything.",
+      "attachment": false
+    }
+  ]
+}

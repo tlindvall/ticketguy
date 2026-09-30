@@ -27,6 +27,8 @@ export const NormalizedInboundSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   receivedAt: z.coerce.date(),
   attachments: z.array(NormalizedAttachmentSchema).default([]),
+  /** Attachments the provider listed but whose bytes couldn't be fetched, with why: recorded, never silent. */
+  unretrieved: z.array(z.object({ id: z.string(), reason: z.string(), filename: z.string().nullable(), declaredMimeType: z.string().nullable() })).optional(),
   authentication: z.object({ spf: z.string().nullable(), dkim: z.string().nullable(), dmarc: z.string().nullable() }).default({ spf: null, dkim: null, dmarc: null }),
   signatureVerified: z.boolean(),
 });

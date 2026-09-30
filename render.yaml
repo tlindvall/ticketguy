@@ -90,6 +90,12 @@ services:
         sync: false
       - key: STAFF_EMAIL_ALLOWLIST
         sync: false
+      # Staffed comparison pilot (DECISION_LOG #54): entered in the dashboard only once a person owns it. Unset,
+      # customers are never offered a person-found comparison.
+      - key: STAFF_COMPARISON_OWNER
+        sync: false
+      - key: STAFF_COMPARISON_LIMIT
+        value: "20"
       - key: BUSINESS_POSTAL_ADDRESS
         sync: false
       - key: SENTRY_DSN

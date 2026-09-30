@@ -800,3 +800,89 @@ A black-box audit sent 16 test emails. Each fix below is covered by the acceptan
 - B05: the quantity change that reopened a settled date, and the Bushwick window reset. Both predate #45 and #51 and need a retest.
 - B07: discovery exclusions.
 - Verified purchasable offers: a listing partner is still needed.
+
+## 53. Audit round 2: exact replay, no value bands, their offers compared
+
+The remediation review and the live retest after #53 found remaining floor-markup verdicts and a missed two-offer question. Replaying the exact audit emails also turned up cases the reconstructed tests had missed.
+
+- **No price band decides a verdict or a filter.** The ×1.15 and ×1.30 bands are gone from `verdictClaim` and `C_QUOTE_MARKET`, and the 1/1.3 fee allowance is gone from alternatives. The email states the observed gap and its basis.
+- **Budget framing.** "Five at that price would be $X, which leaves $Y for fees; unconfirmed" replaces "under your budget". Over budget: "that doesn't prove nothing cheaper exists now".
+- **Offers the customer writes out** are kept separate (`offersInText`) and compared as the question (`C_OFFERS`). Wheelchair spaces nobody needs are not the one to buy.
+- **Deterministic guards after any extractor:**
+  - an explicit watch cancel is a cancellation, but "stop this watch on <date>" is an expiry;
+  - "neither of us needs wheelchair seating" means no access need;
+  - "in London, UK" is out of scope.
+- **Watches.** None is stored while watch alerts are off. A cancel is scoped to its thread and closes the request.
+- **Other additions:**
+  - `C_REQS`: hard requirements are said as unchecked when nothing verified meets them.
+  - `C_LEFT_OUT`: rejected cheaper listings are named, with the reason.
+  - `C_SALES`: "asking prices, not sales".
+  - The official-sale reply is deduplicated per revision.
+  - The headline shows the budget.
+
+## 54. A person finds the seats, once a person owns it; cancellation proven in the database; London is not the event
+
+Response to the review of round 2.
+
+**Accuracy is not usefulness.** "I haven't checked those requirements" is honest, but it leaves the customer to do the shopping. The staffed comparison pilot closes that gap for up to 20 customer requests. The next section covers how it works.
+
+**Staffed comparison pilot.**
+- **When it runs:** nothing verified meets the request's requirements (or the customer asked to compare) and a named owner exists (`STAFF_COMPARISON_OWNER`, a staff address).
+- **What the customer sees:** the email says a person is looking, checking sellers by hand, and will reply in the thread with options and all-in totals, or say plainly that nothing fits. It doesn't ask the customer to go and find seats.
+- **Handoff:** once the email is sent, the request waits on the owner. The owner's alert says what the customer was told and what to record.
+- **How staff answer:** staff record what they checked as manual offers and re-run research. The existing comparison engine then sends the answer: requirements applied, whole-party totals, rejected options named with the reason.
+- **Measurement:**
+  - `staff_comparison_offered` records the promise.
+  - `staff_comparison_answered` records the time to a verified option and the seller used.
+  - `/admin/pilot` shows both.
+- **Limits:** the limit counts customer requests only. With no owner, nothing is promised.
+
+**Cancellation, backend.** Two gaps were found by testing stored state rather than the reply email:
+- A customer's cancellation left already-approved watch alert sends queued. Every cancellation path now invalidates pending alerts and blocks queued alert sends (`stopWatchAlerts`).
+- Dispatch looked a watch alert's approval up in the recommendations table. That would have blocked even valid alerts ("not approved"), and ignored a cancelled watch. It now reads the alert's own approval and the watch's state and generation.
+
+`tests/acceptance/cancellation-isolation.test.ts` proves it: two threads, queued alerts on both, an event alert, and a repeated cancel on the closed thread.
+
+**Abroad vs. residence.**
+- The "in London, UK" guard now fires only when the event is there. The city the extractor chose must be negated ("not New York") or not a US place, and the place must not follow "I live in", "my sister in", "visiting from" or similar.
+- "I live in London, UK, but want Hamilton in New York" is declined by the residence rule (US customers only, ENGINEERING_SPEC §1), with the residence reason. It is not refused as an event abroad.
+- "My sister in London, UK recommended…" is a New York request.
+
+## 55. Their offers, one record each; the screenshot that never arrived (post-#54 QA)
+
+**Their offers.** When a customer copies two or more offers, each becomes one record: quantity, can't-split, view, access, together, fee basis and a per-order fee. The comparison then:
+- works each whole-party total out once, with a per-order fee added once;
+- applies the hard requirements before comparing prices: the quantity they can actually buy, a view they ruled out, access, together, and the budget;
+- names each left-out offer with its reason;
+- measures the pick against the offer they asked about.
+
+That comparison is the whole answer. The same email is not also read as one listing, and there is no quote, market read or "send me a link" ask. An offer's price is never taken as their budget.
+
+**Screenshots.**
+- Resend's received email lists attachments without download URLs, so signed URLs are fetched from the attachments endpoint.
+- An attachment that can't be fetched is recorded on the message.
+- An image that isn't read is said plainly, and nothing is assumed in its place.
+
+**Other wording fixes.**
+- Market floors always carry their check time and scope, and never read as a minimum for every seat.
+- Discovery honours "no pop / tribute / kids".
+- A delivery or offer question gets no buy-or-wait passage.
+- A no-match with a date and place already given offers a next step instead of re-asking.
+
+## 56. Every hard requirement before any price; the same offers across the thread; entry help
+
+**Their offers.** Each supplied offer is judged on every requirement the customer gave before any price comparison:
+- attendees versus tickets bought, extra tickets refused or allowed (the latest word wins), and a block that won't split;
+- view, access and together;
+- the time the tickets must arrive, which a late or unstated delivery fails;
+- the budget.
+
+An offer with unknown fees is compared by break-even, never called a fit. When nothing fits, the one change that would make an offer work is named. A follow-up that changes a requirement re-judges the same offers.
+
+**The listing we read.** One price object: a total that carries fees over a before-fees ticket price is compared as its all-in share. A typed correction overrides the read and is acknowledged first.
+
+**Other changes.**
+- Discovery enforces start-time windows and flags an unverified age policy.
+- "I already bought, will this barcode get us in?" gets sourced official-transfer guidance, not intake.
+- Doors are stored and shown apart from the start.
+- Writing: the decision comes first and is the only emphasis, and comparisons carry nothing that doesn't change the choice.

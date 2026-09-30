@@ -45,6 +45,13 @@ export default async function Pilot() {
   });
   const answeredCount = table.filter((x) => x.answered).length;
   const withOutcome = table.filter((x) => x.followUp === 'answered' || x.reported || x.confirmed).length;
+  // The staffed comparison pilot (DECISION_LOG #54): what was promised, what was answered, how fast, and which
+  // sellers staff had to check by hand, which is the list automation would need.
+  const offered = outs.filter((o) => o.kind === 'staff_comparison_offered' && (o.details as { counted?: boolean }).counted);
+  const answeredCmp = outs.filter((o) => o.kind === 'staff_comparison_answered' && offered.some((x) => x.requestId === o.requestId));
+  const minutes = answeredCmp.map((o) => Number((o.details as { minutes?: number }).minutes ?? 0)).sort((a, b) => a - b);
+  const medianMinutes = minutes.length ? minutes[Math.floor(minutes.length / 2)]! : null;
+  const sourcesUsed = [...new Set(answeredCmp.map((o) => String((o.details as { sourceId?: string }).sourceId ?? '')).filter(Boolean))];
   const byType = PROBLEM_TYPES.map((p) => [p, table.filter((x) => (x.r.problemTypes ?? []).includes(p)).length] as const).filter(([, n]) => n > 0);
   return (
     <div className="space-y-6">
@@ -56,6 +63,18 @@ export default async function Pilot() {
         <div className="rounded-lg border border-gray-200 p-3"><p className="text-sm text-gray-500">Answered</p><p className="text-2xl font-semibold">{answeredCount} / {PILOT_TARGET}</p></div>
         <div className="rounded-lg border border-gray-200 p-3"><p className="text-sm text-gray-500">With an outcome</p><p className="text-2xl font-semibold">{withOutcome}</p></div>
         <div className="rounded-lg border border-gray-200 p-3"><p className="text-sm text-gray-500">Advice changed what or when</p><p className="text-2xl font-semibold">{table.filter((x) => x.changed && x.changed !== 'no' && x.changed !== 'not said').length}</p></div>
+      </div>
+      <div className="rounded-lg border border-gray-200 p-3 text-sm">
+        <p className="font-medium">Staffed comparisons</p>
+        {e.STAFF_COMPARISON_OWNER && staff.has(e.STAFF_COMPARISON_OWNER) ? (
+          <p className="mt-1 text-gray-700">
+            Owner {e.STAFF_COMPARISON_OWNER}. Offered {offered.length} / {e.STAFF_COMPARISON_LIMIT}, answered {answeredCmp.length}, still open {offered.length - answeredCmp.length}
+            {medianMinutes !== null ? `, median ${medianMinutes < 120 ? `${medianMinutes} min` : `${Math.round(medianMinutes / 60)} h`} to a verified option` : ''}.
+            {sourcesUsed.length ? ` Sellers checked by hand: ${sourcesUsed.join(', ')}.` : ''}
+          </p>
+        ) : (
+          <p className="mt-1 text-gray-500">Off: no owner. Set STAFF_COMPARISON_OWNER to a staff address to offer customers a person-found comparison when nothing verified meets their request.</p>
+        )}
       </div>
       {byType.length ? <p className="text-sm text-gray-700">{byType.map(([p, n]) => `${p.replace(/_/g, ' ')} ${n}`).join(' · ')}</p> : null}
       <table className="w-full text-left text-sm">

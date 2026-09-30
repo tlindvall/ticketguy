@@ -30,16 +30,16 @@ export type AlternativesResult = {
 const norm = (s: string | null) => (s ?? '').toLowerCase().replace(/^(section|sec)\s*/, '').trim();
 
 /**
- * Listings clearly cheaper than the customer's, for at least their party size, in their section first and then
- * their part of the venue. "Clearly" allows for fees: when their price includes fees (or we can't tell), a
- * market price before fees counts only when it is cheaper even with fees of up to 30% on top.
+ * Listings cheaper than the customer's, for at least their party size, in their section first and then their
+ * part of the venue. No fee allowance is guessed: a market price before fees is compared as listed, and when
+ * their price includes fees (or we can't tell) the claim says the two aren't on the same basis (remediation
+ * review §4: no unvalidated percentage band drives ranking).
  */
 export function findAlternatives(listings: MarketListing[], subject: { perTicketCents: number; feeBasis: 'all_in' | 'before_fees' | 'unknown'; section: string | null; row: string | null }, quantity: number): AlternativesResult {
   const fits = listings.filter((l) => l.quantity >= quantity);
   const sec = norm(subject.section);
   const zone = sec ? (fits.find((l) => norm(l.section) === sec)?.zone ?? listings.find((l) => norm(l.section) === sec)?.zone ?? null) : null;
-  const allowance = subject.feeBasis === 'before_fees' ? 0.95 : 1 / 1.3;
-  const cap = Math.floor(subject.perTicketCents * allowance);
+  const cap = subject.perTicketCents - 1;
   const sameSeatsMaybe = (l: MarketListing) => !!sec && norm(l.section) === sec && !!subject.row && (l.row ?? '').toLowerCase() === subject.row.toLowerCase();
   const cheaper = fits.filter((l) => l.priceCents <= cap && !sameSeatsMaybe(l)).sort((a, b) => a.priceCents - b.priceCents);
   const out: Alternative[] = [];

@@ -18,7 +18,7 @@ import { inspectImage, selectProcessableImages } from '@/lib/media/image-validat
 import { createMediaStore } from '@/lib/media/storage';
 import { fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName } from '@/lib/ai/extraction';
+import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
@@ -38,6 +38,7 @@ import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOU
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
+import { cleanSeatField, flat, offersInText, partyTerms, statedFeeBasis, timeLabel } from '@/lib/advice/text-offers';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -221,6 +222,7 @@ export class Concierge {
         }
         await tx.insert(t.attachments).values({ messageId, providerAttachmentId: x.a.providerAttachmentId, filename: x.a.filename, declaredMimeType: x.a.declaredMimeType, detectedMimeType: x.insp.ok ? x.insp.mimeType : null, byteLength: x.byteLength, width: x.insp.ok ? x.insp.width : null, height: x.insp.ok ? x.insp.height : null, mediaId, validationState, validationReason: reason, purgeAt: new Date(now.getTime() + RAW_RETENTION_DAYS * 86_400_000) });
       }
+      for (const u of msg.unretrieved ?? []) await tx.insert(t.attachments).values({ messageId, providerAttachmentId: u.id, filename: u.filename, declaredMimeType: u.declaredMimeType, detectedMimeType: null, byteLength: null, mediaId: null, validationState: 'rejected', validationReason: `not_retrieved:${u.reason}`, purgeAt: new Date(now.getTime() + RAW_RETENTION_DAYS * 86_400_000) });
 
       if (auto.autoResponse) {
         await audit(tx, { actor: 'system', action: 'inbound.auto_response_suppressed', entityKind: 'message', entityId: messageId, diff: { reasons: auto.reasons } });
@@ -320,6 +322,22 @@ export class Concierge {
     }
     // "Connecticut" as the city is the state of Connecticut, not a town of that name.
     extraction = normalizePlace(extraction);
+    // Deterministic guards over what either extractor read (audit replay A07-R1, A03): an explicit "cancel the
+    // watch" is a cancellation, and "neither of us needs wheelchair seating" is no access need.
+    const latestText = msg.sanitizedText ?? '';
+    if (asksToCancelWatch(latestText)) extraction = { ...extraction, intent: 'cancel_watch' };
+    if (extraction.accessibilityNeeds && NO_ACCESS_NEED.test(latestText)) extraction = { ...extraction, accessibilityNeeds: null };
+    // An offer's price is not their budget: "Offer A: $90 per ticket" read as "Budget: $90 a ticket" ruled out
+    // every offer they sent (post-#54 replay). A budget is kept only when it isn't one of their offers' prices.
+    const latestOffers = offersInText(latestText);
+    if (latestOffers.length >= 2 && extraction.budgetCents !== null && latestOffers.some((o) => o.perTicketCents === extraction.budgetCents || o.totalCents === extraction.budgetCents)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    // A follow-up about a listing we already read ("the image says $72 per ticket BEFORE fees…") is about that
+    // listing's price: without budget words it sets no budget (live A11-F1 replay: $72 × 3 became "up to $216").
+    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !/\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b/i.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), sql`${t.listingEvidence.fields} is not null`)).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    // "$72 per ticket" is a price, not 72 tickets (live A11-F1 replay): a quantity that is one of the prices named.
+    if (extraction.quantity !== null && new RegExp(`\\$\\s?${extraction.quantity}(?:\\.\\d{2})?\\b`).test(flat(latestText)) && !new RegExp(`\\b${extraction.quantity}\\s+(?:tickets?|seats?)\\b`, 'i').test(flat(latestText).replace(/\$\s?\d[\d,.]*/g, ''))) extraction = { ...extraction, quantity: null };
+    // Likewise a quoted price: with offers side by side there is no single price they're asking about.
+    if (latestOffers.length >= 2 && extraction.quotedPriceCents != null) extraction = { ...extraction, quotedPriceCents: null, quotedPriceBasis: null };
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
     extraction = applyTicketLinks(extraction, known);
@@ -328,10 +346,14 @@ export class Concierge {
     const listing = await this.readListingEvidence(msg, req);
     if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known);
     const listingNotes = listing.redacted ? [REDACTED_NOTE] : [];
+    // An image they sent (or say they attached) that we couldn't read is said plainly, and nothing is assumed
+    // in its place: "Two tickets. Got it" to a screenshot of three was answering an email they didn't send
+    // (post-#54 QA, R3-B09).
+    const imageUnread = !listing.fields && !listing.redacted && (await this.unreadImage(msg));
 
     // A first message that isn't about tickets ("tell me something about New York", "are you an idiot?") gets
     // one short "I only do tickets" reply a day, and nothing is assumed about a request that isn't there.
-    if (!priorVersion && !listing.images && isOffTopic(extraction, msg.sanitizedText ?? '')) {
+    if (!priorVersion && !listing.images && !imageUnread && isOffTopic(extraction, msg.sanitizedText ?? '')) {
       const replied = await this.recentAudit('intake.off_topic_replied', contact!.id, msg.receivedAt, OFF_TOPIC_REPLY_EVERY_HOURS);
       if (!replied) {
         await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy does tickets'), template: 'off_topic', vars: {}, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `off_topic:${req.id}` });
@@ -368,11 +390,13 @@ export class Concierge {
       const inThread = (col: typeof t.watches.requestId | typeof t.eventAlerts.requestId) => inArray(col, threadReqs);
       const [wIn] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.watches).where(and(inThread(t.watches.requestId), eq(t.watches.state, 'active')));
       const [aIn] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.eventAlerts).where(and(inThread(t.eventAlerts.requestId), eq(t.eventAlerts.state, 'active')));
-      const scoped = (wIn?.n ?? 0) + (aIn?.n ?? 0) > 0 || !!priorVersion;
+      // A reply in a thread (an earlier request there, even a closed one) is about that thread (retest R04).
+      const scoped = (wIn?.n ?? 0) + (aIn?.n ?? 0) > 0 || !!priorVersion || threadReqs.length > 1;
       const watchScope = scoped ? inThread(t.watches.requestId) : eq(t.watches.contactId, contact!.id);
       const alertScope = scoped ? inThread(t.eventAlerts.requestId) : eq(t.eventAlerts.contactId, contact!.id);
       const stoppedWatches = await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(watchScope, eq(t.watches.state, 'active'))).returning({ id: t.watches.id });
       const stoppedAlerts = await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(alertScope, eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
+      await this.stopWatchAlerts(stoppedWatches.map((w) => w.id));
       await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id, scope: scoped ? 'thread' : 'contact', watches: stoppedWatches.length, alerts: stoppedAlerts.length } });
       // Always answered, from what was actually stored and changed (TG-B10): never silence, never a guess.
       const n = stoppedWatches.length + stoppedAlerts.length;
@@ -390,11 +414,33 @@ export class Concierge {
         ...(said?.bought === true ? [{ requestId: req.id, kind: 'user_reported_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at: msg.receivedAt }] : []),
       ]);
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Stopped'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;">${line}</p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `cancel:${msg.id}` });
-      if (said?.bought === true) {
-        await this.transition(req.id, 'closed', 'customer_bought');
-        return { state: 'closed', revision: rev, extraction: merged };
-      }
-      return { state: req.state, revision: rev, extraction: merged };
+      // Stopping it ends what this request was waiting on: closed, as a customer's own stop.
+      await this.transition(req.id, 'closed', said?.bought === true ? 'customer_bought' : 'customer_stopped');
+      return { state: 'closed', revision: rev, extraction: merged };
+    }
+
+    // Already bought, and asking about getting in ("the seller sent a PDF screenshot of a mobile barcode"): entry
+    // help, from the sources that say it, never an event search or more shopping (live G03).
+    if (entryHelpAsked(latestText)) {
+      const t0 = flat(latestText);
+      const two = /\b(?:two|2)\s+(?:\w+\s+){0,3}(?:tickets?|seats?)\b/i.test(t0);
+      const msg0 = /\b(?:msg|madison square garden)\b/i.test(t0);
+      const TM_GUIDE = 'https://blog.ticketmaster.com/new-mobile-ticket-safety/';
+      const MSG_GUIDE = 'https://assets.msg.com/uploads/2025/03/Mobile-Ticketing-Tutorial.pdf';
+      const lead = 'Ask the seller for an official mobile transfer; don’t count on the PDF or screenshot of the barcode to get you in.';
+      const why = 'Ticketmaster says screenshots aren’t valid for entry, and that someone who bought from another fan should get the tickets by official transfer.';
+      const msgLine = msg0 ? 'Madison Square Garden’s mobile ticket guide shows how to accept a transferred ticket into your account and add it to your phone’s wallet.' : '';
+      const next = `Next step: contact the seller or the marketplace’s support now and ask them to transfer ${two ? 'both tickets' : 'the tickets'} to your account. Once you’ve accepted it, check the event and ${two ? 'both seats' : 'your seats'} show there, then add them to your phone’s wallet.`;
+      const text = ['Hey,', lead, `${why}\nTicketmaster’s guidance: ${TM_GUIDE}`, ...(msgLine ? [`${msgLine}\nMSG’s guide: ${MSG_GUIDE}`] : []), next].join('\n\n');
+      const P0 = (x: string) => `<p style="margin:0 0 18px;">${x}</p>`;
+      const html = [P0('Hey,'), P0(`<strong>${lead}</strong>`), P0(`${why} <a href="${TM_GUIDE}">Read Ticketmaster’s guidance</a>.`), ...(msgLine ? [P0(`${msgLine} <a href="${MSG_GUIDE}">Open MSG’s mobile ticket guide</a>.`)] : []), P0(next)].join('\n');
+      const rev = priorVersion ? req.currentRevision + 1 : 1;
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      await this.db.insert(t.requestOutcomes).values({ requestId: req.id, kind: 'user_reported_purchase', source: 'customer_reply', messageId: msg.id, details: { entryHelp: true }, actor: 'customer', at: msg.receivedAt });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Getting in with your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `entry_help:${msg.id}` });
+      await this.transition(req.id, 'closed', 'post_purchase_help');
+      return { state: 'closed', revision: rev, extraction: merged };
     }
 
     // What they need help with, accumulated over the conversation (pilot measurement).
@@ -443,18 +489,24 @@ export class Concierge {
 
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
-    const { brief: withDefaults, assumed } = applyDefaults(merged);
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged);
     merged = withDefaults;
     const assumptions = [...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
     // the city ("London, KY") keeps it in scope.
-    if (!picked && eventOutsideUs(merged)) {
+    // A place named with its country ("Hamilton in London, UK") is abroad even when the extractor also caught
+    // "not New York" as the city (audit replay A09). Only then, though: "my sister in London, UK recommended
+    // Hamilton in New York" is a New York request, and where they live is the residence rule's business.
+    // A non-US city that only appears as where someone lives or is ("my sister in London, UK") isn't the event's.
+    if (merged.city && isOutsideUs(merged.city) && onlyAsWhereSomeoneIs(latestText, merged.city)) merged = { ...merged, city: null, state: null };
+    const abroad = namedAbroadEvent(latestText, merged.city);
+    if (!picked && (eventOutsideUs(merged) || abroad)) {
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
       await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'unsupported', 'event_outside_us');
-      await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: `We only cover events in the US for now, so I can’t help with ${merged.performerOrTeam ? `${titleCaseName(merged.performerOrTeam)} in ` : ''}${placeName(merged)}.` }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: `We only cover events in the US for now, so I can’t help with ${merged.performerOrTeam ? `${titleCaseName(merged.performerOrTeam)} in ` : ''}${abroad ? `${abroad[1]}, ${abroad[2]}` : placeName(merged)}.` }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'unsupported', revision, extraction: merged };
     }
 
@@ -526,7 +578,11 @@ export class Concierge {
       const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
       const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')));
       if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
-      const questions = [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
+      // They named the act, the date and the place and nothing is scheduled: asking "which date and venue?" asks
+      // for what they already gave (post-#54 QA, R3-B10). One next step instead.
+      const gaveWhenWhere = resolution.kind === 'no_match' && !!merged.performerOrTeam && !!(merged.resolvedLocalDate || merged.dateExpression) && !!(merged.city || merged.state) && !elsewhere.length;
+      const nextStep = gaveWhenWhere ? `If you’ve seen a ${titleCaseName(merged.performerOrTeam!)} show announced for then, send me the link and I’ll check it. Or tell me another date or city and I’ll look there.` : null;
+      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && k !== 'performer_ambiguous'), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       const countryCheck = !contact!.countryConfirmed && count === 1;
@@ -540,7 +596,7 @@ export class Concierge {
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: acknowledgementLine(merged), eventNote, questions, assumptions, countryCheck, knownFacts, ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -557,9 +613,11 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: unverifiedRequirements(merged), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { unverified: unverifiedRequirements(merged, latestText), recheck: revision > 1, eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
-        dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
+        // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
+        // into silence (audit replay A05-R1).
+        dedupeKey: `official_sale:${req.id}:${resolution.event.id}:${revision}`,
       });
       return { state: 'referred', revision, extraction: merged };
     }
@@ -568,7 +626,11 @@ export class Concierge {
     await this.transition(req.id, 'researching', 'brief_complete');
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
     // a "compare" after the official-sale reply.
-    if (revision === 1 || picked || cameFromReferral) {
+    // A question answered from what they sent (their offers side by side, a screenshot, delivery against their
+    // trip) gets its answer once, seconds later: "I'll look at how the tickets are trading" was promising work
+    // that wasn't the job (post-#55 writing review). Anything we assumed still gets the acknowledgment.
+    const selfContained = !assumptions.length && (latestOffers.length >= 2 || !!listing.fields || questionsAsked(latestText).deliveryRisk);
+    if ((revision === 1 || picked || cameFromReferral) && !selfContained) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
@@ -666,6 +728,17 @@ export class Concierge {
    * size). One that shows a barcode, payment card or ID is deleted and quarantined, and nothing read from it is
    * kept. A read that fails never fails the request; the customer is asked for the details instead.
    */
+  /**
+   * Whether this message carries an image we didn't read: one attached (fetched or not) with nothing usable
+   * read from it, or an email that says it attaches one when none reached us. 'missing' when it never arrived.
+   */
+  private async unreadImage(msg: typeof t.messages.$inferSelect): Promise<'unread' | 'missing' | null> {
+    const rows = await this.db.select().from(t.attachments).where(eq(t.attachments.messageId, msg.id));
+    const images = rows.filter((a) => a.validationState !== 'quarantined' && (/^image\//i.test(a.detectedMimeType ?? a.declaredMimeType ?? '') || /\.(png|jpe?g|gif|webp|heic)$/i.test(a.filename ?? '')));
+    if (images.length) return 'unread';
+    return SAYS_ATTACHED.test(msg.sanitizedText ?? '') ? 'missing' : null;
+  }
+
   private async readListingEvidence(msg: typeof t.messages.$inferSelect, req: typeof t.requests.$inferSelect): Promise<{ fields: ListingFields | null; source: 'screenshot' | 'listing_text' | null; images: number; redacted: number }> {
     const atts = await this.db.select().from(t.attachments).where(and(eq(t.attachments.messageId, msg.id), eq(t.attachments.validationState, 'accepted')));
     const images = atts.filter((a) => a.mediaId);
@@ -725,10 +798,15 @@ export class Concierge {
       }
     }
     const text = msg.sanitizedText ?? '';
-    if (!best && looksLikeListingText(text) && reader.name !== 'none') {
+    // Two or more offers in their words are compared one by one (text-offers); read as one listing, their fields
+    // run together (post-#54 QA, R3-B01).
+    if (!best && looksLikeListingText(text) && reader.name !== 'none' && offersInText(text).length < 2) {
       try {
         const r = await read({ text });
-        const fields = usableListing(r) ? fieldsFromRead(r) : null;
+        let fields = usableListing(r) ? fieldsFromRead(r) : null;
+        // "Neither seat is a wheelchair or companion space": their correction wins over any reading of the
+        // word itself (post-#54 QA, R3-B08).
+        if (fields && SEATS_NOT_ACCESSIBLE.test(text)) fields = { ...fields, restrictionCodes: fields.restrictionCodes.filter((c) => c !== 'accessible_seating'), restrictions: fields.restrictions.filter((x) => !/\b(wheelchair|accessible|accessibility|ada|companion)\b/i.test(x)) };
         await this.db.insert(t.listingEvidence).values({ requestId: req.id, messageId: msg.id, source: 'listing_text', observedAt: msg.receivedAt, kind: r.kind, confidence: r.confidence, fields: fields as unknown as Record<string, unknown> | null, readBy: reader.name });
         if (fields) {
           best = fields;
@@ -765,7 +843,8 @@ export class Concierge {
     if (rows.length) await this.db.insert(t.requestOutcomes).values(rows);
     // Bought or stop: nothing more to watch for this request.
     if (reply?.bought === true || reply?.stopWatching) {
-      await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active')));
+      const stopped = await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).returning({ id: t.watches.id });
+      await this.stopWatchAlerts(stopped.map((w) => w.id));
       await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.requestId, req.id), eq(t.eventAlerts.state, 'active')));
     }
     const kind = reply?.bought === true ? 'bought' : reply?.stopWatching ? 'stopped' : 'thanks';
@@ -869,8 +948,8 @@ export class Concierge {
       await audit(this.db, { actor: 'system', action: 'staff_alert.skipped', entityKind: 'request', entityId: args.requestId, revision: args.revision, diff: { reason: why } });
       return { outcome: 'skipped' as const, reason: why };
     };
-    const recipients = this.env.STAFF_ALERT_ADDRESSES.length ? this.env.STAFF_ALERT_ADDRESSES : this.env.STAFF_EMAIL_ALLOWLIST;
-    if (!recipients.length) return skip('no_staff_addresses');
+    const allRecipients = this.env.STAFF_ALERT_ADDRESSES.length ? this.env.STAFF_ALERT_ADDRESSES : this.env.STAFF_EMAIL_ALLOWLIST;
+    if (!allRecipients.length) return skip('no_staff_addresses');
     if (!this.deps.emailProvider) return skip('sending_disabled');
     const switches = await loadSwitches(this.db);
     if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
@@ -879,10 +958,17 @@ export class Concierge {
     if (req.state !== 'manual_attention') return skip('no_longer_waiting');
     const [last] = await this.db.select({ reason: t.requestTransitions.reason, at: t.requestTransitions.createdAt }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.toState, 'manual_attention'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
     const why = staffReasonLabel(last?.reason ?? 'unknown');
+    // A promised comparison goes to the person who owns it.
+    const comparison = last?.reason === 'staff_comparison';
+    const recipients = comparison && this.env.STAFF_COMPARISON_OWNER ? [this.env.STAFF_COMPARISON_OWNER] : allRecipients;
     const link = `${this.env.APP_URL.replace(/\/$/, '')}/admin/requests/${req.id}`;
     // What the customer has actually been sent, from the send record, never assumed (TG-B06).
-    const [holding] = await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), eq(t.sendIntents.dedupeKey, `holding:${req.id}`))).limit(1);
-    const told = !holding
+    const [holding] = comparison
+      ? await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), sql`${t.sendIntents.dedupeKey} like 'rec:%'`)).orderBy(desc(t.sendIntents.createdAt)).limit(1)
+      : await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), eq(t.sendIntents.dedupeKey, `holding:${req.id}`))).limit(1);
+    const told = comparison && holding && ['provider_accepted', 'delivered'].includes(holding.state)
+      ? 'The customer has been told a person is looking for seats that meet their requirements and will reply in the thread. Record each option you check under Manual offers (source, time checked, exact quantity, seats together, all-in total, restrictions), then re-run research to send the comparison; or reply that nothing fits.'
+      : !holding
       ? 'The customer has not been told anything yet: reply to them from the request page.'
       : ['provider_accepted', 'delivered'].includes(holding.state)
         ? 'The customer has been told a person is picking it up.'
@@ -976,6 +1062,9 @@ export class Concierge {
     // Ask the provider about a window once per city (fresh results are reused), then read the catalog. A kind
     // of music is also asked for by name, so a busy week's first hundred shows do not crowd it out.
     const discovery = await this.discoveryAvailability();
+    const threadText = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
+    const ruledOut = exclusionsIn(threadText);
+    const startsAt = startWindow(msg.sanitizedText ?? threadText);
     const lookIn = async (w: { from: string; to: string }) => {
       let providerChecked = false;
       if (discovery && w.from <= w.to) {
@@ -1004,6 +1093,12 @@ export class Concierge {
         if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
         const d = eventLocalDate(e.localStartAt, v.timezone);
         if (d < w.from || d > w.to) return false;
+        if (startsAt.after !== null || startsAt.before !== null) {
+          const [hh, mm] = new Intl.DateTimeFormat('en-GB', { timeZone: v.timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(e.localStartAt).split(':').map(Number) as [number, number];
+          const mins = (hh % 24) * 60 + mm;
+          if (startsAt.after !== null && mins < startsAt.after) return false;
+          if (startsAt.before !== null && mins > startsAt.before) return false;
+        }
         const key = `${e.name.toLowerCase()}|${d}|${v.id}`;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -1017,9 +1112,12 @@ export class Concierge {
       const areaUsed = !area ? null : inArea.length ? area : inParent.length ? area.parent! : null;
       const areaKept = !area || areaUsed === area;
       const placed = !area ? all : inArea.length ? inArea : inParent.length ? inParent : all;
-      const ofGenre = genre ? placed.filter(({ e }) => genreMatches(genre, e.genre)) : placed;
+      // What they ruled out ("no pop concerts, tribute acts or kids' events") goes before any ranking, so an
+      // excluded show is never one of the picks (post-#54 QA, R3-B07).
+      const allowed = ruledOut.length ? placed.filter(({ e }) => !ruledOut.some((k) => excludedBy(k, e))) : placed;
+      const ofGenre = genre ? allowed.filter(({ e }) => genreMatches(genre, e.genre)) : allowed;
       const genreKept = !genre || ofGenre.length > 0;
-      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : placed };
+      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : allowed };
     };
     // Nothing in the window is not a dead end: a team that plays at home every other week, or a quiet week,
     // gets the next few after it (six weeks on), said as such.
@@ -1042,7 +1140,8 @@ export class Concierge {
     const single = !more && !after && events.length === 1 && !runOf.get(events[0]!.e.id)?.moreDates && genreKept && areaKept;
     if (single && merged.quantity !== null) {
       const only = events[0]!;
-      return { pick: only, note: `That's the only ${oneOfLabel(merged.categoryHint, genre)} in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so I've gone ahead with it. Tell me if you had something else in mind.` };
+      // What we found, not a claim about everything on in the city (live G02: "the only show in Manhattan").
+      return { pick: only, note: `It's the only ${oneOfLabel(merged.categoryHint, genre)} I found in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}${startsAt.after !== null ? ` starting after ${timeLabel(startsAt.after)}` : ''}, so I've gone ahead with it. Tell me if you had something else in mind.` };
     }
     await recordVersion();
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
@@ -1073,11 +1172,12 @@ export class Concierge {
     const assumption = notes.length ? notes.join(' ') : null;
     // A place we don't know is searched as a town of that name; finding nothing there says more about the name.
     const unknownPlace = market.id.startsWith('city:') && !all.length;
+    const startsAfter = startsAt.after !== null ? ` starting after ${timeLabel(startsAt.after)}` : startsAt.before !== null ? ` starting before ${timeLabel(startsAt.before)}` : '';
     const emptyNote = unknownPlace
       ? `I couldn't find ${market.label} as a place in the official listings. Which city is it in or near? I'll look there.`
       : providerChecked
-      ? `I checked the official listings and couldn't find any ${label.toLowerCase()} in ${place} for ${span}.`
-      : `I don't have any ${label.toLowerCase()} in ${place} on file for ${span}.`;
+      ? `I checked the official listings and couldn't find any ${label.toLowerCase()} in ${place} for ${span}${startsAfter}.`
+      : `I don't have any ${label.toLowerCase()} in ${place} on file for ${span}${startsAfter}.`;
     // What this reply lists is remembered, so "the other 7" continues from here; a new question starts over.
     const listed = shown.map(({ e }) => e.id);
     await this.db.update(t.requests).set({ clarificationCount: count, browseShown: more ? [...req.browseShown, ...listed] : listed }).where(eq(t.requests.id, req.id));
@@ -1557,16 +1657,51 @@ export class Concierge {
     // price the customer asked about (per ticket; a total is divided by the party size).
     const official = await this.officialSale(event, now);
     const faceValue = event.faceMinCents != null && event.faceMaxCents != null ? { minCents: event.faceMinCents, maxCents: event.faceMaxCents } : null;
+    // What they asked in the message behind this revision, not anywhere in the thread: a question answered
+    // before, or quoted back, is not asked again (remediation review §1). Quoted history is already stripped.
+    const latestIds = version?.sourceMessageIds ?? [];
+    const said = latestIds.length ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, latestIds))).map((m) => m.text ?? '').join('\n') : '';
+    const asks = questionsAsked(said);
+    // Two or more offers laid out in their words: compared as the question, each kept apart (retest R2-B02).
+    const threadMessages = (await this.db.select({ text: t.messages.sanitizedText, at: t.messages.receivedAt }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const saidInThread = threadMessages.join('\n');
+    // The offers they laid out stay the question when a follow-up changes a requirement without restating them
+    // ("I'm now happy to buy six… which of the same offers?", "I can raise it to $230… using only my supplied
+    // offers"): the same offers, judged again on the changed terms, never a fresh market search (live M01-F1,
+    // M03-F1). A follow-up that names an offer itself ("ignore Offer A, only B") is its own question.
+    let textOffers = offersInText(said);
+    if (textOffers.length < 2 && !/\b(?:[Oo]ffer|[Oo]ption|[Ll]isting)\s+[A-Z1-9]\b/.test(said) && /\b(?:offers?|options?|listings?)\b/i.test(said)) {
+      for (const earlier of [...threadMessages].reverse()) {
+        const found = offersInText(earlier);
+        if (found.length >= 2) {
+          textOffers = found;
+          break;
+        }
+      }
+    }
     // The listing they showed us, newest first: what it displayed is the price being checked, with its source.
     const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), sql`${t.listingEvidence.fields} is not null`)).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
-    const shown: SubjectListing | null = ev ? { ...(ev.fields as unknown as ListingFields), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    // "section Offer B: 211" was the label read as the seat (retest R2-B06): the seat fields keep the value only.
+    const evFields = ev ? (ev.fields as unknown as ListingFields) : null;
+    // With two or more of their offers, the comparison is the answer: a single-listing read of the same email
+    // mixes their fields (A's price and access with B's seat) and contradicts it (post-#54 QA, R3-B01).
+    const read: SubjectListing | null = textOffers.length >= 2 ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    // What they typed about that listing since it was read wins over the read: "the image says $72 per ticket
+    // BEFORE fees, plus $48 for the whole order … delivery by 6pm" (live A11-F1 repeated the old summary).
+    const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read, changes: [] as string[] };
+    const shown = corrected.fields;
+    // One price for the listing: a total that carries fees on top of a before-fees ticket price is compared as its
+    // all-in share per ticket, with the breakdown kept (live A11: $72 + $48 / 3 = $88 each).
+    const tickets = shown?.quantity ?? quantity;
+    const withFees = shown?.perTicketCents != null && shown.wholePartyCents != null && tickets > 0 && shown.wholePartyCents > shown.perTicketCents * tickets + 50;
     const quote: QuotedPrice | null = shown?.perTicketCents != null
-      ? { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
-      : brief.quotedPriceCents != null
-        ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported' }
+      ? withFees
+        ? { perTicketCents: Math.round(shown.wholePartyCents! / tickets), assumedPerTicket: false, source: shown.source, feeBasis: 'all_in', seenAt: shown.observedAt, seller: shown.seller, base: { perTicketCents: shown.perTicketCents, feesCents: shown.wholePartyCents! - shown.perTicketCents * tickets, tickets, totalCents: shown.wholePartyCents! } }
+        : { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
+      : brief.quotedPriceCents != null && textOffers.length < 2
+        ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported', feeBasis: statedFeeBasis(said, brief.quotedPriceCents) ?? statedFeeBasis(saidInThread, brief.quotedPriceCents) ?? undefined }
         : null;
     // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
-    const saidInThread = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
     const travelling = TRAVELLING.test(saidInThread);
     // The market around the listing they showed us: cheaper seats for their group, from one fresh listings read.
     const around = shown?.perTicketCents != null && licence.allows('tracking') ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
@@ -1579,11 +1714,31 @@ export class Concierge {
       const [w] = await this.db.select().from(t.watches).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).orderBy(desc(t.watches.createdAt)).limit(1);
       watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt } : { running: false };
     }
-    // What they asked in their own words, across the thread: a delivery or accessible-seating question is
-    // answered as itself, not folded into price advice (TG-B02).
-    const said = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
-    const asks = questionsAsked(said);
-    const packet = buildPacket({ asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // Cheaper offers the comparison rejected for a hard requirement: named with the reason, never offered.
+    const perSeat = (o: Offer) => { const tot = o.payableTotalCents ?? o.baseTotalCents; return tot === null ? null : tot / o.quantity; };
+    const ref = best?.comparableTotalCents != null ? best.comparableTotalCents / quantity : constraints.budgetTotalCents != null ? constraints.budgetTotalCents / quantity : Infinity;
+    const leftOut: NonNullable<Parameters<typeof buildPacket>[0]['leftOut']> = [];
+    for (const e of cmp.excluded) {
+      const ps = perSeat(e.offer);
+      if (ps === null || ps >= ref || e.exclusions.some((x) => ['wrong_event', 'parking_only', 'different_session', 'unavailable', 'currency', 'resale_deposit', 'vip_package'].includes(x))) continue;
+      const reason = e.exclusions.includes('obstructed_view') ? 'obstructed_view' : e.exclusions.includes('accessible_only') ? 'accessible_only' : e.exclusions.includes('seats_not_together') ? 'seats_not_together' : e.exclusions.includes('section_not_acceptable') ? 'section_not_acceptable' : e.exclusions.includes('wrong_quantity') && e.offer.quantity > quantity ? 'bigger_block' : null;
+      if (reason && !leftOut.some((l) => l.reason === reason && l.quantity === e.offer.quantity)) leftOut.push({ reason, quantity: e.offer.quantity });
+    }
+    const eventNoun = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab'].includes(event.category) ? 'game' as const : 'show' as const;
+    // The staffed comparison pilot (DECISION_LOG #54): when nothing verified meets what they asked for, and a
+    // named owner exists with room in the pilot, a person takes it on and the email says so.
+    const requirements = unverifiedRequirements(brief, saidInThread);
+    if (best && best.comparableTotalCents !== null && best.offer.collectionMode !== 'fixture') {
+      const [offered] = await this.db.select().from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, req.id), eq(t.requestOutcomes.kind, 'staff_comparison_offered'))).limit(1);
+      const [answered] = await this.db.select({ id: t.requestOutcomes.id }).from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, req.id), eq(t.requestOutcomes.kind, 'staff_comparison_answered'))).limit(1);
+      if (offered && !answered) await this.db.insert(t.requestOutcomes).values({ requestId: req.id, kind: 'staff_comparison_answered', source: 'staff', details: { minutes: Math.round((now.getTime() - offered.at.getTime()) / 60_000), sourceId: best.offer.sourceId, totalCents: best.comparableTotalCents, checked: cmp.eligible.length + cmp.needsReview.length + cmp.excluded.length }, actor: 'system', at: now });
+    }
+    const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && textOffers.length < 2
+      ? await this.takeForStaffComparison({ requestId: req.id, contactEmail: contact?.emailLookup ?? '', requirements })
+      : null;
+    // Their terms read across the thread, latest word winning: how many go, extra tickets, the arrival deadline.
+    const offerNeeds = textOffers.length >= 2 ? { noObstructed: NO_OBSTRUCTED.test(`${saidInThread}\n${brief.seatingPreference ?? ''}`), togetherRequired: !!brief.togetherRequired, baseline: comparedAgainst(said, textOffers.map((o) => o.label)) ?? comparedAgainst(saidInThread, textOffers.map((o) => o.label)), terms: partyTerms(threadMessages) } : null;
+    const packet = buildPacket({ corrections: corrected.changes, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -1807,7 +1962,13 @@ export class Concierge {
     if (intent.requestId && intent.requestRevision !== null) {
       const [req] = await this.db.select({ rev: t.requests.currentRevision, eventId: t.requests.eventId }).from(t.requests).where(eq(t.requests.id, intent.requestId));
       revisionCurrent = req?.rev === intent.requestRevision;
-      if (intent.approvalId) {
+      if (intent.approvalId && intent.messageClass === 'watch_alert') {
+        // A watch alert's approval is the alert's, and a cancellation seen now wins over an approval given before
+        // it (A26): a watch that is no longer active, or has moved on a generation, sends nothing.
+        const [alert] = await this.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.id, intent.approvalId));
+        const [w] = alert ? await this.db.select().from(t.watches).where(eq(t.watches.id, alert.watchId)) : [];
+        approved = alert?.approvalState === 'approved' && w?.state === 'active' && w.generation === alert.generation;
+      } else if (intent.approvalId) {
         const [rec] = await this.db.select().from(t.recommendations).where(eq(t.recommendations.id, intent.approvalId));
         approved = rec?.reviewStatus === 'approved';
         hashMatches = rec?.draftHash === intent.approvedHash;
@@ -1843,6 +2004,15 @@ export class Concierge {
         await this.db.update(t.recommendations).set({ reviewStatus: 'sent' }).where(eq(t.recommendations.id, intent.approvalId));
         if (intent.requestId) await this.transition(intent.requestId, 'recommendation_sent', 'approved_recommendation_sent');
       }
+      // An advice email that promised a person would look (DECISION_LOG #54), reviewed or auto-sent: the request
+      // now waits on its owner, who is told.
+      if (intent.requestId && intent.dedupeKey?.startsWith('rec:')) {
+        const kinds = (await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, intent.requestId))).map((o) => o.kind);
+        if (kinds.includes('staff_comparison_offered') && !kinds.includes('staff_comparison_answered')) {
+          await this.transition(intent.requestId, 'manual_attention', 'staff_comparison');
+          await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${intent.requestId}:${intent.requestRevision ?? 0}:staff_comparison`, entityId: intent.requestId, payload: { requestId: intent.requestId, revision: intent.requestRevision ?? 0 }, now });
+        }
+      }
       return { outcome: 'sent' };
     } catch (e) {
       // A17: the provider may have accepted; keep the same key/payload for any retry, and mark uncertain.
@@ -1861,6 +2031,12 @@ export class Concierge {
     if (target === null || !a.brief.quantity) return null; // budget is required for a target-price watch → clarification already asked via ambiguities path
     const active = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.watches).where(and(eq(t.watches.contactId, a.contactId), eq(t.watches.state, 'active')));
     if ((active[0]?.n ?? 0) >= WATCH_MAX_ACTIVE_PER_CONTACT) return null;
+    // A watch whose alerts can't be sent would be "active" to staff and "stopped" on cancel while it never ran,
+    // and the customer is told nothing is monitored (audit replay A07/A07-R1): none is stored until they can.
+    if (!this.env.WATCH_SEND_ENABLED) {
+      await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: a.requestId, diff: { reason: 'watch_alerts_disabled' } });
+      return null;
+    }
     const cadence = cadenceMinutes(a.eventStartAt, now, { lastMinuteApproved: false });
     if (cadence === null) return null;
     // A watch needs a seller we may check on a schedule. Without one it could never alert, yet it showed as
@@ -1873,6 +2049,25 @@ export class Concierge {
     const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, consentMessageId: a.consentMessageId, cadenceMinutes: cadence, nextCheckAt: new Date(now.getTime() + cadence * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
     await audit(this.db, { actor: 'system', action: 'watch.created', entityKind: 'watch', entityId: w!.id, diff: { consentMessageId: a.consentMessageId, targetTotalCents: target } });
     return w!.id;
+  }
+
+  /**
+   * A place in the staffed comparison pilot, if there is one: an owner who is staff, the request not already
+   * taken, and fewer than the limit taken for customers (staff's own tests are served but not counted). Taking it
+   * records the promise as an outcome, so the pilot can be measured against it.
+   */
+  private async takeForStaffComparison(a: { requestId: string; contactEmail: string; requirements: string[] }): Promise<{ hours: string } | null> {
+    const owner = this.env.STAFF_COMPARISON_OWNER;
+    const staff = new Set(this.env.STAFF_EMAIL_ALLOWLIST.map((x) => x.toLowerCase()));
+    if (!owner || !staff.has(owner)) return null;
+    const hours = staffedHoursLabel(this.env);
+    const taken = await this.db.select({ requestId: t.requestOutcomes.requestId, email: t.contacts.emailLookup }).from(t.requestOutcomes).innerJoin(t.requests, eq(t.requests.id, t.requestOutcomes.requestId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(eq(t.requestOutcomes.kind, 'staff_comparison_offered'));
+    if (taken.some((x) => x.requestId === a.requestId)) return { hours };
+    const isStaff = staff.has(a.contactEmail.toLowerCase());
+    if (!isStaff && taken.filter((x) => !staff.has(x.email.toLowerCase())).length >= this.env.STAFF_COMPARISON_LIMIT) return null;
+    await this.db.insert(t.requestOutcomes).values({ requestId: a.requestId, kind: 'staff_comparison_offered', source: 'system', details: { owner, requirements: a.requirements, counted: !isStaff }, actor: 'system', at: this.now() });
+    await audit(this.db, { actor: 'system', action: 'pilot.staff_comparison_offered', entityKind: 'request', entityId: a.requestId, diff: { owner, counted: !isStaff } });
+    return { hours };
   }
 
   /** Deterministic due-watch evaluation; never invokes a model. */
@@ -1938,11 +2133,21 @@ export class Concierge {
 
   async cancelWatch(args: { watchId: string; actor: string; reason: string }): Promise<void> {
     await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(eq(t.watches.id, args.watchId));
-    // Any queued (not yet provider-accepted) alert sends for this watch are blocked; accepted ones cannot be recalled.
-    const alerts = await this.db.select({ sendIntentId: t.watchAlerts.sendIntentId }).from(t.watchAlerts).where(eq(t.watchAlerts.watchId, args.watchId));
+    await this.stopWatchAlerts([args.watchId]);
+    await audit(this.db, { actor: args.actor, action: 'watch.cancelled', entityKind: 'watch', entityId: args.watchId, diff: { reason: args.reason } });
+  }
+
+  /**
+   * After watches stop, nothing they found goes out: pending alerts are invalidated and queued (not yet
+   * provider-accepted) alert sends are blocked. Accepted ones cannot be recalled. Every cancellation path uses
+   * this, the customer's own included (a correct "stopped" email proves nothing about what was queued).
+   */
+  private async stopWatchAlerts(watchIds: string[]): Promise<void> {
+    if (!watchIds.length) return;
+    await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(and(inArray(t.watchAlerts.watchId, watchIds), eq(t.watchAlerts.approvalState, 'pending')));
+    const alerts = await this.db.select({ sendIntentId: t.watchAlerts.sendIntentId }).from(t.watchAlerts).where(inArray(t.watchAlerts.watchId, watchIds));
     const ids = alerts.map((a) => a.sendIntentId).filter((x): x is string => !!x);
     if (ids.length) await this.db.update(t.sendIntents).set({ state: 'blocked', lastError: 'watch_cancelled' }).where(and(inArray(t.sendIntents.id, ids), eq(t.sendIntents.state, 'queued')));
-    await audit(this.db, { actor: args.actor, action: 'watch.cancelled', entityKind: 'watch', entityId: args.watchId, diff: { reason: args.reason } });
   }
 }
 
@@ -1975,15 +2180,45 @@ function candidateFrom(entity: { name: string; league: string | null }, e: { id:
  * What they need that an on-sale event says nothing about: the seats, the total and access (TG-B01). The sale
  * being open is not a seat, so none of these is met by it; each is said back as still to check.
  */
-export function unverifiedRequirements(x: RequestExtraction): string[] {
+export function unverifiedRequirements(x: RequestExtraction, text = ''): string[] {
   const out: string[] = [];
+  const age = ageNeed(text);
   const q = x.quantity;
   if (q && q > 1 && x.togetherRequired) out.push(`${q} seats together`);
   const total = wholePartyBudgetCents(x.budgetCents, x.budgetBasis, x.quantity);
-  if (total !== null) out.push(`${formatUsd(total)} in total${q && q > 1 ? ` for all ${q}` : ''}, once fees are added`);
+  if (total !== null) out.push(`${formatUsd(total)} in total${q && q > 1 ? (q === 2 ? ' for both' : ` for all ${q}`) : ''}, once fees are added`);
   if (x.accessibilityNeeds?.trim()) out.push(x.accessibilityNeeds.trim().replace(/^./, (c) => c.toUpperCase()));
   if (x.seatingPreference?.trim()) out.push(x.seatingPreference.trim().replace(/^./, (c) => c.toUpperCase()));
+  if (age) out.push(age);
   return out;
+}
+
+/**
+ * A child or teenager in the party, or a venue age rule they ruled out ("our 16-year-old", "no 21+ venues"): the
+ * venue's age policy is a requirement nothing here has checked (live G02).
+ */
+export function ageNeed(text: string): string | null {
+  const t = flat(text);
+  const minor = /\b(1[0-7]|[5-9])[- ]?(?:year[- ]?old|yo)\b/i.exec(t);
+  if (minor) return `Admission for your ${minor[1]}-year-old (the venue’s age policy)`;
+  if (/\b(?:no\s+21\s*\+|no\s+18\s*\+|all[- ]ages|our (?:teen|teenager|kids?|child|children|son|daughter))\b/i.test(t)) return 'The venue’s age policy for your group';
+  return null;
+}
+
+/**
+ * A start-time window they gave ("after 6pm", "no earlier than 7", "before 9pm"), in minutes after midnight
+ * local time. A show outside it isn't one of theirs, however few there are (live G02: a 4pm show for "after 6pm").
+ */
+export function startWindow(text: string): { after: number | null; before: number | null } {
+  const t = flat(text);
+  const at = (h: string, m: string | undefined, ap: string | undefined) => {
+    let hh = Number(h) % 12;
+    if ((ap ?? 'pm').toLowerCase().startsWith('p')) hh += 12; // "after 6" for a show means the evening
+    return hh * 60 + Number(m ?? 0);
+  };
+  const a = /\b(?:after|from|no earlier than|not before|starting after|later than)\s+(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?(?!\s*(?:tickets?|seats?|people|of us|\$))/i.exec(t);
+  const b = /(?<!\bdeliver\w*\s+)\b(?:before|by|no later than|ending before|finish(?:ed)? by)\s+(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)(?!\s*(?:tickets?|seats?))/i.exec(t);
+  return { after: a ? at(a[1]!, a[2], a[3]) : null, before: b ? at(b[1]!, b[2], b[3]) : null };
 }
 
 /**
@@ -1991,12 +2226,28 @@ export function unverifiedRequirements(x: RequestExtraction): string[] {
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean } {
   const t = text.replace(/[’‘]/g, "'");
-  const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets)\b/i.test(t);
-  const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|travel(l?ing)?|drive|driving|train|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
-  const spaces = /\b(wheelchair|accessible|ada|companion) (spaces?|seats?|seating|section|spots?)\b/i.test(t);
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces };
+  const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
+  const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
+  // Accessible spaces as one of the options on the table (a price or an offer beside them), not a mention
+  // that turns them down: "I don't need wheelchair spaces; compare these two" asks nothing about access.
+  const spaces = t.split(/[.?!;\n]+/).some((sentence) => /\b(wheelchair|accessible|ada|companion)[- ]?(accessible )?(spaces?|seats?|seating|section|spots?)\b/i.test(sentence) && /\$\s?\d|\b(offer|listing|option|section|row)\b/i.test(sentence));
+  const sales = /\b(how many (?:tickets |seats )?(?:have |has )?(?:actually |really )?sold|completed sales|actual sales|sold for|sales data|tickets sold)\b/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales };
+}
+
+/**
+ * "Cancel only the price watch requested in this thread", "stop the alerts": a cancellation, whatever the
+ * extractor read. "Stop this watch on September 30 at 6pm" is when a new watch should end, not a cancellation.
+ */
+export function asksToCancelWatch(text: string): boolean {
+  if (/\b(don'?t|do not|never mind) (cancel|stop)\b/i.test(text)) return false;
+  for (const m of text.matchAll(/\b(cancel|stop|end|turn off)\b[^.?!]{0,40}?\b(watch|watching|alerts?|monitoring|tracking)\b/gi)) {
+    const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 12);
+    if (!/^\s+(on|at|after|by|when|once)\b/i.test(after)) return true;
+  }
+  return false;
 }
 
 /** A reply that stops something: checked before the inbound limit, so it is never held behind it. */
@@ -2008,6 +2259,36 @@ export function eventOutsideUs(x: Pick<RequestExtraction, 'city' | 'state'>): bo
   const place = [x.city, x.state].filter(Boolean).join(', ');
   return !!place && !/\bnew london\b/i.test(place) && isOutsideUs(place);
 }
+
+/** "in London, UK", "to Toronto, Canada": a city with a non-US country beside it. */
+const NAMED_ABROAD = /\b(?:in|to)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?),?\s+(UK|U\.K\.|United Kingdom|England|Scotland|Wales|Ireland|Canada|Mexico|France|Germany|Spain|Italy|Portugal|Netherlands|Australia|Japan)\b/g;
+/** Words before a place that make it where someone lives or is, not where the event is. */
+const NOT_THE_EVENT = /\b(live|living|lives|based|from|home|sister|brother|friend|family|parents?|mum|mom|dad|visiting|staying|moved|born)\b[^.?!]{0,12}$/i;
+
+/** Every mention of the place follows "live in", "my sister in", "visiting from"…: a person's place, not the event's. */
+export function onlyAsWhereSomeoneIs(text: string, place: string): boolean {
+  const escaped = place.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hits = [...text.matchAll(new RegExp(`\\b${escaped}\\b`, 'gi'))];
+  return hits.length > 0 && hits.every((m) => NOT_THE_EVENT.test(text.slice(Math.max(0, m.index! - 30), m.index!).replace(/\s+(?:in|to|at)\s*$/i, ' ')));
+}
+
+/**
+ * The non-US place the event is in, when the message puts it there: a city with its country, not one they live
+ * in or know someone in, and only when the city the extractor chose is negated ("not New York") or isn't a US
+ * place. Anything else is a US request, and residence is decided by the residence rule on its own words.
+ */
+export function namedAbroadEvent(text: string, city: string | null): RegExpExecArray | null {
+  const escaped = city?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const cityNegated = !!escaped && new RegExp(`\\b(?:not|no|rather than|instead of)\\s+(?:in\\s+)?${escaped}\\b`, 'i').test(text);
+  const cityIsUs = !!city && !isOutsideUs(city) && (!!marketFor(city) || !!stateCodeFor(city));
+  if (city && cityIsUs && !cityNegated) return null;
+  for (const m of text.matchAll(NAMED_ABROAD)) {
+    if (!NOT_THE_EVENT.test(text.slice(Math.max(0, m.index! - 30), m.index!))) return m as RegExpExecArray;
+  }
+  return null;
+}
+
+const countWords = (n: number) => ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][n] ?? String(n);
 
 /** "London, UK" as they'd write it, for the reply. */
 function placeName(x: Pick<RequestExtraction, 'city' | 'state'>): string {
@@ -2081,9 +2362,12 @@ export function acknowledgementLine(x: RequestExtraction): string {
   return `${line}. Got it.`;
 }
 
-export function eventLabel(e: { name: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }): string {
+export function eventLabel(e: { name: string; localStartAt: Date; doorsAt?: Date | null }, v: { name: string; city: string | null; timezone: string }): string {
   const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
-  return `${e.name} at ${v.name}${v.city ? `, ${v.city}` : ''}, ${when}`;
+  // Doors and the show are different times, and neither is inferred from the other (live A04-F1: "8pm" was doors).
+  const at = (d: Date) => new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(d);
+  const doors = e.doorsAt ? (e.doorsAt.getTime() < e.localStartAt.getTime() ? ` (doors ${at(e.doorsAt)})` : e.doorsAt.getTime() === e.localStartAt.getTime() ? ' (that’s when doors open; the show starts later)' : '') : '';
+  return `${e.name} at ${v.name}${v.city ? `, ${v.city}` : ''}, ${when}${doors}`;
 }
 
 /**
@@ -2209,6 +2493,98 @@ export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: stri
 const TRAVELLING = /\b(fly(ing)? in|flight|flying (in|out|to)|travel(l)?ing (in|to|from|for)|driving in|coming in from|road trip|booked (a|our) hotel|hotel booked)\b/i;
 
 /** Told when a screenshot showed a barcode, card or ID: we deleted it and used nothing from it. */
+type Exclusion = 'pop' | 'tribute' | 'kids';
+/** Kinds of show they ruled out, from a "no …" / "not …" / "without …" clause. */
+export function exclusionsIn(text: string): Exclusion[] {
+  const out = new Set<Exclusion>();
+  const t = text.replace(/[’‘]/g, "'");
+  for (const m of t.matchAll(/\b(?:no|not|nothing|without|avoid|skip|exclude|excluding|none of)\b([^.!?;:]{0,80})/gi)) {
+    const clause = m[1]!;
+    if (/\b(?:k-?)?pop\b(?!-?up)/i.test(clause) && !/\bpop[- ]?punk\b/i.test(clause)) out.add('pop');
+    if (/\btribute/i.test(clause)) out.add('tribute');
+    if (/\b(?:kids?|kids'|children'?s?|family|families|all[- ]ages)\b/i.test(clause)) out.add('kids');
+  }
+  return [...out];
+}
+function excludedBy(k: Exclusion, e: { name: string; genre: string | null; category: string }): boolean {
+  const g = e.genre ?? '';
+  if (k === 'pop') return /\bpop\b/i.test(g) || /\bpop\b/i.test(e.name);
+  if (k === 'tribute') return /\btribute\b/i.test(g) || /\btribute\b|\bthe music of\b|\bsalute to\b/i.test(e.name);
+  return e.category === 'family' || /\b(?:children'?s?|kids|family)\b/i.test(g) || /\b(?:kids|children'?s|for kids|family show)\b/i.test(e.name);
+}
+
+/**
+ * Their typed corrections to a listing we read earlier: a fee basis for the same ticket price, a per-order fee,
+ * the total, a delivery time. Each change is said back in the reply, and nothing else in the read is touched.
+ */
+export function correctListing(fields: SubjectListing, text: string): { fields: SubjectListing; changes: string[] } {
+  const t = flat(text);
+  const out: SubjectListing = { ...fields };
+  const changes: string[] = [];
+  const cents = (x: string) => Math.round(Number(x.replace(/,/g, '')) * 100);
+  const per = fields.perTicketCents;
+  if (per !== null) {
+    const amt = `\\$\\s?${(per / 100).toFixed(per % 100 ? 2 : 0).replace('.', '\\.')}(?:\\.00)?`;
+    if (new RegExp(`${amt}\\s*(?:per ticket|each|a ticket|/ticket)?\\s*(?:is\\s+)?(?:before|plus|excluding|not including)\\s+(?:any\\s+)?fees`, 'i').test(t) && fields.feeBasis !== 'before_fees') {
+      out.feeBasis = 'before_fees';
+      changes.push(`${formatUsd(per)} a ticket is before fees`);
+    } else if (new RegExp(`${amt}\\s*(?:per ticket|each|a ticket)?\\s*(?:including|incl\\.?|with)\\s+(?:all\\s+|every\\s+)?fees?`, 'i').test(t) && fields.feeBasis !== 'all_in') {
+      out.feeBasis = 'all_in';
+      changes.push(`${formatUsd(per)} a ticket includes fees`);
+    }
+  }
+  const fee = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?(?:fees?\s+)?(?:for|per|on)\s+(?:the\s+)?(?:whole\s+|entire\s+)?order\b/i.exec(t);
+  const total = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?total\b/i.exec(t);
+  const q = fields.quantity;
+  if (total && cents(total[1]!) !== fields.wholePartyCents) {
+    out.wholePartyCents = cents(total[1]!);
+    changes.push(`the total is ${formatUsd(out.wholePartyCents)}`);
+  } else if (!total && fee && per !== null && q) {
+    const w = per * q + cents(fee[1]!);
+    if (w !== fields.wholePartyCents) {
+      out.wholePartyCents = w;
+      changes.push(`the total is ${formatUsd(w)}`);
+    }
+  }
+  if (fee && per !== null && q && out.wholePartyCents !== null && out.wholePartyCents > per * q) changes.push(`that includes ${formatUsd(cents(fee[1]!))} in fees for the order, so ${formatUsd(Math.round(out.wholePartyCents / q))} each including fees`);
+  const by = /\bdeliver(?:y|ed)?\s+(?:is\s+)?(?:by|before)\s+(noon|midday|\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(t);
+  if (by && !(fields.deliveryText ?? '').toLowerCase().includes(by[1]!.toLowerCase().replace(/\s+/g, ''))) {
+    out.deliveryText = `delivery by ${by[1]!.replace(/\s+/g, '').toLowerCase()}${/game day|event day|on the day/i.test(t) ? ' on the day' : ''}`;
+    changes.push(`delivery is by ${by[1]!.replace(/\s+/g, '').toLowerCase()}`);
+  }
+  return { fields: out, changes };
+}
+
+/** They already have tickets and are asking how to get in with them (a barcode image, a transfer, entry). */
+export function entryHelpAsked(text: string): boolean {
+  const t = flat(text);
+  const bought = /\b(?:already\s+(?:bought|purchased|have|got)|(?:I|we)\s+(?:just\s+)?(?:bought|purchased)|(?:I|we)\s+have\s+(?:the|our|my)\s+tickets|got\s+(?:our|my)\s+tickets)\b/i.test(t);
+  const entry = /\b(?:barcode|bar code|screenshot|pdf|transfer(?:red)?|get\s+(?:us|me|in)\b|entry|scan(?:ned)?|let (?:us|me) in|at the gate|at the door)\b/i.test(t);
+  return bought && entry;
+}
+
+/** They say the seats themselves aren't accessible spaces ("Neither seat is a wheelchair or companion space"). */
+export const SEATS_NOT_ACCESSIBLE = /\b(?:neither|none|no)\b[^.!?]{0,40}\b(?:is|are|seats?)\b[^.!?]{0,12}\b(?:an?\s+)?(?:wheelchair|accessible|companion|ada)\b|\b(?:seats?|spaces?|they|these|those|it)\s+(?:is|are)(?:n't| not)\s+(?:an?\s+)?(?:wheelchair|accessible|companion|ada)\b|\bnon-?accessible\b|\bordinary seats?\b[^.!?]{0,30}\bnot\s+(?:wheelchair|accessible)\b/i;
+
+/** "no obstructed views", "not an obstructed view", "without a limited view": a view they ruled out. */
+export const NO_OBSTRUCTED = /\b(?:no|not|never|without|avoid|can't have|cannot have|can’t have|don't want|don’t want|do not want|won't take|won’t take)\s+(?:an?\s+|any\s+)?(?:obstructed|limited|restricted|partial)(?:[\s-]+views?)?\b|\bunobstructed (?:only|views? only)\b|\bmust (?:be|have) (?:an? )?(?:unobstructed|clear view)\b/i;
+
+/** "how much less is it than A", "compared with Offer B": the offer they want the pick measured against. */
+export function comparedAgainst(text: string, labels: string[]): string | null {
+  // The label is a capital or digit: "cheaper than a ticket" isn't Offer A.
+  const m = /\b(?:[Tt]han|[Cc]ompared (?:to|with)|[Vv]ersus|vs\.?|[Aa]gainst|[Rr]elative to)\s+(?:[Oo]ffer\s+|[Oo]ption\s+|[Ll]isting\s+)?([A-Z1-9])\b/.exec(text);
+  const l = m?.[1] ?? null;
+  return l && labels.includes(l) ? l : null;
+}
+
+/** "the attached image", "see attachment", "this screenshot": they meant to send us a picture. */
+const SAYS_ATTACHED = /\b(?:attached|attachment|enclosed)\b|\b(?:this|the|my)\s+(?:screenshot|screen shot|image|picture|photo)\b/i;
+export const IMAGE_UNREAD_ASK = 'Could you type out what it shows: the event and date, how many tickets, the section and row, and the total including fees? Those few details are all I need.';
+export function imageUnreadLine(kind: 'unread' | 'missing'): string {
+  return kind === 'missing'
+    ? 'Your email mentions an attachment, but no image reached me, so I haven’t assumed anything about the tickets.'
+    : 'I couldn’t read the image you attached, so I haven’t used anything from it or assumed anything about the tickets.';
+}
 export const REDACTED_NOTE = 'One of your screenshots looked like it showed a ticket barcode, card details or an ID, so I deleted it and didn’t use it. A screenshot of the listing page (price, section, row) is all I need.';
 
 /** The name of a known team or artist inside some text, longest match first ("New York Rangers" over "New York"). */
@@ -2283,7 +2659,14 @@ export function acknowledgedFacts(e: { name: string; category: string; localStar
   const out = [`${sports ? 'Game' : 'Show'}: ${e.name}`, `When: ${when}`, `Where: ${v.name}${v.city ? `, ${v.city}` : ''}`];
   if (x.quantity) out.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
   if (x.budgetCents !== null && x.budgetBasis) out.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'a ticket'}`);
-  const question = x.quotedPriceCents != null
+  // Their question as they asked it (retest R2-B02/B04): a delivery or two-offer question is not a price check.
+  const asked = questionsAsked(text);
+  const offers = offersInText(text);
+  const question = offers.length >= 2
+    ? `which of the ${offers.length === 2 ? 'two' : countWords(offers.length)} offers to choose`
+    : asked.deliveryRisk
+      ? 'whether the delivery timing is a risk for your trip'
+      : x.quotedPriceCents != null
     ? `whether ${formatUsd(x.quotedPriceCents)} is a good price`
     : /\b(buy now|hold off|wait (?:until|till|for|closer)|should i (?:buy|wait)|good time to buy|now or later|buy or wait)\b/i.test(text)
       ? 'whether to buy now or hold off'
@@ -2372,6 +2755,7 @@ export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: 
 /** Why a request is waiting on a person, in words for the staff alert. */
 export function staffReasonLabel(reason: string): string {
   if (reason === 'clarification_limit_reached') return 'three rounds of questions did not settle the request';
+  if (reason === 'staff_comparison') return 'a comparison was promised: find seats that meet their requirements';
   if (reason.startsWith('extraction_failed:budget_exceeded')) return 'the AI budget for this request ran out';
   if (reason.startsWith('extraction_failed:')) return `the AI could not read the message (${reason.split(':')[1] ?? 'unknown'})`;
   return reason.split(':')[0]!.replace(/_/g, ' ');

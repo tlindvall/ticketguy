@@ -406,6 +406,8 @@ export const events = pgTable(
     publicSaleStartAt: ts('public_sale_start_at'),
     publicSaleEndAt: ts('public_sale_end_at'),
     /** The provider's published face-value range per ticket, before fees; a reference for a quoted price, never an offer. */
+    /** When doors open, when the provider publishes it apart from the start ("doors 8pm, show 9pm"). */
+    doorsAt: ts('doors_at'),
     faceMinCents: integer('face_min_cents'),
     faceMaxCents: integer('face_max_cents'),
     verifiedSourceId: text('verified_source_id'),
