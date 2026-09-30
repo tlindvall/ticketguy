@@ -5,6 +5,7 @@ import * as t from '@/lib/db/schema';
 import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
+import { normalizeMessageId, normalizeReferencesHeader } from '@/lib/intake/threading';
 
 /**
  * A request sent without a subject got two emails with different subjects, which Gmail showed as two threads;
@@ -37,8 +38,12 @@ describe('one thread, and the customer by name', () => {
     await drain(c);
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     expect(sends.length).toBeGreaterThanOrEqual(2);
-    const base = (s: string) => s.replace(/^re:\s*/i, '');
-    expect(new Set(sends.map((s) => base(s.subject))).size).toBe(1);
+    // Gmail threads a reply only when its subject matches the thread's: a subject of our own ("A couple of
+    // quick questions") opened a second thread beside the customer's subjectless one. Every reply is "Re:".
+    for (const s of sends) {
+      expect(s.subject).toBe('Re:');
+      expect(s.headers['In-Reply-To']).toMatch(/^<[^<>\s]+>$/);
+    }
     for (const s of sends) expect(s.bodyText.startsWith('Hey Tobias,')).toBe(true);
     const [contact] = await h.db.select().from(t.contacts).where(eq(t.contacts.emailLookup, 'tobias@customer.example'));
     expect(contact!.firstName).toBe('Tobias');
@@ -54,5 +59,28 @@ describe('one thread, and the customer by name', () => {
       expect(s.subject).toBe('Re: Rangers');
       expect(s.bodyText.startsWith('Hey Priya,')).toBe(true);
     }
+  });
+
+  it('a bare Message-ID from the provider is bracketed, so replies thread and the reply to our reply is found', async () => {
+    const c = makeConcierge(h, { env: testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: 'bare@customer.example' }) });
+    const first = inbound({ text: 'Two Rangers tickets Oct 3, $300 total.', from: 'bare@customer.example', subject: 'Rangers', rfcMessageId: normalizeMessageId('CAbare-1@mail.gmail.com') });
+    expect(first.rfcMessageId).toBe('<CAbare-1@mail.gmail.com>');
+    const r = (await c.ingestInbound(first)) as { requestId: string };
+    await drain(c);
+    const [send] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
+    expect(send!.headers['In-Reply-To']).toBe('<CAbare-1@mail.gmail.com>');
+    // Their reply names the original only by a bare ID; it still lands in the same conversation.
+    const reply = await c.ingestInbound(inbound({ text: 'Make it 4', from: 'bare@customer.example', subject: 'Re: Rangers', inReplyTo: normalizeReferencesHeader('CAbare-1@mail.gmail.com'), references: normalizeReferencesHeader('CAbare-1@mail.gmail.com') }));
+    expect((reply as { requestId: string }).requestId).toBe(r.requestId);
+  });
+});
+
+describe('Message-ID normalisation', () => {
+  it('brackets bare IDs and leaves bracketed ones alone', () => {
+    expect(normalizeMessageId('abc@mail.gmail.com')).toBe('<abc@mail.gmail.com>');
+    expect(normalizeMessageId(' <abc@mail.gmail.com> ')).toBe('<abc@mail.gmail.com>');
+    expect(normalizeMessageId('')).toBeNull();
+    expect(normalizeMessageId(null)).toBeNull();
+    expect(normalizeReferencesHeader('a@x.com <b@y.com>\r\n c@z.com')).toBe('<a@x.com> <b@y.com> <c@z.com>');
   });
 });

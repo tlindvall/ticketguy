@@ -5,6 +5,7 @@ import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
 import { neighbourhoodFor } from '@/lib/domain/neighbourhoods';
+import { stateCodeFor } from '@/lib/domain/us-states';
 import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
@@ -189,6 +190,20 @@ export class FixtureExtractor implements Extractor {
         state = s;
         ev('city', m[0]);
         break;
+      }
+    }
+    // A state, when no city is named: "they're playing in Connecticut".
+    if (!city) {
+      const sm = /\b(?:in|to|around)\s+(?:the\s+state\s+of\s+)?([a-z]+(?:\s[a-z]+)?)\b/gi;
+      for (const m of t.matchAll(sm)) {
+        // Names only: two letters ("in or out", "in me") are words far more often than states here.
+        const words = m[1]!.split(' ');
+        const code = [m[1]!, words[0]!].filter((w) => w.length > 2).map(stateCodeFor).find(Boolean) ?? null;
+        if (code && !['NY', 'WA', 'DC'].includes(code)) {
+          state = code;
+          ev('state', m[0]);
+          break;
+        }
       }
     }
     // The negation is checked first: "we don't need to sit together" contains "together".
