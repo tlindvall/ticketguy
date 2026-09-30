@@ -62,7 +62,7 @@ const ORDER_FEE = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?(?:fees?|service fees
 /** "a $12.75 fee PER TICKET", "$10 in fees per ticket", "$12.75 per-ticket fee". */
 const PER_TICKET_FEE = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?(?:service\s+)?fees?\s+(?:per|a|each|on each)\s+(?:ticket|seat)\b|\$\s?(\d[\d,]*(?:\.\d{2})?)\s*per[- ](?:ticket|seat)\s+fees?\b/i;
 /** A sentence that is the customer talking, not describing the offer: the offer ends there. */
-const THEIR_WORDS = /^(?:I|I'm|I'd|We|We're|My|Our|Which|Please|These|Those|Neither|Can|Could|Should|What|How|Is|Are|Do|Does|Would|On price|Thanks|Also|Treat|Don't|Using|All (?:the )?offers|All (?:say|state|show|list)|All of (?:them|these)|Both (?:offers|of them|say|are|listings)|Each (?:offer|of them))\b/;
+const THEIR_WORDS = /^(?:I|I'm|I'd|We|We're|My|Our|Which|Please|These|Those|Neither|Can|Could|Should|What|How|Is|Are|Do|Does|Would|On price|Thanks|Also|Treat|Don't|Using|All (?:the )?offers|All (?:say|state|show|list)|All of (?:them|these)|Both (?:offers|of them|say|are|listings)|Each (?:offer|of them|child|kid|adult)|(?:The )?(?:Kids|Children|Adults)|Pairs are|Singles are|Budget|Cap)\b/;
 const DELIVERY = /\b(?:deliver(?:y|ed|s)?|transfer(?:s|red)?|arriv(?:e|es|al)|mobile ticket|e-?ticket)\b/i;
 const NEGATED = /\b(?:no|not|neither|nor|non|isn't|aren't|without|never)\b[^.;]{0,30}$/i;
 const TIME = '(noon|midday|midnight|\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\.?)';
@@ -174,7 +174,14 @@ function offerMarks(t: string, minimum = 2): Array<{ index: number; label: strin
     ...[...t.matchAll(/\b[Tt]he\s+([a-z]+)\s+(listing|offer|option|seller|block)\b/g)].filter((m) => !NOT_A_NAME.test(m[1]!)).map((m) => ({ index: m.index!, label: m[1]!.toLowerCase(), name: `the ${m[1]!.toLowerCase()} ${m[2]}` })),
     ...[...t.matchAll(/\b(First|Second|Third|Fourth|Fifth|first|second|third|fourth|fifth)\s+(seller|listing|offer|option)\b/g)].filter((m) => ORDINAL.test(m[1]!)).map((m) => ({ index: m.index!, label: m[1]!.toLowerCase(), name: `the ${m[1]!.toLowerCase()} ${m[2]}` })),
   ].sort((a, b) => a.index - b.index);
-  return new Set(named.map((m) => m.label)).size >= minimum ? named : [];
+  if (new Set(named.map((m) => m.label)).size >= minimum) return named;
+  // A bare name and a colon, each with its own price: "North: four scattered singles, $400… South: two adjacent pairs,
+  // $480…" (TGQA-R8 S05: the same offers under any labels give the same answer).
+  const colon = [...t.matchAll(/(?:^|[.;!?]\s+)([A-Z][a-z]{2,})\s*:\s/g)]
+    .filter((m) => !OFFER_WORD_NOT_NAME.test(m[1]!) && !/^(?:Note|Budget|Cap|Total|Update|Correction|Offers?|Options?|Also|Details|Terms|Question|Re|Subject|Deadline|Delivery)$/i.test(m[1]!))
+    .map((m) => ({ index: m.index! + m[0].indexOf(m[1]!), label: m[1]!.toLowerCase(), name: m[1]! }));
+  const priced = colon.filter((m, i) => /\$\s?\d/.test(t.slice(m.index, colon[i + 1]?.index ?? t.length)));
+  return new Set(priced.map((m) => m.label)).size >= Math.max(minimum, 2) ? priced : [];
 }
 
 /** `minimum` 1 reads the one offer kept from a comparison ("ignore Offer A, only B"); the default needs two. */

@@ -518,6 +518,20 @@ export class Concierge {
     // A question outside tickets from someone who has theirs ("easy dinner spots near MSG? We already have the game
     // tickets"): said plainly that it isn't something we do, never a ticket search and never "glad you got them,
     // I've stopped watching" (TGQA-R6 1010).
+    // "Is the automatic on-sale alert feature actually available?", "I am only asking whether you can…": what we can
+    // do, answered, and nothing else started: no event or quantity questions, no search (TGQA-R8 S07).
+    if (!this.env.EVENT_ALERTS_ENABLED && capabilityOnly(latestText)) {
+      const who = extraction.performerOrTeam ? titleCaseName(extraction.performerOrTeam) : null;
+      const line = 'No. Automatic on-sale alerts are switched off for now, so I won’t email you when tickets go on sale, and nothing is watching this for you.';
+      const tail = `${who ? `${possessive(who)} official website or Ticketmaster` : 'The official website or Ticketmaster'} will have the on-sale date once one is announced; I haven’t seen one, and I haven’t set up a search or a watch.`;
+      const rev = priorVersion ? req.currentRevision + 1 : 1;
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'On-sale alerts'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${line}</strong></p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `capability:${msg.id}` });
+      await this.transition(req.id, 'closed', 'capability_answered');
+      return { state: 'closed', revision: rev, extraction: merged };
+    }
+
     if (asksOutsideTickets(latestText)) {
       const venueWord = /\b(msg|madison square garden)\b/i.test(latestText) ? 'Madison Square Garden' : /\bbarclays\b/i.test(latestText) ? 'Barclays Center' : 'the venue';
       const line = `Restaurant and bar suggestions are outside what I do: I only help with tickets, so I don’t have anything reliable on places to eat near ${venueWord}.`;
@@ -745,7 +759,9 @@ export class Concierge {
             ? `${conflict.dateNamed ? 'On another date, the next one that fits everything else you said' : 'The next one that fits everything you said'} is ${conflict.suggestion.label}. Want that one instead?`
             : 'I haven’t found one that fits all of that. Tell me which of those to relax, or send a date or link.'
         : null;
-      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => !['event', 'performer_ambiguous'].includes(k) && !k.startsWith('date_')), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && k !== 'performer_ambiguous'), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(qKeys, merged)].slice(0, 3);
+      // One ask per missing thing: the event question already covers its date and place (TGQA-R8 S08).
+      const coveredByEvent = (k: string) => k.startsWith('date_') || k.startsWith('event_') || k === 'performer_ambiguous';
+      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       const countryCheck = !contact!.countryConfirmed && count === 1;
@@ -757,13 +773,16 @@ export class Concierge {
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
       const alertsOff = !this.env.EVENT_ALERTS_ENABLED && (merged.notifyAsked || ON_SALE_ASKED.test(flat(latestText)));
       const capability = [
-        alertsOff ? `I can’t email you when tickets go on sale: automatic on-sale alerts are switched off for now, so nothing is watching this for you. ${merged.performerOrTeam ? `Check ${titleCaseName(merged.performerOrTeam)}’s official website or Ticketmaster` : 'Check the official website or Ticketmaster'} for the on-sale date; I haven’t seen one announced.` : null,
+        alertsOff ? `I can’t email you when tickets go on sale: automatic on-sale alerts are switched off for now, so nothing is watching this for you. ${merged.performerOrTeam ? `Check ${possessive(titleCaseName(merged.performerOrTeam))} official website or Ticketmaster` : 'Check the official website or Ticketmaster'} for the on-sale date; I haven’t seen one announced.` : null,
         TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I don’t have usable price history for ${merged.quantity && merged.quantity > 1 ? `${countWordLower(merged.quantity)} seats together` : 'these seats'} at ${merged.performerOrTeam ? `${titleCaseName(merged.performerOrTeam)} games` : 'these events'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
       ].filter(Boolean).join(' ');
       // The event is settled and only something else is missing (how many tickets): say which one, so "the next home
       // game" is answered, not just filed (TGQA-R6 1007).
       const settled = resolution.kind === 'resolved' ? `${resolution.assumed ? `${resolution.assumed} ` : ''}That’s ${resolution.label}.` : null;
-      const eventNote = [capability || null, settled, noMatch ? `${noMatch}${offerAlert ? (elsewhere.length ? ` If you’d rather wait for a ${placeLabel(merged)} date, reply "let me know" and I’ll email you when one is announced.` : ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.') : ''}` : null].filter(Boolean).join('\n\n') || null;
+      // "Do those still match the schedule?": yes or no first, with the times that decide it (TGQA-R8 S04).
+      const scheduleAsked = resolution.kind === 'ambiguous' && /\b(?:still\s+)?(?:match|fit|meet)\b[^.]*\?|\bdo (?:those|they|these) (?:still )?(?:match|fit|work)\b/i.test(flat(latestText));
+      const scheduleAnswer = scheduleAsked && resolution.kind === 'ambiguous' ? `${resolution.candidates.length === 2 ? 'Both still fit' : 'These still fit'} your schedule: ${((xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join('; ')} and ${xs[xs.length - 1]}` : xs[0]!))(resolution.candidates.map((c) => `${c.name} on ${c.when}${c.at ? ` at ${c.at}` : ''} at ${c.venueName}`))}. I haven’t checked seats or prices for either.` : null;
+      const eventNote = [capability || null, scheduleAnswer, settled, noMatch ? `${noMatch}${offerAlert ? (elsewhere.length ? ` If you’d rather wait for a ${placeLabel(merged)} date, reply "let me know" and I’ll email you when one is announced.` : ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.') : ''}` : null].filter(Boolean).join('\n\n') || null;
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
@@ -780,7 +799,9 @@ export class Concierge {
     // the resale comparison. No prices are quoted, so this goes without review (DECISION_LOG #36).
     // A price to judge ("is $106 a good deal?") gets the full answer, which includes the official sale.
     // Their offers (or a listing they showed) are the question: compared, never answered with "it's on general sale".
-    const official = merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields ? null : await this.officialSale(resolution.event, now);
+    // A direct question about price history or buy-or-wait is answered first, by the full reply (it carries the
+    // official sale too): the sale pointer alone swallowed it (TGQA-R8 S06).
+    const official = merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) ? null : await this.officialSale(resolution.event, now);
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
       await this.queueSend({
@@ -803,7 +824,12 @@ export class Concierge {
     // trip) gets its answer once, seconds later: "I'll look at how the tickets are trading" was promising work
     // that wasn't the job (post-#55 writing review). Anything we assumed still gets the acknowledgment.
     const selfContained = !assumptions.length && (latestOffers.length >= 2 || !!listing.fields || questionsAsked(latestText).deliveryRisk || !!questionsAsked(latestText).parking);
-    if ((revision === 1 || picked || cameFromReferral) && !selfContained) {
+    // When nobody reviews the answer (testing auto-approval, or a price check that goes out on its own), it follows
+    // within seconds: an "I'll look and come back" email just before it is a second email saying nothing (TGQA-R8
+    // writing review 10). With a person reviewing, the wait is real and the acknowledgment says so.
+    const answeredUnreviewed = autoApproveActive(this.env) || merged.quotedPriceCents != null;
+    // What we assumed or picked for them is said in it, so it still goes then.
+    if ((revision === 1 || picked || cameFromReferral) && !selfContained && (!answeredUnreviewed || assumptions.length || picked)) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
@@ -1383,7 +1409,10 @@ export class Concierge {
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
     const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
     const shown = choosePicks(events, 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint) }));
-    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}: ${e.name} at ${v.name}`);
+    // With a start-time rule, the start time is what proves the fit, so it is shown (TGQA-R8 S04, writing review 6).
+    const timed = !!(rules.after || rules.before || rules.exactTime !== null || rules.partOfDay);
+    const startLabel = (e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect) => new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(e.localStartAt).replace(':00', '').replace(/\s?([AP])M/, (_m, x: string) => `${x.toLowerCase()}m`);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${e.name} at ${v.name}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && (genreKept || bounded) ? genre.label : browseLabel(merged.categoryHint);
     const place = areaUsed?.label ?? market.label;
@@ -1572,7 +1601,11 @@ export class Concierge {
       sawEntity = true;
       perEntity = [];
       for (const entity of entities) {
-        const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+        const loaded = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+        // Home as the team's market says, not as a synced name implied: rows written before the sync learned this are
+        // read the same way (TGQA-R8 S03), so "home game at Xfinity Mobile Arena?" is never asked.
+        const homeMk = entity.kind === 'team' ? teamHomeMarket(entity.name) : null;
+        const rows = homeMk ? loaded.map((r) => (r.e.isHome !== false && entity.homeVenueId !== r.v.id && !inMarket(r.v, homeMk) ? { ...r, e: { ...r.e, isHome: false } } : r)) : loaded;
         perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team', attempt.opponent, entity) });
       }
       if (perEntity.some((p) => p.cands.length > 0)) break;
@@ -2088,7 +2121,7 @@ export class Concierge {
     // A made-up example they want read, not bought (A11: "this is a synthetic QA example, not an actual offer").
     const synthetic = !!shown && /\b(?:synthetic|fictional|made[- ]up|hypothetical|imaginary|pretend|mock|sample)\b[^.]{0,40}\b(?:example|offer|screenshot|image|listing)s?\b|\bnot (?:an? )?(?:actual|real) offer\b|\bdon'?t (?:search|check) live (?:inventory|listings)\b|\bnot a real offer\b/i.test(flat(saidInThread));
     const trendAsked = TREND_ASKED.test(flat(said)) ? { noAlerts: NO_ALERTS.test(flat(said)), riskOk: brief.waitRiskTolerance === 'high' } : null;
-    const packet = buildPacket({ trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -2714,7 +2747,7 @@ export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtract
     const isGame = cands.some((c) => c.league);
     // Two performances on one day are told apart by the time: "Sat, Oct 3 at 4pm or at 7pm at Town Hall".
     const sameDay = new Set(cands.map((c) => c.when)).size < cands.length;
-    const opts = cands.map((c) => (isGame ? `${c.when} (${c.name})` : `${c.when}${sameDay && c.at ? ` at ${c.at}` : ''} at ${c.venueName}`));
+    const opts = cands.map((c) => (isGame ? `${c.when}${c.at ? ` at ${c.at}` : ''} (${c.name})` : `${c.when}${sameDay && c.at ? ` at ${c.at}` : ''} at ${c.venueName}`));
     return `Which ${isGame ? 'game' : 'show'}: ${opts.slice(0, -1).join(', ')} or ${opts[opts.length - 1]}?`;
   }
   return 'Which date are you looking at? Send a date or ticket link if you have one.';
@@ -3117,10 +3150,25 @@ const countWordLower = (n: number) => (['zero', 'one', 'two', 'three', 'four', '
  * A question about something other than tickets, asked around a game or show ("easy dinner spots near MSG before a
  * Rangers game?"): food, drink, parking directions. Only when they aren't also asking about tickets themselves.
  */
+/**
+ * A question only about what we can do: "Is the automatic on-sale alert feature actually available?", "I am only
+ * asking whether you can automatically email an on-sale alert. Do not create a search."
+ */
+/** "the Knicks’", "Dua Lipa’s". */
+export function possessive(name: string): string {
+  return /s$/i.test(name.trim()) ? `${name}’` : `${name}’s`;
+}
+
+export function capabilityOnly(text: string): boolean {
+  const t = flat(text);
+  if (!ON_SALE_ASKED.test(t) && !/\bon[- ]sale alerts?\b/i.test(t)) return false;
+  return /\b(?:only|just) asking\b|\bjust say so\b|\b(?:is|are) (?:the |your )?(?:automatic )?(?:on[- ]sale )?(?:alert|alerts) (?:feature )?(?:actually )?(?:available|on|working)\b|\bfeature (?:actually )?available\b|\b(?:do not|don'?t) (?:create|start|set up) (?:a|any)\b[^.?!]{0,30}\b(?:search|watch)\b|\b(?:do not|don'?t) invent\b/i.test(t);
+}
+
 export function asksOutsideTickets(text: string): boolean {
   // A drink minimum or food spend is part of what the ticket costs, not a dinner question.
   const t = flat(text).replace(/\b(?:(?:any|the)\s+)?(?:compulsory|mandatory|required|minimum)?\s*(?:food|drinks?)(?:\s*(?:or|and|\/)\s*(?:food|drinks?))?\s+(?:spend|minimums?|charges?)\b|\b(?:two|2|one|1)?[-\s]*drink\s+minimums?\b/gi, ' ');
-  const food = /\b(?:dinner|lunch|brunch|restaurants?|places? to eat|eat(?:ing)?|food|bars?|drinks? spots?|pre-?game (?:meal|drinks?))\b/i.test(t) && /\b(?:near|around|close to|walk(?:ing)? (?:of|from|distance)|before|after|spots?|places?|recommend|suggest)\b/i.test(t);
+  const food = /\b(?:dinner|lunch|brunch|restaurants?|places? to eat|eat(?:ing)?|food|bars?|drinks? spots?|pre-?game (?:meal|drinks?))\b/i.test(t) && /\b(?:near|around|close to|walk(?:ing)? (?:of|from|distance)|before|after|spots?|places?|recommend|suggest|(?:only|just) (?:about|asking about)|outside (?:your|what you)|say so)\b/i.test(t);
   if (!food) return false;
   // "Tickets and dinner nearby?" still asks for tickets; "we already have the tickets" doesn't.
   const shopping = /\b(?:need|want|looking for|find|get)\b[^.?!]{0,30}\b(?:tickets?|seats?)\b/i.test(t) && !/\b(?:don'?t|do not|no)\s+need\s+(?:any\s+)?(?:new\s+)?tickets?\b/i.test(t);

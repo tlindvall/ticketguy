@@ -1,0 +1,105 @@
+{
+ "source": "Semantic variants of the TGQA-R8 sports scenarios (relabel, reorder, relax/tighten one rule, paraphrase). Synthetic.",
+ "clock": "2026-09-30T19:30:00Z",
+ "cases": [
+  {
+   "id": "v15-relabel",
+   "scenario": "family pairs, other labels, cap stated last",
+   "from": "qa+r8-variant-00@example.com",
+   "name": "Alex Rivera",
+   "subject": "family pairs, other labels, cap stated last",
+   "turns": [
+    {
+     "text": "Four of us for the same Knicks game: two adults, kids 10 and 13. North: four scattered single seats, $400 total all-in. South: two adjacent pairs, clear view, $480 total all-in. East: four together, clear view, $520 total all-in. All immediate transfer. Each child has to sit next to an adult, so pairs are OK but singles are not. Our cap is $500 for everyone."
+    }
+   ]
+  },
+  {
+   "id": "v15-tighten",
+   "scenario": "cap raised, child rule kept",
+   "from": "qa+r8-variant-01@example.com",
+   "name": "Alex Rivera",
+   "subject": "cap raised, child rule kept",
+   "turns": [
+    {
+     "text": "Four of us, two adults and two kids for the same Knicks game. Each child must sit beside an adult; two adjacent adult-child pairs are fine. Budget $600 TOTAL. Offer A: four scattered singles, $400 TOTAL all-in. Offer B: two adjacent pairs, $480 TOTAL all-in. Offer C: four together, $520 TOTAL all-in. All immediate transfer. Which fits?"
+    }
+   ]
+  },
+  {
+   "id": "v17-need-by",
+   "scenario": "deadline as 'need them by', other zone",
+   "from": "qa+r8-variant-02@example.com",
+   "name": "Alex Rivera",
+   "subject": "deadline as 'need them by', other zone",
+   "turns": [
+    {
+     "text": "Same Lakers home game in Los Angeles on October 9, 2026, two adjacent seats. I need them by 12pm Pacific. Offer A is $190 TOTAL all-in, delivery by 2pm New York time. Offer B is $220 TOTAL all-in, delivery by 3pm New York time. Budget $230 TOTAL. Which meets my deadline?"
+    }
+   ]
+  },
+  {
+   "id": "v18-sellers",
+   "scenario": "named sellers, reversed order",
+   "from": "qa+r8-variant-03@example.com",
+   "name": "Alex Rivera",
+   "subject": "named sellers, reversed order",
+   "turns": [
+    {
+     "text": "Two seats together for the same Dodgers game. Seller Blue: $84.25 each including every fee. Seller Red: $72.50 each before fees plus $23.75 for the whole order, no other charges. Both immediate transfer. $180 total budget. Which is cheaper in total?"
+    }
+   ]
+  },
+  {
+   "id": "v09-garden",
+   "scenario": "home at the Garden, no MSG",
+   "from": "qa+r8-variant-04@example.com",
+   "name": "Alex Rivera",
+   "subject": "home at the Garden, no MSG",
+   "turns": [
+    {
+     "text": "2 seats for the next Knicks home game at the Garden, $50 total with fees, together."
+    }
+   ]
+  },
+  {
+   "id": "v16-exclude",
+   "scenario": "exclusion phrased as excluding",
+   "from": "qa+r8-variant-05@example.com",
+   "name": "Alex Rivera",
+   "subject": "exclusion phrased as excluding",
+   "turns": [
+    {
+     "text": "Knicks or Nets home games in November 2026, Saturday or Sunday only, starting after 7pm. Excluding UBS Arena and Prudential Center. Two together, $300 total."
+    }
+   ]
+  },
+  {
+   "id": "v25-para",
+   "scenario": "capability paraphrase",
+   "from": "qa+r8-variant-06@example.com",
+   "name": "Alex Rivera",
+   "subject": "capability paraphrase",
+   "turns": [
+    {
+     "text": "Quick question only: does your service send automatic emails when tickets go on sale? Don't start a search for me."
+    }
+   ]
+  },
+  {
+   "id": "v26-para",
+   "scenario": "dinner paraphrase follow-up",
+   "from": "qa+r8-variant-07@example.com",
+   "name": "Alex Rivera",
+   "subject": "dinner paraphrase follow-up",
+   "turns": [
+    {
+     "text": "Where should we eat near Barclays before the Nets game? We already have tickets."
+    },
+    {
+     "text": "Just asking about food, not tickets. If that's not something you do, say so."
+    }
+   ]
+  }
+ ]
+}

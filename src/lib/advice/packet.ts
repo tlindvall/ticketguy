@@ -1,5 +1,6 @@
 import { entryFailure } from './concert-terms';
-import { fromVenueMinutes, offerTotal, timeLabel, venueZoneName, type PartyTerms, type TextOffer } from './text-offers';
+import { fromVenueMinutes, minutesOf, offerTotal, timeLabel, venueZoneName, type PartyTerms, type TextOffer } from './text-offers';
+import { localStart } from '@/lib/domain/event-constraints';
 import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
@@ -109,6 +110,8 @@ export type BuildPacketArgs = {
   subject?: SubjectListing | null;
   /** The event's own local date and start, to check the listing against. */
   eventLocalDate?: string | null;
+  /** The event's start, to size delivery margins in its venue's zone. */
+  eventStartAt?: Date | null;
   /** Whether the buyer said they need accessible seating. */
   accessibilityRequired?: boolean;
   /** The venue's time zone, for saying when something was checked. */
@@ -225,7 +228,17 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
       : 'Fees are extra, so the total at checkout will be higher than the listed price.');
   }
   const byTime = sub.deliveryText ? DELIVERY_TIME.exec(sub.deliveryText)?.[1] ?? null : null;
-  if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) out.push(`The tickets are delivered by ${byTime ? `${byTime.replace(/\s+/g, '').toLowerCase()} on ` : ''}${shortDate(sub.deliveryBy)}, the day of the event. That’s common for resale, but it leaves no time to fix a problem.`);
+  if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) {
+    // The real margin, not "no time": "the latest promised transfer is 4pm, 3.5 hours before the 7:30pm start"
+    // (TGQA-R8 S10). A deadline is a promise, not a delivery that has happened.
+    const by = byTime ? minutesOf(byTime.replace(/\s+/g, '').toLowerCase()) : null;
+    const start = a.eventStartAt && a.timeZone ? localStart(a.eventStartAt, a.timeZone).minutes : null;
+    const gap = by !== null && start !== null && sub.deliveryBy === a.eventLocalDate ? start - by : null;
+    const hours = gap !== null ? (gap % 60 === 0 ? `${gap / 60} hour${gap === 60 ? '' : 's'}` : `${Math.floor(gap / 60) ? `${(gap / 60).toFixed(1).replace(/\.0$/, '')} hours` : `${gap} minutes`}`) : null;
+    out.push(gap !== null && gap > 0
+      ? `The latest promised transfer is ${timeLabel(by!)} on ${shortDate(sub.deliveryBy)}, ${hours} before the ${timeLabel(start!)} start. That’s common for resale, but a late transfer would leave little room to sort it out.`
+      : `The tickets are promised by ${byTime ? `${byTime.replace(/\s+/g, '').toLowerCase()} on ` : ''}${shortDate(sub.deliveryBy)}, the day of the event. That’s common for resale, but a late transfer would leave little room to sort it out.`);
+  }
   else if (!sub.deliveryBy && !sub.deliveryText) out.push(`${missing('when the tickets will be delivered')}. Check the listing’s delivery date before you buy.`);
   if (sub.restrictionCodes.includes('obstructed_view')) out.push('It notes a limited or obstructed view.');
   if (sub.section && !sub.seatNumbers) out.push(`${missing('seat numbers')}. Check the listing if you want to know exactly where you’ll sit.`);
@@ -328,6 +341,8 @@ function alternativesClaim(a: BuildPacketArgs, alt: AlternativesResult): ClaimRe
 /** Whether we have a verified alternative (checked by a person or a licensed source, all-in total), said plainly. */
 function verifiedClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord | null {
   if (a.best) return null; // C_BEST names it, with its link
+  // No source searched and no market shown: the verdict already says it can't be compared yet (TGQA-R8 S10).
+  if (!a.sourcesChecked.length && !a.market?.visible) return null;
   return { id: 'C_VERIFIED', kind: 'coverage', text: 'I haven’t found a verified alternative I can link you to yet, with a checked all-in price.', values: {}, scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: null, limitations: ['no_verified_inventory'], customerVisible: true };
 }
 
@@ -803,7 +818,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
         ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. But if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
         : a.best || marketShown
           ? '' // the verified option or the resale figures below are the comparison
-          : `I can’t see what sellers are charging for this show yet, so I can’t say whether that’s low or high.`;
+          : a.subject
+            ? '' // the listing's own verdict already says the market can't be compared yet: said once (TGQA-R8 S10)
+            : `I can’t see what sellers are charging for this ${a.eventNoun ?? 'event'} yet, so I can’t say whether that’s low or high.`;
     claims.push({
       id: 'C_QUOTE',
       kind: 'quoted_price',
@@ -1149,14 +1166,15 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     text: noMarket
       ? marketShown
         ? `Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked, and they can move quickly.`
-        : `I can’t see live resale listings for this show yet, so this doesn’t compare other sellers’ prices.`
+        : `I can’t see live resale listings for this ${a.eventNoun ?? 'event'} yet, so this doesn’t compare other sellers’ prices.`
       : `Checked: ${a.sourcesChecked.join(', ')}.${failed.length ? ` Couldn’t reach: ${failed.join(', ')}.` : ''} Prices can change before checkout.`,
     values: { checked: a.sourcesChecked.length, unavailable: unavailable.length },
     scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
     evidenceIds: [],
     methodVersion: null,
     limitations: [],
-    customerVisible: !comparing,
+    // With a listing we read and no market to set it against, its verdict already says so; once is enough.
+    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote)),
   });
   if (a.policy.nextCheckpointAt) {
     claims.push({

@@ -954,3 +954,38 @@ Every place that picks an event applies them: resolution, the settled-event chec
 **Preference and deletion flows.** An opt-out gets one acknowledgment built from the stored suppressions. An exact CONFIRM verifies a pending deletion before any other reading of the email.
 
 **Test API.** It exposes the trace, the stops, the deletion status, the kept offers with where each came from, and each email's HTML, for test conversations only.
+
+## 60. Hard rules are checked on every path, whatever the model left out
+
+TGQA-R8 showed the model path leaving fields empty that the rules path fills: no city, no resolved day, a budget without budget words. Every hard rule is therefore read again from the customer's own words and checked before anything is ranked or linked.
+
+**Budget.** The comparison keeps the budget they gave however it was worded ("$500 TOTAL"). It drops it only when the amount is one of their offers' own prices.
+
+**Seating.** How the party must sit is its own requirement: all together, adjacent pairs with each child beside an adult, or anywhere. The latest message wins. Adjacent pairs pass the pairs rule, and scattered singles don't.
+
+**Deadline.** Their deadline is read wherever they state it, in any of these forms:
+- "my deadline is 1pm New York";
+- "need them by 12pm Pacific";
+- "can accept delivery until 3pm", even in a sentence that also mentions an offer.
+
+It is stored with its zone and compared with each offer's promised transfer, and the reply shows both clocks. A promised time is never called a completed transfer.
+
+**Home and venue.**
+- A game outside the team's home market is away, whatever the synced name implies ("Knicks v 76ers" in Philadelphia). The sync, the resolver and settled events all apply this.
+- Well-known venue nicknames are built in ("MSG", "the Garden", "Barclays", "UBS", "Prudential").
+- A venue they exclude is never searched.
+- A date that breaks a rule is named with the reason. The alternatives are offered as another date, and the reply never claims they fit everything.
+- "Weekend" means Saturday and Sunday.
+
+**Dates.** When the model leaves the day unresolved, the deterministic reader fills it in from the model's own date phrase or the email ("Monday October 5", "this coming Friday", "fri"). The timezone comes from the venue, else the team's market, else the pilot market's. The reader never pins one weekday out of "Saturday or Sunday".
+
+**Offers.**
+- Offers are one record each across the thread. A later mention updates only what it states, a renamed offer ("Offer A (Gold)") is the same offer, and a follow-up that changes a requirement is judged on the same offers.
+- Labels can be letters, names, sellers or "Name:".
+
+**Routing.** A buy-or-wait question is answered before the official-sale pointer. The following are answered and the request closed, with no ticket intake:
+- a capability-only question about on-sale alerts;
+- a food-only follow-up;
+- a question about the stops on file.
+
+**One email.** An answer that goes out unreviewed (testing auto-approval, or an auto-sent price check) is not preceded by a "checking your options" acknowledgment unless that acknowledgment carries an assumption or a pick.
