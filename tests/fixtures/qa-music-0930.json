@@ -1,0 +1,158 @@
+[
+  {
+    "id": "01",
+    "scenario": "Brooklyn small-club house and techno discovery",
+    "messages": [
+      "Hey, find me something good at Elsewhere in Brooklyn on Friday Oct 2 or Saturday Oct 3, 2026. Two of us, both 27, up to $60 each including fees. We want house or techno DJ sets, not an indie band or dubstep. Which night would you pick and why? Please link the actual event and something to listen to for the artist.",
+      "Only Elsewhere, Oct 2 or 3. Their official calendar has Dusky and dj poolboi on Friday Oct 2: https://www.elsewhere.club/events/1992171479523 . Is this a good fit for house/techno, and what do you know about age, door time and price including fees? We are both 27 and the cap is still $60 each. Don't send me a different venue.",
+      "This is a standing club night, so there isn't a seat section to send. The official Elsewhere page I sent states doors 10:30pm, 21+, and $30.44 excluding service fees, with an Eventbrite buy link. Can you explain what we know from that and what remains unverified? I only want to know if it fits two 27-year-olds under $60 each, and whether the stated time is doors or Dusky's set time."
+    ]
+  },
+  {
+    "id": "02",
+    "scenario": "Stadium pop; unconfirmed Dua Lipa premise",
+    "messages": [
+      "Hey, can you get me two tickets to Dua Lipa at MetLife Stadium? I'm in New York but happy to go to East Rutherford. Up to $400 total including fees. I don't have a date; first tell me if she actually has an upcoming show there. If she doesn't, suggest a genuinely similar big pop show in the New York/New Jersey area, not a Dua Lipa tribute or DJ party.",
+      "Thanks. I don't need Dua Lipa specifically. Could you choose two upcoming big pop shows anywhere in NYC or nearby New Jersey? Two adults, up to $400 total including fees. We like Dua Lipa and Sabrina Carpenter. I don't have another artist or date to give you; discovering a suitable show is what I need help with."
+    ]
+  },
+  {
+    "id": "03",
+    "scenario": "Chicago country discovery",
+    "messages": [
+      "I'm in Chicago Oct 8-10, 2026. Can you find a country gig for three adults, under $75 each including fees? We like Shaboozey and Kacey Musgraves. Original artists please, not a tribute band. Give me your best two picks, why they fit, and event links.",
+      "Shaboozey is at the Aragon Ballroom in Chicago on Oct 9, 2026. Why wasn't that your first recommendation when I said I like him? Also please exclude cover bands and anything outside Chicago. Which of your options meets those requirements, and why would you pick it? Three adults, $75 each with fees."
+    ]
+  },
+  {
+    "id": "04",
+    "scenario": "Los Angeles mainstream pop; seated preference",
+    "messages": [
+      "Find a mainstream pop concert around Los Angeles Oct 16-18, 2026 for two adults. We like Dua Lipa, Sabrina Carpenter and Billie Eilish. $125 each max with fees. We want actual artists, not tribute nights, and we'd prefer seats to standing. Inglewood is fine. What are our best options?"
+    ]
+  },
+  {
+    "id": "05",
+    "scenario": "Nashville country; concerts versus cover bars",
+    "messages": [
+      "Hey, I'm taking my dad to Nashville Oct 9 or 10, 2026. Two adults, $160 total with fees. We'd love a real country artist in a smaller room, not a Broadway bar with a cover band. We like Tyler Childers and Zach Bryan. What would you recommend? Link the show and let me know if it's seated or standing, if you can verify that."
+    ]
+  },
+  {
+    "id": "06",
+    "scenario": "Austin electronic discovery",
+    "messages": [
+      "Any good house or minimal techno DJ nights in Austin on Oct 9 or 10, 2026? Three of us, all over 21, $60 each including fees. Not EDM festivals or bass music. I don't know the local venues. Pick two good options and link the event and artist so I can check the vibe."
+    ]
+  },
+  {
+    "id": "07",
+    "scenario": "Miami late-night club discovery",
+    "messages": [
+      "I'm in Miami Oct 2-3, 2026 and want a proper house night, more Keinemusik than big-room EDM. Two adults, $80 each max including fees. We won't get there until about 1am. Recommend a night and flag any ticket that only allows entry before midnight. No need to invent set times if they aren't published."
+    ]
+  },
+  {
+    "id": "08",
+    "scenario": "Seattle country with a travel boundary",
+    "messages": [
+      "Can you find a country show in Seattle Oct 9-10, 2026 for two adults under $100 each with fees? Within 20 miles of downtown Seattle only; Portland isn't an option. We like Kacey Musgraves and Chris Stapleton. Original performers, not tribute acts. Link the actual show and tell me what you know about prices."
+    ]
+  },
+  {
+    "id": "09",
+    "scenario": "Atlanta pop with minor admission constraints",
+    "messages": [
+      "Hey, my daughter and her friend are both 16 and want a pop concert in Atlanta Oct 9 or 10, 2026. Two tickets, $80 each max with fees. They like Dua Lipa and Olivia Rodrigo. They'll go without an adult. Please only suggest events you can verify admit unaccompanied 16-year-olds, or clearly say that you couldn't verify it.",
+      "Did you actually check whether either 16-year-old can enter without a guardian? That's the deciding factor, not just the genre. Don't assume an adult can accompany them; none will. Please answer that question directly and tell me which admission policies, if any, you verified."
+    ]
+  },
+  {
+    "id": "10",
+    "scenario": "Phoenix electronic; single night only",
+    "messages": [
+      "Find us an electronic gig in Phoenix Oct 9 or 10, 2026. Four adults, $60 each all-in. We want a one-night house/techno event, not a multiday festival pass. Scottsdale or Tempe is fine. What are the best two options, and can you link both the artist and event?"
+    ]
+  },
+  {
+    "id": "11",
+    "scenario": "Hawaii is US; national coverage",
+    "messages": [
+      "We're in Honolulu Oct 16-18, 2026. Two adults, up to $100 each including fees. Any worthwhile live country or Americana gigs on Oahu? We can't fly to another island. Please give actual event links if you find anything; if you can't check this area, just tell me."
+    ]
+  },
+  {
+    "id": "12",
+    "scenario": "San Francisco pop; standing versus seated",
+    "messages": [
+      "Looking for a pop or indie-pop gig in San Francisco Oct 9-11, 2026. Two adults, $90 each with fees. No Oakland or San Jose this time. I can stand but my friend needs a guaranteed seat, so GA standing doesn't work. What can you genuinely recommend and which seating details still need checking?",
+      "No Oakland, and my friend cannot stand. Mastodon isn't the pop/indie-pop vibe we asked for. Please keep this to San Francisco Oct 9-11 and tell me whether you actually verified a guaranteed seat for any of your suggestions. Don't recommend GA standing as a substitute."
+    ]
+  },
+  {
+    "id": "13",
+    "scenario": "Elsewhere Presents is a promoter; physical venue differs",
+    "messages": [
+      "I'm interested in Elsewhere Presents: Loukeman on Friday Oct 2, 2026. The calendar says Market Hotel. Is this actually at Elsewhere in Brooklyn? I was planning to meet friends in Elsewhere's Hall. Two adults, $100 total, but before we buy I need the correct venue and event link. https://www.elsewhere.club/events?page=1&type=live",
+      "Here is the official promoter page: https://www.elsewhere.club/presents/1990908204032 . It says Loukeman, Friday October 2, 2026, Market Hotel, doors 11pm. Please answer the venue question: should we go to Market Hotel or Elsewhere's Hall? The page's generic footer has Elsewhere directions, but that may not be this performance's location."
+    ]
+  },
+  {
+    "id": "14",
+    "scenario": "One venue, independent performances and room access",
+    "messages": [
+      "Two of us want Kiefer at Elsewhere on Oct 2, 2026. I have two quotes, both fees included: A is $30 each for Kiefer in The Hall at 7pm; B is $20 each for a different DJ event in Zone One at 10:30pm. Does buying B let us into Kiefer too because it's all Elsewhere? Which one should we buy to see Kiefer? Don't treat a cheaper ticket to a different event as a deal.",
+      "Kiefer, Friday October 2, 2026 at Elsewhere's Hall in Brooklyn. Please use my copied quotes: Offer A, two Kiefer Hall concert admissions, $60 TOTAL including fees. Offer B, two separate Zone One DJ-event admissions, $40 TOTAL including fees, Kiefer not on its lineup. We want Kiefer. Which ticket is valid for what we want? Elsewhere's FAQ says most events are separately ticketed: https://www.elsewhere.club/help . Availability is not the question.",
+      "Here is the exact official Kiefer event: https://www.elsewhere.club/events/1992080179442 . It says Oct 2, 2026, The Hall, 7pm doors, 16+, and GA tickets $33.33 including fees ($25 face value plus $8.33 fees). Two adults. Does a separate $20 Zone One DJ ticket let us into this Kiefer show? Please answer the room-access question and use the correct event page, even if you can't verify current availability."
+    ]
+  },
+  {
+    "id": "15",
+    "scenario": "Concert ticket entry cutoff; next calendar day",
+    "messages": [
+      "I have two ticket options for the same house night in Miami. It starts Friday Oct 2, 2026 at 11pm; we arrive Saturday Oct 3 at 1am. Both prices include fees. A is $25 each, marked 'entry before midnight'; B is $40 each, marked 'anytime entry'. Two of us, budget $90 total. Is A actually usable for us, or which one should we choose? These are quotes I copied; I don't need you to verify availability.",
+      "The event starts Friday October 2, 2026 at 11pm Miami local time. We arrive two hours later, at 1am Saturday October 3. That is not an ambiguous date. Just compare the ticket restrictions I gave you: Offer A, $50 total with fees, entry BEFORE MIDNIGHT; Offer B, $80 total with fees, ANYTIME ENTRY. Can A be used at 1am? Which fits our $90 budget and arrival? Don't silently pick a different event."
+    ]
+  },
+  {
+    "id": "16",
+    "scenario": "VIP upgrade excludes admission",
+    "messages": [
+      "For The Chicks at The Auditorium in Chicago on Oct 3, 2026, I need two actual concert tickets. Here are two copied offers, both fees included: A, VIP merchandise upgrade, $60 each, 'concert ticket NOT included'; B, balcony concert admission, two seats together, $110 each. Budget $250 total. Which offer gets both of us into the show? If A needs an additional admission ticket, don't call it the cheaper concert ticket.",
+      "Same October 3, 2026 Chicks show at The Auditorium in Chicago. Offer A is two VIP merchandise upgrades for $120 TOTAL all-in; the terms explicitly say CONCERT TICKET NOT INCLUDED. Offer B is two ordinary balcony concert admission seats together for $220 TOTAL all-in. Both say immediate delivery. Our $250 TOTAL budget is for the pair. Which offer gets us into the concert? Please compare A and B using these terms, not a market average.",
+      "Offer A does NOT include a concert ticket. It's just merchandise, not ordinary seats. Neither of us has an admission ticket yet. Offer B is the only actual concert admission: two balcony seats for $220 total including all fees. Please correct your recommendation. Buying A would leave us unable to enter the concert."
+    ]
+  },
+  {
+    "id": "17",
+    "scenario": "Festival admission versus shuttle and extra days",
+    "messages": [
+      "We're going to a Las Vegas electronic festival together and only want Saturday. Two adults. These copied quotes include all fees: A is a Saturday shuttle-only pass, $70 each, no festival admission; B is Saturday festival admission, $160 each; C is a three-day festival pass, $240 each. Our admission budget is $350 total and we have our own ride. Which option meets the request, and what would it cost for both of us? I'm asking you to compare these quotes, not look up availability."
+    ]
+  },
+  {
+    "id": "18",
+    "scenario": "Tribute show versus original mainstream artist",
+    "messages": [
+      "Is '$30 Dua Lipa Dance Party' in Boston a cheap way to see Dua Lipa herself? The description says 'a DJ spins all your favorite Dua tracks; artist will not appear'. Two of us, $100 total. I only want a concert with the actual artist performing. Should I buy this or skip it? Don't search for another city yet.",
+      "I'm not asking for a date search. The seller's own description says Dua Lipa will NOT appear. It is a DJ dance party playing her recordings. If I want to see Dua Lipa herself perform, should I buy this $30 ticket or skip it? Please answer that directly, without asking me to find a different concert first."
+    ]
+  },
+  {
+    "id": "19",
+    "scenario": "Denver metro country and parking versus admission",
+    "messages": [
+      "Ella Langley at Red Rocks on Oct 7, 2026: two adults, budget $200 total. A copied offer says 'Parking only, no event admission', $45 total. B says two general-admission concert tickets, $85 each including fees. Can either get both of us into the concert? We're staying in Denver; please flag that Red Rocks is in Morrison. https://www.axs.com/venues/101164/red-rocks-amphitheatre-morrison-tickets?skin=redrocks",
+      "You mixed up the prices. Offer A is a PARKING PASS for $45 TOTAL and includes ZERO concert admissions. Offer B is TWO GA CONCERT ADMISSIONS for $170 TOTAL including all fees ($85 each). Ella Langley, Red Rocks in Morrison, Oct 7, 2026. Our budget is $200 TOTAL for the pair. Which offer gets both of us into the show and what do the concert tickets cost?",
+      "Offer A includes ZERO event admissions. Its $45 price is parking for the car only; no amount of extra fees turns it into a concert ticket. Neither of us has a concert ticket yet. Offer B includes two GA concert admissions for $170 total with all fees. Please exclude A from the admission comparison, say what the two actual concert tickets cost, and correct the idea that A could beat B."
+    ]
+  },
+  {
+    "id": "20",
+    "scenario": "Cross-city country value including travel costs",
+    "messages": [
+      "Help me compare two country concert plans for two adults. Dallas show: tickets $140 each with all fees and $20 total local transport. Austin show: tickets $100 each with all fees, but $110 total round-trip fuel and parking. Same artist, equivalent seats; we can do either date. Ignore live availability: using these numbers, which whole trip is cheaper and by how much? Our trip budget is $320 total.",
+      "Nothing is in New York. This is a calculation for Dallas versus Austin, not a search. Two people. Dallas: 2 x $140 tickets plus $20 total transport. Austin: 2 x $100 tickets plus $110 total travel. Every amount includes fees. Both dates and seats are suitable. Which whole trip is cheaper, by how much, and do both fit the $320 total trip budget? You already have every number you need."
+    ]
+  }
+]
