@@ -4,6 +4,7 @@ import { SvgLibrary } from '@/components/public/Landing';
 import { HeroDemo } from './HeroDemo';
 import { CopyAddress } from './CopyAddress';
 import { HeroVideo } from './HeroVideo';
+import { SourceUniverse } from './SourceUniverse';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
@@ -16,7 +17,7 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and an illustrative reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + composer → example reply → request starters → how it works → demo animation → FAQ →
+ * Order: promise + composer → example reply → request starters → source universe → how it works → demo animation → FAQ →
  * closing invitation. The animation is an optional demonstration lower down; the headline and the composer
  * carry the first screen on their own.
  *
@@ -153,6 +154,8 @@ export function InboxHome({ state, address, preview = false }: Props) {
             ))}
           </ul>
         </section>
+
+        <SourceUniverse />
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>

@@ -100,6 +100,51 @@
 .tgx .hero-cursor.is-down { width: 21px; height: 32px; }
 .tgx .hero-demo .mascot { right: -58px; bottom: auto; top: 150px; z-index: 0; }
 
+/* Source universe: Ticket Guy at the centre, the sources it knows in slow orbit (CSS only) */
+.tgx .universe-section { overflow-x: clip; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); align-items: center; gap: clamp(24px, 4vw, 56px); padding-block: clamp(40px, 6vw, 80px); border-top: 1px solid var(--line); }
+.tgx .universe-copy h2 { font-size: clamp(30px, 3.6vw, 48px); line-height: 1; font-weight: 800; letter-spacing: -.04em; text-wrap: balance; }
+.tgx .universe-copy p { margin-top: 16px; max-width: 44ch; font-size: 17px; line-height: 1.55; color: var(--muted); }
+.tgx .universe-stats { display: flex; flex-wrap: wrap; gap: 14px 28px; margin: 26px 0 0; }
+.tgx .universe-stats div { padding-top: 10px; border-top: 2px solid var(--ink); min-width: 120px; }
+.tgx .universe-stats dt { font: 13px/1.3 var(--mono); color: var(--muted); }
+.tgx .universe-stats dd { margin: 4px 0 0; font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+.tgx .universe { position: relative; width: 100%; max-width: 760px; margin-inline: auto; aspect-ratio: 1; container-type: inline-size; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #fff 0 16%, rgba(215, 243, 107, .22) 16.2% 25%, rgba(20, 36, 56, .035) 25.2% 50%, transparent 50.2%); }
+.tgx .universe-dust { position: absolute; inset: 4%; border-radius: 50%; background-image: radial-gradient(var(--ink) .9px, transparent 1.4px); background-size: 23px 23px; opacity: .1; -webkit-mask: radial-gradient(circle, transparent 12%, #000 40%, transparent 70%); mask: radial-gradient(circle, transparent 12%, #000 40%, transparent 70%); }
+.tgx .orbit { position: absolute; left: 50%; top: 50%; width: 0; height: 0; animation: tgx-spin var(--d) linear infinite; }
+.tgx .orbit-rev { animation-direction: reverse; }
+.tgx .orbit-ring { position: absolute; left: 0; top: 0; width: calc(var(--r) * 2); height: calc(var(--r) * 2); margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1); border: 1px dashed rgba(20, 36, 56, .28); border-radius: 50%; }
+.tgx .planet { position: absolute; left: 0; top: 0; width: 0; height: 0; transform: rotate(var(--a)) translateX(var(--r)) rotate(calc(var(--a) * -1)); }
+.tgx .planet-up { position: absolute; left: 0; top: 0; width: 0; height: 0; animation: tgx-spin var(--d) linear infinite reverse; }
+.tgx .orbit-rev .planet-up { animation-direction: normal; }
+.tgx .planet-pill { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); white-space: nowrap; padding: .38em .8em; border: 1px solid var(--ink); border-radius: 999px; background: var(--paper); font: 600 1.55cqw/1.1 var(--sans); letter-spacing: -.01em; box-shadow: 2px 2px 0 rgba(20, 36, 56, .12); }
+.tgx .planet-pill::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; border-radius: 50%; background: var(--desk); border: 1px solid var(--ink); vertical-align: .05em; }
+.tgx .planet-pill.is-core { background: var(--lime); font-size: 1.75cqw; font-weight: 700; }
+.tgx .planet-pill.is-core::before { background: var(--ink); }
+.tgx .universe-core { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; align-content: center; gap: 2px; width: 20cqw; height: 20cqw; transform: translate(-50%, -50%); border-radius: 50%; background: var(--ink); color: var(--cream); box-shadow: 0 0 0 8px rgba(215, 243, 107, .45), 6px 6px 0 8px rgba(20, 36, 56, .08); }
+.tgx .universe-mark { width: 8cqw; height: 6cqw; color: var(--lime); transform: rotate(-8deg); }
+.tgx .universe-core span { font-size: 2.8cqw; font-weight: 800; letter-spacing: -.045em; }
+.tgx .universe-note { grid-column: 1 / -1; font: 12px/1.5 var(--mono); color: var(--muted); }
+@keyframes tgx-spin { to { transform: rotate(360deg); } }
+.tgx .universe-list { display: none; }
+@container (max-width: 440px) {
+  .tgx .planet-pill { font-size: 0; padding: 3px; box-shadow: none; }
+  .tgx .planet-pill::before { width: 7px; height: 7px; margin: 0; }
+  .tgx .planet-pill.is-core { font-size: 0; }
+  .tgx .universe-core span { font-size: 11px; }
+}
+@media (max-width: 1100px) {
+  .tgx .universe-section { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .tgx .universe-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .tgx .universe-list li { padding: 4px 10px; border: 1px solid var(--ink); border-radius: 999px; background: var(--paper); font-size: 13px; font-weight: 600; }
+  .tgx .universe-list li.is-core { background: var(--lime); }
+  .tgx .universe-list li.is-more { border-style: dashed; background: none; color: var(--muted); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tgx .orbit, .tgx .planet-up { animation: none; }
+}
+
 /* Example reply: a static, clearly illustrative email */
 .tgx .example { padding-block: clamp(40px, 6vw, 72px); border-top: 1px solid var(--line); }
 .tgx .reply { max-width: 880px; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .07); }
