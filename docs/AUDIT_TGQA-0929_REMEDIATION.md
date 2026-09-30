@@ -281,3 +281,17 @@ The reviewer's copy of the round-1 report was cut off during TG-B06 (104 of 220 
 - **Production state:** the A07 watch and the persisted R02-F1 brief were checked only in replay, never against production data.
 - **A10 seven-day group trend:** the claim is gated on comparable history, which the replay can't show.
 - **A single-offer model read of a two-offer message** is still stored as listing evidence. `C_OFFERS` now answers the question, but that stored read is unused noise.
+
+---
+
+# Round 3: usefulness, wider wording, backend proof (PR #55)
+
+**Status:** PR #55, not merged or deployed.
+
+| Point from the review | What changed | Evidence |
+|---|---|---|
+| Honest isn't useful: "I haven't checked" leaves the customer shopping | Staffed comparison pilot, off until `STAFF_COMPARISON_OWNER` names a staff address; up to 20 customer requests. The email says a person is looking and will reply in the thread with options and all-in totals, or say nothing fits. The request waits on the owner, who is alerted with what to record. Staff record verified manual offers and re-run research; the existing engine sends the comparison. `/admin/pilot` shows offered, answered, open, median time and the sellers checked. | `tests/acceptance/staff-comparison-pilot.test.ts`: no owner means no promise; owner handoff and alert; staff answer and measurement; limit, with staff tests not counted |
+| Beyond exact wording: "I live in London, UK, but want Hamilton in New York" | The abroad guard fires only when the event is abroad. Where someone lives, or where someone else is, never makes a US event "abroad". That example is still declined, by the residence rule (US customers only, ENGINEERING_SPEC §1), with the residence reason. | Regression cases `event.resident_abroad_us_event` and `event.someone_else_abroad` |
+| Cancellation needs backend proof | Found and fixed: a customer's cancellation left approved alert sends queued; dispatch looked alert approvals up in the wrong table, which would have blocked valid alerts and ignored cancelled watches. | `tests/acceptance/cancellation-isolation.test.ts`, on two threads with queued alerts, an event alert and a repeated cancel on the closed thread. It fails when either fix is removed. |
+
+**Decision needed from the owner:** should non-US residents buying US events be served? The launch boundary says no. Tourists buying US shows may be a large share of demand, but changing it needs the privacy and legal review the spec calls for (§ "US-only scope still needs appropriate privacy/legal review").

@@ -127,6 +127,11 @@ export type BuildPacketArgs = {
    * meets them: each is said as not yet checked, not implied by a market figure (audit replay A05-R1).
    */
   requirements?: string[];
+  /**
+   * The staffed comparison pilot has taken this request: a named owner will look for seats that meet the
+   * requirements by hand and reply in the thread. Only set when that owner exists (DECISION_LOG #54).
+   */
+  staffFollowUp?: { hours: string } | null;
   /** Offers they laid out in their own words, two or more, compared as their question (retest R2-B02). */
   textOffers?: TextOffer[];
   /** "game" for sports, "show" otherwise. */
@@ -412,7 +417,7 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
 function followUpQuestions(a: BuildPacketArgs): string[] {
   const out: string[] = [];
   const sub = a.subject ?? null;
-  if (!a.quote && !a.best && !sub) {
+  if (!a.quote && !a.best && !sub && !a.staffFollowUp) {
     // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link
       ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
@@ -806,12 +811,26 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_REQS',
       kind: 'coverage',
-      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${((xs) => (xs.length === 1 ? xs[0]! : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
+      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${((xs) => (xs.length === 1 ? xs[0]! : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check automatically has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
       values: { requirements: reqs.length },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
       methodVersion: null,
       limitations: ['requirements_unverified'],
+      customerVisible: true,
+    });
+  }
+  if (a.staffFollowUp) {
+    // Owned, and said with its limits: what the person will do, where the answer comes, and no promised result.
+    claims.push({
+      id: 'C_STAFF',
+      kind: 'coverage',
+      text: `So you don’t have to do the shopping: a person on our team is now looking for seats that meet ${a.requirements?.length ? (a.requirements.length === 1 ? 'it' : 'all of them') : 'what you asked for'}, checking sellers by hand. They’ll reply in this thread with the options they find and their all-in totals, or tell you plainly if nothing fits. The team replies from ${a.staffFollowUp.hours}.`,
+      values: {},
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['staff_assisted'],
       customerVisible: true,
     });
   }

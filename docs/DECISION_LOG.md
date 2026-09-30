@@ -819,3 +819,31 @@ The remediation review and the live retest after #53 found remaining floor-marku
   - `C_SALES`: "asking prices, not sales".
   - The official-sale reply is deduplicated per revision.
   - The headline shows the budget.
+
+## 54. A person finds the seats, once a person owns it; cancellation proven in the database; London is not the event
+
+Response to the review of round 2.
+
+**Accuracy is not usefulness.** "I haven't checked those requirements" is honest, but it leaves the customer to do the shopping. The staffed comparison pilot closes that gap for up to 20 customer requests. The next section covers how it works.
+
+**Staffed comparison pilot.**
+- **When it runs:** nothing verified meets the request's requirements (or the customer asked to compare) and a named owner exists (`STAFF_COMPARISON_OWNER`, a staff address).
+- **What the customer sees:** the email says a person is looking, checking sellers by hand, and will reply in the thread with options and all-in totals, or say plainly that nothing fits. It doesn't ask the customer to go and find seats.
+- **Handoff:** once the email is sent, the request waits on the owner. The owner's alert says what the customer was told and what to record.
+- **How staff answer:** staff record what they checked as manual offers and re-run research. The existing comparison engine then sends the answer: requirements applied, whole-party totals, rejected options named with the reason.
+- **Measurement:**
+  - `staff_comparison_offered` records the promise.
+  - `staff_comparison_answered` records the time to a verified option and the seller used.
+  - `/admin/pilot` shows both.
+- **Limits:** the limit counts customer requests only. With no owner, nothing is promised.
+
+**Cancellation, backend.** Two gaps were found by testing stored state rather than the reply email:
+- A customer's cancellation left already-approved watch alert sends queued. Every cancellation path now invalidates pending alerts and blocks queued alert sends (`stopWatchAlerts`).
+- Dispatch looked a watch alert's approval up in the recommendations table. That would have blocked even valid alerts ("not approved"), and ignored a cancelled watch. It now reads the alert's own approval and the watch's state and generation.
+
+`tests/acceptance/cancellation-isolation.test.ts` proves it: two threads, queued alerts on both, an event alert, and a repeated cancel on the closed thread.
+
+**Abroad vs. residence.**
+- The "in London, UK" guard now fires only when the event is there. The city the extractor chose must be negated ("not New York") or not a US place, and the place must not follow "I live in", "my sister in", "visiting from" or similar.
+- "I live in London, UK, but want Hamilton in New York" is declined by the residence rule (US customers only, ENGINEERING_SPEC §1), with the residence reason. It is not refused as an event abroad.
+- "My sister in London, UK recommended…" is a New York request.

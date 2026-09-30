@@ -380,6 +380,7 @@ export class Concierge {
       const alertScope = scoped ? inThread(t.eventAlerts.requestId) : eq(t.eventAlerts.contactId, contact!.id);
       const stoppedWatches = await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(watchScope, eq(t.watches.state, 'active'))).returning({ id: t.watches.id });
       const stoppedAlerts = await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(alertScope, eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
+      await this.stopWatchAlerts(stoppedWatches.map((w) => w.id));
       await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id, scope: scoped ? 'thread' : 'contact', watches: stoppedWatches.length, alerts: stoppedAlerts.length } });
       // Always answered, from what was actually stored and changed (TG-B10): never silence, never a guess.
       const n = stoppedWatches.length + stoppedAlerts.length;
@@ -456,8 +457,11 @@ export class Concierge {
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
     // the city ("London, KY") keeps it in scope.
     // A place named with its country ("Hamilton in London, UK") is abroad even when the extractor also caught
-    // "not New York" as the city (audit replay A09).
-    const abroad = NAMED_ABROAD.exec(latestText);
+    // "not New York" as the city (audit replay A09). Only then, though: "my sister in London, UK recommended
+    // Hamilton in New York" is a New York request, and where they live is the residence rule's business.
+    // A non-US city that only appears as where someone lives or is ("my sister in London, UK") isn't the event's.
+    if (merged.city && isOutsideUs(merged.city) && onlyAsWhereSomeoneIs(latestText, merged.city)) merged = { ...merged, city: null, state: null };
+    const abroad = namedAbroadEvent(latestText, merged.city);
     if (!picked && (eventOutsideUs(merged) || abroad)) {
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
       await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
@@ -775,7 +779,8 @@ export class Concierge {
     if (rows.length) await this.db.insert(t.requestOutcomes).values(rows);
     // Bought or stop: nothing more to watch for this request.
     if (reply?.bought === true || reply?.stopWatching) {
-      await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active')));
+      const stopped = await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).returning({ id: t.watches.id });
+      await this.stopWatchAlerts(stopped.map((w) => w.id));
       await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.requestId, req.id), eq(t.eventAlerts.state, 'active')));
     }
     const kind = reply?.bought === true ? 'bought' : reply?.stopWatching ? 'stopped' : 'thanks';
@@ -879,8 +884,8 @@ export class Concierge {
       await audit(this.db, { actor: 'system', action: 'staff_alert.skipped', entityKind: 'request', entityId: args.requestId, revision: args.revision, diff: { reason: why } });
       return { outcome: 'skipped' as const, reason: why };
     };
-    const recipients = this.env.STAFF_ALERT_ADDRESSES.length ? this.env.STAFF_ALERT_ADDRESSES : this.env.STAFF_EMAIL_ALLOWLIST;
-    if (!recipients.length) return skip('no_staff_addresses');
+    const allRecipients = this.env.STAFF_ALERT_ADDRESSES.length ? this.env.STAFF_ALERT_ADDRESSES : this.env.STAFF_EMAIL_ALLOWLIST;
+    if (!allRecipients.length) return skip('no_staff_addresses');
     if (!this.deps.emailProvider) return skip('sending_disabled');
     const switches = await loadSwitches(this.db);
     if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
@@ -889,10 +894,17 @@ export class Concierge {
     if (req.state !== 'manual_attention') return skip('no_longer_waiting');
     const [last] = await this.db.select({ reason: t.requestTransitions.reason, at: t.requestTransitions.createdAt }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.toState, 'manual_attention'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
     const why = staffReasonLabel(last?.reason ?? 'unknown');
+    // A promised comparison goes to the person who owns it.
+    const comparison = last?.reason === 'staff_comparison';
+    const recipients = comparison && this.env.STAFF_COMPARISON_OWNER ? [this.env.STAFF_COMPARISON_OWNER] : allRecipients;
     const link = `${this.env.APP_URL.replace(/\/$/, '')}/admin/requests/${req.id}`;
     // What the customer has actually been sent, from the send record, never assumed (TG-B06).
-    const [holding] = await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), eq(t.sendIntents.dedupeKey, `holding:${req.id}`))).limit(1);
-    const told = !holding
+    const [holding] = comparison
+      ? await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), sql`${t.sendIntents.dedupeKey} like 'rec:%'`)).orderBy(desc(t.sendIntents.createdAt)).limit(1)
+      : await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), eq(t.sendIntents.dedupeKey, `holding:${req.id}`))).limit(1);
+    const told = comparison && holding && ['provider_accepted', 'delivered'].includes(holding.state)
+      ? 'The customer has been told a person is looking for seats that meet their requirements and will reply in the thread. Record each option you check under Manual offers (source, time checked, exact quantity, seats together, all-in total, restrictions), then re-run research to send the comparison; or reply that nothing fits.'
+      : !holding
       ? 'The customer has not been told anything yet: reply to them from the request page.'
       : ['provider_accepted', 'delivered'].includes(holding.state)
         ? 'The customer has been told a person is picking it up.'
@@ -1609,7 +1621,18 @@ export class Concierge {
       if (reason && !leftOut.some((l) => l.reason === reason && l.quantity === e.offer.quantity)) leftOut.push({ reason, quantity: e.offer.quantity });
     }
     const eventNoun = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab'].includes(event.category) ? 'game' as const : 'show' as const;
-    const packet = buildPacket({ requirements: unverifiedRequirements(brief), textOffers, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // The staffed comparison pilot (DECISION_LOG #54): when nothing verified meets what they asked for, and a
+    // named owner exists with room in the pilot, a person takes it on and the email says so.
+    const requirements = unverifiedRequirements(brief);
+    if (best && best.comparableTotalCents !== null && best.offer.collectionMode !== 'fixture') {
+      const [offered] = await this.db.select().from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, req.id), eq(t.requestOutcomes.kind, 'staff_comparison_offered'))).limit(1);
+      const [answered] = await this.db.select({ id: t.requestOutcomes.id }).from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, req.id), eq(t.requestOutcomes.kind, 'staff_comparison_answered'))).limit(1);
+      if (offered && !answered) await this.db.insert(t.requestOutcomes).values({ requestId: req.id, kind: 'staff_comparison_answered', source: 'staff', details: { minutes: Math.round((now.getTime() - offered.at.getTime()) / 60_000), sourceId: best.offer.sourceId, totalCents: best.comparableTotalCents, checked: cmp.eligible.length + cmp.needsReview.length + cmp.excluded.length }, actor: 'system', at: now });
+    }
+    const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && textOffers.length < 2
+      ? await this.takeForStaffComparison({ requestId: req.id, contactEmail: contact?.emailLookup ?? '', requirements })
+      : null;
+    const packet = buildPacket({ staffFollowUp, requirements, textOffers, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -1833,7 +1856,13 @@ export class Concierge {
     if (intent.requestId && intent.requestRevision !== null) {
       const [req] = await this.db.select({ rev: t.requests.currentRevision, eventId: t.requests.eventId }).from(t.requests).where(eq(t.requests.id, intent.requestId));
       revisionCurrent = req?.rev === intent.requestRevision;
-      if (intent.approvalId) {
+      if (intent.approvalId && intent.messageClass === 'watch_alert') {
+        // A watch alert's approval is the alert's, and a cancellation seen now wins over an approval given before
+        // it (A26): a watch that is no longer active, or has moved on a generation, sends nothing.
+        const [alert] = await this.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.id, intent.approvalId));
+        const [w] = alert ? await this.db.select().from(t.watches).where(eq(t.watches.id, alert.watchId)) : [];
+        approved = alert?.approvalState === 'approved' && w?.state === 'active' && w.generation === alert.generation;
+      } else if (intent.approvalId) {
         const [rec] = await this.db.select().from(t.recommendations).where(eq(t.recommendations.id, intent.approvalId));
         approved = rec?.reviewStatus === 'approved';
         hashMatches = rec?.draftHash === intent.approvedHash;
@@ -1868,6 +1897,15 @@ export class Concierge {
       if (intent.approvalId) {
         await this.db.update(t.recommendations).set({ reviewStatus: 'sent' }).where(eq(t.recommendations.id, intent.approvalId));
         if (intent.requestId) await this.transition(intent.requestId, 'recommendation_sent', 'approved_recommendation_sent');
+      }
+      // An advice email that promised a person would look (DECISION_LOG #54), reviewed or auto-sent: the request
+      // now waits on its owner, who is told.
+      if (intent.requestId && intent.dedupeKey?.startsWith('rec:')) {
+        const kinds = (await this.db.select({ kind: t.requestOutcomes.kind }).from(t.requestOutcomes).where(eq(t.requestOutcomes.requestId, intent.requestId))).map((o) => o.kind);
+        if (kinds.includes('staff_comparison_offered') && !kinds.includes('staff_comparison_answered')) {
+          await this.transition(intent.requestId, 'manual_attention', 'staff_comparison');
+          await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${intent.requestId}:${intent.requestRevision ?? 0}:staff_comparison`, entityId: intent.requestId, payload: { requestId: intent.requestId, revision: intent.requestRevision ?? 0 }, now });
+        }
       }
       return { outcome: 'sent' };
     } catch (e) {
@@ -1905,6 +1943,25 @@ export class Concierge {
     const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, consentMessageId: a.consentMessageId, cadenceMinutes: cadence, nextCheckAt: new Date(now.getTime() + cadence * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
     await audit(this.db, { actor: 'system', action: 'watch.created', entityKind: 'watch', entityId: w!.id, diff: { consentMessageId: a.consentMessageId, targetTotalCents: target } });
     return w!.id;
+  }
+
+  /**
+   * A place in the staffed comparison pilot, if there is one: an owner who is staff, the request not already
+   * taken, and fewer than the limit taken for customers (staff's own tests are served but not counted). Taking it
+   * records the promise as an outcome, so the pilot can be measured against it.
+   */
+  private async takeForStaffComparison(a: { requestId: string; contactEmail: string; requirements: string[] }): Promise<{ hours: string } | null> {
+    const owner = this.env.STAFF_COMPARISON_OWNER;
+    const staff = new Set(this.env.STAFF_EMAIL_ALLOWLIST.map((x) => x.toLowerCase()));
+    if (!owner || !staff.has(owner)) return null;
+    const hours = staffedHoursLabel(this.env);
+    const taken = await this.db.select({ requestId: t.requestOutcomes.requestId, email: t.contacts.emailLookup }).from(t.requestOutcomes).innerJoin(t.requests, eq(t.requests.id, t.requestOutcomes.requestId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(eq(t.requestOutcomes.kind, 'staff_comparison_offered'));
+    if (taken.some((x) => x.requestId === a.requestId)) return { hours };
+    const isStaff = staff.has(a.contactEmail.toLowerCase());
+    if (!isStaff && taken.filter((x) => !staff.has(x.email.toLowerCase())).length >= this.env.STAFF_COMPARISON_LIMIT) return null;
+    await this.db.insert(t.requestOutcomes).values({ requestId: a.requestId, kind: 'staff_comparison_offered', source: 'system', details: { owner, requirements: a.requirements, counted: !isStaff }, actor: 'system', at: this.now() });
+    await audit(this.db, { actor: 'system', action: 'pilot.staff_comparison_offered', entityKind: 'request', entityId: a.requestId, diff: { owner, counted: !isStaff } });
+    return { hours };
   }
 
   /** Deterministic due-watch evaluation; never invokes a model. */
@@ -1970,11 +2027,21 @@ export class Concierge {
 
   async cancelWatch(args: { watchId: string; actor: string; reason: string }): Promise<void> {
     await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(eq(t.watches.id, args.watchId));
-    // Any queued (not yet provider-accepted) alert sends for this watch are blocked; accepted ones cannot be recalled.
-    const alerts = await this.db.select({ sendIntentId: t.watchAlerts.sendIntentId }).from(t.watchAlerts).where(eq(t.watchAlerts.watchId, args.watchId));
+    await this.stopWatchAlerts([args.watchId]);
+    await audit(this.db, { actor: args.actor, action: 'watch.cancelled', entityKind: 'watch', entityId: args.watchId, diff: { reason: args.reason } });
+  }
+
+  /**
+   * After watches stop, nothing they found goes out: pending alerts are invalidated and queued (not yet
+   * provider-accepted) alert sends are blocked. Accepted ones cannot be recalled. Every cancellation path uses
+   * this, the customer's own included (a correct "stopped" email proves nothing about what was queued).
+   */
+  private async stopWatchAlerts(watchIds: string[]): Promise<void> {
+    if (!watchIds.length) return;
+    await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(and(inArray(t.watchAlerts.watchId, watchIds), eq(t.watchAlerts.approvalState, 'pending')));
+    const alerts = await this.db.select({ sendIntentId: t.watchAlerts.sendIntentId }).from(t.watchAlerts).where(inArray(t.watchAlerts.watchId, watchIds));
     const ids = alerts.map((a) => a.sendIntentId).filter((x): x is string => !!x);
     if (ids.length) await this.db.update(t.sendIntents).set({ state: 'blocked', lastError: 'watch_cancelled' }).where(and(inArray(t.sendIntents.id, ids), eq(t.sendIntents.state, 'queued')));
-    await audit(this.db, { actor: args.actor, action: 'watch.cancelled', entityKind: 'watch', entityId: args.watchId, diff: { reason: args.reason } });
   }
 }
 
@@ -2058,7 +2125,32 @@ export function eventOutsideUs(x: Pick<RequestExtraction, 'city' | 'state'>): bo
 }
 
 /** "in London, UK", "to Toronto, Canada": a city with a non-US country beside it. */
-const NAMED_ABROAD = /\b(?:in|to)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?),?\s+(UK|U\.K\.|United Kingdom|England|Scotland|Wales|Ireland|Canada|Mexico|France|Germany|Spain|Italy|Portugal|Netherlands|Australia|Japan)\b/;
+const NAMED_ABROAD = /\b(?:in|to)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?),?\s+(UK|U\.K\.|United Kingdom|England|Scotland|Wales|Ireland|Canada|Mexico|France|Germany|Spain|Italy|Portugal|Netherlands|Australia|Japan)\b/g;
+/** Words before a place that make it where someone lives or is, not where the event is. */
+const NOT_THE_EVENT = /\b(live|living|lives|based|from|home|sister|brother|friend|family|parents?|mum|mom|dad|visiting|staying|moved|born)\b[^.?!]{0,12}$/i;
+
+/** Every mention of the place follows "live in", "my sister in", "visiting from"…: a person's place, not the event's. */
+export function onlyAsWhereSomeoneIs(text: string, place: string): boolean {
+  const escaped = place.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hits = [...text.matchAll(new RegExp(`\\b${escaped}\\b`, 'gi'))];
+  return hits.length > 0 && hits.every((m) => NOT_THE_EVENT.test(text.slice(Math.max(0, m.index! - 30), m.index!).replace(/\s+(?:in|to|at)\s*$/i, ' ')));
+}
+
+/**
+ * The non-US place the event is in, when the message puts it there: a city with its country, not one they live
+ * in or know someone in, and only when the city the extractor chose is negated ("not New York") or isn't a US
+ * place. Anything else is a US request, and residence is decided by the residence rule on its own words.
+ */
+export function namedAbroadEvent(text: string, city: string | null): RegExpExecArray | null {
+  const escaped = city?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const cityNegated = !!escaped && new RegExp(`\\b(?:not|no|rather than|instead of)\\s+(?:in\\s+)?${escaped}\\b`, 'i').test(text);
+  const cityIsUs = !!city && !isOutsideUs(city) && (!!marketFor(city) || !!stateCodeFor(city));
+  if (city && cityIsUs && !cityNegated) return null;
+  for (const m of text.matchAll(NAMED_ABROAD)) {
+    if (!NOT_THE_EVENT.test(text.slice(Math.max(0, m.index! - 30), m.index!))) return m as RegExpExecArray;
+  }
+  return null;
+}
 
 const countWords = (n: number) => ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][n] ?? String(n);
 
@@ -2432,6 +2524,7 @@ export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: 
 /** Why a request is waiting on a person, in words for the staff alert. */
 export function staffReasonLabel(reason: string): string {
   if (reason === 'clarification_limit_reached') return 'three rounds of questions did not settle the request';
+  if (reason === 'staff_comparison') return 'a comparison was promised: find seats that meet their requirements';
   if (reason.startsWith('extraction_failed:budget_exceeded')) return 'the AI budget for this request ran out';
   if (reason.startsWith('extraction_failed:')) return `the AI could not read the message (${reason.split(':')[1] ?? 'unknown'})`;
   return reason.split(':')[0]!.replace(/_/g, ' ');

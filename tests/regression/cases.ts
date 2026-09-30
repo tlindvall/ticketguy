@@ -84,6 +84,10 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'residence.tourist_in_ny', type: 'find', text: "I'm in New York for the weekend, 2 Rangers tickets Oct 3", reply: { contains: ['Ticket Guy is for US-based fans for now'] } },
   { id: 'event.outside_us', type: 'find', text: 'Two Leafs tickets in Toronto', reply: { state: 'unsupported', contains: ['only cover events in the US'] } },
   // A performer we don't have on file, in a city abroad: said straight away, never "couldn't find it in London".
+  // Beyond the exact audit wording: where they live is the residence rule's call (US customers only, by the launch
+  // boundary), said as such; a place someone else is in, or where they live, never makes a New York event "abroad".
+  { id: 'event.resident_abroad_us_event', type: 'find', text: 'I live in London, UK, but want Hamilton in New York on October 3, 2026, two tickets.', reply: { state: 'unsupported', contains: ['We currently serve US customers and US events only.'], notContains: ['can’t help with Hamilton in London'] } },
+  { id: 'event.someone_else_abroad', type: 'find', text: 'My sister in London, UK recommended the Rangers: two tickets Oct 3.', reply: { notContains: ['only cover events in the US', 'US-only'] } },
   { id: 'event.outside_us_unknown_show', type: 'find', text: 'Can you find two tickets to Hamilton in London, UK, on Saturday October 3, 2026? Budget £180 total.', reply: { state: 'unsupported', contains: ['only cover events in the US'], notContains: ["couldn't find"] } },
 
   // ── Seats and budget ─────────────────────────────────────────────────────────────────────────────────
