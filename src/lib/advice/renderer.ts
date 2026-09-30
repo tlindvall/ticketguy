@@ -176,23 +176,32 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // with neither and nothing verified or on official sale to recommend, what the market means for them.
   const quote = claim('C_QUOTE');
   const somethingToBuy = claimsById.has('C_BEST') || claimsById.has('C_OFFICIAL');
-  // Their own question first: delivery against their travel, wheelchair spaces against ordinary seats, the
-  // verdict on their listing, a watch they asked for, the price they asked about (TG-B02). The first is the
-  // opening; the rest follow it, in that order.
+  // Their own question first (TG-B02, remediation review §2): the state they asked about, then delivery against
+  // their travel, wheelchair spaces against ordinary seats, the verdict on their listing, the price they asked
+  // about. The first is the opening; the rest follow it, in that order. Stops and purchases never reach here:
+  // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
-  const primary = [claim('C_DELIVERY'), claim('C_ACCESS'), verdict, watch, quote].filter((c): c is ClaimRecord => !!c);
+  // State they asked about comes first (a watch running or not), then the question in their latest message.
+  const primary = [watch, claim('C_OFFERS'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS')].filter((c): c is ClaimRecord => !!c);
+  // A claim with bullets (their offers side by side) is its first line, then the bullets.
+  const put = (c: ClaimRecord) => {
+    if (c.items?.length && c.text.includes('\n')) {
+      const head = c.text.split('\n')[0]!;
+      lines.push(head, c.items.map((i) => `- ${i}`).join('\n'));
+      html.push(P(rich(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
+    } else {
+      lines.push(c.text);
+      html.push(P(rich(c.text)));
+    }
+  };
   const opener = primary[0] ?? (read && !subject && !somethingToBuy ? read : undefined) ?? (packet.headline ? undefined : link);
   if (opener) {
-    lines.push(opener.text);
-    html.push(P(rich(opener.text)));
+    put(opener);
   } else if (b.opening.trim()) {
     lines.push(b.opening.trim());
     html.push(P(rich(b.opening.trim())));
   }
-  for (const c of primary.slice(1)) {
-    lines.push(c.text);
-    html.push(P(rich(c.text)));
-  }
+  for (const c of primary.slice(1)) put(c);
 
   if (subject) {
     lines.push(subject.text);
@@ -202,6 +211,12 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   for (const c of alternatives) {
     lines.push(c.text);
     html.push(P(rich(c.text)));
+  }
+  // What the comparison rejected and why, right after what it recommends.
+  const leftOut = claim('C_LEFT_OUT');
+  if (leftOut) {
+    lines.push(leftOut.text);
+    html.push(P(rich(leftOut.text)));
   }
   if (quoteMarket) {
     lines.push(quoteMarket.text);
@@ -222,7 +237,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set(['C_LINK', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set(['C_LINK', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;

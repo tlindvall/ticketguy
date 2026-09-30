@@ -218,3 +218,66 @@ Test from a QA address on `EMAIL_TEST_RECIPIENT_ALLOWLIST`; it is no longer rate
 | Decision records | `docs/DECISION_LOG.md` #51 (geography and threading), #52 (this audit) |
 | Audit acceptance tests | `tests/unit/audit-0929.test.ts`; `tests/acceptance/official-sale.test.ts`, `boundaries.test.ts`, `geography-discovery.test.ts`, `thread-and-name.test.ts`, `listing-evidence.test.ts`; `tests/regression/cases.ts` |
 | Test suite at PR #53 | 538 passed, 7 skipped; typecheck and lint clean |
+
+---
+
+# Round 2: after the remediation review and the live retest (Sep 30, 01:14 UTC)
+
+**Inputs:**
+- `remediation-review/CLAUDE_REVIEW_AND_ACCEPTANCE.md`
+- `remediation-review/audit-replay-cases.json`, with the exact 16 audit sends
+- `retest-2026-09-30-0114/`: 7 live sends after PR #53 was deployed
+
+The reviewer's copy of the round-1 report was cut off during TG-B06 (104 of 220 lines). The full round-1 text is above.
+
+**Status:** PR #54, not merged or deployed. Nothing in this round has been observed live.
+
+## How this round was verified
+- New `tests/acceptance/audit-replay.test.ts` replays every audit email and every retest email word for word. The source is `tests/fixtures/audit-0929-cases.json`, with addresses and message ids removed.
+- It runs at the audit clock, against seeded events: Rangers vs Lightning on Oct 1, and Hamilton on Oct 3 with its real Ticketmaster mapping.
+- Follow-ups go into their original threads.
+- It uses the deterministic extractor. It checks what the pipeline does with each request, not what the production model reads into it. Model extraction can differ; the guards below cover the cases where it mattered.
+- It also found failures the reconstructed tests missed: A09, A07, A07-R1, A05-R1 and A10. These are listed below.
+
+## Per finding
+
+| Finding | Cause (confirmed in code) | Fix in PR #54 | Regression |
+|---|---|---|---|
+| **R2-B01**: "It's a fair price for these seats" (R05); "in line with the market" (R03) | `verdictClaim` and `C_QUOTE_MARKET` still used a floor × 1.15 / × 1.30 band (`priceAgainstFloor`, `nearCap`). The market alternatives filter used a 1/1.3 fee allowance. | Removed all three. Now the email states the observed gap, its basis ("your price includes fees and that one doesn't, so the real gap is smaller") and "that cheapest listing could be any seat in the venue". No "fair", "reasonable" or "in line". Alternatives count as cheaper only as listed, with a fee-basis caveat. | Replay test "no reply anywhere calls a price fair…" across all 23 sends; market-tracking; alternatives unit |
+| **R2-B02**: R05 two offers with "neither of us needs wheelchair seating" | The model set `accessibilityNeeds` despite the negation. Nothing kept more than one offer. | `NO_ACCESS_NEED` guard clears it after any extractor. New `offersInText()` keeps each offer separate. `C_OFFERS` opens the email with the choice and why: "Offer A is wheelchair-accessible spaces, which no one in your group needs, so it isn't one to buy even though it's cheaper". Whole-party totals ($160, $210) and what to check on B follow. The acknowledgment now reads "which of the two offers to choose". | Replay A03, R05 |
+| **R2-B06**: "section Offer B: 211" | The listing reader put the offer label into the seat fields. | `cleanSeatField()` on section and row. | Replay A03, R05 |
+| **R2-B04**: R03 acknowledgment said "whether $220 is a good price"; deadline asked again | The acknowledgment read only price and quote. Timing questions ran regardless of what was asked. | The acknowledgment names the delivery or two-offer question. There is no deadline or "lock in" question when they asked about delivery, access or offers. Refund wording is now "a refund guarantee, if the seller offers one…". | Replay A08, A08-R1, R03 |
+| **R2-B05**: "$547.65, under your $600" | The under-budget branch said "under your budget". | "five at that price would be $547.65, which leaves $52.35 of your $600 for fees. I can't see those fees, so whether it fits is unconfirmed." Over budget (A01): "…over your budget before any fees. That doesn't prove nothing cheaper exists now". | `audit-0929` unit A01, A07 |
+| **R2-B03**: "compare" did not lead to a comparison | The invitation implied a capability we don't have. | With hard requirements, the invitation says what a comparison can't do: "That shows price levels only: I can't check particular seats, their access or whether they sit together". The follow-up opens with each requirement said as not yet checked (`C_REQS`). A real comparison still needs inventory; see Dependencies. | Replay A05, R01, A05-R1, R01-F1 |
+| **Review §3/§5 core case**: their offer vs B, C and D | Already handled by `compareOffers` (wrong quantity, obstructed, over budget), but the email didn't point to B or say why C and D were dropped. | The verdict now reads "…over your $600 budget. The verified option below meets what you asked for: $585 for all five, within your $600 and $65 less than this one." New `C_LEFT_OUT` names the rejected cheaper listings and why, without offering them. The no-suitable world states the limit. | `tests/acceptance/useful-comparison.test.ts` (both of the reviewer's fixtures) |
+| **A09** London (replay): endorsed Hamilton in New York | The rules extractor took "not New York" as the city. | `NAMED_ABROAD`: a city with a non-US country ("London, UK") is out of scope whatever the city field says. | Replay A09 |
+| **A07 / A07-R1 / R04** (replay) | The watch request wasn't recognised. The cancel wasn't recognised. A watch row was stored while alerts were off, so "stopped the price watch" contradicted "nothing is being monitored". After A07-R1 closed the request, R04's cancel widened to all of the customer's watches. | `asksToCancelWatch()` guard; "stop this watch on Sep 30 at 6pm" is read as an expiry, not a cancel. No watch is stored while `WATCH_SEND_ENABLED` is off. Cancel is scoped to the thread whenever it has an earlier request. A cancel closes the request. | Replay A07, A07-R1, R04; watches acceptance |
+| **A05-R1** (replay): silent | The official-sale reply was deduplicated per request, so a follow-up got nothing. Its budget basis was also asked again. | Official-sale replies are deduplicated per revision. A recheck opens "No, I haven't checked any of these…". "the total is under $450" reads as a total. | Replay A05-R1 |
+| **A10** (replay): the game wasn't found, and "how many sold" went unanswered | The matchup was read as "For New York Rangers vs …". Sales were never addressed. | Leading function words are stripped. `C_SALES`: "I can't tell you how many tickets have sold… asking prices… not completed sales, and a listing that disappears may have been sold, moved or withdrawn." | Replay A10 |
+| **B05** (A01-R1 / R02-F1): budget not visible in the reply | — | Reply headline shows the brief: "· 6 tickets · up to $720 in total". Persisted brief asserted: quantity 6, $720, whole party, same event. | Replay A01-R1, R02-F1 |
+
+## Completion table (the fields the reviewer asked for)
+
+| Item | Code status | Deployment | Regression | End-to-end | Manual work | External dependency |
+|---|---|---|---|---|---|---|
+| B01 endorsement gate | #53 merged, CI green; extended in #54 | #53 deployed per the user (commit not verified by me); #54 not deployed | Replay A05, R01, A05-R1, R01-F1 | Live R01 passed on #53; #54 not observed | None | None |
+| B02 intent / two offers / delivery | #53 partial; #54 | #54 not deployed | Replay A03, R05, A08, A08-R1, R03 | Live R03 partial, R05 failed on #53; #54 not observed | None | None |
+| B03/B04 budget and value | #53 partial; #54 removes every band | #54 not deployed | Replay "no fair" across 23 sends; audit unit | Live R02/R03/R05 showed remaining bands on #53 | None | SeatData: customer display needs written approval before launch |
+| B05 context | #51, #53, #54 | #51 and #53 deployed per the user | Replay A01-R1, R02-F1 | Live R02-F1 passed quantity and date on #53 | None | None |
+| B06 degraded service | #53 | #53 deployed per the user | `boundaries` acceptance | Not exercised live (no rate limit hit) | Staff own the "a person is picking this up" requests; the alert says what the customer was actually sent | None |
+| B07 discovery exclusions | Not started | — | — | A04 replay still shows "Live music" for house/techno | — | — |
+| B08 provenance | #53 | #53 deployed per the user | listing-evidence, audit unit | Live R05 wording passed on #53 | None | None |
+| B09 US-only | #52, #54 guard | #52 deployed | Replay A09 | Not re-tested live | None | None |
+| B10 watch state | #53, #54 | #54 not deployed | Replay A07, A07-R1, R04; watches | Live R04 acknowledgment passed on #53; database state not verified | Staff can check `/admin` → Price watches | Watch alerts need a source whose terms allow monitoring (`WATCH_SEND_ENABLED` is off) |
+| B11 threading | #51 | #51 deployed | thread-and-name | Not re-tested live | None | None |
+| B12 template prose | #52 | #52 deployed | timing-advice | Not re-tested live | None | None |
+| Useful comparison (review) | #54 | #54 not deployed | useful-comparison (both fixtures) | Not observable live: there is no verified inventory in production | Only a staff-verified offer can produce it today | A listing or inventory partner, or permitted staff verification, with source, check time, quantity, adjacency, cost basis and who checked it recorded |
+| A10 trend and sales | #54 (sales statement) | #54 not deployed | Replay A10 | Not observed live | None | Completed-sales data: none available (SeatData gives asking prices only) |
+| A11 screenshot | Existing (listing-evidence) | Deployed | listing-evidence (fake reader) | Not observed live (blocked in the audit) | None | Model image read: enabled with `EXTRACTION_PROVIDER` |
+
+## Still open
+- **B07 discovery exclusions:** "No pop concerts" is ignored, and house/techno is read as "live music".
+- **Live comparison:** needs verified inventory. The code path is proven only on fixtures.
+- **Production state:** the A07 watch and the persisted R02-F1 brief were checked only in replay, never against production data.
+- **A10 seven-day group trend:** the claim is gated on comparable history, which the replay can't show.
+- **A single-offer model read of a two-offer message** is still stored as listing evidence. `C_OFFERS` now answers the question, but that stored read is unused noise.

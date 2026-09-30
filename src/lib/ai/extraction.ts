@@ -61,6 +61,8 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
   let basis: 'per_ticket' | 'whole_party' | null = null;
   if (/total|all|combined|altogether|for/.test(q)) basis = 'whole_party';
   else if (/each|per|apiece|pp|a /.test(q)) basis = 'per_ticket';
+  // "Raise the total budget to $720", "the total is under $450 with fees": the word comes before the amount.
+  else if (/\btotal\b/i.test(t.slice(Math.max(0, m.index - 30), m.index))) basis = 'whole_party';
   return { cents, basis, quote: m[0] };
 }
 
@@ -68,8 +70,10 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
 function matchupPhrase(t: string): string | null {
   const m = /\b([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3})\s+(?:vs\.?|v\.?|versus|against|@)\s+([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3})/i.exec(t);
   if (!m) return null;
-  const stop = /\s+(?:on|at|in|for|this|next|tonight|tomorrow|please|\d.*)$/i;
-  const a = m[1]!.replace(stop, '').trim();
+  // "For New York Rangers vs Tampa Bay at MSG on October 1": the teams, without the words around them (A10).
+  const stop = /\s+(?:(?:on|at|in|for|this|next|tonight|tomorrow|please)\b.*|\d.*)$/i;
+  const lead = /^(?:(?:for|the|tickets?|seats?|to|at|on|in|about|is|are|of|and|see|watch|game|a|an)\s+)+/i;
+  const a = m[1]!.replace(lead, '').replace(stop, '').trim();
   const b = m[2]!.replace(stop, '').trim();
   return a && b ? `${a} vs ${b}` : null;
 }
@@ -112,6 +116,9 @@ const CITIES: Array<[RegExp, string, string]> = [
   [/\b(london)\b/i, 'London', 'UK'],
 ];
 
+/** Someone saying no one in the party needs accessible seating: the word "wheelchair" is not a need. */
+export const NO_ACCESS_NEED = /\b(neither of us|none of us|no one|nobody|we don'?t|we do not|i don'?t|i do not)\s+(needs?|requires?|uses?)\b[^.;!?]{0,40}\b(wheelchair|accessible|accessibility|ada)\b/i;
+
 export class FixtureExtractor implements Extractor {
   readonly name = 'fixture';
   async extract(input: ExtractionInput): Promise<RequestExtraction> {
@@ -125,7 +132,7 @@ export class FixtureExtractor implements Extractor {
     if (optOut) intent = 'marketing_opt_out';
     else if (/\b(delete|erase|remove) (all )?(of )?my (data|information|account)\b/i.test(t)) intent = 'delete_data';
     else if (/\b(stop|cancel) (the |my )?(watch|monitoring|alerts?|looking)\b/i.test(t)) intent = 'cancel_watch';
-    else if (/\b(keep (looking|watching|an eye)|watch (it|this|for)|let me know if|alert me|notify me)\b/i.test(t)) intent = 'watch_request';
+    else if (/\b(keep (looking|watching|an eye)|watch (it|this|for)|let me know if|alert me|notify me|please watch|monitor(ing)? (it|this|prices?)|email me (only )?when)\b/i.test(t)) intent = 'watch_request';
     // "Let me know when it goes on sale" is about the event, not its price: no watch, no budget needed.
     const notify = lexiconNotifyAsked(t);
     if (notify && intent === 'watch_request') intent = 'new_search';
@@ -209,7 +216,10 @@ export class FixtureExtractor implements Extractor {
     // The negation is checked first: "we don't need to sit together" contains "together".
     const together = /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i.test(t) ? false : /\b(together|next to each other|adjacent|side by side)\b/i.test(t) ? true : null;
     ev('togetherRequired', together === null ? null : (/\b(together|next to each other|adjacent|side by side|split|separate)\b/i.exec(t)?.[0] ?? null));
-    const accessibility = /\b(wheelchair|accessible|ada)\b/i.exec(t);
+    // A need, said as one: "cannot manage stairs" is step-free access; "neither of us needs wheelchair seating"
+    // is no need at all, whatever words follow it.
+    const accessMatch = /\b(step[- ]free|no stairs|(?:can(?:no|')?t|cannot|unable to) (?:manage|do|climb|use) (?:the )?stairs|wheelchair|accessible|ada)\b/i.exec(t);
+    const accessibility = accessMatch && !NO_ACCESS_NEED.test(t) ? [/stair|step/i.test(accessMatch[0]) ? 'step-free access' : accessMatch[0]] : null;
     // A nickname two teams share ("Giants") stays the customer's word: which one is meant is the resolver's call,
     // from the catalog and the market, not whichever happened to be listed first.
     const sharedNickname = !!ent && input.knownEntities.filter((k) => [k.name, ...k.aliases].some((n) => n.toLowerCase() === ent.quote.toLowerCase())).length > 1;

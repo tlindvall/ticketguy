@@ -18,8 +18,11 @@ describe('cheaper listings around the one a customer sent', () => {
     expect(r.alternatives.every((a) => a.listing.quantity >= 5)).toBe(true);
   });
 
-  it('allows for fees: an all-in price is only beaten by a before-fees price 30% lower', () => {
-    expect(findAlternatives(market, { perTicketCents: 18000, feeBasis: 'all_in', section: '112', row: '5' }, 4).alternatives).toHaveLength(0); // 140 * 1.3 > 180
+  // No guessed fee allowance decides what counts as cheaper (remediation review §4): a listed price below theirs
+  // is cheaper as listed, on either basis, and the email says when the bases differ.
+  it('cheaper means cheaper as listed, with no percentage band for fees', () => {
+    expect(findAlternatives(market, { perTicketCents: 18000, feeBasis: 'all_in', section: '112', row: '5' }, 4).alternatives.length).toBeGreaterThan(0);
     expect(findAlternatives(market, { perTicketCents: 18000, feeBasis: 'before_fees', section: '112', row: '5' }, 4).alternatives.length).toBeGreaterThan(0);
+    expect(findAlternatives(market, { perTicketCents: 10000, feeBasis: 'all_in', section: '112', row: '5' }, 4).alternatives).toHaveLength(0);
   });
 });
