@@ -272,13 +272,28 @@ export class Concierge {
     // A sender over the inbound limits gets no model call and no reply until the window passes; staff hear once a day.
     // The addresses on the test allowlist are ours, testing on purpose, and are not held to them.
     const tester = !!contact && this.env.EMAIL_TEST_RECIPIENT_ALLOWLIST.map((a) => a.trim().toLowerCase()).includes(contact.emailLookup);
-    if (contact && !tester) {
+    // A cancellation, opt-out or deletion is never held behind the limit: "stop watching" must work on the
+    // busiest day (TG-B06).
+    // Three a day at most, so "cancel" in every email is not a way round the limit.
+    let stopping = false;
+    if (contact && (STOP_WORDS.test(msg.sanitizedText ?? '') || classifyOptOutText(msg.sanitizedText ?? '') !== null)) {
+      const [used] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.auditLog).where(and(eq(t.auditLog.action, 'intake.limit_skipped_for_stop'), eq(t.auditLog.entityKind, 'contact'), eq(t.auditLog.entityId, contact.id), gte(t.auditLog.createdAt, new Date(msg.receivedAt.getTime() - 86_400_000))));
+      stopping = (used?.n ?? 0) < 3;
+      if (stopping) await audit(this.db, { actor: 'system', action: 'intake.limit_skipped_for_stop', entityKind: 'contact', entityId: contact.id, diff: { at: msg.receivedAt.toISOString(), messageId: msg.id } });
+    }
+    if (contact && !tester && !stopping) {
       const over = await this.inboundLimitHit(contact.id, msg);
       if (over) {
         const told = await this.recentAudit('intake.rate_limited', contact.id, msg.receivedAt, 24);
         await audit(this.db, { actor: 'system', action: 'intake.rate_limited', entityKind: 'contact', entityId: contact.id, diff: { at: msg.receivedAt.toISOString(), window: over, messageId: msg.id, staffTold: !told } });
         if (!told) {
           await this.transition(req.id, 'manual_attention', `rate_limited:${over}`);
+          // The customer hears, once, that a person has it; the staff alert says so only when that is true.
+          await this.queueSend({
+            messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact.emailOriginal,
+            subject: reSubject(msg.subject, 'A person is picking this up'), template: 'holding', vars: { hours: staffedHoursLabel(this.env) },
+            inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `holding:${req.id}`,
+          });
           await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${req.id}:${req.currentRevision}:rate_limited`, entityId: req.id, payload: { requestId: req.id, revision: req.currentRevision }, now });
           return { state: 'manual_attention', revision: req.currentRevision, extraction: null };
         }
@@ -347,9 +362,39 @@ export class Concierge {
       return { state: 'manual_attention', revision: req.currentRevision, extraction };
     }
     if (extraction.intent === 'cancel_watch') {
-      await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.contactId, contact!.id), eq(t.watches.state, 'active')));
-      await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(eq(t.eventAlerts.contactId, contact!.id), eq(t.eventAlerts.state, 'active')));
-      await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id } });
+      // Only what this thread set up is stopped: another request's watch, and their email preferences, are
+      // untouched. A "stop" in a thread of its own, with nothing set up in it, stops what they have running.
+      const threadReqs = (await this.db.select({ id: t.requests.id }).from(t.requests).where(eq(t.requests.conversationId, req.conversationId))).map((r) => r.id);
+      const inThread = (col: typeof t.watches.requestId | typeof t.eventAlerts.requestId) => inArray(col, threadReqs);
+      const [wIn] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.watches).where(and(inThread(t.watches.requestId), eq(t.watches.state, 'active')));
+      const [aIn] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.eventAlerts).where(and(inThread(t.eventAlerts.requestId), eq(t.eventAlerts.state, 'active')));
+      const scoped = (wIn?.n ?? 0) + (aIn?.n ?? 0) > 0 || !!priorVersion;
+      const watchScope = scoped ? inThread(t.watches.requestId) : eq(t.watches.contactId, contact!.id);
+      const alertScope = scoped ? inThread(t.eventAlerts.requestId) : eq(t.eventAlerts.contactId, contact!.id);
+      const stoppedWatches = await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(watchScope, eq(t.watches.state, 'active'))).returning({ id: t.watches.id });
+      const stoppedAlerts = await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(alertScope, eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
+      await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id, scope: scoped ? 'thread' : 'contact', watches: stoppedWatches.length, alerts: stoppedAlerts.length } });
+      // Always answered, from what was actually stored and changed (TG-B10): never silence, never a guess.
+      const n = stoppedWatches.length + stoppedAlerts.length;
+      const line = n
+        ? `Done: I’ve stopped ${[stoppedWatches.length ? `${stoppedWatches.length === 1 ? 'the price watch' : `${stoppedWatches.length} price watches`}` : '', stoppedAlerts.length ? `${stoppedAlerts.length === 1 ? 'the event alert' : `${stoppedAlerts.length} event alerts`}` : ''].filter(Boolean).join(' and ')}${scoped ? ' on this request' : ''}. You won’t get any more alerts for ${n === 1 ? 'it' : 'them'}.`
+        : `There was no active price watch or alert${scoped ? ' on this request' : ''}, so nothing was being monitored and there’s nothing to stop.`;
+      const tail = 'Nothing else has changed: your other requests and your email preferences are as they were.';
+      // Kept as a revision and an outcome, as any reply is: "stop, we bought them" is also a reported purchase.
+      const rev = priorVersion ? req.currentRevision + 1 : 1;
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      const said = classifyOutcomeReply(msg.sanitizedText ?? '');
+      await this.db.insert(t.requestOutcomes).values([
+        { requestId: req.id, kind: 'stop_watching', source: 'customer_reply', messageId: msg.id, details: { watches: stoppedWatches.length, alerts: stoppedAlerts.length }, actor: 'customer', at: msg.receivedAt },
+        ...(said?.bought === true ? [{ requestId: req.id, kind: 'user_reported_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at: msg.receivedAt }] : []),
+      ]);
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Stopped'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;">${line}</p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `cancel:${msg.id}` });
+      if (said?.bought === true) {
+        await this.transition(req.id, 'closed', 'customer_bought');
+        return { state: 'closed', revision: rev, extraction: merged };
+      }
+      return { state: req.state, revision: rev, extraction: merged };
     }
 
     // What they need help with, accumulated over the conversation (pilot measurement).
@@ -463,7 +508,7 @@ export class Concierge {
     }
 
     // "Let me know when it goes on sale / when they announce a date" (DECISION_LOG #43).
-    if (this.env.EVENT_ALERTS_ENABLED && merged.notifyAsked && extraction.intent !== 'cancel_watch') {
+    if (this.env.EVENT_ALERTS_ENABLED && merged.notifyAsked) {
       const set = await this.maybeEventAlert({ req, msg, contact: contact!, merged, revision, resolution, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id) });
       if (set) return set;
     }
@@ -512,7 +557,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { unverified: unverifiedRequirements(merged), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         dedupeKey: `official_sale:${req.id}:${resolution.event.id}`,
       });
@@ -835,15 +880,24 @@ export class Concierge {
     const [last] = await this.db.select({ reason: t.requestTransitions.reason, at: t.requestTransitions.createdAt }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.toState, 'manual_attention'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
     const why = staffReasonLabel(last?.reason ?? 'unknown');
     const link = `${this.env.APP_URL.replace(/\/$/, '')}/admin/requests/${req.id}`;
+    // What the customer has actually been sent, from the send record, never assumed (TG-B06).
+    const [holding] = await this.db.select({ state: t.sendIntents.state }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), eq(t.sendIntents.dedupeKey, `holding:${req.id}`))).limit(1);
+    const told = !holding
+      ? 'The customer has not been told anything yet: reply to them from the request page.'
+      : ['provider_accepted', 'delivered'].includes(holding.state)
+        ? 'The customer has been told a person is picking it up.'
+        : ['queued', 'claimed', 'submitted', 'uncertain'].includes(holding.state)
+          ? 'A reply telling the customer a person is picking it up is on its way.'
+          : `The reply telling the customer a person is picking it up was not sent (${holding.state}): reply to them from the request page.`;
     const subject = `Needs a person: ${why}`;
     const text = [
       `A request is waiting on a person: ${why}.`,
-      `Request ${req.id.slice(0, 8)}, revision ${args.revision}. The customer has been told a person is picking it up.`,
+      `Request ${req.id.slice(0, 8)}, revision ${args.revision}. ${told}`,
       `Open it: ${link}`,
       'This is an automatic alert. Reply to the customer from the request page, not to this email.',
     ].join('\n\n');
     const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    const html = `<p>A request is waiting on a person: <strong>${esc(why)}</strong>.</p><p>Request ${esc(req.id.slice(0, 8))}, revision ${args.revision}. The customer has been told a person is picking it up.</p><p><a href="${esc(link)}">Open the request</a></p><p style="color:#666;font-size:12px;">This is an automatic alert. Reply to the customer from the request page, not to this email.</p>`;
+    const html = `<p>A request is waiting on a person: <strong>${esc(why)}</strong>.</p><p>Request ${esc(req.id.slice(0, 8))}, revision ${args.revision}. ${esc(told)}</p><p><a href="${esc(link)}">Open the request</a></p><p style="color:#666;font-size:12px;">This is an automatic alert. Reply to the customer from the request page, not to this email.</p>`;
     for (const to of recipients) {
       await this.deps.emailProvider.send({
         idempotencyKey: `staff-alert:${req.id}:${args.revision}:${to}`,
@@ -1519,7 +1573,17 @@ export class Concierge {
     const marketAround = around && shown?.perTicketCents != null ? findAlternatives(around.listings, { perTicketCents: shown.perTicketCents, feeBasis: shown.feeBasis, section: shown.section, row: shown.row }, quantity) : null;
     // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
     const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
-    const packet = buildPacket({ subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
+    let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
+    if (brief.intent === 'watch_request') {
+      const [w] = await this.db.select().from(t.watches).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).orderBy(desc(t.watches.createdAt)).limit(1);
+      watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt } : { running: false };
+    }
+    // What they asked in their own words, across the thread: a delivery or accessible-seating question is
+    // answered as itself, not folded into price advice (TG-B02).
+    const said = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
+    const asks = questionsAsked(said);
+    const packet = buildPacket({ asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -1907,6 +1971,37 @@ function candidateFrom(entity: { name: string; league: string | null }, e: { id:
  * Home and away games in the window → home at the venue, or would they travel. A few games → name them. More
  * than that → ask for the date. It never lists more than three events and never claims availability.
  */
+/**
+ * What they need that an on-sale event says nothing about: the seats, the total and access (TG-B01). The sale
+ * being open is not a seat, so none of these is met by it; each is said back as still to check.
+ */
+export function unverifiedRequirements(x: RequestExtraction): string[] {
+  const out: string[] = [];
+  const q = x.quantity;
+  if (q && q > 1 && x.togetherRequired) out.push(`${q} seats together`);
+  const total = wholePartyBudgetCents(x.budgetCents, x.budgetBasis, x.quantity);
+  if (total !== null) out.push(`${formatUsd(total)} in total${q && q > 1 ? ` for all ${q}` : ''}, once fees are added`);
+  if (x.accessibilityNeeds?.trim()) out.push(x.accessibilityNeeds.trim().replace(/^./, (c) => c.toUpperCase()));
+  if (x.seatingPreference?.trim()) out.push(x.seatingPreference.trim().replace(/^./, (c) => c.toUpperCase()));
+  return out;
+}
+
+/**
+ * Questions that aren't about price, from their words: delivery against their travel or a refund, and wheelchair
+ * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
+ * is not a question about them.
+ */
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean } {
+  const t = text.replace(/[’‘]/g, "'");
+  const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets)\b/i.test(t);
+  const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|travel(l?ing)?|drive|driving|train|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
+  const spaces = /\b(wheelchair|accessible|ada|companion) (spaces?|seats?|seating|section|spots?)\b/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces };
+}
+
+/** A reply that stops something: checked before the inbound limit, so it is never held behind it. */
+const STOP_WORDS = /\b(cancel|stop (watching|tracking|checking|monitoring|looking)|no longer (need|interested)|don'?t need (them|it|tickets) any ?more)\b/i;
+
 /** The place they named is outside the US: a non-US city or country, with no US state beside it. */
 export function eventOutsideUs(x: Pick<RequestExtraction, 'city' | 'state'>): boolean {
   if (stateCodeFor(x.state)) return false;

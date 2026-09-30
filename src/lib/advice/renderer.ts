@@ -176,13 +176,22 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // with neither and nothing verified or on official sale to recommend, what the market means for them.
   const quote = claim('C_QUOTE');
   const somethingToBuy = claimsById.has('C_BEST') || claimsById.has('C_OFFICIAL');
-  const opener = verdict ?? quote ?? (read && !subject && !somethingToBuy ? read : undefined) ?? (packet.headline ? undefined : link);
+  // Their own question first: delivery against their travel, wheelchair spaces against ordinary seats, the
+  // verdict on their listing, a watch they asked for, the price they asked about (TG-B02). The first is the
+  // opening; the rest follow it, in that order.
+  const watch = claim('C_WATCH');
+  const primary = [claim('C_DELIVERY'), claim('C_ACCESS'), verdict, watch, quote].filter((c): c is ClaimRecord => !!c);
+  const opener = primary[0] ?? (read && !subject && !somethingToBuy ? read : undefined) ?? (packet.headline ? undefined : link);
   if (opener) {
     lines.push(opener.text);
     html.push(P(rich(opener.text)));
   } else if (b.opening.trim()) {
     lines.push(b.opening.trim());
     html.push(P(rich(b.opening.trim())));
+  }
+  for (const c of primary.slice(1)) {
+    lines.push(c.text);
+    html.push(P(rich(c.text)));
   }
 
   if (subject) {
@@ -213,7 +222,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set(['C_LINK', 'C_VERDICT', 'C_READ', ...(opener === quote && quote ? ['C_QUOTE'] : []), 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set(['C_LINK', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
