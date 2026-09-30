@@ -36,6 +36,26 @@ export function resolveThread(args: { senderEmail: string; inReplyTo: string | n
   return { kind: 'new', reason: sawKnown ? 'participant_mismatch' : 'unknown_reference' };
 }
 
+/**
+ * A Message-ID in its header form, angle brackets included. Some providers hand it over bare
+ * ("abc@mail.gmail.com"); a bare one in our In-Reply-To is one mail clients may not thread on, and one our own
+ * lookups (which read bracketed IDs) never match.
+ */
+export function normalizeMessageId(id: string | null | undefined): string | null {
+  const t = (id ?? '').trim();
+  if (!t) return null;
+  if (/^<[^<>\s]+>$/.test(t)) return t;
+  if (/^[^<>\s]+@[^<>\s]+$/.test(t)) return `<${t}>`;
+  return t;
+}
+
+/** A References (or In-Reply-To) header with each bare ID bracketed; bracketed ones are left as they are. */
+export function normalizeReferencesHeader(h: string | null | undefined): string | null {
+  const t = (h ?? '').trim();
+  if (!t) return null;
+  return t.split(/[\s,]+/).filter(Boolean).map((x) => normalizeMessageId(x) ?? x).join(' ');
+}
+
 /** Bounded References chain for outbound replies: keep the root and the last few IDs. */
 export function buildReferencesChain(existing: string[], inboundRfcMessageId: string, max = 8): string {
   const chain = [...existing.filter((x) => x !== inboundRfcMessageId), inboundRfcMessageId];

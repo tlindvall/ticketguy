@@ -749,3 +749,23 @@ better options". This entry covers the work that completes it against the gap an
 - Historical and customer-display rights: SeatData's written OK.
 - Affiliate approval: needed for commissions and confirmed purchases.
 - None of these blocks the deal check itself, which works on the customer's own evidence.
+
+## 51. Geography that works live, and one thread in Gmail
+
+Live, "Two Metallica tickets soon in NY" still got "couldn't find a scheduled Metallica event in NY". The reply "They are playing in Connecticut" got the same email again, and our first reply opened a second Gmail thread. The #49 tests passed only because the shows were already on file. Live, they come from Ticketmaster.
+
+**Causes.**
+- The national search (#49) was skipped as fresh. A search with no place counted any recent search for the same name, including the New York one that had just come back empty.
+- Freshness also ignored the date window. A fresh October search stood in for March.
+- A new place in a reply was merged field by field. City "NY" stayed beside state "CT".
+- A state on its own was never searched.
+- The customer wrote with no subject, and our reply used a subject of its own. Gmail groups a reply into a thread only when the subjects match, as well as the reply headers.
+- Bare Message-IDs from the provider were sent unbracketed and never matched our lookups.
+
+**Now.**
+- Freshness is keyed by keyword, place and window. The place is a city, a geo point, `state:XX`, or none for a national search.
+- With no date given ("soon"), the national fallback searches six months ahead.
+- A reply that names a place replaces the old place as a whole.
+- A state as the place ("Connecticut", "CT") filters venues by state and asks Ticketmaster with `stateCode`. "NY", "New York" and "Washington" still mean the metro.
+- Replies to a subjectless email are "Re:", so they stay in the customer's thread.
+- Message-IDs are bracketed on the way in and on the way out.

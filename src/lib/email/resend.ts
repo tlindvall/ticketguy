@@ -3,6 +3,7 @@ import type { EmailProvider } from '@/lib/intake/pipeline';
 import type { NormalizedInbound, NormalizedAttachment } from '@/lib/intake/contract';
 import { validateUrlSyntax, validateUrlDestination } from '@/lib/security/url-safety';
 import { IMAGE_LIMITS } from '@/lib/media/image-validation';
+import { normalizeMessageId, normalizeReferencesHeader } from '@/lib/intake/threading';
 
 /**
  * Resend adapters. Outbound: idempotency key = send-intent dedupe key, byte-identical payload on retry.
@@ -204,9 +205,9 @@ export function normalizeReceived(detail: ReceivedEmailDetail, attachments: Norm
   return {
     provider: 'resend',
     providerEmailId: detail.id,
-    rfcMessageId: detail.message_id,
-    inReplyTo: detail.in_reply_to,
-    references: detail.references,
+    rfcMessageId: normalizeMessageId(detail.message_id),
+    inReplyTo: normalizeReferencesHeader(detail.in_reply_to),
+    references: normalizeReferencesHeader(detail.references),
     from: extractAddress(detail.from),
     fromName: extractDisplayName(detail.from),
     to: detail.to.map(extractAddress),

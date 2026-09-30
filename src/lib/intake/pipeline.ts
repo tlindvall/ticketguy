@@ -12,7 +12,7 @@ import * as t from '@/lib/db/schema';
 import type { Env } from '@/lib/config/env';
 import type { NormalizedInbound } from './contract';
 import { detectAutoResponse } from './autoreply';
-import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReferencesChain } from './threading';
+import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReferencesChain, normalizeMessageId } from './threading';
 import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
@@ -37,6 +37,7 @@ import { findAlternatives } from '@/lib/market/alternatives';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
+import { normalizePlace, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -93,7 +94,7 @@ const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', .
 function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | null {
   const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
   const when = brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
-  const where = brief.city ? ` in ${brief.city}` : '';
+  const where = brief.city ? ` in ${brief.city}` : stateOnly(brief) ? ` in ${US_STATES[stateOnly(brief)!]}` : '';
   if (reason === 'no_performer') return null; // nothing was named; the questions carry it
   if (reason === 'unknown_performer') return `We don't have ${who ?? 'that performer or team'} in our event list yet, so we haven't looked at any prices.`;
   // This one is earned: the official listings were actually queried for this name and window.
@@ -153,12 +154,14 @@ export class Concierge {
       const refs = await (async () => {
         const ids = [msg.inReplyTo, msg.references].filter((x): x is string => !!x).flatMap((x) => [...x.matchAll(/<[^<>\s]+>/g)].map((m) => m[0]));
         if (!ids.length) return new Map<string, { conversationId: string; contactEmailLookup: string; rfcMessageId: string }>();
-        const rows = await tx.select({ conversationId: t.messages.conversationId, rfc: t.messages.rfcMessageId, providerRfc: t.sendIntents.providerRfcMessageId, email: t.contacts.emailLookup }).from(t.messages).innerJoin(t.conversations, eq(t.conversations.id, t.messages.conversationId)).innerJoin(t.contacts, eq(t.contacts.id, t.conversations.contactId)).leftJoin(t.sendIntents, eq(t.sendIntents.conversationId, t.conversations.id)).where(inArray(t.messages.rfcMessageId, ids));
+        // Messages stored before IDs were normalised may hold them without brackets.
+        const lookupIds = [...ids, ...ids.map((id) => id.slice(1, -1))];
+        const rows = await tx.select({ conversationId: t.messages.conversationId, rfc: t.messages.rfcMessageId, providerRfc: t.sendIntents.providerRfcMessageId, email: t.contacts.emailLookup }).from(t.messages).innerJoin(t.conversations, eq(t.conversations.id, t.messages.conversationId)).innerJoin(t.contacts, eq(t.contacts.id, t.conversations.contactId)).leftJoin(t.sendIntents, eq(t.sendIntents.conversationId, t.conversations.id)).where(inArray(t.messages.rfcMessageId, lookupIds));
         const m = new Map<string, { conversationId: string; contactEmailLookup: string; rfcMessageId: string }>();
-        for (const r of rows) if (r.rfc) m.set(r.rfc, { conversationId: r.conversationId, contactEmailLookup: r.email, rfcMessageId: r.rfc });
+        for (const r of rows) if (r.rfc) m.set(normalizeMessageId(r.rfc)!, { conversationId: r.conversationId, contactEmailLookup: r.email, rfcMessageId: r.rfc });
         // Outbound provider-assigned Message-IDs are also valid anchors.
-        const outbound = await tx.select({ conversationId: t.sendIntents.conversationId, rfc: t.sendIntents.providerRfcMessageId, email: t.contacts.emailLookup }).from(t.sendIntents).innerJoin(t.contacts, eq(t.contacts.id, t.sendIntents.contactId)).where(inArray(t.sendIntents.providerRfcMessageId, ids));
-        for (const r of outbound) if (r.rfc && r.conversationId) m.set(r.rfc, { conversationId: r.conversationId, contactEmailLookup: r.email, rfcMessageId: r.rfc });
+        const outbound = await tx.select({ conversationId: t.sendIntents.conversationId, rfc: t.sendIntents.providerRfcMessageId, email: t.contacts.emailLookup }).from(t.sendIntents).innerJoin(t.contacts, eq(t.contacts.id, t.sendIntents.contactId)).where(inArray(t.sendIntents.providerRfcMessageId, lookupIds));
+        for (const r of outbound) if (r.rfc && r.conversationId) m.set(normalizeMessageId(r.rfc)!, { conversationId: r.conversationId, contactEmailLookup: r.email, rfcMessageId: r.rfc });
         return m;
       })();
       const thread = resolveThread({ senderEmail: msg.from, inReplyTo: msg.inReplyTo, references: msg.references, lookup: (id) => refs.get(id) });
@@ -298,6 +301,8 @@ export class Concierge {
       }
       throw e;
     }
+    // "Connecticut" as the city is the state of Connecticut, not a town of that name.
+    extraction = normalizePlace(extraction);
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
     extraction = applyTicketLinks(extraction, known);
@@ -398,7 +403,7 @@ export class Concierge {
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
-      : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city ? null : await this.contactMarket(contact!.id) });
+      : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id) });
     // Not playing where they named it ("Metallica soon in NY" while the tour stops in Philadelphia and
     // Foxborough): the nearest shows elsewhere in the US, closest first. One that fits a date they named, or
     // one close enough to be the same trip, is the answer, said as such; otherwise they choose.
@@ -446,7 +451,7 @@ export class Concierge {
 
     // "Let me know when it goes on sale / when they announce a date" (DECISION_LOG #43).
     if (this.env.EVENT_ALERTS_ENABLED && merged.notifyAsked && extraction.intent !== 'cancel_watch') {
-      const set = await this.maybeEventAlert({ req, msg, contact: contact!, merged, revision, resolution, home: merged.city ? null : await this.contactMarket(contact!.id) });
+      const set = await this.maybeEventAlert({ req, msg, contact: contact!, merged, revision, resolution, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id) });
       if (set) return set;
     }
 
@@ -471,7 +476,7 @@ export class Concierge {
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
       const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows are a trip away.'}` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
-      const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city ? null : await this.contactMarket(contact!.id)));
+      const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       const eventNote = noMatch ? `${noMatch}${offerAlert ? (elsewhere.length ? ` If you’d rather wait for a ${placeLabel(merged)} date, reply "let me know" and I’ll email you when one is announced.` : ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.') : ''}` : null;
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
@@ -1093,6 +1098,9 @@ export class Concierge {
       if (x.city) {
         const mk = marketFor(x.city, x.state);
         cands = cands.filter(({ v }) => (mk ? inMarket(v, mk) : false) || (v.city ?? '').toLowerCase() === x.city!.toLowerCase());
+      } else if (stateOnly(x)) {
+        const code = stateOnly(x)!;
+        cands = cands.filter(({ v }) => (v.state ?? '').toUpperCase() === code);
       }
       // The provider lists one show more than once (package and presale variants under the same name); one
       // show at one venue on one day is one candidate, or the customer is asked to choose between twins.
@@ -1184,7 +1192,8 @@ export class Concierge {
     if (local.length) return local;
     const discovery = await this.discoveryAvailability();
     if (!discovery) return [];
-    const win = this.discoveryWindow(x, ctx);
+    // "Soon" names no window; a tour stop a few months out, with its date, beats "couldn't find one".
+    const win = this.discoveryWindow(x, ctx, 180);
     const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: name, city: null, size: 50, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: name.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win, scope: 'national_fallback' } });
     return sync.status === 'success' || sync.status === 'skipped_fresh' ? load() : [];
@@ -1217,8 +1226,8 @@ export class Concierge {
     return { adapter: new TicketmasterDiscoveryAdapter(this.env.TICKETMASTER_DISCOVERY_API_KEY, true, this.deps.discoveryFetch ?? fetch), dailyCallLimit: cfg.dailyCallLimit };
   }
 
-  /** The date window the provider is asked about: the customer's date when we have one, otherwise the next 90 days. */
-  private discoveryWindow(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null }): { start: string; end: string } {
+  /** The date window the provider is asked about: the customer's date when we have one, otherwise the next 90 days (or `openDays`). */
+  private discoveryWindow(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null }, openDays = 90): { start: string; end: string } {
     const day = (iso: string, deltaDays: number) => {
       const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
       const dt = new Date(Date.UTC(y, m - 1, d + deltaDays));
@@ -1238,7 +1247,7 @@ export class Concierge {
     }
     if (from && to) return { start: `${day(from, -1)}T00:00:00Z`, end: `${day(to, 1)}T23:59:59Z` };
     const today = toIsoDate(ctx.receivedAt.getUTCFullYear(), ctx.receivedAt.getUTCMonth() + 1, ctx.receivedAt.getUTCDate());
-    return { start: `${today}T00:00:00Z`, end: `${day(today, 90)}T23:59:59Z` };
+    return { start: `${today}T00:00:00Z`, end: `${day(today, openDays)}T23:59:59Z` };
   }
 
   /**
@@ -1255,7 +1264,7 @@ export class Concierge {
     const keyword = splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam ?? x.eventName ?? '';
     // A named metro is searched by its centre and radius ("LA" finds Inglewood); a town by name; none, nationally.
     const mk = marketFor(x.city, x.state);
-    const where = mk && mk.lat !== null && mk.lng !== null ? { geoPoint: geohash(mk.lat, mk.lng), radiusMiles: mk.radiusMiles } : { city: x.city };
+    const where = mk && mk.lat !== null && mk.lng !== null ? { geoPoint: geohash(mk.lat, mk.lng), radiusMiles: mk.radiusMiles } : stateOnly(x) ? { city: null, stateCode: stateOnly(x) } : { city: x.city };
     const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword, ...where, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now() });
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
     if (sync.status !== 'success' && sync.status !== 'skipped_fresh') return local; // provider trouble: say what we have, not what we could not check
@@ -1672,21 +1681,24 @@ export class Concierge {
     // Blocked and suppressed intents never reached the customer, so they do not count as the introduction.
     const [prior] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, a.conversationId), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
     const signature = (prior?.n ?? 0) === 0 ? 'full' : 'short';
-    // One thread in the customer's inbox: Gmail groups by subject as well as by reply headers, so every email
-    // after the first carries the conversation's subject. With no subject from the customer, our first
-    // email's subject becomes the conversation's.
+    // One thread in the customer's inbox: Gmail threads a reply only when its subject matches the thread's
+    // (after "Re:") as well as its reply headers, so every email carries the conversation's subject. A customer
+    // who wrote with no subject gets "Re:" back: a subject of our own ("A couple of quick questions") opened a
+    // new thread beside theirs.
     const [conv] = await this.db.select({ subject: t.conversations.subject }).from(t.conversations).where(eq(t.conversations.id, a.conversationId));
     let subject = a.subject;
     if (conv?.subject?.trim()) subject = reSubject(conv.subject, a.subject);
+    else if (conv && a.inReplyTo) subject = 'Re:';
     else if (conv) await this.db.update(t.conversations).set({ subject: a.subject.replace(/^re:\s*/i, '') }).where(eq(t.conversations.id, a.conversationId));
     const [who] = await this.db.select({ firstName: t.contacts.firstName }).from(t.contacts).where(eq(t.contacts.id, a.contactId));
     const vars = who?.firstName && a.vars.firstName === undefined ? { ...a.vars, firstName: who.firstName } : a.vars;
     const rendered = renderTemplate(a.template, vars, { appUrl: this.env.APP_URL, postalAddress: this.env.BUSINESS_POSTAL_ADDRESS ?? null, overrides, signature, brand });
     const headers: Record<string, string> = { 'Reply-To': this.env.CONCIERGE_FROM_ADDRESS };
-    if (a.inReplyTo) {
-      headers['In-Reply-To'] = a.inReplyTo;
-      const priorRefs = await this.db.select({ r: t.messages.referencesHeader }).from(t.messages).where(eq(t.messages.rfcMessageId, a.inReplyTo));
-      headers['References'] = buildReferencesChain([...(priorRefs[0]?.r ?? '').matchAll(/<[^<>\s]+>/g)].map((m) => m[0]), a.inReplyTo);
+    const inReplyTo = normalizeMessageId(a.inReplyTo);
+    if (inReplyTo) {
+      headers['In-Reply-To'] = inReplyTo;
+      const priorRefs = await this.db.select({ r: t.messages.referencesHeader }).from(t.messages).where(inArray(t.messages.rfcMessageId, [a.inReplyTo!, inReplyTo]));
+      headers['References'] = buildReferencesChain([...(priorRefs[0]?.r ?? '').matchAll(/<[^<>\s]+>/g)].map((m) => m[0]), inReplyTo);
     }
     if (a.containsFixtureData) headers['X-TicketGuy-Fixture'] = 'true';
     return await this.db.transaction(async (tx) => {
@@ -1889,7 +1901,7 @@ export const NEARBY_TRAVEL_MILES = 300;
 export type NearbyShow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; miles: number | null; kind: 'team' | 'artist' | null };
 
 function placeLabel(x: RequestExtraction): string {
-  return marketFor(x.city, x.state)?.label ?? x.city ?? 'there';
+  return marketFor(x.city, x.state)?.label ?? x.city ?? (stateOnly(x) ? US_STATES[stateOnly(x)!]! : 'there');
 }
 
 /** " (about 95 miles from New York)"; nothing when the distance isn't known. */
@@ -2128,8 +2140,12 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
     else if (k === 'intent') out.intent = next.intent === 'clarification' ? prior.intent : next.intent;
     else if (k === 'wantsMore') out.wantsMore = next.wantsMore; // about this message's list, never the next one's
     else if (k === 'notifyAsked') out.notifyAsked = next.notifyAsked; // this message's ask; a later reply must not re-arm a cancelled or sent alert
+    else if (k === 'city' || k === 'state') continue; // a place is moved as one, below
     else if (v !== null && v !== undefined) (out as Record<string, unknown>)[k] = v;
   }
+  // A new place replaces the old one whole: "they're playing in Connecticut" after "Metallica in NY" is
+  // Connecticut, not New York City with a CT state code beside it.
+  if (next.city || next.state) [out.city, out.state] = [next.city, next.state];
   return out;
 }
 
@@ -2158,7 +2174,8 @@ export function acknowledgedFacts(e: { name: string; category: string; localStar
 
 export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {
   const parts: string[] = [];
-  if (x.performerOrTeam && !opts.eventResolved) parts.push(`Event: ${x.performerOrTeam}${x.city ? ` in ${x.city}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);
+  const place = x.city ?? (stateOnly(x) ? US_STATES[stateOnly(x)!] : null);
+  if (x.performerOrTeam && !opts.eventResolved) parts.push(`Event: ${x.performerOrTeam}${place ? ` in ${place}` : ''}${x.dateExpression ? ` (${x.dateExpression})` : ''}`);
   if (x.quantity) parts.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
   if (x.budgetCents !== null && x.budgetBasis) parts.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'per ticket'}`);
   return parts;

@@ -40,3 +40,13 @@ describe('html-only replies', () => {
     expect(n.text.trim()).toBe('lets do 6 tickets.');
   });
 });
+
+describe('Message-IDs from the provider', () => {
+  it('brackets bare IDs, so our In-Reply-To threads and their replies find the conversation', async () => {
+    const { normalizeReceived } = await import('@/lib/email/resend');
+    const n = normalizeReceived({ id: 'e2', from: 't@customer.example', to: ['my@ticketguy.now'], subject: null, text: 'hi', html: null, headers: {}, message_id: 'CAm2@mail.gmail.com', in_reply_to: 'abc@resend.dev', references: 'root@mail.gmail.com abc@resend.dev', created_at: '2026-09-29T19:53:00Z', attachments: [] }, [], true);
+    expect(n.rfcMessageId).toBe('<CAm2@mail.gmail.com>');
+    expect(n.inReplyTo).toBe('<abc@resend.dev>');
+    expect(n.references).toBe('<root@mail.gmail.com> <abc@resend.dev>');
+  });
+});

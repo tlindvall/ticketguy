@@ -262,12 +262,28 @@ export async function callsToday(db: DbOrTx, now = new Date()): Promise<number> 
   return r?.n ?? 0;
 }
 
-async function recentlySynced(db: DbOrTx, keyword: string, city: string | null, now: Date): Promise<boolean> {
+/**
+ * Whether this same search ran recently enough to trust the catalog. "Same" is the keyword, the place key
+ * (a city, a geo point and radius, a state, or none for a national search) and a window at least as wide:
+ * a search around New York says nothing about Connecticut, and a fresh sync of October says nothing about March.
+ */
+async function recentlySynced(db: DbOrTx, keyword: string, city: string | null, window: { from: string | null; to: string | null }, now: Date): Promise<boolean> {
   const since = new Date(now.getTime() - SYNC_FRESHNESS_HOURS * 3_600_000);
+  const c = t.catalogSyncs;
   const rows = await db
-    .select({ id: t.catalogSyncs.id })
-    .from(t.catalogSyncs)
-    .where(and(eq(t.catalogSyncs.sourceId, DISCOVERY_SOURCE_ID), eq(t.catalogSyncs.keywordNormalized, keyword), city ? sql`lower(coalesce(${t.catalogSyncs.city}, '')) = ${city.toLowerCase()}` : sql`true`, gte(t.catalogSyncs.syncedAt, since), eq(t.catalogSyncs.status, 'success')))
+    .select({ id: c.id })
+    .from(c)
+    .where(
+      and(
+        eq(c.sourceId, DISCOVERY_SOURCE_ID),
+        eq(c.keywordNormalized, keyword),
+        city ? sql`lower(coalesce(${c.city}, '')) = ${city.toLowerCase()}` : sql`${c.city} is null`,
+        window.from ? sql`(${c.windowFrom} is null or ${c.windowFrom} <= ${window.from})` : sql`${c.windowFrom} is null`,
+        window.to ? sql`(${c.windowTo} is null or ${c.windowTo} >= ${window.to})` : sql`${c.windowTo} is null`,
+        gte(c.syncedAt, since),
+        eq(c.status, 'success'),
+      ),
+    )
     .limit(1);
   return rows.length > 0;
 }
@@ -285,13 +301,14 @@ export async function syncFromDiscovery(
   // A browse has no keyword; its freshness is tracked per classification so one sync serves the next asker.
   // The window is part of that key: a fresh sync of October says nothing about November.
   const keyword = normalizeKeyword(q.keyword) || (q.classificationName ? `classification:${q.classificationName.toLowerCase()}:${q.startDateTime ?? ''}..${q.endDateTime ?? ''}` : '');
-  // A geo search is fresh per point and radius, the way a city search is fresh per city.
-  const city = q.city ?? (q.geoPoint && q.radiusMiles ? `geo:${q.geoPoint}:${q.radiusMiles}mi` : null);
+  // A geo search is fresh per point and radius, the way a city search is fresh per city, and a state search per
+  // state. No place at all is a national search, and only another national search stands in for it.
+  const city = q.city ?? (q.geoPoint && q.radiusMiles ? `geo:${q.geoPoint}:${q.radiusMiles}mi` : q.stateCode ? `state:${q.stateCode.toUpperCase()}` : null);
   const record = async (status: SyncOutcome['status'], eventCount: number) => {
     await db.insert(t.catalogSyncs).values({ sourceId: DISCOVERY_SOURCE_ID, keywordNormalized: keyword, city, windowFrom: q.startDateTime ?? null, windowTo: q.endDateTime ?? null, status, eventCount, trigger: q.trigger, syncedAt: now });
   };
 
-  if (!q.force && (await recentlySynced(db, keyword, city, now))) return { status: 'skipped_fresh', eventsSeen: 0, eventsUpserted: 0, entityIds: [] };
+  if (!q.force && (await recentlySynced(db, keyword, city, { from: q.startDateTime ?? null, to: q.endDateTime ?? null }, now))) return { status: 'skipped_fresh', eventsSeen: 0, eventsUpserted: 0, entityIds: [] };
   const limit = q.dailyCallLimit ?? DEFAULT_DAILY_CALL_LIMIT;
   if ((await callsToday(db, now)) >= limit) {
     await record('skipped_budget', 0);
