@@ -37,7 +37,7 @@ import { findAlternatives } from '@/lib/market/alternatives';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
-import { normalizePlace, stateOnly, US_STATES } from '@/lib/domain/us-states';
+import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -270,7 +270,9 @@ export class Concierge {
     if (!venueTz && /\b(new york|nyc|manhattan|brooklyn|msg)\b/i.test(msg.sanitizedText ?? '')) venueTz = 'America/New_York';
 
     // A sender over the inbound limits gets no model call and no reply until the window passes; staff hear once a day.
-    if (contact) {
+    // The addresses on the test allowlist are ours, testing on purpose, and are not held to them.
+    const tester = !!contact && this.env.EMAIL_TEST_RECIPIENT_ALLOWLIST.map((a) => a.trim().toLowerCase()).includes(contact.emailLookup);
+    if (contact && !tester) {
       const over = await this.inboundLimitHit(contact.id, msg);
       if (over) {
         const told = await this.recentAudit('intake.rate_limited', contact.id, msg.receivedAt, 24);
@@ -399,6 +401,17 @@ export class Concierge {
     const { brief: withDefaults, assumed } = applyDefaults(merged);
     merged = withDefaults;
     const assumptions = [...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+
+    // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
+    // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
+    // the city ("London, KY") keeps it in scope.
+    if (!picked && eventOutsideUs(merged)) {
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+      await this.transition(req.id, 'unsupported', 'event_outside_us');
+      await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: `We only cover events in the US for now, so I can’t help with ${merged.performerOrTeam ? `${titleCaseName(merged.performerOrTeam)} in ` : ''}${placeName(merged)}.` }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      return { state: 'unsupported', revision, extraction: merged };
+    }
 
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
@@ -1894,6 +1907,18 @@ function candidateFrom(entity: { name: string; league: string | null }, e: { id:
  * Home and away games in the window → home at the venue, or would they travel. A few games → name them. More
  * than that → ask for the date. It never lists more than three events and never claims availability.
  */
+/** The place they named is outside the US: a non-US city or country, with no US state beside it. */
+export function eventOutsideUs(x: Pick<RequestExtraction, 'city' | 'state'>): boolean {
+  if (stateCodeFor(x.state)) return false;
+  const place = [x.city, x.state].filter(Boolean).join(', ');
+  return !!place && !/\bnew london\b/i.test(place) && isOutsideUs(place);
+}
+
+/** "London, UK" as they'd write it, for the reply. */
+function placeName(x: Pick<RequestExtraction, 'city' | 'state'>): string {
+  return [x.city, x.state].filter(Boolean).join(', ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'That event';
+}
+
 /** A show this far from where they asked is the same trip, and is proposed rather than asked about. */
 export const NEARBY_SAME_TRIP_MILES = 60;
 /** Shows within this distance are offered on their own; farther ones only when there is nothing closer. */

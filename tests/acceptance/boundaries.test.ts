@@ -5,7 +5,7 @@ import * as t from '@/lib/db/schema';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { INBOUND_PER_HOUR } from '@/lib/intake/boundaries';
-import { openTestDb, makeConcierge, inbound } from '../harness';
+import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
 
 async function interpretAll(h: DbHandle, c: ReturnType<typeof makeConcierge>) {
   for (let i = 0; i < 5; i++) {
@@ -89,5 +89,18 @@ describe('boundaries', () => {
     // The ten within the limit were answered; the three over it were not.
     const answered = new Set((await sendsTo(from)).map((s) => s.requestId));
     expect(answered.size).toBe(INBOUND_PER_HOUR);
+  });
+
+  it('an address on the test allowlist is ours, testing on purpose, and is not held to the limit', async () => {
+    const from = 'tester@customer.example';
+    const c = makeConcierge(h, { env: testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: from }) });
+    for (let i = 0; i < INBOUND_PER_HOUR + 3; i++) {
+      await c.ingestInbound(inbound({ text: `Two Knicks tickets please, test ${i}`, from, subject: `Knicks test ${i}` }));
+    }
+    await interpretAll(h, c);
+    const limited = (await h.db.select().from(t.auditLog).where(eq(t.auditLog.action, 'intake.rate_limited'))).filter((a) => String((a.diff as { messageId?: string }).messageId ?? '') && a.entityId !== null);
+    const [contact] = await h.db.select().from(t.contacts).where(eq(t.contacts.emailLookup, from));
+    expect(limited.filter((a) => a.entityId === contact!.id)).toHaveLength(0);
+    expect(new Set((await sendsTo(from)).map((s) => s.requestId)).size).toBe(INBOUND_PER_HOUR + 3);
   });
 });
