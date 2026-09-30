@@ -95,6 +95,7 @@ export function narrowByFor(hint: CategoryHint | null): { narrowBy: string; askF
 export function oneOfLabel(hint: CategoryHint | null, genre: GenreFamily | null): string {
   const sport: Partial<Record<CategoryHint, string>> = { sports: 'game', nhl: 'hockey game', nba: 'basketball game', mlb: 'baseball game', wnba: 'WNBA game', nfl: 'football game', soccer: 'soccer match' };
   if (hint && sport[hint]) return sport[hint]!;
+  if (hint === 'comedy') return 'comedy show';
   return genre ? `${genre.words} show` : 'show';
 }
 

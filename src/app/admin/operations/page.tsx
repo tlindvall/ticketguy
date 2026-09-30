@@ -9,6 +9,9 @@ import { DEFAULT_SWITCHES, loadSwitches } from '@/lib/email/send-gate';
 import { ActionButton } from '@/components/ActionButton';
 import { JsonForm } from '@/components/JsonForm';
 import { DbMediaStore } from '@/lib/media/storage';
+import { TEST_MODE_KEY, TEST_PROVIDER } from '@/lib/email/test-mode';
+import Link from 'next/link';
+import { SPEND_SQL, PRICES_USD_PER_MTOKEN, priceFor } from '@/lib/ai/budget';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,9 +27,17 @@ export default async function Operations() {
   const switches = await loadSwitches(db);
   const missingSwitches = DEFAULT_SWITCHES.filter((k) => !(k in switches));
   const intentStates = await db.select({ state: t.sendIntents.state, n: sql<number>`count(*)::int` }).from(t.sendIntents).groupBy(t.sendIntents.state);
+  const [captured] = await db.select({ n: sql<number>`count(*)::int` }).from(t.messages).where(and(eq(t.messages.direction, 'outbound'), eq(t.messages.provider, TEST_PROVIDER)));
+  const testMode = switches[TEST_MODE_KEY] === true;
   const uncertain = await db.select().from(t.sendIntents).where(eq(t.sendIntents.state, 'uncertain')).limit(20);
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const [spend] = await db.select({ usd: sql<number>`coalesce(sum(case when kind='released' then -estimated_usd_micros else estimated_usd_micros end),0)::bigint` }).from(t.usageLedger).where(gte(t.usageLedger.createdAt, dayStart));
+  const [spend] = await db.select({ usd: sql<number>`${SPEND_SQL}` }).from(t.usageLedger).where(gte(t.usageLedger.createdAt, dayStart));
+  // What the caps are charging each call at: a model without a configured rate is billed at the high fallback.
+  const model = e.modelName;
+  const configured = model ? e.modelPrices[model] ?? PRICES_USD_PER_MTOKEN[model] ?? null : null;
+  const rate = model ? priceFor(model, e.modelPrices) : null;
+  const budgetStops = await db.select({ n: sql<number>`count(*)::int` }).from(t.auditLog).where(and(eq(t.auditLog.action, 'ai.budget_rules_fallback'), gte(t.auditLog.createdAt, dayStart)));
+  const providerStops = await db.select({ n: sql<number>`count(*)::int` }).from(t.auditLog).where(and(eq(t.auditLog.action, 'ai.provider_rules_fallback'), gte(t.auditLog.createdAt, dayStart)));
   const media = await new DbMediaStore(db, e.MEDIA_MAX_TOTAL_BYTES).usage();
   const staleApprovals = await db.select({ n: sql<number>`count(*)::int` }).from(t.recommendations).where(and(eq(t.recommendations.reviewStatus, 'approved'), lt(t.recommendations.expiresAt, now)));
   const quarantined = await db.select({ n: sql<number>`count(*)::int` }).from(t.inboundEvents).where(eq(t.inboundEvents.processingState, 'quarantined'));
@@ -37,13 +48,13 @@ export default async function Operations() {
     <main className="space-y-8">
       <header>
         <h1 className="text-xl font-bold">Operations</h1>
-        <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · event alerts {e.EVENT_ALERTS_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'} · drafts {autoApproveActive(e) ? <strong>auto-approved (testing allowlist on)</strong> : 'wait for a person'}</p>
+        <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · event alerts {e.EVENT_ALERTS_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'} · drafts {autoApproveActive(e) ? <strong>auto-approved (testing allowlist on)</strong> : 'wait for a person'} · test mode {testMode ? <strong>ON (nothing is sent)</strong> : 'off'} (<Link className="underline" href="/admin/test">change</Link>)</p>
       </header>
       <section className="grid gap-3 text-sm sm:grid-cols-3">
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Outbox</h2><p>pending {lag.pending} ({lag.due} due now) · dead {lag.dead} · oldest pending {lag.oldestPendingSeconds ?? 0}s</p>{retrying.length ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{retrying.length} retrying after failure</span></p> : null}</div>
-        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">AI spend today</h2><p>${(Number(spend?.usd ?? 0) / 1e6).toFixed(3)} of ${e.aiGlobalDailyBudgetUsd.toFixed(2)} cap</p></div>
+        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">AI spend today (UTC)</h2><p>${(Number(spend?.usd ?? 0) / 1e6).toFixed(3)} of ${e.aiGlobalDailyBudgetUsd.toFixed(2)} cap</p>{model && rate ? <p className="text-xs">{model} at ${rate.input}/${rate.output} per million tokens {configured ? '(configured)' : <span className="tg-badge tg-badge-danger">no rate set: using the high fallback; set MODEL_PRICES_USD_PER_MTOKEN={model}=input:output</span>}</p> : <p className="text-xs">rules mode (no model)</p>}{budgetStops[0]?.n ? <p className="mt-1"><span className="tg-badge tg-badge-warn">{budgetStops[0].n} emails read by rules today: budget used up</span></p> : null}{providerStops[0]?.n ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{providerStops[0].n} emails read by rules today: the AI provider refused the call (check the model name, API key and billing)</span></p> : null}</div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Media</h2><p>{(media.totalBytes / 1048576).toFixed(1)} MiB of {(media.budgetBytes / 1048576).toFixed(0)} MiB {media.ratio >= 0.8 ? <span className="tg-badge tg-badge-warn">≥80%</span> : null}</p><p>pending-budget attachments: {pendingMedia[0]?.n ?? 0}</p></div>
-        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Sends by state</h2><ul>{intentStates.map((s) => <li key={s.state}>{s.state}: {s.n}</li>)}</ul></div>
+        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Sends by state</h2><ul>{intentStates.map((s) => <li key={s.state}>{s.state}: {s.n}</li>)}</ul>{captured?.n ? <p className="mt-1 text-xs text-gray-600">of which recorded by test mode, not sent: {captured.n}</p> : null}</div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Attention</h2><p>stale approvals: {staleApprovals[0]?.n ?? 0}</p><p>quarantined webhooks: {quarantined[0]?.n ?? 0}</p><p>unprocessed inbound events: {inboundPending[0]?.n ?? 0}</p><p>uncertain sends: {uncertain.length}</p></div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Source failures (24h)</h2>{sourceFailures.length ? <ul>{sourceFailures.map((f) => <li key={f.sourceId + f.status}>{f.sourceId}: {f.status} ×{f.n}</li>)}</ul> : <p>none</p>}</div>
       </section>
@@ -51,7 +62,7 @@ export default async function Operations() {
         <h2 className="font-semibold">Kill switches <span className="text-xs font-normal text-gray-500">(enabled = capability allowed; evaluated at every dispatch)</span></h2>
         {missingSwitches.length ? <p className="mt-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-900">Missing switch rows: {missingSwitches.join(', ')}. The gate only stops a capability when its row says so, so a missing row is <strong>not</strong> a stop — it is an unseeded database. Run <code>pnpm db:seed</code> against this database.</p> : null}
         <table className="tg-table mt-2"><thead><tr><th>Switch</th><th>State</th><th></th></tr></thead>
-          <tbody>{Object.entries(switches).map(([k, v]) => <tr key={k}><td>{k}</td><td><span className={`tg-badge ${v ? 'tg-badge-ok' : 'tg-badge-danger'}`}>{v ? 'allowed' : 'STOPPED'}</span></td><td>{staff.role === 'admin' ? <ActionButton url="/api/admin/switches" body={{ key: k, enabled: !v, reason: v ? 'staff stop' : 'staff resume' }} label={v ? 'Stop' : 'Resume'} /> : null}</td></tr>)}</tbody>
+          <tbody>{Object.entries(switches).filter(([k]) => k !== TEST_MODE_KEY).map(([k, v]) => <tr key={k}><td>{k}</td><td><span className={`tg-badge ${v ? 'tg-badge-ok' : 'tg-badge-danger'}`}>{v ? 'allowed' : 'STOPPED'}</span></td><td>{staff.role === 'admin' ? <ActionButton url="/api/admin/switches" body={{ key: k, enabled: !v, reason: v ? 'staff stop' : 'staff resume' }} label={v ? 'Stop' : 'Resume'} /> : null}</td></tr>)}</tbody>
         </table>
       </section>
       <section>

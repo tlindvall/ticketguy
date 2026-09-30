@@ -24,6 +24,8 @@ export type GateInput = {
   evidenceFresh: boolean;
   /** Active marketing permission for marketing sends. */
   marketingPermission: boolean;
+  /** Test mode will record this send instead of delivering it (src/lib/email/test-mode.ts). */
+  testMode?: boolean;
 };
 
 export type GateResult = { allowed: true } | { allowed: false; reasons: string[] };
@@ -72,7 +74,8 @@ export function evaluateGate(env: Env, switches: Record<string, boolean>, suppre
     if (switches['follow_ups'] === false) reasons.push('kill_switch_follow_ups');
   }
   if (suppressed.has('global')) reasons.push('suppressed_global');
-  if (env.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0 && !env.EMAIL_TEST_RECIPIENT_ALLOWLIST.includes(input.recipientLookup)) reasons.push('recipient_not_in_test_allowlist');
+  // The allowlist keeps real mail to named testers. A captured send reaches nobody, so test customers can be anyone.
+  if (!input.testMode && env.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0 && !env.EMAIL_TEST_RECIPIENT_ALLOWLIST.includes(input.recipientLookup)) reasons.push('recipient_not_in_test_allowlist');
   if (REQUIRES_APPROVAL.includes(input.messageClass) || env.HUMAN_REVIEW_REQUIRED && input.messageClass !== 'acknowledgment' && input.messageClass !== 'clarification' && input.messageClass !== 'verification' && input.messageClass !== 'no_result' && input.messageClass !== 'event_alert' && input.messageClass !== 'follow_up') {
     if (!input.approved) reasons.push('not_approved');
     if (!input.approvalHashMatches) reasons.push('approval_hash_mismatch');

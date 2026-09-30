@@ -102,7 +102,7 @@ describe('the Sep 30 live QA (post-#55), replayed exactly', () => {
     expect(all('X02')).toContain('Offer B is the one that meets what you asked for: $585 for all five, fees included. That’s $65 less than Offer A.');
     const m01 = all('M01');
     expect(m01).toContain('Offer D is the one that meets what you asked for: $585 for all five, fees included.');
-    expect(m01).toContain('Left out: it’s six tickets the seller won’t split, and you won’t buy an extra.');
+    expect(m01).toContain('It’s six tickets the seller won’t split, and you won’t buy an extra.');
     expect(m01).not.toMatch(/Offer B costs less|\$480 for all five/);
   });
 
@@ -115,11 +115,11 @@ describe('the Sep 30 live QA (post-#55), replayed exactly', () => {
   it('M03: none fits, each for its own reason, and the smallest change is named; M03-F1 at $230 picks A, keeping noon (R4-B02)', () => {
     const m03 = all('M03');
     expect(m03).toContain('None of these meets all your requirements. The smallest change: if you can stretch to $230 in total, Offer A meets everything else.');
-    expect(m03).toContain('Left out: delivery by 6pm misses your noon deadline.');
+    expect(m03).toContain('Delivery by 6pm misses your noon deadline.');
     expect(m03).not.toMatch(/Offer B is the one|On delivery:/);
     const f1 = all('M03-F1');
     expect(f1).toContain('Offer A is the one that meets what you asked for: $230 for both, fees included.');
-    expect(f1).toContain('Left out: delivery by 6pm misses your noon deadline.');
+    expect(f1).toContain('Delivery by 6pm misses your noon deadline.');
   });
 
   it('X01: the per-order fee and fee-inclusive price compare: B saves $10; no market floor in the answer (R4-B03)', () => {
@@ -137,7 +137,8 @@ describe('the Sep 30 live QA (post-#55), replayed exactly', () => {
 
   it('A11: one price object: $72 before fees + $48 = $264, $88 each all-in, delivery by 6pm (R4-B03)', () => {
     const body = all('A11');
-    expect(body).toContain('$72 a ticket before fees, plus $48 in fees for the order: $264 for three, which is $88 each including fees');
+    expect(body).toContain('The example image shows three tickets: $264 in total, $88 each including fees.');
+    expect(body).toContain('$72 × 3, plus $48 in fees for the whole order.');
     expect(body).toContain('delivery by 6pm');
     expect(body).not.toContain('$72 a ticket including fees');
     expect(body).not.toMatch(/could seat all three|look at how the tickets are trading/);
@@ -145,7 +146,7 @@ describe('the Sep 30 live QA (post-#55), replayed exactly', () => {
 
   it('A11-F1: the correction is acknowledged first and the summary is the corrected one (R4-B04)', () => {
     const body = all('A11-F1');
-    expect(body.indexOf('You’re right, and I’ve corrected it')).toBeGreaterThan(0);
+    expect(body.indexOf('Updated from your email')).toBeGreaterThan(0);
     expect(body).toContain('$88 each including fees');
     expect(body).not.toMatch(/\$72 a ticket including fees|72 tickets|up to \$216/);
   });

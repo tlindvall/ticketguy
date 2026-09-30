@@ -69,12 +69,13 @@ describe('post-#54: screenshots and corrections through the listing reader', () 
     expect(req!.eventId).toBe(RANGERS_TB);
     const all = (await repliesTo(r.requestId)).join('\n=====\n');
     expect(all).toContain("· 3 tickets");
-    expect(all).toContain('in section 212, row 18, seats 7, 8 and 9');
+    expect(all).toContain('Section 212, row 18, seats 7, 8 and 9, together.');
     expect(all).toContain('$264');
     expect(all).toMatch(/obstructed|limited view/i);
     // Its total already carries the $48 order fee: not "fees are extra" under a total that includes them.
-    expect(all).toContain('Its total, $264, is $48 more than three at $72, so it looks like it includes the fees it lists.');
-    expect(all).not.toContain('Fees are extra');
+    // Their email says it's a synthetic example: its facts, and no checkout or live-market advice (post-#56 QA).
+    expect(all).toContain('Since it’s a fictional example, there’s no live offer to check.');
+    expect(all).not.toMatch(/Fees are extra|before you pay|resale market/);
     expect(all).not.toMatch(/Two tickets\. Got it|assumed two tickets|Which event/);
   });
 
@@ -93,7 +94,8 @@ describe('post-#54: screenshots and corrections through the listing reader', () 
     await run(c);
     expect(reader.calls).toEqual(['text']);
     const replies = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId))).filter((s) => !before.has(s.id)).map((s) => s.bodyText).join('\n=====\n');
-    expect(replies).toContain("$210 in total including fees");
+    // B alone, from the offers compared before: judged on its own, nothing of A's carried over (live R05-F1).
+    expect(replies).toContain('Looking at Offer B on its own, with nothing from Offer A applied: it meets what you asked for, at $210 for both, fees included.');
     expect(replies).not.toMatch(/accessible seats|wheelchair or companion spaces\)|meant for people who need them|I wouldn’t buy this one/);
   });
 

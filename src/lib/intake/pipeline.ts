@@ -18,7 +18,7 @@ import { inspectImage, selectProcessableImages } from '@/lib/media/image-validat
 import { createMediaStore } from '@/lib/media/storage';
 import { fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED } from '@/lib/ai/extraction';
+import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
@@ -38,7 +38,7 @@ import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOU
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
-import { cleanSeatField, flat, offersInText, partyTerms, statedFeeBasis, timeLabel } from '@/lib/advice/text-offers';
+import { cleanSeatField, flat, offersInText, partyTerms, statedFeeBasis, timeLabel, type TextOffer } from '@/lib/advice/text-offers';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -46,6 +46,7 @@ import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
+import { capturedIds, isTestConversation, testConversationIds, testModeFrom, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
@@ -331,9 +332,13 @@ export class Concierge {
     // every offer they sent (post-#54 replay). A budget is kept only when it isn't one of their offers' prices.
     const latestOffers = offersInText(latestText);
     if (latestOffers.length >= 2 && extraction.budgetCents !== null && latestOffers.some((o) => o.perTicketCents === extraction.budgetCents || o.totalCents === extraction.budgetCents)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    // Without a budget word, a price they quote from a listing or offer is that listing's price, not a budget:
+    // "a listing … PARKING ONLY at $20 each" was read as "Budget: $20 a ticket" (live V03), and "Offer B … $210
+    // total" as "up to $210" (live R05-F1).
+    if (extraction.budgetCents !== null && !BUDGET_WORDS.test(latestText) && isListingPrice(flat(latestText), extraction.budgetCents, latestOffers)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // A follow-up about a listing we already read ("the image says $72 per ticket BEFORE fees…") is about that
     // listing's price: without budget words it sets no budget (live A11-F1 replay: $72 × 3 became "up to $216").
-    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !/\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b/i.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), sql`${t.listingEvidence.fields} is not null`)).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !BUDGET_WORDS.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), sql`${t.listingEvidence.fields} is not null`)).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // "$72 per ticket" is a price, not 72 tickets (live A11-F1 replay): a quantity that is one of the prices named.
     if (extraction.quantity !== null && new RegExp(`\\$\\s?${extraction.quantity}(?:\\.\\d{2})?\\b`).test(flat(latestText)) && !new RegExp(`\\b${extraction.quantity}\\s+(?:tickets?|seats?)\\b`, 'i').test(flat(latestText).replace(/\$\s?\d[\d,.]*/g, ''))) extraction = { ...extraction, quantity: null };
     // Likewise a quoted price: with offers side by side there is no single price they're asking about.
@@ -613,7 +618,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: unverifiedRequirements(merged, latestText), recheck: revision > 1, eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(pickNote ? [pickNote] : []), ...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1, eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -629,7 +634,7 @@ export class Concierge {
     // A question answered from what they sent (their offers side by side, a screenshot, delivery against their
     // trip) gets its answer once, seconds later: "I'll look at how the tickets are trading" was promising work
     // that wasn't the job (post-#55 writing review). Anything we assumed still gets the acknowledgment.
-    const selfContained = !assumptions.length && (latestOffers.length >= 2 || !!listing.fields || questionsAsked(latestText).deliveryRisk);
+    const selfContained = !assumptions.length && (latestOffers.length >= 2 || !!listing.fields || questionsAsked(latestText).deliveryRisk || !!questionsAsked(latestText).parking);
     if ((revision === 1 || picked || cameFromReferral) && !selfContained) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
@@ -704,7 +709,17 @@ export class Concierge {
     const est = estimateUsdMicros(model, Math.ceil(input.text.length / 3) + 800, 700, 0, this.env.modelPrices);
     // The ledger records the model the cost was estimated against; naming a different one makes every
     // spend figure unattributable.
-    const res = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'extract', model, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
+    let res;
+    try {
+      res = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'extract', model, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
+    } catch (e) {
+      // Out of AI budget: the email is still read, by the rules reader, rather than handed to a person with
+      // nothing done (post-#56 live QA: two simple comparisons became "a person will reply", and they answer
+      // from what the customer wrote). The draft falls back to the evidence-only email the same way.
+      if (!(e instanceof BudgetExceededError)) throw e;
+      await audit(this.db, { actor: 'system', action: 'ai.budget_rules_fallback', entityKind: 'request', entityId: req.id, revision: req.currentRevision, diff: { job: 'extract', scope: e.scope, detail: e.detail } });
+      return new FixtureExtractor().extract(input);
+    }
     let out: RequestExtraction;
     try {
       out = await this.deps.extractor.extract(input);
@@ -712,8 +727,16 @@ export class Concierge {
       // Nothing was billed when the call never reached the model, so the reservation must not stand: a
       // run of transport failures would otherwise eat the daily cap without producing one extraction.
       // A refusal, a malformed response or a truncated one did consume tokens, so those keep theirs.
-      if (e instanceof ModelOutputError && e.kind === 'transport') {
+      if (e instanceof ModelOutputError && (e.kind === 'transport' || e.kind === 'rejected')) {
         await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'extract' });
+      }
+      // A refused call (unknown model, bad key, no billing) is the same for every email, not this one, so
+      // retrying it or handing it to a person changes nothing: the rules reader answers, and the operations
+      // page counts each one so the setting gets fixed.
+      if (e instanceof ModelOutputError && e.kind === 'rejected') {
+        console.error('[ai] provider refused the extraction call; reading by rules', e.message.slice(0, 200));
+        await audit(this.db, { actor: 'system', action: 'ai.provider_rules_fallback', entityKind: 'request', entityId: req.id, revision: req.currentRevision, diff: { job: 'extract', model, error: e.message.slice(0, 300) } });
+        return new FixtureExtractor().extract(input);
       }
       throw e;
     }
@@ -758,7 +781,7 @@ export class Concierge {
         if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
         return out;
       } catch (e) {
-        if (e instanceof ModelOutputError && e.kind === 'transport') await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'listing_read' });
+        if (e instanceof ModelOutputError && (e.kind === 'transport' || e.kind === 'rejected')) await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'listing_read' });
         throw e;
       }
     };
@@ -926,6 +949,25 @@ export class Concierge {
     });
   }
 
+  /**
+   * A customer's request whose work was dead-lettered (its model calls kept failing): handed to a person with the
+   * error, once, and the customer told a person has it. Replaying the dead event later still answers it.
+   */
+  async handOffFailedWork(a: { eventType: string; payload: Record<string, unknown>; error: string }): Promise<'handed_off' | 'not_customer_work' | 'already_handled'> {
+    if (!['request.interpret', 'research.requested'].includes(a.eventType)) return 'not_customer_work';
+    const requestId = String(a.payload.requestId ?? '');
+    const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, requestId));
+    if (!req || ['closed', 'manual_attention', 'recommendation_sent', 'unsupported'].includes(req.state)) return 'already_handled';
+    const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
+    const msgId = typeof a.payload.messageId === 'string' ? a.payload.messageId : null;
+    const [msg] = msgId
+      ? await this.db.select().from(t.messages).where(eq(t.messages.id, msgId))
+      : await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+    if (!contact || !msg) return 'already_handled';
+    await this.parkForStaff({ req, revision: req.currentRevision, reason: `work_failed:${a.eventType}: ${a.error.slice(0, 300)}`, contact, msg });
+    return 'handed_off';
+  }
+
   private async parkForStaff(a: { req: typeof t.requests.$inferSelect; revision: number; reason: string; contact: typeof t.contacts.$inferSelect; msg: typeof t.messages.$inferSelect }): Promise<void> {
     const { req, revision, reason, contact, msg } = a;
     await this.transition(req.id, 'manual_attention', reason.slice(0, 500));
@@ -953,6 +995,8 @@ export class Concierge {
     if (!this.deps.emailProvider) return skip('sending_disabled');
     const switches = await loadSwitches(this.db);
     if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
+    // Test mode sends nothing; the request shows as needing a person on the board, which is where testing watches.
+    if (testModeFrom(switches)) return skip('test_mode');
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, args.requestId));
     if (!req) return skip('request_not_found');
     if (req.state !== 'manual_attention') return skip('no_longer_waiting');
@@ -1141,7 +1185,13 @@ export class Concierge {
     if (single && merged.quantity !== null) {
       const only = events[0]!;
       // What we found, not a claim about everything on in the city (live G02: "the only show in Manhattan").
-      return { pick: only, note: `It's the only ${oneOfLabel(merged.categoryHint, genre)} I found in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}${startsAt.after !== null ? ` starting after ${timeLabel(startsAt.after)}` : ''}, so I've gone ahead with it. Tell me if you had something else in mind.` };
+      const found = `the only ${oneOfLabel(merged.categoryHint, genre)} I found in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}${startsAt.after !== null ? ` starting after ${timeLabel(startsAt.after)}` : ''}`;
+      // With a requirement nothing here can check (a teenager's admission), it is one possibility, not a choice made
+      // for them (post-#56 QA G02).
+      // The time is what we can check; the rest is said as still to check (writing review: "This is one evening option
+      // I found", not a pick made for them).
+      const evening = startsAt.after !== null && startsAt.after >= 17 * 60 ? 'evening ' : '';
+      return { pick: only, note: ageNeed(threadText) ? `This is one ${evening}option: ${found}. ${startsAt.after !== null || startsAt.before !== null ? 'The time fits; ' : ''}I haven't confirmed it works for your group yet, so the checks it still needs are below.` : `It's ${found}, so I've gone ahead with it. Tell me if you had something else in mind.` };
     }
     await recordVersion();
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
@@ -1669,23 +1719,36 @@ export class Concierge {
     // ("I'm now happy to buy six… which of the same offers?", "I can raise it to $230… using only my supplied
     // offers"): the same offers, judged again on the changed terms, never a fresh market search (live M01-F1,
     // M03-F1). A follow-up that names an offer itself ("ignore Offer A, only B") is its own question.
-    let textOffers = offersInText(said);
+    let textOffers = offersInText(said, venue.timezone);
     if (textOffers.length < 2 && !/\b(?:[Oo]ffer|[Oo]ption|[Ll]isting)\s+[A-Z1-9]\b/.test(said) && /\b(?:offers?|options?|listings?)\b/i.test(said)) {
       for (const earlier of [...threadMessages].reverse()) {
-        const found = offersInText(earlier);
+        const found = offersInText(earlier, venue.timezone);
         if (found.length >= 2) {
           textOffers = found;
           break;
         }
       }
     }
+    // "Ignore Offer A now. I only want your view on Offer B": the one they kept, from the offers they compared
+    // before, is judged alone against their requirements, not sent to a market search (live R05-F1).
+    let offersSetAside: string[] = [];
+    const keptOne = textOffers.length ? [] : offersInText(said, venue.timezone, 1);
+    if (keptOne.length === 1) {
+      const kept = keptOne[0]!;
+      const before = threadMessages.filter((m) => m !== said).map((m) => offersInText(m, venue.timezone)).reverse().find((f) => f.length >= 2 && f.some((o) => o.label === kept.label));
+      if (before) {
+        offersSetAside = before.filter((o) => o.label !== kept.label).map((o) => o.name);
+        textOffers = keptOne;
+      }
+    }
+    const judged = textOffers.length >= 2 || offersSetAside.length > 0;
     // The listing they showed us, newest first: what it displayed is the price being checked, with its source.
     const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), sql`${t.listingEvidence.fields} is not null`)).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
     // "section Offer B: 211" was the label read as the seat (retest R2-B06): the seat fields keep the value only.
     const evFields = ev ? (ev.fields as unknown as ListingFields) : null;
     // With two or more of their offers, the comparison is the answer: a single-listing read of the same email
     // mixes their fields (A's price and access with B's seat) and contradicts it (post-#54 QA, R3-B01).
-    const read: SubjectListing | null = textOffers.length >= 2 ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    const read: SubjectListing | null = judged ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
     // What they typed about that listing since it was read wins over the read: "the image says $72 per ticket
     // BEFORE fees, plus $48 for the whole order … delivery by 6pm" (live A11-F1 repeated the old summary).
     const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read, changes: [] as string[] };
@@ -1698,7 +1761,7 @@ export class Concierge {
       ? withFees
         ? { perTicketCents: Math.round(shown.wholePartyCents! / tickets), assumedPerTicket: false, source: shown.source, feeBasis: 'all_in', seenAt: shown.observedAt, seller: shown.seller, base: { perTicketCents: shown.perTicketCents, feesCents: shown.wholePartyCents! - shown.perTicketCents * tickets, tickets, totalCents: shown.wholePartyCents! } }
         : { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
-      : brief.quotedPriceCents != null && textOffers.length < 2
+      : brief.quotedPriceCents != null && !judged
         ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported', feeBasis: statedFeeBasis(said, brief.quotedPriceCents) ?? statedFeeBasis(saidInThread, brief.quotedPriceCents) ?? undefined }
         : null;
     // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
@@ -1733,12 +1796,14 @@ export class Concierge {
       const [answered] = await this.db.select({ id: t.requestOutcomes.id }).from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, req.id), eq(t.requestOutcomes.kind, 'staff_comparison_answered'))).limit(1);
       if (offered && !answered) await this.db.insert(t.requestOutcomes).values({ requestId: req.id, kind: 'staff_comparison_answered', source: 'staff', details: { minutes: Math.round((now.getTime() - offered.at.getTime()) / 60_000), sourceId: best.offer.sourceId, totalCents: best.comparableTotalCents, checked: cmp.eligible.length + cmp.needsReview.length + cmp.excluded.length }, actor: 'system', at: now });
     }
-    const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && textOffers.length < 2
+    const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && !judged
       ? await this.takeForStaffComparison({ requestId: req.id, contactEmail: contact?.emailLookup ?? '', requirements })
       : null;
     // Their terms read across the thread, latest word winning: how many go, extra tickets, the arrival deadline.
-    const offerNeeds = textOffers.length >= 2 ? { noObstructed: NO_OBSTRUCTED.test(`${saidInThread}\n${brief.seatingPreference ?? ''}`), togetherRequired: !!brief.togetherRequired, baseline: comparedAgainst(said, textOffers.map((o) => o.label)) ?? comparedAgainst(saidInThread, textOffers.map((o) => o.label)), terms: partyTerms(threadMessages) } : null;
-    const packet = buildPacket({ corrections: corrected.changes, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const offerNeeds = judged ? { noObstructed: NO_OBSTRUCTED.test(`${saidInThread}\n${brief.seatingPreference ?? ''}`), togetherRequired: !!brief.togetherRequired, baseline: comparedAgainst(said, textOffers.map((o) => o.label)) ?? comparedAgainst(saidInThread, textOffers.map((o) => o.label)), terms: partyTerms(threadMessages, venue.timezone) } : null;
+    // A made-up example they want read, not bought (A11: "this is a synthetic QA example, not an actual offer").
+    const synthetic = !!shown && /\b(?:synthetic|fictional|made[- ]up|hypothetical|imaginary|pretend|mock|sample)\b[^.]{0,40}\b(?:example|offer|screenshot|image|listing)s?\b|\bnot (?:an? )?(?:actual|real) offer\b|\bdon'?t (?:search|check) live (?:inventory|listings)\b|\bnot a real offer\b/i.test(flat(saidInThread));
+    const packet = buildPacket({ offersSetAside, synthetic, corrections: corrected.changes, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -1766,7 +1831,7 @@ export class Concierge {
           } catch (e) {
             // Same rule as extraction: a call that never reached the model keeps no reservation. This
             // loop retries, so an unreleased reservation would be charged twice for one draft.
-            if (e instanceof ModelOutputError && e.kind === 'transport') {
+            if (e instanceof ModelOutputError && (e.kind === 'transport' || e.kind === 'rejected')) {
               await releaseBudget(this.db, { requestId: req.id, revision: args.revision, model, estimatedUsdMicros: est, jobName: 'draft' });
             }
             throw e;
@@ -1940,7 +2005,10 @@ export class Concierge {
     });
   }
 
-  /** Dispatcher: claim → gate (current state) → provider → record. Never sends fixture content; never resends blindly. */
+  /**
+   * Dispatcher: claim → gate (current state) → provider → record. Never sends fixture content; never resends blindly.
+   * In test mode the provider step is replaced by a recorded capture and everything else runs unchanged.
+   */
   async dispatchSend(sendIntentId: string): Promise<{ outcome: 'sent' | 'blocked' | 'suppressed' | 'uncertain' | 'already_handled' | 'manual_reconciliation'; reasons?: string[] }> {
     const now = this.now();
     const [intent] = await this.db.select().from(t.sendIntents).where(eq(t.sendIntents.id, sendIntentId));
@@ -1985,21 +2053,28 @@ export class Concierge {
       const [rev] = await this.db.select().from(t.marketingPermissions).where(and(eq(t.marketingPermissions.contactId, intent.contactId), eq(t.marketingPermissions.status, 'revoked'))).orderBy(desc(t.marketingPermissions.createdAt)).limit(1);
       marketingPermission = !!perm && (!rev || rev.createdAt < perm.createdAt);
     }
-    const gate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission });
+    const capture = testModeFrom(switches) || (await isTestConversation(this.db, intent.conversationId));
+    const gate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
       await audit(this.db, { actor: 'system', action: 'send.blocked', entityKind: 'send_intent', entityId: intent.id, diff: { reasons: gate.reasons, messageClass: intent.messageClass } });
       return { outcome: suppressedOnly ? 'suppressed' : 'blocked', reasons: gate.reasons };
     }
-    if (!this.deps.emailProvider) {
+    const provider = this.deps.emailProvider;
+    if (!capture && !provider) {
       await releaseClaim(this.db, claim, 'blocked', 'no_email_provider_configured');
       return { outcome: 'blocked', reasons: ['no_email_provider_configured'] };
     }
     try {
-      const r = await this.deps.emailProvider.send({ idempotencyKey: intent.dedupeKey, from: intent.fromAddress, to: intent.recipient, subject: intent.subject, text: intent.bodyText, html: intent.bodyHtml, headers: intent.headers });
+      const captured = capture ? capturedIds() : null;
+      const r = captured ?? (await provider!.send({ idempotencyKey: intent.dedupeKey, from: intent.fromAddress, to: intent.recipient, subject: intent.subject, text: intent.bodyText, html: intent.bodyHtml, headers: intent.headers }));
       await recordProviderAccepted(this.db, claim, r.providerMessageId, now);
-      await this.db.insert(t.messages).values({ conversationId: intent.conversationId!, direction: 'outbound', provider: 'resend', providerEmailId: r.providerMessageId, rfcMessageId: null, inReplyTo: intent.headers['In-Reply-To'] ?? null, referencesHeader: intent.headers['References'] ?? null, fromAddress: intent.fromAddress, toAddresses: [intent.recipient], subject: intent.subject, sanitizedText: intent.bodyText, receivedAt: now }).onConflictDoNothing();
+      if (captured) {
+        await this.db.update(t.sendIntents).set({ providerRfcMessageId: captured.rfcMessageId }).where(eq(t.sendIntents.id, intent.id));
+        await audit(this.db, { actor: 'system', action: 'send.captured_test_mode', entityKind: 'send_intent', entityId: intent.id, diff: { messageClass: intent.messageClass } });
+      }
+      await this.db.insert(t.messages).values({ conversationId: intent.conversationId!, direction: 'outbound', provider: captured ? TEST_PROVIDER : 'resend', providerEmailId: r.providerMessageId, rfcMessageId: captured?.rfcMessageId ?? null, inReplyTo: intent.headers['In-Reply-To'] ?? null, referencesHeader: intent.headers['References'] ?? null, fromAddress: intent.fromAddress, toAddresses: [intent.recipient], subject: intent.subject, sanitizedText: intent.bodyText, receivedAt: now }).onConflictDoNothing();
       if (intent.approvalId) {
         await this.db.update(t.recommendations).set({ reviewStatus: 'sent' }).where(eq(t.recommendations.id, intent.approvalId));
         if (intent.requestId) await this.transition(intent.requestId, 'recommendation_sent', 'approved_recommendation_sent');
@@ -2053,20 +2128,23 @@ export class Concierge {
 
   /**
    * A place in the staffed comparison pilot, if there is one: an owner who is staff, the request not already
-   * taken, and fewer than the limit taken for customers (staff's own tests are served but not counted). Taking it
-   * records the promise as an outcome, so the pilot can be measured against it.
+   * taken, and fewer than the limit taken for customers (staff's own tests and test-mode customers are served but
+   * not counted). Taking it records the promise as an outcome, so the pilot can be measured against it.
    */
   private async takeForStaffComparison(a: { requestId: string; contactEmail: string; requirements: string[] }): Promise<{ hours: string } | null> {
     const owner = this.env.STAFF_COMPARISON_OWNER;
     const staff = new Set(this.env.STAFF_EMAIL_ALLOWLIST.map((x) => x.toLowerCase()));
     if (!owner || !staff.has(owner)) return null;
     const hours = staffedHoursLabel(this.env);
-    const taken = await this.db.select({ requestId: t.requestOutcomes.requestId, email: t.contacts.emailLookup }).from(t.requestOutcomes).innerJoin(t.requests, eq(t.requests.id, t.requestOutcomes.requestId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(eq(t.requestOutcomes.kind, 'staff_comparison_offered'));
+    const taken = await this.db.select({ requestId: t.requestOutcomes.requestId, email: t.contacts.emailLookup, conversationId: t.requests.conversationId }).from(t.requestOutcomes).innerJoin(t.requests, eq(t.requests.id, t.requestOutcomes.requestId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(eq(t.requestOutcomes.kind, 'staff_comparison_offered'));
     if (taken.some((x) => x.requestId === a.requestId)) return { hours };
-    const isStaff = staff.has(a.contactEmail.toLowerCase());
-    if (!isStaff && taken.filter((x) => !staff.has(x.email.toLowerCase())).length >= this.env.STAFF_COMPARISON_LIMIT) return null;
-    await this.db.insert(t.requestOutcomes).values({ requestId: a.requestId, kind: 'staff_comparison_offered', source: 'system', details: { owner, requirements: a.requirements, counted: !isStaff }, actor: 'system', at: this.now() });
-    await audit(this.db, { actor: 'system', action: 'pilot.staff_comparison_offered', entityKind: 'request', entityId: a.requestId, diff: { owner, counted: !isStaff } });
+    const [req] = await this.db.select({ conversationId: t.requests.conversationId }).from(t.requests).where(eq(t.requests.id, a.requestId));
+    const isTest = await isTestConversation(this.db, req?.conversationId ?? null);
+    const counted = !staff.has(a.contactEmail.toLowerCase()) && !isTest;
+    const tests = await testConversationIds(this.db, [...new Set(taken.map((x) => x.conversationId))]);
+    if (counted && taken.filter((x) => !staff.has(x.email.toLowerCase()) && !tests.has(x.conversationId)).length >= this.env.STAFF_COMPARISON_LIMIT) return null;
+    await this.db.insert(t.requestOutcomes).values({ requestId: a.requestId, kind: 'staff_comparison_offered', source: 'system', details: { owner, requirements: a.requirements, counted }, actor: 'system', at: this.now() });
+    await audit(this.db, { actor: 'system', action: 'pilot.staff_comparison_offered', entityKind: 'request', entityId: a.requestId, diff: { owner, counted } });
     return { hours };
   }
 
@@ -2190,7 +2268,8 @@ export function unverifiedRequirements(x: RequestExtraction, text = ''): string[
   if (x.accessibilityNeeds?.trim()) out.push(x.accessibilityNeeds.trim().replace(/^./, (c) => c.toUpperCase()));
   if (x.seatingPreference?.trim()) out.push(x.seatingPreference.trim().replace(/^./, (c) => c.toUpperCase()));
   if (age) out.push(age);
-  return out;
+  // One admission check, not the same age rule said three ways (G02).
+  return age ? out.filter((r) => r === age || !/\b(?:21|18)\s*\+|\bage\b|year[- ]old|\bteen/i.test(r)) : out;
 }
 
 /**
@@ -2226,15 +2305,24 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean } {
-  const t = text.replace(/[’‘]/g, "'");
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null } {
+  const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
   // Accessible spaces as one of the options on the table (a price or an offer beside them), not a mention
   // that turns them down: "I don't need wheelchair spaces; compare these two" asks nothing about access.
   const spaces = t.split(/[.?!;\n]+/).some((sentence) => /\b(wheelchair|accessible|ada|companion)[- ]?(accessible )?(spaces?|seats?|seating|section|spots?)\b/i.test(sentence) && /\$\s?\d|\b(offer|listing|option|section|row)\b/i.test(sentence));
   const sales = /\b(how many (?:tickets |seats )?(?:have |has )?(?:actually |really )?sold|completed sales|actual sales|sold for|sales data|tickets sold)\b/i.test(t);
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales };
+  // A "parking only" listing weighed as a way in (post-#56 QA V03): it is a parking pass, and the answer is the
+  // admission ticket they need, at the admission price they gave when they gave one.
+  const parkingListing = /\bparking[- ]only\b|\bparking pass(?:es)?\b|\bparking (?:listing|ticket|spot)s?\b/i.test(t) && /\b(?:get (?:us |me |both of us |them )?in(?:to)?|attend|entry|admission|see the (?:game|show)|a (?:good |cheap )?way)\b/i.test(t);
+  const adm = parkingListing ? /\b(?:admission|event ticket|game ticket|entry)\b[^$.]{0,50}\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket)?([^.;]{0,40})/i.exec(t) : null;
+  const parking = parkingListing ? { admissionEachCents: adm ? Math.round(Number(adm[1]!.replace(/,/g, '')) * 100) : null, admissionAllIn: adm ? /\b(?:including|incl\.?|with)\s+(?:all\s+)?fees\b|\ball[- ]in\b/i.test(adm[2] ?? '') : false } : null;
+  // "If another offer is $98.89 each BEFORE fees, would adding its fees make its gap from our $88 all-in price
+  // larger or smaller?" (live A11-F1): arithmetic on their numbers, answered without any market data.
+  const gap = /\bgap\b[^?]{0,80}\b(?:larger|bigger|wider|smaller|narrower)\b/i.test(t) ? /\b(?:another|other|a second|a different|second)\s+(?:offer|listing|seller|price)\b[^.?]{0,40}?\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket)?\s*(before fees|plus fees|excluding fees|including (?:all )?fees|all[- ]in)?/i.exec(t) : null;
+  const gapAgainst = gap ? { perTicketCents: Math.round(Number(gap[1]!.replace(/,/g, '')) * 100), beforeFees: /before|plus|excluding/i.test(gap[2] ?? '') } : null;
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst };
 }
 
 /**
@@ -2522,8 +2610,35 @@ export function correctListing(fields: SubjectListing, text: string): { fields: 
   const out: SubjectListing = { ...fields };
   const changes: string[] = [];
   const cents = (x: string) => Math.round(Number(x.replace(/,/g, '')) * 100);
-  const per = fields.perTicketCents;
-  if (per !== null) {
+  const WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  // A new version replaces the old numbers ("new version… now FOUR seats… $70 each… these replace the old
+  // image's numbers"); a correction fixes how the same numbers were read ("$72 is BEFORE fees").
+  const replacing = /\b(?:new version|now|replace[sd]?|instead|updated?|changed?)\b/i.test(t);
+  if (replacing) {
+    const qty = /\b(?:now\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2})\s+(?:(?:seats?|tickets?)\b)/i.exec(t);
+    const n = qty ? WORDS[qty[1]!.toLowerCase()] ?? Number(qty[1]) : null;
+    if (n && n !== fields.quantity) {
+      out.quantity = n;
+      changes.push(`${countWordLower(n)} tickets`);
+    }
+    const seats = /\bseats?\s+(\d{1,3})\s*(?:[-–]|to|through)\s*(\d{1,3})\b/i.exec(t);
+    if (seats) {
+      const [from, to] = [Number(seats[1]), Number(seats[2])];
+      const list = to >= from && to - from < 20 ? Array.from({ length: to - from + 1 }, (_, k) => String(from + k)) : null;
+      if (list && list.join(',') !== (fields.seatNumbers ?? []).join(',')) {
+        out.seatNumbers = list;
+        changes.push(`seats ${from} to ${to}`);
+      }
+    }
+    const each = /(?:base price is\s+)?\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|per ticket|a ticket)\b/i.exec(t);
+    if (each && cents(each[1]!) !== fields.perTicketCents) {
+      out.perTicketCents = cents(each[1]!);
+      out.feeBasis = /\bbase\b|before fees|plus (?:a\s+)?\$/i.test(t) ? 'before_fees' : /including|incl\.?\s+fees|all[- ]in/i.test(t.slice(each.index, each.index + 60)) ? 'all_in' : 'unknown';
+      changes.push(`${formatUsd(out.perTicketCents)} a ticket${out.feeBasis === 'before_fees' ? ' before fees' : out.feeBasis === 'all_in' ? ' including fees' : ''}`);
+    }
+  }
+  const per = out.perTicketCents;
+  if (per !== null && per === fields.perTicketCents) {
     const amt = `\\$\\s?${(per / 100).toFixed(per % 100 ? 2 : 0).replace('.', '\\.')}(?:\\.00)?`;
     if (new RegExp(`${amt}\\s*(?:per ticket|each|a ticket|/ticket)?\\s*(?:is\\s+)?(?:before|plus|excluding|not including)\\s+(?:any\\s+)?fees`, 'i').test(t) && fields.feeBasis !== 'before_fees') {
       out.feeBasis = 'before_fees';
@@ -2535,25 +2650,52 @@ export function correctListing(fields: SubjectListing, text: string): { fields: 
   }
   const fee = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?(?:fees?\s+)?(?:for|per|on)\s+(?:the\s+)?(?:whole\s+|entire\s+)?order\b/i.exec(t);
   const total = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?total\b/i.exec(t);
-  const q = fields.quantity;
+  const q = out.quantity;
   if (total && cents(total[1]!) !== fields.wholePartyCents) {
     out.wholePartyCents = cents(total[1]!);
-    changes.push(`the total is ${formatUsd(out.wholePartyCents)}`);
+    changes.push(`${formatUsd(out.wholePartyCents)} in total`);
   } else if (!total && fee && per !== null && q) {
     const w = per * q + cents(fee[1]!);
     if (w !== fields.wholePartyCents) {
       out.wholePartyCents = w;
-      changes.push(`the total is ${formatUsd(w)}`);
+      changes.push(`${formatUsd(w)} in total`);
     }
   }
   if (fee && per !== null && q && out.wholePartyCents !== null && out.wholePartyCents > per * q) changes.push(`that includes ${formatUsd(cents(fee[1]!))} in fees for the order, so ${formatUsd(Math.round(out.wholePartyCents / q))} each including fees`);
-  const by = /\bdeliver(?:y|ed)?\s+(?:is\s+)?(?:by|before)\s+(noon|midday|\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(t);
-  if (by && !(fields.deliveryText ?? '').toLowerCase().includes(by[1]!.toLowerCase().replace(/\s+/g, ''))) {
-    out.deliveryText = `delivery by ${by[1]!.replace(/\s+/g, '').toLowerCase()}${/game day|event day|on the day/i.test(t) ? ' on the day' : ''}`;
-    changes.push(`delivery is by ${by[1]!.replace(/\s+/g, '').toLowerCase()}`);
+  const by = /\bdeliver(?:y|ed)?\s+(?:is\s+)?(?:now\s+)?(?:by|before)\s+(noon|midday|\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(t);
+  if (by && !(fields.deliveryText ?? '').toLowerCase().replace(/\s+/g, '').includes(by[1]!.toLowerCase().replace(/\s+/g, '').replace(/:00/, ''))) {
+    out.deliveryText = `delivery by ${by[1]!.replace(/\s+/g, '').toLowerCase()}${/game day|event day|on the day|on october|on oct/i.test(t) ? ' on the day' : ''}`;
+    changes.push(`delivery by ${by[1]!.replace(/\s+/g, '').toLowerCase()}`);
   }
   return { fields: out, changes };
 }
+
+/**
+ * The one price check we can make without seeing seats: the provider's lowest face value times the party, against
+ * their total. When that alone is over, the budget line says so with the arithmetic instead of "check the total"
+ * (live G02: 3 × $59.10 = $177.30 before fees, over a $150 cap). Face value is before fees, so it is a floor.
+ */
+export function withFaceValueCheck(reqs: string[], x: RequestExtraction, event: { faceMinCents: number | null }): string[] {
+  const total = wholePartyBudgetCents(x.budgetCents, x.budgetBasis, x.quantity);
+  const q = x.quantity;
+  if (total === null || !q || event.faceMinCents == null || event.faceMinCents * q <= total) return reqs;
+  const floor = event.faceMinCents * q;
+  const line = `${formatUsd(total)} in total: Ticketmaster lists these from ${formatUsd(event.faceMinCents)} a ticket before fees, so ${countWordLower(q)} already come to ${formatUsd(floor)} before fees, over your ${formatUsd(total)}`;
+  return reqs.map((r) => (r.startsWith(`${formatUsd(total)} in total`) ? line : r));
+}
+
+/** Words that make a dollar figure their budget rather than a price they saw. */
+const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b/i;
+
+/** Whether this amount is a price their offers or listings carry: an offer's own figure, or one said of a listing. */
+function isListingPrice(text: string, cents: number, offers: TextOffer[]): boolean {
+  if (offers.some((o) => o.perTicketCents === cents || o.totalCents === cents || (o.perTicketCents !== null && o.quantity !== null && o.perTicketCents * o.quantity === cents))) return true;
+  const d = cents % 100 ? (cents / 100).toFixed(2).replace('.', '\\.') : String(cents / 100);
+  return new RegExp(`\\b(?:listings?|offers?|sellers?|found|priced|costs?|selling|asking)\\b[^.?!]{0,120}\\$\\s?${d}(?:\\.00)?\\b`, 'i').test(text);
+}
+
+const countWordLower = (n: number) => (['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'][n] ?? String(n));
+
 
 /** They already have tickets and are asking how to get in with them (a barcode image, a transfer, entry). */
 export function entryHelpAsked(text: string): boolean {
@@ -2756,7 +2898,10 @@ export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: 
 export function staffReasonLabel(reason: string): string {
   if (reason === 'clarification_limit_reached') return 'three rounds of questions did not settle the request';
   if (reason === 'staff_comparison') return 'a comparison was promised: find seats that meet their requirements';
-  if (reason.startsWith('extraction_failed:budget_exceeded')) return 'the AI budget for this request ran out';
+  // Which cap it was: the whole service's day, or this request (post-#56 QA: "this request" was said for both).
+  if (reason.startsWith('extraction_failed:budget_exceeded')) return /\(global_daily\)/.test(reason) ? 'the service’s daily AI budget is used up' : /\(call_count\)/.test(reason) ? 'this request made too many AI calls' : 'the AI budget for this request ran out';
+  if (reason.startsWith('extraction_failed:rejected')) return `the AI provider refused the call (check the model name, API key and billing): ${reason.split(': ').slice(1).join(': ').slice(0, 160)}`;
+  if (reason.startsWith('work_failed:')) return `the AI provider kept failing, so this was stopped after several tries: ${reason.split(': ').slice(1).join(': ').slice(0, 160)}`;
   if (reason.startsWith('extraction_failed:')) return `the AI could not read the message (${reason.split(':')[1] ?? 'unknown'})`;
   return reason.split(':')[0]!.replace(/_/g, ' ');
 }

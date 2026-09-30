@@ -201,8 +201,10 @@ function renderBody(
       const seller = String(v.seller);
       const title = String(v.eventTitle ?? v.eventLabel);
       const where = [v.eventWhen ? String(v.eventWhen) : '', v.venueName ? `at ${String(v.venueName)}` : ''].filter(Boolean).join(' ');
+      // A browse that found one show opens with what it is and what's still unchecked (writing review, G02).
+      const opening = v.opening ? String(v.opening) : '';
       const rest = unverified.length
-        ? ` is on general sale on ${seller}. I haven’t seen its seats or prices, so I can’t tell you yet whether any fit what you need.`
+        ? ` is on general sale on ${seller}. I haven’t seen its seats or prices${opening ? '.' : ', so I can’t tell you yet whether any fit what you need.'}`
         : ` is still on general sale on ${seller}, and that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
       // Asked again whether we've checked: the answer is no, first, in plain words.
       const recheckLine = v.recheck && unverified.length ? `No, I haven't checked any of these: I can't see ${seller}'s seats, their prices or their access from here.` : '';
@@ -221,20 +223,20 @@ function renderBody(
         v.affiliate ? AFFILIATE_DISCLOSURE : '',
       ].filter(Boolean);
       const linkLine = unverified.length ? `Event page on ${seller}: ${String(v.url)}` : `Buy tickets on ${seller}: ${String(v.url)}`;
-      const text = ['Hey,', ...(recheckLine ? [recheckLine] : []), lead, ...(unverified.length ? [checkLead, unverified.map((u) => `- ${u}`).join('\n')] : []), linkLine, ...tail];
+      const text = ['Hey,', ...(recheckLine ? [recheckLine] : []), ...(opening ? [opening] : []), lead, ...(unverified.length ? [checkLead, unverified.map((u) => `- ${u}`).join('\n')] : []), linkLine, ...tail];
       // The seller's name is the link; the event title links to the event's page.
       const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
       const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)}`, `on ${link(seller, String(v.url), true)}`)}`;
       const checks = unverified.length ? [`<p style="margin:0 0 8px;font-weight:600;">${esc(checkLead)}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${unverified.map((u) => `<li style="margin:0 0 8px;">${esc(u)}</li>`).join('')}</ul>`] : [];
-      const html = [para('Hey,'), ...(recheckLine ? [para(recheckLine)] : []), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
+      const html = [para('Hey,'), ...(recheckLine ? [para(recheckLine)] : []), ...(opening ? [`<p style="margin:0 0 18px;"><strong>${esc(opening.split(/(?<=\.)\s/)[0]!)}</strong>${esc(opening.slice(opening.split(/(?<=\.)\s/)[0]!.length))}</p>`] : []), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
       return wrap(text, html);
     }
     case 'holding': {
-      // Sent when only a person can move the request; it promises a person, never a time or a result.
+      // Sent when only a person can move the request. It says what happened and where the answer will come, and
+      // promises no time and no result: office hours are not a response time (post-#56 writing review).
       const paras = [
         'Hey,',
-        'Thanks for bearing with me. This one needs a person, so I’ve passed it to the team.',
-        `You’ll hear back in this thread. The team replies from ${String(v.hours ?? '9am to 9pm ET')}.`,
+        'I couldn’t finish this one automatically, so it needs a manual check. I’ve passed it to the team, and the answer will come in this thread.',
       ];
       return wrap(paras, paras.map(para));
     }

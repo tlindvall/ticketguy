@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type { z } from 'zod';
-import { ModelOutputError, type StructuredClient, type StructuredRequest, type StructuredResult } from './model-client';
+import { ModelOutputError, providerError, type StructuredClient, type StructuredRequest, type StructuredResult } from './model-client';
 
 /**
  * Anthropic Messages API client. Structured output via `output_config.format` + Zod, so a response that
@@ -37,7 +37,7 @@ export class AnthropicClient implements StructuredClient {
         fallbacks: 'default',
       });
     } catch (e) {
-      if (e instanceof Anthropic.APIError) throw new ModelOutputError('transport', `${e.status ?? 'api'}: ${e.message}`);
+      if (e instanceof Anthropic.APIError) throw providerError(e.status, (e as { code?: string | null }).code ?? null, e.message);
       throw new ModelOutputError('transport', e instanceof Error ? e.message : String(e));
     }
     if (res.stop_reason === 'refusal') {

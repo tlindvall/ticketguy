@@ -886,3 +886,49 @@ An offer with unknown fees is compared by break-even, never called a fit. When n
 - "I already bought, will this barcode get us in?" gets sourced official-transfer guidance, not intake.
 - Doors are stored and shown apart from the start.
 - Writing: the decision comes first and is the only emphasis, and comparisons carry nothing that doesn't change the choice.
+
+## 57. Test mode: everything runs as live, and email is recorded instead of sent
+
+**Why.** Testing hit Resend's daily quota. Resend counts received mail against it as well as sent mail, so a tester writing in from Gmail uses it up from both sides.
+
+**What changes.** An admin turns test mode on at `/admin/test`. It is a `test_mode` row in the switch table: read at every dispatch, audited, and off when the row is missing.
+
+- The dispatcher runs as normal: claim, then the gate, then everything after a send (state changes, the staffed-comparison hand-off). The one step that changes is the provider call, which is replaced by a record:
+  - the send is marked `provider_accepted` with a `test_…` id;
+  - the email becomes an outbound message with provider `test` and its own Message-ID, so a reply can thread on it;
+  - the audit log gets `send.captured_test_mode`.
+- Staff alert emails are skipped with `test_mode`.
+- The tester allowlist does not apply to a recorded send, since it reaches nobody. Every other gate check still applies.
+
+**Test customers.** Test customers write in without real mail. They use the admin board, or `POST /api/test/inbound` with a bearer `TEST_AGENT_TOKEN`, so an agent needs neither an inbox nor a staff login. The message enters through the ordinary intake:
+
+- a reply carries the In-Reply-To and References a mail client would set for our latest email;
+- by default it quotes that email the way Gmail does, so the quote stripper is exercised;
+- screenshots go through the same image checks.
+
+**Safety.**
+- Writes are refused while test mode is off.
+- The API reads only conversations a test customer wrote in.
+- Such a conversation stays test-only when test mode is turned off: nothing in it is ever emailed, so an invented address never gets real mail.
+- Test mode stops real customers' replies too. The banner on every admin page is there so nobody forgets it is on.
+
+## 58. A spent or refused AI budget still answers; customer work that keeps failing goes to a person, saying why
+
+**Budget.** Spend is what calls actually cost: a settled call at its tokens times the configured rate, and a reservation only while its call is running. Every finished call counts toward the per-revision call cap. The operations page shows the model's configured price, or a red badge when it is costed at the high fallback.
+
+**What happens when the model can't be used.**
+- **Budget used up:** the email is read by the deterministic rules reader and answered from what the customer wrote. The stop is audited and counted.
+- **Provider refuses the call** (unknown model, bad key, no quota or billing, invalid request): the same, with a red count on /admin/operations, because the setting is wrong for every email, not this one.
+- **Timeouts and rate limits:** retried, but customer work gets four tries. After that the request goes to a person with the provider's error in the staff alert, and the customer gets the holding reply once.
+- **A refusal, malformed or truncated output:** about this message, so it still goes to a person.
+
+A parked request can be re-read from its admin page ("Read the latest email again"), and dead events can be replayed from /admin/operations. Both are idempotent.
+
+**Holding reply.** It says the request needs a manual check and that the answer will come in the thread. It gives no hours or reply time that nothing enforces.
+
+**Offers.**
+- A follow-up that keeps one offer from an earlier comparison ("ignore A, only B") is judged alone, and the reply says so.
+- Named offers ("the green listing", "the first seller"), per-ticket fees, "$X all-in for both" totals and seller time zones are read.
+- Offer lines give the reason, not a status label.
+
+**Synthetic examples** get what they show and the arithmetic, never market, checkout or availability advice. A hypothetical price comparison is answered from the customer's own two numbers.

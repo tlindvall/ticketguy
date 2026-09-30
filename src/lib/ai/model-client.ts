@@ -19,11 +19,28 @@ import { LISTING_SCHEMA, type ListingImage, type ListingRead, type ListingReader
 export class ModelOutputError extends Error {
   override name = 'ModelOutputError';
   constructor(
-    public readonly kind: 'refusal' | 'incomplete' | 'malformed' | 'transport',
+    /**
+     * 'transport' is worth retrying (timeouts, rate limits, 5xx). 'rejected' is not: the provider refused the
+     * call itself (bad parameter, unknown model, bad key, no quota), so the same call fails the same way until
+     * someone changes the configuration or billing, and retrying only delays the customer silently.
+     */
+    public readonly kind: 'refusal' | 'incomplete' | 'malformed' | 'transport' | 'rejected',
     message: string,
   ) {
     super(message);
   }
+}
+
+/**
+ * A provider API error, classed: retry only what can succeed on retry. 400/401/403/404/422 and an exhausted
+ * account ("insufficient_quota", "billing") are the configuration's problem, not the network's (post-#56 live
+ * QA: five sends went silent while failing calls were retried).
+ */
+export function providerError(status: number | undefined, code: string | null | undefined, message: string): ModelOutputError {
+  const text = `${status ?? 'api'}${code ? ` ${code}` : ''}: ${message}`.slice(0, 400);
+  const quota = /insufficient_quota|billing|quota/i.test(`${code ?? ''} ${message}`);
+  if (quota || (status !== undefined && [400, 401, 403, 404, 422].includes(status))) return new ModelOutputError('rejected', text);
+  return new ModelOutputError('transport', text);
 }
 
 export type Usage = { inputTokens: number; outputTokens: number };

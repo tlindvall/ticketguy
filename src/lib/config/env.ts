@@ -209,6 +209,12 @@ const rawSchema = z.object({
   INNGEST_SIGNING_KEY: z.string().optional(),
   PREFERENCE_TOKEN_SIGNING_KEY: z.string().optional(),
   INTERNAL_CRON_SECRET: z.string().optional(),
+  /**
+   * Bearer token for the test-mode customer API (/api/test/*): lets a testing agent write in as a customer and
+   * read the replies test mode recorded, without an inbox or a staff login. Unset = the API is off. It only
+   * works while an admin has test mode on, and only ever reads test conversations.
+   */
+  TEST_AGENT_TOKEN: z.string().optional(),
   SENTRY_DSN: z.string().optional(),
 
   TICKETMASTER_DISCOVERY_API_KEY: z.string().optional(),
@@ -324,6 +330,9 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
   }
   if (e.EMAIL_SEND_ENABLED && !e.RESEND_API_KEY) {
     throw new ConfigurationError('EMAIL_SEND_ENABLED=true requires RESEND_API_KEY');
+  }
+  if (e.TEST_AGENT_TOKEN && e.TEST_AGENT_TOKEN.length < 32) {
+    throw new ConfigurationError('TEST_AGENT_TOKEN must be at least 32 characters when set');
   }
   if (e.TICKETMASTER_DISCOVERY_ENABLED && !e.TICKETMASTER_DISCOVERY_API_KEY) {
     throw new ConfigurationError('TICKETMASTER_DISCOVERY_ENABLED=true requires TICKETMASTER_DISCOVERY_API_KEY');

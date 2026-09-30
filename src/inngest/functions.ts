@@ -62,8 +62,11 @@ export async function runOutboxBatch(limit: number): Promise<{ processed: number
       await markDispatched(db, ev.id, ev.leaseToken, new Date());
     } catch (e) {
       failed += 1;
-      const r = await markFailed(db, ev, e instanceof Error ? e.message : String(e), new Date());
+      const error = e instanceof Error ? e.message : String(e);
+      const r = await markFailed(db, ev, error, new Date());
       await audit(db, { actor: 'system', action: r === 'dead' ? 'outbox.dead_lettered' : 'outbox.retry_scheduled', entityKind: 'outbox_event', entityId: ev.id, diff: { eventType: ev.eventType, attempts: ev.attempts } });
+      // A customer's request that stops here is never silent: it goes to a person, saying what failed.
+      if (r === 'dead') await c.handOffFailedWork({ eventType: ev.eventType, payload: ev.payload, error }).catch((err) => console.error('[outbox] hand-off failed', err instanceof Error ? err.message : err));
     }
   }
   return { processed: leased.length - failed, failed };

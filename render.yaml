@@ -73,6 +73,9 @@ services:
         sync: false
       - key: INTERNAL_CRON_SECRET
         sync: false
+      # Test-mode customer API (docs/TEST_MODE.md). Optional; unset turns the API off.
+      - key: TEST_AGENT_TOKEN
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_WEBHOOK_SECRET

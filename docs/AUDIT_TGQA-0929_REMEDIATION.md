@@ -361,3 +361,60 @@ Every fix below is checked on the full rendered email, not the opening line. The
 - **Signature:** your design gives the full signature on the first reply in a thread and the short one on follow-ups. Dropping the extra acknowledgments makes it more consistent; changing the design is your call.
 - **R4-B08 house/techno precision:** still category-level matching. It needs genre evidence we don't have.
 - **R4-F01–F04 (verified inventory, monitoring, group trends, visitor policy):** capability and policy gaps, unchanged.
+
+---
+
+# Round 6: the Sep 30 "latest commits" live QA after #56 (18 sends)
+
+**Status:** new PR from `claude/relaxed-faraday-x955vr` (restarted on main after #56 merged). Not deployed.
+
+**How it's tested.**
+- `tests/acceptance/qa0930b-replay.test.ts` replays all 18 sends in send order, wrapped at 76 characters. It runs them three ways:
+  - with a budget;
+  - with the daily budget at $0 and a model extractor that fails the test if it's called;
+  - with a model that times out on every call, through the outbox's retries, to the hand-off.
+- `tests/unit/reliability-0930b.test.ts` covers:
+  - provider error classes;
+  - actual-cost accounting and the call cap;
+  - the four-try limit;
+  - a model name the provider refuses;
+  - the variants' arithmetic;
+  - the rules reader's party size and budget basis.
+
+**Why R05 and V01 went to a person, and why five sends got no reply.**
+
+| Finding | Cause (traced) | Fix |
+|---|---|---|
+| R5-B01 R05, V01 "a person will reply" | [Certain] The daily cap (`global_daily`), not the per-request cap. A first call is estimated at about $0.07, far below $1. No price was set for the model, so every call was costed at the $15/$75 fallback. The cap also summed estimates, never actual usage. By early afternoon UTC the day's estimates had passed $10 while the real bill was a few dollars. | Spend counts a finished call at its actual cost, and a reservation only while its call is running. With no budget left, the email is read by the rules reader and answered, never parked. Each such stop is audited (`ai.budget_rules_fallback`) and counted on /admin/operations. The operations page shows the model's configured price, or a red badge when it is using the fallback. |
+| R5-B02 V02, V03, A11-F2, V04, R05-F1 unanswered | [Likely, not proven] Every provider error was classed as a network error, so it was retried with backoff for about 42 minutes. Then it was dead-lettered with no reply and no alert. A wrong model name, key or billing (for example after a model switch) fails every call this way. R05-F1 fell under R05's once-per-request holding reply. | Provider errors are split. 400, 401, 403, 404 and 422 responses, and quota or billing errors, are `rejected`: nothing to retry, so the email is read by rules and answered, with `ai.provider_rules_fallback` counted in red on the operations page. Timeouts and rate limits stay `transport` and are retried, but customer work (`request.interpret`, `research.requested`) gets four tries, not eight. After the fourth, the request goes to a person with the provider's error in the staff alert, and the customer gets the holding reply once. /admin/requests/[id] has "Read the latest email again" for a parked request. |
+| Call cap never counted finished calls | Settling a call changes its row to `settled`, and the cap counted only `reservation` rows. | Calls = reserved + settled − released. |
+
+**The variants, on the replay.**
+
+| Case | Now |
+|---|---|
+| R05 | Offer B, $210 for both. A's wheelchair spaces are ruled out with the reason. |
+| V01 | The green listing, $180 for all four. Gold is ruled out: "It's five tickets the seller won't split, and you won't buy an extra." "For the whole order" is read as a total, so there's no "I've read $200 as the total" acknowledgment. |
+| V02 | "$190 all-in for both" is the pair's total, not $190 each. Seller times are converted: A's 1:30pm New York time (10:30am Los Angeles time) misses the 1pm deadline. B, at 12:30pm, fits at $220. |
+| V03 | "With a friend" is two tickets. The $20 parking price isn't taken as a budget. The reply is only the parking answer: $190 for two admissions. No acknowledgment, no seat search, no "send me the listing". |
+| A11-F2 | "Updated from your email: four tickets, $316 in total, $79 each including fees." Then three points: $70 × 4 plus $36; section 212, row 18, seats 7 to 10; limited view and delivery by 4pm on Oct 1. Then "These replace what the image showed." |
+| V04 | $52.50 + $12.75 a ticket, plus $8: $269, against $272. Both fit $275, and the first saves $3. The per-ticket fee is in the working, and "both offers say immediate transfer" is read mid-sentence. |
+| R05-F1 | "Looking at Offer B on its own, with nothing from Offer A applied: it meets what you asked for, at $210 for both." The immediate transfer is read from the later sentence, and $210 is no longer taken as a budget. |
+| A11-F1 | The $98.89-before-fees question is answered from their numbers: "Larger… its fees can only add to that." Live, that answer came from the market-floor paragraph, which a synthetic example no longer shows. |
+| G02 | The reply opens: "This is one evening option: … The time fits; I haven't confirmed it works for your group yet." "Two adults and our 16-year-old" is three. When Ticketmaster's lowest face value times the party is already over the cap, the budget line says so with the arithmetic (3 × $59.10 = $177.30). |
+
+**Writing-review changes.**
+- Offer lines give the reason ("Over your $600 budget by $50.", "Delivery by 6pm misses your noon deadline."), not a "Left out:" or "Meets what you asked for" label.
+- M02 opens "Offer B is the straightforward choice if you'd rather skip another checkout", with the $40 threshold straight after it.
+- A synthetic example gets no market, checkout or availability advice: the total and the per-ticket price with fees, then the working, the seats and the catches as points, each said once.
+- The holding reply says what happened and where the answer will come, with no business hours presented as a reply time.
+
+**Not proven here:**
+- **The cause of the five silences on the live service.** The fixes cover both likely causes (refused calls and long retries). The real cause is the "Last error" of the retried or dead-lettered events on /admin/operations.
+- **The model path for these emails.** The replay uses the rules reader, which is now also the budget fallback. A model-reading replay would need recorded model outputs.
+- **G02's face value.** `events.face_min_cents` comes from Discovery `priceRanges`, which not every event has.
+
+**Not changed, and why:**
+- **Signature consistency across follow-ups:** still your design call (as in Round 5).
+- **A04 house/techno precision:** needs genre evidence we don't have.
+- **Visitor policy:** unchanged.
