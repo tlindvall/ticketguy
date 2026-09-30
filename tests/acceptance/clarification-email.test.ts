@@ -84,7 +84,8 @@ describe('the clarification email', () => {
     expect(body).toContain("Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.");
     expect(body.match(/outside the US/g)).toHaveLength(1);
     expect(body).not.toContain('are you based in the US?');
-    expect(body).toContain('Just reply and I’ll narrow it down.');
+    // The canned closer is gone: the question is the ask (TGQA-R6 writing review).
+    expect(body).not.toContain('Just reply and I’ll narrow it down.');
     // First message in the conversation: the full signature, and an honest disclosure.
     expect(body).toContain('Ticket Guy\nYour second opinion before you buy.\nhttps://ticketguy.now');
     expect(intent!.bodyHtml).toContain('/email/ticket-mark@3x.png');
@@ -109,7 +110,7 @@ describe('the clarification email', () => {
     expect(second!.bodyText).not.toContain('outside the US');
   });
 
-  it('assumes instead of asking: a bare budget is the total and an unstated quantity is two, each said once', async () => {
+  it('assumes a bare budget is the total; asks an unstated quantity once', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: 'Two tickets for the Knicks on October 24, around $300.', from: 'jo@customer.example', subject: 'Knicks' }));
     await interpretAll(h, c);
@@ -121,8 +122,9 @@ describe('the clarification email', () => {
     const q = await c.ingestInbound(inbound({ text: 'Rangers tickets on Oct 3 please.', from: 'noqty@customer.example', subject: 'Rangers' }));
     await interpretAll(h, c);
     const [qi] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, (q as { requestId: string }).requestId));
-    expect(qi!.bodyText).not.toContain('How many tickets do you need');
-    expect(qi!.bodyText).toContain("I've assumed two tickets. Just tell me if you need a different number.");
+    // An unstated quantity is asked, once, rather than assumed to be two (TGQA-R6 1008).
+    expect(qi!.bodyText.match(/How many tickets do you need/g)).toHaveLength(1);
+    expect(qi!.bodyText).not.toContain("I've assumed two tickets");
 
     // Real doubt is still asked, not papered over.
     const few = await c.ingestInbound(inbound({ text: 'A few tickets for the Rangers on Oct 3.', from: 'few@customer.example', subject: 'Rangers' }));

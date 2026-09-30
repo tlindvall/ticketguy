@@ -35,7 +35,8 @@ export async function applyProviderComplaintOrBounce(db: DbOrTx, args: { emailLo
 /** Natural-language intent classification for opt-out text (deterministic; no model needed). */
 export function classifyOptOutText(text: string): 'stop_all' | 'unsubscribe_marketing' | null {
   const t = text.toLowerCase();
-  if (/\b(stop all( emails| messages)?|stop everything|no more emails at all|do not (email|contact) me (again|anymore))\b/.test(t)) return 'stop_all';
+  // "stop emailing me", "I don't want ticket suggestions, price-watch emails or marketing emails" (TGQA-R6 1014).
+  if (/\b(stop all( emails| messages)?|stop everything|no more emails at all|do not (email|contact) me (again|anymore)|stop (emailing|messaging|contacting|writing to) me|(don'?t|do not) (email|contact|message) me|don'?t want (any )?(more )?(ticket suggestions|emails from you)|no more emails)\b/.test(t.replace(/[’‘]/g, "'"))) return 'stop_all';
   if (/\bunsubscribe\b|\bopt[- ]?out\b|\bremove me from (your|the) (list|mailing)\b|\bno (more )?(promotions|marketing|deals)\b/.test(t)) return 'unsubscribe_marketing';
   return null;
 }

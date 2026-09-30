@@ -244,9 +244,7 @@ I'll look at how the tickets are trading and come back to you shortly. If anythi
 
 {{questions}}
 
-{{countryCheck}}Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.
-
-Just reply and I’ll narrow it down.`,
+{{countryCheck}}Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.`,
   unsupported: `{{reason}}
 
 We're sorry we can't help with this one yet.`,

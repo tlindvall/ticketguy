@@ -9,7 +9,7 @@ import { runOutboxBatch } from '@/inngest/functions';
 import { buildTestInbound, isTestConversation, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { reasonText, sendClassLabel, stateInfo } from '@/lib/admin/labels';
 import { audit } from '@/lib/util/audit';
-import type { IngestOutcome } from '@/lib/intake/pipeline';
+import { suppliedOffers, type IngestOutcome } from '@/lib/intake/pipeline';
 
 /** What the admin form and the agent API both accept. Attachments arrive base64-encoded (images, as a customer would attach). */
 export const TestMessageBody = z.object({
@@ -85,6 +85,7 @@ export async function testTranscript(requestId: string): Promise<Record<string, 
   const [draft] = await db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, req.id), eq(t.recommendations.reviewStatus, 'pending'), eq(t.recommendations.revision, req.currentRevision))).limit(1);
   const classOf = new Map(intents.filter((i) => i.providerMessageId).map((i) => [i.providerMessageId!, i.messageClass]));
   const recorded = new Set(messages.map((m) => m.providerEmailId).filter(Boolean));
+  const qa = await qaTrace(db, req, messages, intents);
   const s = stateInfo(req.state);
   const settled = !WORKING.includes(req.state) && !intents.some((i) => IN_FLIGHT_SENDS.includes(i.state)) && pendingOutbox.length === 0;
   return {
@@ -112,5 +113,51 @@ export async function testTranscript(requestId: string): Promise<Record<string, 
       .filter((i) => !i.providerMessageId || !recorded.has(i.providerMessageId))
       .map((i) => ({ at: i.createdAt.toISOString(), kind: sendClassLabel(i.messageClass), state: i.state, reasons: i.lastError ? i.lastError.split(',') : [], subject: i.subject, text: i.bodyText })),
     draftAwaitingApproval: draft ? { subject: draft.subject, text: draft.bodyText } : null,
+    ...qa,
+  };
+}
+
+/** Listing fields safe to hand back: what a customer could read off a listing, never an image, URL or barcode. */
+const SAFE_LISTING_FIELDS = ['seller', 'eventName', 'eventDate', 'eventTime', 'venue', 'city', 'quantity', 'priceText', 'perTicketCents', 'wholePartyCents', 'priceBasis', 'feeBasis', 'section', 'row', 'seatNumbers', 'seatsTogether', 'restrictions', 'restrictionCodes', 'deliveryText', 'deliveryBy', 'includedBenefits'] as const;
+
+/**
+ * What a QA replay needs to tell a real fix from a warmer sentence (TGQA-R6): the build that answered, how the
+ * request moved and what it understood at each revision, the contact's stored stops and deletion status, the
+ * offer facts we kept and where each came from, and every email we generated as text and HTML. Test
+ * conversations only (the caller checks); no credentials, attachment URLs, signed links or email lookups.
+ */
+export async function qaTrace(db: Awaited<ReturnType<typeof getDb>>['db'], req: typeof t.requests.$inferSelect, messages: (typeof t.messages.$inferSelect)[], intents: (typeof t.sendIntents.$inferSelect)[]) {
+  const transitions = await db.select().from(t.requestTransitions).where(eq(t.requestTransitions.requestId, req.id)).orderBy(asc(t.requestTransitions.createdAt));
+  const versions = await db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, req.id)).orderBy(asc(t.requestVersions.revision));
+  const [contact] = await db.select({ id: t.contacts.id, emailLookup: t.contacts.emailLookup }).from(t.contacts).where(eq(t.contacts.id, req.contactId));
+  const stops = contact ? await db.select({ scope: t.suppressions.scope, reason: t.suppressions.reason, createdAt: t.suppressions.createdAt }).from(t.suppressions).where(eq(t.suppressions.emailLookup, contact.emailLookup)) : [];
+  const [deletion] = contact ? await db.select().from(t.deletionLedger).where(eq(t.deletionLedger.contactId, contact.id)).orderBy(desc(t.deletionLedger.requestedAt)).limit(1) : [];
+  const evidence = await db.select().from(t.listingEvidence).where(eq(t.listingEvidence.requestId, req.id)).orderBy(asc(t.listingEvidence.observedAt));
+  const inbound = messages.filter((m) => m.direction === 'inbound');
+  const latest = inbound[inbound.length - 1];
+  const [venue] = req.eventId ? await db.select({ tz: t.venues.timezone }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, req.eventId)) : [];
+  const parsed = latest ? suppliedOffers(latest.sanitizedText ?? '', inbound.map((m) => m.sanitizedText ?? ''), venue?.tz ?? 'America/New_York') : null;
+  return {
+    build: {
+      commit: process.env.RENDER_GIT_COMMIT ?? process.env.GIT_COMMIT ?? null,
+      branch: process.env.RENDER_GIT_BRANCH ?? null,
+      appMode: env().APP_MODE,
+      extractionProvider: env().EXTRACTION_PROVIDER,
+    },
+    trace: {
+      transitions: transitions.map((x) => ({ at: x.createdAt.toISOString(), from: x.fromState, to: x.toState, revision: x.revision, actor: x.actor, reason: x.reason })),
+      versions: versions.map((v) => {
+        const b = v.brief as Record<string, unknown>;
+        return { revision: v.revision, at: v.createdAt.toISOString(), createdBy: v.createdBy, intent: b.intent ?? null, unresolved: v.unresolvedFields, understood: { performerOrTeam: b.performerOrTeam ?? null, city: b.city ?? null, dateExpression: b.dateExpression ?? null, resolvedLocalDate: b.resolvedLocalDate ?? null, quantity: b.quantity ?? null, budgetCents: b.budgetCents ?? null, budgetBasis: b.budgetBasis ?? null, togetherRequired: b.togetherRequired ?? null, accessibility: !!b.accessibilityNeeds, ambiguities: b.ambiguities ?? [] } };
+      }),
+    },
+    suppression: { stopped: stops.map((x) => ({ scope: x.scope, reason: x.reason, since: x.createdAt.toISOString() })) },
+    deletion: deletion ? { requestedAt: deletion.requestedAt.toISOString(), verifiedAt: deletion.verifiedAt?.toISOString() ?? null, completedAt: deletion.completedAt?.toISOString() ?? null, status: deletion.completedAt ? 'completed' : deletion.verifiedAt ? 'verified_awaiting_staff' : 'awaiting_confirm' } : null,
+    offers: {
+      // A sensitive image (a barcode or ticket) is deleted unread: only that it happened is reported.
+      listings: evidence.map((x) => ({ source: x.source, kind: x.kind, observedAt: x.observedAt.toISOString(), readBy: x.readBy, confidence: x.confidence, sensitive: x.sensitive, fields: x.sensitive || !x.fields ? null : Object.fromEntries(SAFE_LISTING_FIELDS.filter((k) => k in x.fields!).map((k) => [k, x.fields![k]])) })),
+      fromLatestMessage: parsed ? { provenance: 'customer_text', offers: parsed.textOffers, setAside: parsed.offersSetAside } : null,
+    },
+    emails: intents.map((i) => ({ at: i.createdAt.toISOString(), kind: sendClassLabel(i.messageClass), state: i.state, subject: i.subject, text: i.bodyText, html: i.bodyHtml })),
   };
 }

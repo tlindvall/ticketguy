@@ -48,9 +48,9 @@ describe('a shared nickname means the local team', () => {
     await h.close();
   });
 
-  it('"Giants tickets Oct 11" goes to the New York Giants game, says so, and asks nothing', async () => {
+  it('"Two Giants tickets Oct 11" goes to the New York Giants game, says so, and asks nothing', async () => {
     const c = makeConcierge(h);
-    const r = await c.ingestInbound(inbound({ text: 'Giants tickets Oct 11', from: 'giants@customer.example', subject: 'Giants' }));
+    const r = await c.ingestInbound(inbound({ text: 'Two Giants tickets Oct 11', from: 'giants@customer.example', subject: 'Giants' }));
     await interpretAll(c);
     const requestId = (r as { requestId: string }).requestId;
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));

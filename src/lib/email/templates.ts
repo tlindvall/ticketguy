@@ -128,7 +128,7 @@ function renderBody(
         ...qs,
         ...((v.assumptions as string[] | undefined) ?? []),
         v.countryCheck ? COUNTRY_CHECK_LINE : '',
-        'Just reply and I’ll narrow it down.',
+        // No stock closer: the questions are the next step (TGQA-R6 writing review).
       ].filter(Boolean);
       const ra = vars.ra as Ra | null | undefined;
       if (!ra) return wrap(paras, paras.map(para));
@@ -253,10 +253,11 @@ function renderBody(
       const kind = String(v.kind ?? '');
       const paras = [
         'Hey,',
+        // Only what was running is said to have stopped: no watch, no "stopped keeping an eye" (TGQA-R6 1015).
         kind === 'bought'
-          ? 'Glad you got them. I’ve stopped keeping an eye on this one. Enjoy it.'
+          ? v.watched ? 'Glad you got them. I’ve stopped the price watch on this one. Enjoy it.' : 'Glad you got them. Enjoy it.'
           : kind === 'stopped'
-            ? 'Done: I’ve stopped keeping an eye on this one. Just reply if you want me to look again.'
+            ? v.watched ? 'Done: I’ve stopped keeping an eye on this one. Just reply if you want me to look again.' : 'Done. There was nothing running on this one, so nothing else will come from it. Just reply if you want me to look again.'
             : 'Thanks, that really helps.',
       ];
       return wrap(paras, paras.map(para));

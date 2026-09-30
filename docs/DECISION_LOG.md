@@ -932,3 +932,25 @@ A parked request can be re-read from its admin page ("Read the latest email agai
 - Offer lines give the reason, not a status label.
 
 **Synthetic examples** get what they show and the arithmetic, never market, checkout or availability advice. A hypothetical price comparison is answered from the customer's own two numbers.
+
+## 59. Event constraints come from the thread, and a broken constraint is said, never swapped silently
+
+**Rules.** The thread's own words give the rules for which event, with the latest message winning each dimension:
+
+- venue;
+- home only;
+- time, strict or not;
+- weekdays;
+- a window;
+- "the next one";
+- the ticket link's event.
+
+Every place that picks an event applies them: resolution, the settled-event check, browse and the nearest-city fallback.
+
+**When nothing fits.** The reply names the dates it found and why each fails. It offers the next event that keeps every rule, and goes ahead with that event only when the latest message named no date. A fenced window ("November ONLY") or a named venue is never widened.
+
+**Quantity.** An unstated quantity is unknown and asked once (TGQA-R6 1008). A per-ticket price check is the one exception: it goes ahead on two and says so, because the verdict doesn't depend on party size.
+
+**Preference and deletion flows.** An opt-out gets one acknowledgment built from the stored suppressions. An exact CONFIRM verifies a pending deletion before any other reading of the email.
+
+**Test API.** It exposes the trace, the stops, the deletion status, the kept offers with where each came from, and each email's HTML, for test conversations only.

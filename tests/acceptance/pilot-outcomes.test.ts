@@ -53,7 +53,9 @@ describe('pilot outcomes', () => {
     expect((await outcomes(r.requestId)).map((o) => [o.kind, o.source])).toEqual([['user_reported_purchase', 'customer_reply']]);
     expect(await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId))).toHaveLength(adviceCount); // no new advice
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
-    expect(sends.some((s) => s.bodyText.includes('Glad you got them. I’ve stopped keeping an eye on this one.'))).toBe(true);
+    // Nothing was being watched, so the closure doesn't say a watch was stopped (TGQA-R6 27).
+    expect(sends.some((s) => s.bodyText.includes('Glad you got them. Enjoy it.'))).toBe(true);
+    expect(sends.some((s) => /stopped (?:the price watch|keeping an eye)/.test(s.bodyText))).toBe(false);
   });
 
   it('sends one follow-up the day after the event, reads the answer, and never sends a second', async () => {

@@ -1,0 +1,530 @@
+{
+  "source": "TGQA-R6 API QA, 30 Sep 2026: 30 scenarios, 74 customer turns, exact texts. Addresses are the QA run's synthetic example.com ones; attachments are synthetic and not committed (a stand-in reader returns what they show).",
+  "clock": "2026-09-30T16:00:00Z",
+  "cases": [
+    {
+      "id": "01",
+      "scenario": "complete",
+      "thread": null,
+      "from": "qa+r6-01@example.com",
+      "name": "Alex Rivera",
+      "subject": "Next Knicks home game",
+      "turns": [
+        {
+          "text": "Hey, can you help with 2 tickets to the next Knicks home game at MSG? $300 total including all fees, and we want to sit together."
+        },
+        {
+          "text": "Can you work out the date of the next Knicks home game at MSG? I'm in New York. The $300 is for both of us including fees, and anywhere with a clear view is fine."
+        },
+        {
+          "text": "Lets do Thursday October8, Knicks vs Washington Wizards at MSG in New York. Two ordinary seats together with a clear view, $300 TOTAL including fees. What can you check for this exact game?"
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "scenario": "per ticket budget",
+      "thread": null,
+      "from": "qa+r6-02@example.com",
+      "name": "Jamie Chen",
+      "subject": "Knicks for two",
+      "turns": [
+        {
+          "text": "Looking for 2 Knicks tickets at MSG next month. Up to $150 each including fees. Together please."
+        },
+        {
+          "text": "Any Saturday or Sunday Knicks home game at MSG in October 2026 is fine. Which is cheapest? $150 each means $300 for both including fees, and we need to sit together."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "scenario": "missing quantity",
+      "thread": null,
+      "from": "qa+r6-03@example.com",
+      "name": "Morgan Ellis",
+      "subject": "Rangers next home game",
+      "turns": [
+        {
+          "text": "Could you find tickets to the next Rangers home game? I can spend $240 altogether, fees included."
+        },
+        {
+          "text": "There are 3 of us and we need to sit together. $240 is for all three including fees. New York Rangers at MSG, their next home game, not an away game. Can you find the date?"
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "scenario": "vague date",
+      "thread": null,
+      "from": "qa+r6-04@example.com",
+      "name": "Casey Brooks",
+      "subject": "Next weekend",
+      "turns": [
+        {
+          "text": "Can you sort out Knicks tickets for next weekend? Two of us, together."
+        },
+        {
+          "text": "I mean Saturday or Sunday, not Monday or Thursday. A home game at MSG, and $300 for both including fees. Can you find a weekend that works?"
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "scenario": "minimal",
+      "thread": null,
+      "from": "qa+r6-05@example.com",
+      "name": "Taylor Jordan",
+      "subject": "rangers",
+      "turns": [
+        {
+          "text": "tickets for the rangers?"
+        },
+        {
+          "text": "NY Rangers, next home game at MSG. Two together, under $200 total with fees. Please work out the game date for me."
+        }
+      ]
+    },
+    {
+      "id": "06",
+      "scenario": "informal",
+      "thread": null,
+      "from": "qa+r6-06@example.com",
+      "name": "Sam Patel",
+      "subject": "knicks fri",
+      "turns": [
+        {
+          "text": "2 tix knicks fri under 3 bills all in, together pls"
+        },
+        {
+          "text": "This coming Friday in New York, at MSG. If they are away or dont play that day, just say so — dont change the day. $300 total for both with fees."
+        },
+        {
+          "text": "Friday October 2, 2026, at MSG. Two together, $300 total with fees. Please tell me if there isnt a Knicks home game that day; dont offer Monday or Thursday."
+        }
+      ]
+    },
+    {
+      "id": "07",
+      "scenario": "five together",
+      "thread": null,
+      "from": "qa+r6-07@example.com",
+      "name": "Riley Park",
+      "subject": "Five Rangers seats",
+      "turns": [
+        {
+          "text": "Five of us want the next Rangers home game at MSG. We must all sit together. $600 total including fees. No extra ticket and no obstructed views."
+        },
+        {
+          "text": "At MSG in New York. I am looking at three listings for that game: A is five ordinary seats together with a clear view, $620 total all-in. B is six together for $500 total all-in but I must buy all six. C is five together for $580 all-in with an obstructed view. I still need exactly five, together, clear view, under $600 total. Does any actually work?"
+        },
+        {
+          "text": "Please just compare the three offers I pasted. You dont need the calendar date to tell me whether A, B or C meets exactly five tickets, all together, no extra ticket, no obstructed view and $600 total including fees. Does any fit?"
+        }
+      ]
+    },
+    {
+      "id": "08",
+      "scenario": "wheelchair companion",
+      "thread": null,
+      "from": "qa+r6-08@example.com",
+      "name": "Jordan Lee",
+      "subject": "Accessible Knicks seats",
+      "turns": [
+        {
+          "text": "I use a wheelchair and my partner is coming with me. We need one wheelchair space and one companion seat next to it for the next Knicks home game at MSG. $300 total with fees. Step-free route, please."
+        },
+        {
+          "text": "Monday October 5, Knicks vs Philadelphia 76ers at MSG. Please keep this as one wheelchair space with one ordinary companion seat beside it, a step-free route, and $300 total with fees. What can you verify and what is still missing?"
+        },
+        {
+          "text": "That is in Philadelphia, but I only want a Knicks HOME game at MSG in New York. Please dont substitute an away game. I still need one wheelchair space plus one companion seat beside it and a step-free route, $300 total with fees. Can you find an actual home game instead?"
+        }
+      ]
+    },
+    {
+      "id": "09",
+      "scenario": "delivery before flight",
+      "thread": null,
+      "from": "qa+r6-09@example.com",
+      "name": "Avery Stone",
+      "subject": "Hamilton before we fly",
+      "turns": [
+        {
+          "text": "Two Hamilton tickets in New York for the next Saturday evening performance. $400 for both all-in, seats together. We fly that morning and need the tickets in our account by 8am New York time, not just before the show."
+        },
+        {
+          "text": "Hamilton at the Richard Rodgers Theatre in New York, Saturday October 3 evening. We need 2 together for under $400 all-in and delivered by 8am New York time that morning. Seller A is $360 total but delivery is by 5pm. Seller B is $390 total and immediate transfer. Same ordinary seats together and clear view. Which meets the deadline?"
+        },
+        {
+          "text": "I asked for the EVENING performance, starting after 7pm on October 3, not the 1pm matinee. And please answer the delivery comparison: A at $360 arrives by 5pm, B at $390 transfers immediately. I need them by 8am New York time that morning. Which works? Use the details I gave, not another event-page search."
+        }
+      ]
+    },
+    {
+      "id": "10",
+      "scenario": "weekends after seven",
+      "thread": null,
+      "from": "qa+r6-10@example.com",
+      "name": "Drew Kim",
+      "subject": "Late weekend show",
+      "turns": [
+        {
+          "text": "Need 2 Broadway tickets in NYC sometime in November. Weekends only and it has to START after 7pm, not at 7. Up to $250 total with fees. Together, no restricted view."
+        },
+        {
+          "text": "No, NOVEMBER 2026 only, Saturday or Sunday, and start after 7pm. Not September or October, not weekdays, not 7pm. Two Broadway seats together, no restricted view, $250 total with fees. Can you find options for that actual window?"
+        }
+      ]
+    },
+    {
+      "id": "11",
+      "scenario": "quantity change",
+      "thread": null,
+      "from": "qa+r6-11@example.com",
+      "name": "Quinn Davis",
+      "subject": "Nets night",
+      "turns": [
+        {
+          "text": "Can you find 2 seats together for the next Nets home game at Barclays? Up to $200 total including fees."
+        },
+        {
+          "text": "Actually there are 3 of us now, and we need to sit together. The $200 total cap is still for the whole group, not each. Home game at Barclays only. Can you find the next date?"
+        }
+      ]
+    },
+    {
+      "id": "12",
+      "scenario": "impossible budget",
+      "thread": null,
+      "from": "qa+r6-12@example.com",
+      "name": "Harper Green",
+      "subject": "Courtside for cheap",
+      "turns": [
+        {
+          "text": "Can you get me 2 courtside Knicks seats at MSG for $50 total including fees? Next home game, together."
+        },
+        {
+          "text": "I cant raise the $50 total budget for both. Happy to sit upstairs rather than courtside if there is something real. Can you tell me whether that is practical and what you can check? Still a Knicks home game at MSG."
+        }
+      ]
+    },
+    {
+      "id": "13",
+      "scenario": "pasted offer",
+      "thread": null,
+      "from": "qa+r6-13@example.com",
+      "name": "Blake Martin",
+      "subject": "Is this a good deal?",
+      "turns": [
+        {
+          "text": "Looking at the next Knicks home game at MSG: StubHub, sec 112 row 8, two seats together, $412 total all-in. Normal seats, no restricted view mentioned. Is that a good deal?"
+        },
+        {
+          "text": "Thursday October 8, Knicks vs Washington Wizards, the listing says MSG in New York. Still two seats together, sec 112 row 8, $412 total including all fees on StubHub. I care more about not overpaying than sitting low. What can you tell from that, and what havent you checked?"
+        },
+        {
+          "text": "I found another option for the same Thursday October 8 Knicks-Wizards game at MSG. Offer A is my original StubHub pair, section112 row8, $412 TOTAL all-in. Offer B is two ordinary adjacent unobstructed upper-level seats for $250 TOTAL all-in. Both say immediate transfer. I prefer saving money to sitting low. Which would you choose and whats the saving?"
+        }
+      ]
+    },
+    {
+      "id": "14",
+      "scenario": "three offers",
+      "thread": null,
+      "from": "qa+r6-14@example.com",
+      "name": "Cameron Ross",
+      "subject": "Which seller?",
+      "turns": [
+        {
+          "text": "For 2 ordinary seats together at the next Rangers home game, same section and row, all unobstructed and immediate transfer: StubHub $90 each plus $40 fees for the order; TickPick $105 each including all fees; Vivid Seats $95 each BEFORE fees that I havent seen. Nothing else added on the first two. Which would you pick?"
+        },
+        {
+          "text": "MSG, New York Rangers home game. Vivid now shows $25 in fees for the whole order and no other charges. Please compare the final totals I gave: StubHub $90 each plus $40 for the order, TickPick $105 each all-in, Vivid $95 each plus $25 for the order. Two seats on each, same seat terms. Which costs less?"
+        },
+        {
+          "text": "Please answer the math from the prices I pasted, for the same two-ticket group at MSG. StubHub is $90 EACH plus $40 for the whole order. TickPick is $105 EACH including fees. Vivid is $95 EACH plus $25 for the whole order. Same seats and delivery. Which final total is lowest and by how much? You dont need the event date to add these up."
+        }
+      ]
+    },
+    {
+      "id": "15",
+      "scenario": "listing screenshot",
+      "thread": null,
+      "from": "qa+r6-15@example.com",
+      "name": "Devon Grant",
+      "subject": "Worth it?",
+      "turns": [
+        {
+          "text": "Worth it for the three of us? Budget is $200 for everyone with fees. Can you read the screenshot and point out the catch?",
+          "attachment": "listing.png"
+        },
+        {
+          "text": "The screenshot says 7pm, not 4pm. Also one more person wants to join, so there would be four of us. Does that screenshot actually cover four people or would we need another listing? Keep the $200 total cap with fees."
+        },
+        {
+          "text": "My BUDGET stayed $200. The listing price did not change: the screenshot still says $52 each for THREE tickets plus a $24 fee for the whole order, total $180, and a 7PM show. Please dont turn my budget into the listing price. We now need four people together. Does that original three-ticket offer fit?"
+        }
+      ]
+    },
+    {
+      "id": "16",
+      "scenario": "barcode screenshot",
+      "thread": null,
+      "from": "qa+r6-16@example.com",
+      "name": "Parker Reed",
+      "subject": "Is this enough to get in?",
+      "turns": [
+        {
+          "text": "Seller sent me this picture but no ticket transfer yet. Is this enough to get us into the show?",
+          "attachment": "ticket-details.png"
+        },
+        {
+          "text": "Its Kanan Gill at Town Hall in New York, October 3, 7pm. I already paid for two tickets. There is no mobile transfer yet, just that image. Can you just tell me what to ask the seller for and whether an image is enough for entry? No need to copy any numbers."
+        },
+        {
+          "text": "I ALREADY BOUGHT these tickets. Please dont send me a link to buy more. Im asking about entry and a missing transfer: is a screenshot enough, and what exactly should I ask the seller to send me? The event is the 7pm Kanan Gill show at Town Hall on October3."
+        }
+      ]
+    },
+    {
+      "id": "17",
+      "scenario": "link only",
+      "thread": null,
+      "from": "qa+r6-17@example.com",
+      "name": "Sydney Bell",
+      "subject": "",
+      "turns": [
+        {
+          "text": "https://www.ticketmaster.com/kanan-gill-not-this-again-new-york-new-york-10-03-2026/event/0300643DF03B25CE"
+        },
+        {
+          "text": "Three adults, $200 total with fees. The link I sent is the 7PM performance, not 4PM. We want the evening show. Can you keep that exact performance and tell me what needs checking before we buy?"
+        },
+        {
+          "text": "Please correct the event first: my Ticketmaster link ends /event/0300643DF03B25CE and it is the 7PM October3 show. I do not want the 4pm show. Keep three adults and $200 total including fees. Can you acknowledge which performance we mean without switching it?"
+        }
+      ]
+    },
+    {
+      "id": "18",
+      "scenario": "broadway four",
+      "thread": null,
+      "from": "qa+r6-18@example.com",
+      "name": "Reese Taylor",
+      "subject": "Hamilton for the family",
+      "turns": [
+        {
+          "text": "Four Hamilton tickets in New York, the next Saturday matinee if possible. Together please, under $500 total including fees. Two adults and kids aged 12 and 15."
+        },
+        {
+          "text": "Saturday October 3 matinee at the Richard Rodgers Theatre in New York. Four of us, two adults plus kids12 and15. We can split into 2 and2 only if one adult sits with each child. Still under $500 TOTAL including fees. Does that help?"
+        },
+        {
+          "text": "For that October3 matinee: Offer A has four separate singles scattered around the theatre for $400 total all-in. Offer B has two adjacent pairs for $480 total all-in, so each adult can sit beside one child. Offer C has four together for $520 total all-in. All are ordinary clear-view seats and immediate transfer. Cap is $500 for allfour; one adult must sit with each child. Which fits?"
+        }
+      ]
+    },
+    {
+      "id": "19",
+      "scenario": "arena concert",
+      "thread": null,
+      "from": "qa+r6-19@example.com",
+      "name": "Finley Torres",
+      "subject": "Concert at MSG or Barclays",
+      "turns": [
+        {
+          "text": "Any concerts at MSG or Barclays in November for 2 adults? We like indie rock, want seats not standing, and have $250 total including fees."
+        },
+        {
+          "text": "I asked for MSG or Barclays ONLY, in November2026, seated tickets, indie rock, $250 for both including fees. Those picks are all other venues. Please narrow it to those two venues, or tell me you havent found a match. A listening link would help if there is one."
+        },
+        {
+          "text": "November 1 through November 30, 2026. Madison Square Garden or Barclays Center only. Two seated indie-rock tickets, $250 total including fees. If you havent found anything at those venues, please say that rather than give me other venues or September dates."
+        }
+      ]
+    },
+    {
+      "id": "20",
+      "scenario": "open discovery",
+      "thread": null,
+      "from": "qa+r6-20@example.com",
+      "name": "Charlie Moore",
+      "subject": "Saturday plans",
+      "turns": [
+        {
+          "text": "Something fun in NYC this Saturday for 2, under $200 total with fees. Open to music, comedy or a show. Were both over 21."
+        },
+        {
+          "text": "Comedy sounds good, but Saturday October3 ONLY, after7pm. Not Wednesday, Thursday or Friday. Two adults, $200 TOTAL including fees and any compulsory drink or food spend. Please show options that fit that actual day and time."
+        },
+        {
+          "text": "4pm does not fit. I need Saturday October3 with the show starting AFTER 7:00PM, so not4pm and not7pm either. Two adults, $200 total including all fees and any mandatory food/drink minimums. Please find a later show or tell me you havent found one."
+        }
+      ]
+    },
+    {
+      "id": "21",
+      "scenario": "outside us",
+      "thread": null,
+      "from": "qa+r6-21@example.com",
+      "name": "Emerson Hall",
+      "subject": "Hamilton London",
+      "turns": [
+        {
+          "text": "Can you find 2 tickets to Hamilton in London, UK, next Saturday? Not New York. Budget £200 total."
+        }
+      ]
+    },
+    {
+      "id": "22",
+      "scenario": "london context nyc intent",
+      "thread": null,
+      "from": "qa+r6-22@example.com",
+      "name": "Rowan Shah",
+      "subject": "Hamilton NYC",
+      "turns": [
+        {
+          "text": "My sister in London loved Hamilton. I want to see it here in New York, next Saturday evening. Two together, $350 total including fees."
+        },
+        {
+          "text": "Yes, the New York production at the Richard Rodgers Theatre, Saturday October 3, 2026, evening only. My sister's London visit was just background. Two seats together, $350 for both including fees."
+        }
+      ]
+    },
+    {
+      "id": "23",
+      "scenario": "nearby restaurant",
+      "thread": null,
+      "from": "qa+r6-23@example.com",
+      "name": "Sage Wilson",
+      "subject": "Dinner near MSG",
+      "turns": [
+        {
+          "text": "Any easy dinner spots near MSG before a Rangers game? Two adults, about $60 total for food. We already have the game tickets."
+        },
+        {
+          "text": "We already bought the Rangers tickets. I'm only asking about dinner: something easy within a short walk of MSG, $60 total for two. If food is outside what you help with, just say so; I don't need any new tickets."
+        }
+      ]
+    },
+    {
+      "id": "24",
+      "scenario": "buy or wait",
+      "thread": null,
+      "from": "qa+r6-24@example.com",
+      "name": "Alexis Nguyen",
+      "subject": "Buy now or hold off?",
+      "turns": [
+        {
+          "text": "Looking at Knicks tickets for about six weeks from now, at MSG. Two together, up to $300 for both including fees. Better to buy now or wait?"
+        },
+        {
+          "text": "I'm flexible about which Knicks home game in mid-November. I can risk missing out. Do you actually have price history showing prices falling for comparable seats together, or would waiting just be a guess? Please don't set up any alerts."
+        },
+        {
+          "text": "For a concrete game instead, Thursday October 8, 2026: Knicks vs Wizards at MSG. Two together, $300 TOTAL including fees. Do you have evidence comparable two-seat asking prices are trending down or up, and what is the history window? If you don't have that evidence, say so. I can risk missing out; don't set any alerts."
+        }
+      ]
+    },
+    {
+      "id": "25",
+      "scenario": "not on sale",
+      "thread": null,
+      "from": "qa+r6-25@example.com",
+      "name": "Dakota Mills",
+      "subject": "Tell me when sales open",
+      "turns": [
+        {
+          "text": "Looking for the next Dua Lipa show in New York. If tickets arent on sale yet, can you tell me when they go on sale? Two tickets, around $150 each all-in."
+        },
+        {
+          "text": "If there isn't an announced New York date yet, that's fine. But will you actually email me when tickets go on sale, or should I check somewhere myself? Please answer that rather than asking me for a show date that doesn't exist yet."
+        }
+      ]
+    },
+    {
+      "id": "26",
+      "scenario": "already bought",
+      "thread": null,
+      "from": "qa+r6-26@example.com",
+      "name": "River Bennett",
+      "subject": "Transfer hasnt arrived",
+      "turns": [
+        {
+          "text": "Already paid for 2 Rangers tickets at MSG for the next home game. The seller sent a barcode screenshot but the actual mobile transfer hasnt arrived. Will that barcode get us in?"
+        },
+        {
+          "text": "The game is tomorrow at MSG and the seller just says trust me. I already PAID; I am not shopping. No tickets have been transferred into my account. What should I ask the seller for, and is a barcode screenshot enough to get in?"
+        },
+        {
+          "text": "I ALREADY BOUGHT the two Rangers tickets. This is about getting in, not buying more. The seller only sent a barcode screenshot, with no official mobile transfer. Will that image work, and what should I ask for now?"
+        }
+      ]
+    },
+    {
+      "id": "27",
+      "scenario": "bought thanks",
+      "thread": "01",
+      "from": null,
+      "name": null,
+      "subject": null,
+      "turns": [
+        {
+          "text": "bought them, thanks!"
+        }
+      ]
+    },
+    {
+      "id": "28",
+      "scenario": "stop emailing",
+      "thread": "24",
+      "from": null,
+      "name": null,
+      "subject": null,
+      "turns": [
+        {
+          "text": "stop emailing me"
+        },
+        {
+          "text": "Please confirm what you stopped. I don't want ticket suggestions, price-watch emails or marketing emails. Have you recorded that preference?"
+        }
+      ]
+    },
+    {
+      "id": "29",
+      "scenario": "delete data",
+      "thread": "02",
+      "from": null,
+      "name": null,
+      "subject": null,
+      "turns": [
+        {
+          "text": "please delete my data and dont keep my preferences"
+        },
+        {
+          "text": "CONFIRM"
+        },
+        {
+          "text": "I replied CONFIRM because you asked me to confirm deleting my data. This is a deletion request, not a new ticket search. Please confirm the next step for deleting my data and preferences; don't restart the Knicks request."
+        }
+      ]
+    },
+    {
+      "id": "30",
+      "scenario": "returning customer",
+      "thread": null,
+      "from": "qa+r6-01@example.com",
+      "name": "Alex Rivera",
+      "subject": "New plan — Nets",
+      "turns": [
+        {
+          "text": "Hey, back for another one. This time 3 Nets tickets for the next home game at Barclays, together, $240 TOTAL including fees."
+        },
+        {
+          "text": "Home game at Barclays only, not away. Three seats together, $240 for all three with fees. Please look up the next Nets home date for me; I don't know it."
+        }
+      ]
+    }
+  ]
+}
