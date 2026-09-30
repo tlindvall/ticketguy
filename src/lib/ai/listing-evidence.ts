@@ -17,6 +17,8 @@ export const LISTING_SCHEMA = z
     eventName: z.string().nullable(),
     /** The event's date as YYYY-MM-DD, only when the page shows the date itself. */
     eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    /** The start time as the page shows it, 24-hour local HH:MM ("7:00 PM EDT" → 19:00). Which performance it is. */
+    eventTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
     venue: z.string().nullable(),
     city: z.string().nullable(),
     quantity: z.number().int().positive().max(40).nullable(),
@@ -45,13 +47,16 @@ export const LISTING_SCHEMA = z
     unreadable: z.array(z.string().max(120)).max(8),
   })
   .strict();
-export type ListingRead = z.infer<typeof LISTING_SCHEMA>;
+/** The read as given: `eventTime` may be absent in reads made before it existed. */
+export type ListingRead = z.input<typeof LISTING_SCHEMA>;
 
 /** What we store and use: the read, in cents, with the per-ticket price worked out only when the page makes it certain. */
 export type ListingFields = {
   seller: string | null;
   eventName: string | null;
   eventDate: string | null;
+  /** 24-hour local start time the page shows ("19:00"): the performance, when a day has more than one. */
+  eventTime?: string | null;
   venue: string | null;
   city: string | null;
   quantity: number | null;
@@ -109,6 +114,7 @@ export function fieldsFromRead(r: ListingRead): ListingFields {
     seller: r.seller,
     eventName: r.eventName,
     eventDate: r.eventDate,
+    eventTime: r.eventTime ?? null,
     venue: r.venue,
     city: r.city,
     quantity: q,

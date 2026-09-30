@@ -72,6 +72,7 @@ export function evaluateGate(env: Env, switches: Record<string, boolean>, suppre
   if (input.messageClass === 'follow_up') {
     if (!env.FOLLOW_UP_ENABLED) reasons.push('follow_up_disabled');
     if (switches['follow_ups'] === false) reasons.push('kill_switch_follow_ups');
+    if (suppressed.has('watch')) reasons.push('suppressed_watch');
   }
   if (suppressed.has('global')) reasons.push('suppressed_global');
   // The allowlist keeps real mail to named testers. A captured send reaches nobody, so test customers can be anyone.

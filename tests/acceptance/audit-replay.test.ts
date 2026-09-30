@@ -142,7 +142,9 @@ describe('the TGQA-0929 audit, replayed exactly', () => {
       expect(body, id).toContain('a refund guarantee, if the seller offers one, gives the money back; it doesn’t get you into the game');
       expect(body, id).not.toMatch(/guaranteed|will arrive|will be delivered|you’ll get in|When do you need to have tickets sorted by/i);
     }
-    for (const id of ['A08', 'R03']) expect(all(id), id).toContain('You asked: whether the delivery timing is a risk for your trip');
+    // Two tickets are read from "two Rangers vs Tampa Bay tickets", so nothing is assumed and the answer comes once,
+    // delivery first, without an "I'll look" acknowledgment ahead of it (TGQA-R6 1008, post-#55 writing review).
+    for (const id of ['A08', 'R03']) expect(all(id), id).toMatch(/· 2 tickets · up to \$220 in total\n\nOn delivery:/);
   });
 
   it('A03/R05: the two offers are compared as asked; the wheelchair spaces nobody needs are not the one to buy', () => {

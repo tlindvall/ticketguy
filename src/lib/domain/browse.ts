@@ -170,8 +170,9 @@ export function collapseRuns<T>(items: T[], of: (t: T) => { name: string; venueI
 }
 
 /** Buying advice that belongs to the kind of event, said once on the buying email (the owner's category rules). */
-export function categoryBuyingNote(category: string): string | null {
-  if (category === 'comedy') return "Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page before you go.";
+export function categoryBuyingNote(category: string, venueName?: string | null): string | null {
+  // Only a comedy club: a theater like Town Hall has no drink minimum, and generic caution there isn't advice (TGQA-R6).
+  if (category === 'comedy') return venueName && !/\b(?:comedy|club|cellar|laugh|stand[- ]?up|improv|gotham|carolines|lounge|cafe|bar)\b/i.test(venueName) ? null : "Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page before you go.";
   if (category === 'broadway') return 'For Broadway, TodayTix and the TKTS booth sometimes have cheaper seats for the same week.';
   return null;
 }

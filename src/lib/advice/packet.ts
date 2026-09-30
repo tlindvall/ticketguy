@@ -137,6 +137,8 @@ export type BuildPacketArgs = {
   /** What their offers are held to beyond access and budget, and the offer they asked to be compared against. */
   /** What they corrected about the listing we read earlier, said back first ("$72 a ticket is before fees"). */
   corrections?: string[];
+  /** They restated the listing's numbers and they match what we read: said so, not "updated". */
+  correctionMatches?: boolean;
   offerNeeds?: { noObstructed: boolean; togetherRequired: boolean; baseline: string | null; terms?: PartyTerms | null } | null;
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
@@ -144,6 +146,8 @@ export type BuildPacketArgs = {
   asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
+  /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
+  trendAsked?: { noAlerts: boolean; riskOk: boolean } | null;
   /** Offers from earlier in the thread they've told us to ignore: the one left is judged alone (R05-F1). */
   offersSetAside?: string[];
   watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date } | { running: false } | null;
@@ -590,9 +594,18 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
  */
 type OfferVerdict = { o: TextOffer; tot: ReturnType<typeof offerTotal>; why: Array<{ kind: 'access' | 'short' | 'block' | 'extra' | 'view' | 'together' | 'budget' | 'late' | 'no_time'; text: string }>; feesUnknown: boolean };
 
+/**
+ * Their offers compared without an event on file (TGQA-R6 1006): the arithmetic and the hard rules need only what
+ * they sent, so "which date?" never stands between them and the answer. Same engine as the full reply.
+ */
+export function suppliedOffersAnswer(a: { offers: TextOffer[]; quantity: number; budgetTotalCents: number | null; needs: NonNullable<BuildPacketArgs['offerNeeds']>; accessibilityRequired: boolean; timeZone: string; offersSetAside?: string[]; observedAt: Date }): { lead: string; items: string[] } {
+  const c = offersClaim({ quantity: a.quantity, priorities: { budgetTotalCents: a.budgetTotalCents }, offerNeeds: a.needs, accessibilityRequired: a.accessibilityRequired, timeZone: a.timeZone, offersSetAside: a.offersSetAside, observedAt: a.observedAt } as unknown as BuildPacketArgs, a.offers);
+  return { lead: c.text.split('\n')[0]!, items: c.items ?? [] };
+}
+
 function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const need = a.offerNeeds ?? { noObstructed: false, togetherRequired: false, baseline: null, terms: null };
-  const terms = need.terms ?? { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null };
+  const terms = need.terms ?? { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, seating: null };
   // How many are going, which is not always how many they'd buy ("happy to buy six; only five of us").
   const q = terms.attendees ?? a.quantity;
   // "Offer B" / "the green listing" as named; mid-sentence, a lettered offer is just its letter ("B costs less").
@@ -618,7 +631,7 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     return tot.tickets > 1 ? `${each}, ${formatUsd(tot.cents)} for ${ticketsWord(tot.tickets)}${o.feeBasis === 'before_fees' ? ' plus fees' : ''}` : each;
   };
   const describe = (o: TextOffer) =>
-    [o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.accessible ? 'wheelchair-accessible spaces' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
+    [o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.accessible ? 'wheelchair-accessible spaces' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
   const rows: OfferVerdict[] = offers.map((o) => {
     const tot = offerTotal(o, q);
     const why: OfferVerdict['why'] = [];
@@ -630,7 +643,10 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
       if (!allowed && (o.mustBuyAll || terms.extra === 'refused')) why.push({ kind: o.mustBuyAll ? 'block' : 'extra', text: o.mustBuyAll ? `it’s ${countWord(o.quantity)} tickets the seller won’t split, and you ${terms.extra === 'refused' ? 'won’t buy an extra' : `want ${countWord(q)}`}` : `it’s ${countWord(o.quantity)} tickets, and you won’t buy an extra; ask the seller whether they’ll sell exactly ${countWord(q)}` });
     }
     if (need.noObstructed && o.obstructed === true) why.push({ kind: 'view', text: 'it has an obstructed view, which you ruled out' });
-    if (need.togetherRequired && o.together === false) why.push({ kind: 'together', text: 'the seats aren’t together' });
+    // Pairs are enough when each adult sits with a child (TGQA-R6 18): scattered singles fail that, adjacent pairs don't.
+    if (terms.seating === 'pairs') {
+      if (o.together === false && !o.pairs) why.push({ kind: 'together', text: 'they’re separate seats, so each adult can’t sit with a child' });
+    } else if (need.togetherRequired && o.together === false) why.push({ kind: 'together', text: o.pairs ? 'they’re two pairs, not all together' : 'the seats aren’t together' });
     if (deadline !== null) {
       if (o.deliveryMinutes === null) why.push({ kind: 'no_time', text: `it doesn’t say the tickets arrive before ${at(deadline)}, your deadline` });
       else if (o.deliveryMinutes > deadline) why.push({ kind: 'late', text: `delivery by ${at(o.deliveryMinutes)} misses your ${at(deadline)} deadline` });
@@ -669,7 +685,10 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
       ? `Looking at ${best.o.name} on its own, with nothing from ${setAside} applied: it meets what you asked for, at ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`
       : `${Name(best.o)} ${open.length ? 'is the straightforward choice if you’d rather skip another checkout' : fits.length > 1 ? 'wins this one' : 'is the one that meets what you asked for'}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`;
     const bits: string[] = [];
-    if (against) bits.push(`That’s ${vs(best, against)}.`);
+    // Three or more that fit: the saving against each, not just the runner-up (TGQA-R6 14: "saves $10 or $5").
+    const others = named ? [] : [...fits].sort(byTotal).filter((r) => r !== best);
+    if (others.length >= 2) bits.push(`That’s ${others.slice(0, 3).map((o) => vs(best, o)).join(' and ')}.`);
+    else if (against) bits.push(`That’s ${vs(best, against)}.`);
     // With a break-even to state, the threshold goes right beside the pick; budget left over would crowd it.
     if (budget !== null && best.tot!.cents <= budget && !open.length) bits.push(best.tot!.cents === budget ? `It’s exactly your ${formatUsd(budget)} budget.` : `It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.`);
     // An offer whose fees aren't known yet: the fee that would make it cheaper, not a guess at its fees.
@@ -980,7 +999,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_REQS',
       kind: 'coverage',
-      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${((xs) => (xs.length === 1 ? xs[0]! : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check automatically has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
+      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check automatically has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
       values: { requirements: reqs.length },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -1130,6 +1149,20 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     });
   }
 
+  // "Better to buy now or wait? Do you have price history for comparable seats?": a direct answer from the evidence
+  // we hold for their group, or a plain abstention; never a trend we can't support, never an alert (TGQA-R6 1011).
+  if (a.trendAsked) {
+    const trendClaim = claims.find((c) => c.id === 'C_TREND' && c.customerVisible);
+    const thin = claims.find((c) => c.id === 'C_NOTREND');
+    const seats = `${q === 1 ? 'one seat' : `${countWord(q)} seats together`}`;
+    const risk = a.trendAsked.riskOk ? ' You’re willing to risk missing out, but that alone doesn’t show that waiting will save money.' : '';
+    const text = trendClaim
+      ? `On buy or wait: ${trendClaim.text}${risk}`
+      : `I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}`;
+    for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
+    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim ? 1 : 0 }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: trendClaim ? [] : ['insufficient_history'], customerVisible: true });
+  }
+
   // Their correction, acknowledged first and specifically, then the answer on the corrected facts (live A11-F1).
   if (a.corrections?.length) {
     const xs = a.corrections;
@@ -1158,7 +1191,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       const price = allIn && total !== null
         ? `${formatUsd(total)} in total, ${formatUsd(qt.perTicketCents)} each including fees`
         : `${formatUsd(qt.perTicketCents)} each${qt.feeBasis === 'before_fees' ? ' before fees' : ', and it doesn’t say whether that includes fees'}`;
-      quoteClaim.text = a.corrections?.length ? `Updated from your email: ${tickets}, ${price}.` : `The example ${sub.source === 'screenshot' ? 'image' : 'listing'} shows ${tickets}: ${price}.`;
+      quoteClaim.text = a.corrections?.length ? `Updated from your email: ${tickets}, ${price}.` : `${a.correctionMatches ? 'Your numbers match what I read. ' : ''}The example ${sub.source === 'screenshot' ? 'image' : 'listing'} shows ${tickets}: ${price}.`;
       const seats = sub.seatNumbers?.length ? seatList(sub.seatNumbers) : null;
       const where = [sub.section ? `section ${sub.section}` : null, sub.row ? `row ${sub.row}` : null, seats].filter(Boolean).join(', ');
       const time = sub.deliveryText ? DELIVERY_TIME.exec(sub.deliveryText)?.[1]?.replace(/\s+/g, '').toLowerCase() ?? null : null;
@@ -1222,4 +1255,12 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     watchConsentReference: a.watchConsentReference,
     isFixture: a.isFixture,
   };
+}
+
+/** "a and b", or "a; and b" when an item already has its own "and"; of two, one with a trailing clause goes last. */
+function joinRequirements(items: string[]): string {
+  if (items.length === 1) return items[0]!;
+  const xs = items.length > 2 ? items : [...items.filter((x) => !x.includes(',')), ...items.filter((x) => x.includes(','))];
+  const semi = xs.length > 2 || xs.slice(0, -1).some((x) => /\band\b|,/.test(x));
+  return semi ? `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}` : `${xs[0]} and ${xs[1]}`;
 }

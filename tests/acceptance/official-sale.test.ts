@@ -112,7 +112,7 @@ describe('still on general sale: point at the official sale', () => {
     expect(send!.bodyHtml).toContain(`href="${URL_OPEN}"`);
   });
 
-  it('a comedy show on general sale gets the drink-minimum note', async () => {
+  it('a comedy show on general sale gets the drink-minimum note at a club, not at an arena', async () => {
     const COMIC = '20000000-0000-4000-8000-0000000000e2';
     const SHOW = '30000000-0000-4000-8000-0000000000e9';
     await h.db.insert(t.entities).values({ id: COMIC, kind: 'performer', name: 'Testy McJokes', slug: 'testy-mcjokes', aliases: [], league: null, homeVenueId: null });
@@ -123,8 +123,16 @@ describe('still on general sale: point at the official sale', () => {
     await interpretAll(c);
     const [send] = await sendsFor((r as { requestId: string }).requestId);
     expect(send!.bodyText).toContain('is still on general sale on Ticketmaster');
-    expect(send!.bodyText).toContain("Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page before you go.");
+    // An arena has no drink minimum: the club boilerplate only where it applies (TGQA-R6 writing review).
+    expect(send!.bodyText).not.toContain('Comedy clubs often add a drink or food minimum');
     expect(send!.bodyText).toContain("Events that aren't sold out often go for less on resale.");
+    const CLUB = '10000000-0000-4000-8000-0000000000e3';
+    await h.db.insert(t.venues).values({ id: CLUB, name: 'Test Comedy Cellar', city: 'New York', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    await h.db.update(t.events).set({ venueId: CLUB }).where(eq(t.events.id, SHOW));
+    const r2 = await c.ingestInbound(inbound({ text: '2 tickets for Testy McJokes Oct 16', from: 'comedy2@customer.example', subject: 'Comedy' }));
+    await interpretAll(c);
+    const [send2] = await sendsFor((r2 as { requestId: string }).requestId);
+    expect(send2!.bodyText).toContain("Comedy clubs often add a drink or food minimum on top of the ticket, so check the venue's page before you go.");
   });
 
   it('"is $106 a good deal?" is answered against face value and the official sale, not with a list of our integrations', async () => {

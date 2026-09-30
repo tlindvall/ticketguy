@@ -418,3 +418,54 @@ Every fix below is checked on the full rendered email, not the opening line. The
 - **Signature consistency across follow-ups:** still your design call (as in Round 5).
 - **A04 house/techno precision:** needs genre evidence we don't have.
 - **Visitor policy:** unchanged.
+
+# Round 7: the TGQA-R6 API QA (30 scenarios, Sep 30)
+
+**How it was replayed.** All 30 scenarios are in `tests/fixtures/qa-r6-cases.json`, with synthetic `example.com` senders and the clock at 2026-09-30 16:00 UTC. They are replayed through test mode (`buildTestInbound`, Gmail-style quoting, sends recorded and not sent) in `tests/acceptance/qa-r6-replay.test.ts`. The seed has every event the scenarios name, including both Hamilton and Kanan Gill shows on Oct 3 and the Knicks away game in Philadelphia. The replay uses the rules reader. The snapshots are `docs/qa/TGQA-R6-replay-before.txt` and `docs/qa/TGQA-R6-replay-after.txt`, and the assertions check the exact sentences from them, not tone.
+
+**The shared cause of 1001 and 1004.** [Certain] Event constraints lived only in the extractor's single date and city fields. A venue, "home only", a strict start time, weekdays and a month window were each dropped or overwritten on a later turn. The nearest-city fallback then brought back an event the city filter had just removed, such as Philadelphia for 08. `src/lib/domain/event-constraints.ts` now derives the rules from the thread's own words, with the latest message winning each dimension:
+
+- venue;
+- home only;
+- after or before a time, strict or not;
+- an exact time, or times ruled out;
+- part of day;
+- weekdays, and weekdays ruled out;
+- a month, range or "next Saturday" window;
+- "the next one";
+- the event ID from a ticket link.
+
+`resolveEvent`, the settled-event check and browse all apply these rules. An event that breaks one is named with its reason, and the reply offers the next event that fits everything they said. It never switches to that event silently.
+
+| Finding | Now (exact sentence from the after snapshot) |
+|---|---|
+| 1001 (08) | "Preseason: New York Knicks v Philadelphia 76ers at Xfinity Mobile Arena, Philadelphia, Mon, Oct 5, 7:00 PM EDT doesn't fit: it's in Philadelphia, not at Madison Square Garden." After the correction the reply resolves to Oct 8 at MSG, and the wheelchair space, companion seat and step-free route are kept. |
+| 1002 (15) | Every turn keeps 7pm, $180 and the $24 order fee. The budget ($200) stays separate: "Budget is $200" is no longer taken as the listing's price, and restating the listing's numbers is no longer called an update. "I wouldn't buy this one as it stands: it's for 3 tickets, and you need 4." |
+| 1003 (09, 13) | $360 and $390 stay order totals across turns. An earlier statement of the same offer carries over. A listing price with a marketplace name is never a budget. |
+| 1004 (04, 06, 10, 19, 20) | "None of the two New York Knicks dates I found then fits: Mon, Oct 5, it's on a Monday; Thu, Oct 8, it's on a Thursday." "I don't have any comedy in New York on file for Sat, Oct 3 starting after 7pm." A fenced window or named venue is never widened. A plain range may still show "the next ones after that", said as such. |
+| 1005 (16, 26) | Entry help whenever they say they paid or the seller sent something: never a buy link or a repeated ticket value. |
+| 1006, 1007 (07, 14, 18) | Offers are compared from the details given, without a calendar lookup. For 14: "TickPick wins this one: $210 for both, fees included. That's $5 less than Vivid Seats and $10 less than StubHub." For 18: "Offer B is the one that meets what you asked for: $480 for all four". Scattered singles fail the "each adult beside a child" rule. |
+| 1008 (03, 05, 17) | Quantity is unknown until said, and asked once: "How many tickets do you need?". A price is never a count ("$90 per ticket" was being read as 90 tickets), and the count a listing has never replaces the party's own. The exception is a per-ticket price check ("is $106 a good deal?"), which goes ahead on two and says so. |
+| 1009 (17) | The ticket link's event ID pins the 7pm show on every turn. |
+| 1010 (26) | "Already paid" goes to support. |
+| 1011, 1012 (24, 25) | "On buy or wait: I don't have usable price history for two seats together at New York Knicks games, so I can't tell you whether prices are rising or falling, and waiting would be a guess. I haven't set an alert." For 25: "I can't email you when tickets go on sale: automatic on-sale alerts are switched off for now". |
+| 1013 (28) | "Done: this address now gets no ticket suggestions, no price-watch or event alerts, no follow-ups and no marketing from Ticket Guy." Asked again, the reply is read from the stored suppression: "Yes, that's recorded (since Sep 30)". |
+| 1014 (29) | An exact CONFIRM verifies the deletion, stops everything and alerts staff. Replies after that get the deletion status, never intake. |
+| 1015, 1016, writing review | The reply answers first. The canned "Just reply and I'll narrow it down" is gone. The closure says a watch stopped only when one was running. The comedy drink-minimum line appears only for club-like venues. A dinner question is out of scope, but a drink minimum is part of the ticket price. |
+
+**QA API.** `GET /api/test/requests/{id}` (test conversations only, bearer token as before) now also returns:
+
+- `build`: the commit, branch, app mode and extraction provider;
+- `trace`: transitions, and every revision's intent, unresolved fields and what was understood;
+- `suppression`: the stored stops;
+- `deletion`: requested, verified or completed;
+- `offers`: listing evidence, with safe fields only (a sensitive image returns only that it happened), plus the offers parsed from the latest message, marked `customer_text`;
+- `emails`: every generated email as text and HTML.
+
+It returns no attachment URLs, signed links, email lookups or credentials.
+
+**Not proven here:**
+- **The model path.** The replay uses the rules reader. The model extractor gets the same downstream rules and validators, but its own reading of quantity, budget and time wasn't replayed.
+- **Live inventory, trend history and checkout.** Every "can't see live listings" line is still true.
+- **Deletion completion.** It stays a staff step.
+- **A custom clarification template on /admin/templates.** An override saved earlier keeps its old closer.

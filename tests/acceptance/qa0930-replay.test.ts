@@ -146,7 +146,9 @@ describe('the Sep 30 live QA (post-#55), replayed exactly', () => {
 
   it('A11-F1: the correction is acknowledged first and the summary is the corrected one (R4-B04)', () => {
     const body = all('A11-F1');
-    expect(body.indexOf('Updated from your email')).toBeGreaterThan(0);
+    // The image was read right the first time, so their restatement is confirmed, not called an update (TGQA-R6 15).
+    expect(body.indexOf('Your numbers match what I read. The example image shows three tickets: $264 in total, $88 each including fees.')).toBeGreaterThan(0);
+    expect(body).not.toContain('Updated from your email');
     expect(body).toContain('$88 each including fees');
     expect(body).not.toMatch(/\$72 a ticket including fees|72 tickets|up to \$216/);
   });

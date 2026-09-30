@@ -35,7 +35,8 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'find.next_week', type: 'find', text: 'Rangers next week, 2 tickets', brief: { quantity: 2, dateExpression: 'next week' }, reply: { contains: ['New York Rangers vs. New York Islanders'] } },
 
   // ── Assume and say ───────────────────────────────────────────────────────────────────────────────────
-  { id: 'assume.quantity', type: 'find', text: 'Rangers tickets on Oct 3 please.', reply: { contains: ["I've assumed two tickets. Just tell me if you need a different number."], notContains: [ASKS_HOW_MANY] } },
+  // An unstated party size is asked once, never assumed to be two (TGQA-R6 1008).
+  { id: 'ask.quantity', type: 'find', text: 'Rangers tickets on Oct 3 please.', reply: { state: 'needs_clarification', contains: [ASKS_HOW_MANY], notContains: ["I've assumed two tickets"] } },
   { id: 'assume.budget', type: 'find', text: 'Knicks Oct 24, 2 tickets, around $300', brief: { budgetCents: 30000 }, reply: { contains: ["I've read $300 as the total for both. Tell me if you meant per ticket."], notContains: [ASKS_BASIS] } },
   { id: 'assume.nothing_for_one', type: 'find', text: 'Rangers Oct 3, just me, $100', brief: { quantity: 1, budgetCents: 10000 }, reply: { notContains: ["I've assumed", "I've read"] } },
   { id: 'assume.under', type: 'find', text: 'Rangers on Oct 3, lower bowl, 2 seats, under $500', brief: { quantity: 2, budgetCents: 50000 }, reply: { contains: ["I've read $500 as the total for both"] } },
@@ -59,7 +60,8 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'browse.gigs_original', type: 'browse', text: "Hello -\n\nI'm coming to New York and want to see some music gigs during the first week on october. What options do I have?", brief: { intent: 'browse', categoryHint: 'concert', performerOrTeam: null }, reply: { state: 'needs_clarification', contains: ['Live music in New York, Oct 1 to 7'], notContains: [ASKS_HOW_MANY, 'calendar date', 'Which event'] } },
   { id: 'browse.hockey', type: 'browse', text: 'Any hockey games coming up?', brief: { categoryHint: 'nhl' }, reply: { contains: ['Hockey in New York', 'New York Rangers vs. New York Islanders (preseason) at Madison Square Garden', "I've looked at the next two weeks"] } },
   { id: 'browse.games_week', type: 'browse', text: 'What games are on the first week of October?', brief: { categoryHint: 'sports' }, reply: { contains: ['Games in New York, Oct 1 to 7', 'Madison Square Garden'] } },
-  { id: 'browse.msg', type: 'browse', text: "What's on at MSG next weekend?", brief: { intent: 'browse' }, reply: { contains: ['Events in New York', 'picks:'] } },
+  // At MSG means at MSG: other venues aren't picks (TGQA-R6 1004).
+  { id: 'browse.msg', type: 'browse', text: "What's on at MSG next weekend?", brief: { intent: 'browse' }, reply: { contains: ['Events in New York', 'at Madison Square Garden'], notContains: ['Barclays', 'MetLife', 'picks:'] } },
   { id: 'browse.things_to_do', type: 'browse', text: 'Things to do in NYC in early October?', brief: { intent: 'browse' }, reply: { contains: ['Events in New York, Oct 1 to 10'] } },
   { id: 'browse.empty', type: 'browse', text: 'Any good gigs in New York next week?', brief: { categoryHint: 'concert' }, reply: { contains: ["I don't have any live music in New York on file"] } },
   { id: 'browse.basketball', type: 'browse', text: 'Want to catch a basketball game in late October, what is on?', brief: { categoryHint: 'nba' }, reply: { contains: ['Basketball in New York, Oct 21 to 31', 'New York Knicks vs. Fixture Opponent'] } },
@@ -103,7 +105,8 @@ export const REGRESSION_CASES: RegressionCase[] = [
   { id: 'watch.drop', type: 'watch', text: 'Knicks Oct 24, 2 tickets, $300 total. Let me know if it drops.', brief: { intent: 'watch_request', notifyAsked: null } },
   // TG-B10 (A07-R1): a cancellation is always answered, from what was stored: here nothing was running.
   { id: 'stop.watch', type: 'stop', text: 'Please stop the watch, we bought tickets already.', brief: { intent: 'cancel_watch' }, reply: { contains: ['nothing was being monitored', 'your other requests and your email preferences are as they were'] } },
-  { id: 'optout.marketing', type: 'stop', text: 'Unsubscribe me from marketing emails please', reply: { state: 'closed', sends: false } },
+  // One acknowledgment of what was stopped, so the opt-out is observable (TGQA-R6 1013).
+  { id: 'optout.marketing', type: 'stop', text: 'Unsubscribe me from marketing emails please', reply: { state: 'closed', contains: ['Done: this address'] } },
   { id: 'delete.data', type: 'stop', text: 'Please delete my data.', reply: { contains: ['CONFIRM'] } },
   { id: 'negation', type: 'find', text: 'Anything except the Knicks — Rangers on Oct 3 for two', brief: { performerOrTeam: 'New York Rangers' } },
   { id: 'gift', type: 'find', text: 'Two Rangers tickets Oct 3 as a gift for my dad', brief: { forSelf: false } },

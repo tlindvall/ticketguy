@@ -153,7 +153,8 @@ describe('the Sep 30 latest-commit live QA (post-#56), replayed exactly', () => 
 
   it('A11-F1: the correction first, and the $98.89-before-fees question answered from their numbers', () => {
     const body = said('A11-F1');
-    expect(body.indexOf('Updated from your email: three tickets, $264 in total, $88 each including fees.')).toBeGreaterThan(0);
+    // The image was read right the first time, so their restatement is confirmed, not called an update (TGQA-R6 15).
+    expect(body.indexOf('Your numbers match what I read. The example image shows three tickets: $264 in total, $88 each including fees.')).toBeGreaterThan(0);
     expect(body).toContain('Larger. At $98.89 before fees it already costs $10.89 a ticket more than the $88 all-in, and its fees can only add to that.');
     expect(body).not.toMatch(/These replace|resale|before you pay/);
   });
