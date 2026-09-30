@@ -1,4 +1,4 @@
-import { admissionTerms, entryTerm, nightTiming, type Admission, type ProductKind, type EntryTerm, type NightTiming } from './concert-terms';
+import { admissionTerms, entryTerm, nightTiming, concertContext, musicExperience, performanceTerms, type PerformanceTerms, type MusicExperience, type Admission, type ProductKind, type EntryTerm, type NightTiming } from './concert-terms';
 import { unglue } from '@/lib/domain/event-constraints';
 /**
  * Offers a customer lays out in their own words ("Offer A says wheelchair-accessible spaces, $80 each including
@@ -11,6 +11,10 @@ export type TextOffer = {
   admissionStated: boolean;
   productKind: ProductKind;
   entry: EntryTerm | null;
+  performance?: PerformanceTerms;
+  /** Package stock and entitlement are independent; neither is the customer’s party size. */
+  unitsAvailable?: number | null;
+  admissionsPerUnit?: number | null;
   /** Explicit price basis, so corrections override older totals. */
   priceBasisStated: boolean;
   label: string;
@@ -62,7 +66,7 @@ const ORDER_FEE = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?(?:fees?|service fees
 /** "a $12.75 fee PER TICKET", "$10 in fees per ticket", "$12.75 per-ticket fee". */
 const PER_TICKET_FEE = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:in\s+)?(?:service\s+)?fees?\s+(?:per|a|each|on each)\s+(?:ticket|seat)\b|\$\s?(\d[\d,]*(?:\.\d{2})?)\s*per[- ](?:ticket|seat)\s+fees?\b/i;
 /** A sentence that is the customer talking, not describing the offer: the offer ends there. */
-const THEIR_WORDS = /^(?:I|I'm|I'd|We|We're|My|Our|Which|Please|These|Those|Neither|Can|Could|Should|What|How|Is|Are|Do|Does|Would|On price|Thanks|Also|Treat|Don't|Using|All (?:the )?offers|All (?:say|state|show|list)|All of (?:them|these)|Both (?:offers|of them|say|are|listings)|Each (?:offer|of them|child|kid|adult)|(?:The )?(?:Kids|Children|Adults)|Pairs are|Singles are|Budget|Cap)\b/;
+const THEIR_WORDS = /^(?:I|I'm|I'd|We|We're|My|Our|Which|Please|These|Those|Neither|Can|Could|Should|What|How|Is|Are|Do|Does|Would|On price|Thanks|Also|Treat|Don't|Using|All (?:the )?offers|All (?:say|state|show|list)|All of (?:them|these)|The (?:shuttle|parking|budget|prices)|Both (?:offers|of them|say|are|listings)|Each (?:offer|of them|child|kid|adult)|(?:The )?(?:Kids|Children|Adults)|Pairs are|Singles are|Budget|Cap)\b/;
 const DELIVERY = /\b(?:deliver(?:y|ed|s)?|transfer(?:s|red)?|arriv(?:e|es|al)|mobile ticket|e-?ticket)\b/i;
 const NEGATED = /\b(?:no|not|neither|nor|non|isn't|aren't|without|never)\b[^.;]{0,30}$/i;
 const TIME = '(noon|midday|midnight|\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\.?)';
@@ -119,7 +123,7 @@ export function minutesOf(t: string): number | null {
   if (s === 'noon' || s === 'midday') return 720;
   if (s === 'midnight') return 0;
   const m = /^(\d{1,2})(?::(\d{2}))?([ap])m$/.exec(s);
-  if (!m) return null;
+  if (!m || Number(m[1]) < 1 || Number(m[1]) > 12 || Number(m[2] ?? 0) > 59) return null;
   const h = Number(m[1]) % 12 + (m[3] === 'p' ? 12 : 0);
   return h * 60 + Number(m[2] ?? 0);
 }
@@ -160,7 +164,7 @@ function offerMarks(t: string, minimum = 2): Array<{ index: number; label: strin
   // Bare letters: "A is five ordinary seats…, B is six together…", "A at $360 arrives by 5pm, B at $390…" (TGQA-R6 07, 09),
   // also beside a lettered one in the same message ("The same Offer B is immediate…; A is $360…", R8 14).
   // "and B $220 TOTAL" in a list, but not "A $24 fee applies" opening a sentence.
-  const bare = [...t.matchAll(/(?:^|[.;:!?]\s+|,\s+|\band\s+|\bbut\s+)([A-E])(?:\s+(?:is|has|costs|at|for|gives|says|copied offer says|remains|still|now|would be|comes to|was|delivers|arrives)\s|[, :]\s+)|(?:,\s+|\band\s+|:\s+)([A-E])\s+(?=\$)/g)]
+  const bare = [...t.matchAll(/(?:^|[.;:!?]\s+|,\s+|\band\s+|\bbut\s+|\bto\s+|\bIf\s+)([A-E])(?:'s\s+(?:corrected\s+|revised\s+|updated\s+)?(?:price|entry|terms|condition)\b|\s+(?:is|has|costs|at|for|gives|says|copied offer says|remains|still|now|would be|comes to|was|delivers|arrives)\s|[, :]\s+)|(?:,\s+|\band\s+|:\s+)([A-E])\s+(?=\$)/g)]
     .map((m) => ({ index: m.index! + m[0].indexOf((m[1] ?? m[2])!), label: (m[1] ?? m[2])!, name: `Offer ${m[1] ?? m[2]}` }));
   const letters = [...lettered, ...bare.filter((b) => !lettered.some((l) => l.label === b.label || Math.abs(l.index - b.index) < 8))].sort((a, b) => a.index - b.index);
   if (new Set(letters.map((m) => m.label)).size >= minimum) return letters;
@@ -185,7 +189,8 @@ function offerMarks(t: string, minimum = 2): Array<{ index: number; label: strin
 }
 
 /** `minimum` 1 reads the one offer kept from a comparison ("ignore Offer A, only B"); the default needs two. */
-export function offersInText(text: string, venueTz = 'America/New_York', minimum = 2, opts: { priceless?: boolean } = {}): TextOffer[] {
+export function offersInText(text: string, venueTz = 'America/New_York', minimum = 2, opts: { priceless?: boolean; calendarYear?: number } = {}): TextOffer[] {
+  const calendarYear = opts.calendarYear ?? 0;
   const t = flat(text);
   const marks = offerMarks(t, minimum);
   if (marks.length < minimum) return [];
@@ -194,6 +199,8 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   const shared = sentences(t).map((s) => /(?:^|[;:,]\s+)((?:All|Both|Each|all|both|each)\b.*)$/.exec(s)?.[1] ?? null).find((s) => s !== null && !/\b(?:offer|option|listing)\s+[A-Z1-9]\b/i.test(s) && DELIVERY.test(s)) ?? null;
   const sharedDelivery = shared ? deliveryIn(shared) : null;
   const out: TextOffer[] = [];
+  const year = Number(/\b(20\d{2})\b/.exec(t)?.[1] ?? calendarYear);
+  const globalFees = /\b(?:copied )?(?:quotes|offers|prices|tickets)(?:\s*,)?\s+(?:including (?:all )?fees|fees included)\s*:/i.test(t) || /\b(?:both|all|these)(?:(?: copied)? (?:offers|prices|quotes))?[^.;:]{0,30}(?:fees included|include (?:all )?fees)\b/i.test(t);
   for (let i = 0; i < marks.length; i++) {
     const label = marks[i]!.label;
     // An offer already read with its price is done; one first mentioned without a price ("Vivid now shows $25 in
@@ -219,7 +226,12 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       price = m;
       break;
     }
-    const entitlement = admissionTerms(seg);
+    let entitlement = admissionTerms(seg);
+    const performance = performanceTerms(seg);
+    // In a ticket comparison, a priced named performance is a ticket quote. Packages and extras
+    // still need explicit admission; their cheaper price never establishes entitlement.
+    const requestedArtist = musicExperience([t]).artist;
+    if (concertContext([t]) && price && entitlement.productKind === 'unknown' && !entitlement.admissionStated && requestedArtist && seg.toLowerCase().includes(requestedArtist.toLowerCase()) && /\b(?:for|in|at)\b/i.test(seg)) entitlement = { admission: 'included', admissionStated: true, productKind: 'admission' };
     // Mentioned without a price ("Offer B is immediate transfer, all fees included") it still updates that offer
     // when the thread's offers are merged; alone it isn't an offer.
     if (!price && !entitlement.admissionStated && !entryTerm(seg) && !opts.priceless) continue;
@@ -230,28 +242,37 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     const forTheBlock = !quote[2] && /\bfor\s*$/i.test(seg.slice(Math.max(0, quote.index - 6), quote.index)) && /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|pair|\d{1,2})\s+(?:[a-z-]+\s+){0,3}?(?:seats?|tickets?|together|pairs|singles)\b/i.test(seg.slice(0, quote.index));
     // "$190 all-in for both" and "$316 including fees in total" put the fee words between the price and "for both".
     const forAllAfterFees = !quote[2] && /^\s*(?:all[- ]in|including (?:all |every )?(?:fees?|charges)|with fees)\s*,?\s*(?:for (?:both|all\b|the two|the pair|the (?:whole )?(?:order|block))|(?:in )?total)/i.test(seg.slice(quote.index + quote[0].length));
-    const isTotal = forTheBlock || forAllAfterFees || /total|for (both|all|the two|the pair)/i.test(quote[2] ?? '');
+    const totalCorrection = /^\s*(?:is|represents)\s+(?:the\s+)?TOTAL\b/i.test(seg.slice(quote.index + quote[0].length));
+    const isTotal = forTheBlock || forAllAfterFees || totalCorrection || /total|for (both|all|the two|the pair)/i.test(quote[2] ?? '');
     // "six ordinary unobstructed seats together", not "row 12 seats 7-9".
-    const qty = new RegExp(`(?<!\\b(?:row|section|sec|seats?|aisle|block)\\s)(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:[a-z-]+\\s+){0,3}?(?:seats?|tickets?|admissions?|upgrades?|together|in a row)\\b`, 'i').exec(seg);
+    const quantityText = seg.replace(/\bZone (?:One|\d+)\b/gi, 'room');
+    const qty = new RegExp(`(?<!\\b(?:row|section|sec|seats?|aisle|block)\\s)(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:(?!per\\b|each\\b|one\\b|two\\b|\\d)[a-z-]+\\s+){0,6}?(?:seats?|tickets?|admissions?|upgrades?|packages?|together|in a row)\\b`, 'i').exec(quantityText);
+    const units = new RegExp(`(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:VIP\\s+)?packages?\\b(?!\\s+(?:includes?|contains?))`, 'i').exec(seg);
+    const perUnit = new RegExp(`\\b(?:each package includes?\\s+${NUMBER}|${NUMBER}\\s+(?:concert\\s+)?admissions?\\s+per\\s+(?:[^.;]{0,12} )?package)`, 'i').exec(seg);
+    const admissionsPerUnit = perUnit ? num((perUnit[1] ?? perUnit[2])!) : null;
+    const unitsAvailable = units ? num(units[1]!) : null;
     const priceText = seg.slice(quote.index);
     const own = deliveryIn(seg) ?? sharedDelivery;
     const earlier = out.findIndex((o) => o.label === label);
     const push = (o: TextOffer) => (earlier >= 0 ? (out[earlier] = mergeOffer(out[earlier]!, o)) : out.push(o));
     push({
       ...entitlement,
-      entry: entryTerm(seg),
-      priceBasisStated: !!quote[2] || forTheBlock || forAllAfterFees,
+      entry: entryTerm(seg, year),
+      performance,
+      unitsAvailable,
+      admissionsPerUnit,
+      priceBasisStated: !!quote[2] || forTheBlock || forAllAfterFees || totalCorrection,
       label,
       name: marks[i]!.name,
       alias: marks[i]!.alias ?? null,
-      quantity: qty ? num(qty[1]!) : null,
+      quantity: unitsAvailable !== null && admissionsPerUnit !== null ? unitsAvailable * admissionsPerUnit : admissionsPerUnit !== null ? null : qty ? num(qty[1]!) : null,
       mustBuyAll: /\b(?:cannot|can't|can ?not|won't|will not|doesn't|does not)\s+(?:be\s+)?split\b|\b(?:must|have to|has to)\s+(?:all\s+)?be\s+(?:bought|purchased|sold)\b|\ball\s+\w+\s+must be\b|\bno splits?\b|\bsold (?:only )?(?:as a (?:block|set)|together)\b|\b(?:must|have to|has to)\s+buy\s+all\b|\brequires?\s+(?:you\s+to\s+)?(?:buy(?:ing)?|purchas(?:e|ing))\s+all\b|\ball\s+\w+\s+or\s+none\b|\bwon't sell (?:fewer|less)\b|\bmust\s+(?:purchase|buy|take)\s+(?:every|all|the whole)\b/i.test(seg),
       perTicketCents: isTotal ? null : cents,
       totalCents: isTotal ? cents : null,
       orderFeeCents: fee ? money(fee[1]!) : null,
       perTicketFeeCents: tFee ? money((tFee[1] ?? tFee[2])!) : null,
       // A total they quote for the order is what it costs ("Seller A is $360 total"), unless they say it's before fees.
-      feeBasis: (ALL_IN.test(priceText) || !BEFORE_FEES.test(priceText) && /\b(?:both|all|these)(?:(?: copied)? (?:offers|prices|quotes))?[^.;:]{0,30}(?:fees included|include (?:all )?fees)\b/i.test(t)) ? 'all_in' : BEFORE_FEES.test(priceText) ? 'before_fees' : isTotal && /^\$\s?[\d,.]+\s*(?:in\s+)?total\b/i.test(priceText) && !fee && !tFee ? 'all_in' : 'unknown',
+      feeBasis: BEFORE_FEES.test(priceText) ? 'before_fees' : ALL_IN.test(priceText) || globalFees ? 'all_in' : isTotal && /^\$\s?[\d,.]+\s*(?:in\s+)?total\b/i.test(priceText) && !fee && !tFee ? 'all_in' : 'unknown',
       noOtherCharges: /\bno (?:taxes? or )?(?:other|further|extra|additional) (?:charges|fees|costs)\b|\bno (?:taxes?|charges) or (?:other )?(?:charges|fees)\b|\bnothing else to pay\b/i.test(seg),
       accessible: says(seg, /\b(wheelchair|accessible|companion|ada)\b/i),
       obstructed: /\bunobstructed\b|\b(?:clear|full) view\b|\bnot obstructed\b/i.test(seg) ? false : /\b(?:obstructed|limited|partial|restricted)(?:\s+|-)view\b|\bview (?:is )?(?:obstructed|limited)\b|\bobstructed\b/i.test(seg) ? true : null,
@@ -375,6 +396,7 @@ export type PartyTerms = {
   seating?: 'together' | 'pairs' | 'any' | null;
   night?: NightTiming | null;
   concertAdmission?: boolean;
+  musicExperience?: MusicExperience;
 };
 
 /** "Each child must sit directly beside an adult; two adjacent adult-child pairs are fine." */
@@ -390,8 +412,13 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
   const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null };
   for (const raw of messagesOldestFirst) {
     const t = flat(raw);
-    const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\s+(?:are\\s+|will\\s+be\\s+)?(?:going|attending)\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
+    const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
     if (going) out.attendees = num((going[1] ?? going[2] ?? going[3] ?? going[4])!);
+    if (!going) {
+      const people = new RegExp(`(?:^|[.;!?]\\s+|\\bSame\\s+)${NUMBER}\\s+(?:adults?|people)(?:\\s+and\\s+${NUMBER}\\s+(?:children|kids))?\\b(?!\\s+(?:must|can|sits?|has to|with|beside))`, 'i').exec(t);
+      if (people) out.attendees = num(people[1]!) + (people[2] ? num(people[2]) : 0);
+      else if (/\bboth of us\b/i.test(t)) out.attendees = 2;
+    }
     // Pairs are enough when each adult sits with a child: "we can split into 2 and 2 only if one adult sits with each
     // child", "each child must sit directly beside an adult; two adjacent adult-child pairs are fine" (TGQA-R6 18,
     // R8 S01). A later "we no longer require that" lifts it; the latest message wins.
@@ -438,7 +465,8 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
     }
   }
   out.night = nightTiming(messagesOldestFirst);
-  out.concertAdmission = /\bconcert|festival|house night\b/i.test(messagesOldestFirst.join(' '));
+  out.concertAdmission = concertContext(messagesOldestFirst);
+  out.musicExperience = musicExperience(messagesOldestFirst);
   return out;
 }
 
@@ -451,7 +479,8 @@ export function offerTotal(o: TextOffer, partyQuantity: number): { cents: number
   const tickets = o.quantity !== null && (o.mustBuyAll || o.totalCents !== null) ? Math.max(o.quantity, partyQuantity) : partyQuantity;
   if (o.totalCents !== null) return { cents: o.totalCents + (o.orderFeeCents ?? 0), allIn: o.feeBasis === 'all_in' || (o.orderFeeCents !== null && o.noOtherCharges), tickets: o.quantity ?? partyQuantity };
   if (o.perTicketCents === null) return null;
-  const base = (o.perTicketCents + (o.perTicketFeeCents ?? 0)) * tickets;
+  const units = o.admissionsPerUnit && o.productKind === 'package' ? Math.ceil(tickets / o.admissionsPerUnit) : tickets;
+  const base = o.perTicketCents * units + (o.perTicketFeeCents ?? 0) * tickets;
   if (o.orderFeeCents !== null || o.perTicketFeeCents !== null) return { cents: base + (o.orderFeeCents ?? 0), allIn: o.noOtherCharges || o.feeBasis === 'all_in', tickets };
   return { cents: base, allIn: o.feeBasis === 'all_in', tickets };
 }
