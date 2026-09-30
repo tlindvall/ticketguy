@@ -105,3 +105,32 @@ read the message (a refusal, malformed output, or the AI budget running out). Tw
 The inbox shows a red banner while any request is waiting. Requests that were stuck before alerts existed:
 run `pnpm tsx scripts/alert-stuck-requests.ts` to list them, and add `--apply` to alert staff. Their
 customers are not emailed, because a holding note days later is worse than a person's reply.
+
+## Staffed comparison pilot (DECISION_LOG #54)
+
+**What it is.** When a request has requirements that nothing verified meets (seats together, an all-in budget, access), or asks to compare, a named person looks for seats by hand. The customer's email says so, and the request waits on that person.
+
+**Turning it on.** It stays off until someone owns it.
+1. Choose the owner: a staff address that is on `STAFF_EMAIL_ALLOWLIST`.
+2. Set `STAFF_COMPARISON_OWNER` to that address in the Render dashboard.
+3. Leave `STAFF_COMPARISON_LIMIT` at 20 unless you've agreed a different number. Only customer requests count toward it; staff's own tests are served but not counted.
+
+**When a request comes in:**
+1. The owner gets "Needs a person: a comparison was promised…" and the request shows on the board as waiting on a person.
+2. Check sellers by hand, using only access you're permitted to use. For each option you check, add it under **Manual offers** on the request page:
+   - source
+   - the time you checked it
+   - exact quantity
+   - whether the seats are together
+   - the all-in total, with fees and tax known or not
+   - restrictions (accessible, obstructed view, package)
+   - a short note of what you saw
+3. Click **Re-run research**. The comparison engine applies the customer's requirements and emails them:
+   - the option that fits, with its all-in total and how much less it costs;
+   - the options left out, and why.
+4. If nothing fits, reply from the request page and say so plainly. Don't pad the reply with an option that doesn't fit.
+
+**Measurement.** On `/admin/pilot`:
+- how many comparisons were offered, answered and are still open;
+- the median time to a verified option;
+- which sellers were checked by hand. That list is what automation would need.

@@ -1,4 +1,4 @@
-import type { TextOffer } from './text-offers';
+import { offerTotal, type TextOffer } from './text-offers';
 import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
@@ -127,8 +127,15 @@ export type BuildPacketArgs = {
    * meets them: each is said as not yet checked, not implied by a market figure (audit replay A05-R1).
    */
   requirements?: string[];
+  /**
+   * The staffed comparison pilot has taken this request: a named owner will look for seats that meet the
+   * requirements by hand and reply in the thread. Only set when that owner exists (DECISION_LOG #54).
+   */
+  staffFollowUp?: { hours: string } | null;
   /** Offers they laid out in their own words, two or more, compared as their question (retest R2-B02). */
   textOffers?: TextOffer[];
+  /** What their offers are held to beyond access and budget, and the offer they asked to be compared against. */
+  offerNeeds?: { noObstructed: boolean; togetherRequired: boolean; baseline: string | null } | null;
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
@@ -190,7 +197,15 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
     else if (sub.seatsTogether === null) out.push(`${missing('whether the seats are together')}. Check the listing before you buy if that matters.`);
   }
   if (sub.feeBasis === 'unknown') out.push(`${missing('whether fees are included')}, so check the total at checkout before you pay.`);
-  else if (sub.feeBasis === 'before_fees') out.push('Fees are extra, so the total at checkout will be higher than the listed price.');
+  else if (sub.feeBasis === 'before_fees') {
+    // "$72 each + $48 per order = $264 total": the total it shows already carries the fees it lists (post-#54
+    // A11), so "fees are extra" would contradict the total one line up.
+    const n = sub.quantity ?? q;
+    const over = sub.wholePartyCents != null && sub.perTicketCents != null ? sub.wholePartyCents - sub.perTicketCents * n : 0;
+    out.push(over > 0
+      ? `Its total, ${formatUsd(sub.wholePartyCents!)}, is ${formatUsd(over)} more than ${countWord(n)} at ${formatUsd(sub.perTicketCents!)}, so it looks like it includes the fees it lists. Check the checkout total matches before you pay.`
+      : 'Fees are extra, so the total at checkout will be higher than the listed price.');
+  }
   if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) out.push(`The tickets are delivered by ${shortDate(sub.deliveryBy)}, the day of the event. That’s common for resale, but it leaves no time to fix a problem.`);
   else if (!sub.deliveryBy && !sub.deliveryText) out.push(`${missing('when the tickets will be delivered')}. Check the listing’s delivery date before you buy.`);
   if (sub.restrictionCodes.includes('obstructed_view')) out.push('It notes a limited or obstructed view.');
@@ -363,7 +378,9 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   if (!a.quote) {
     const budget = a.priorities.budgetTotalCents;
     const ageHours = Math.round((a.observedAt.getTime() - c.current.at.getTime()) / 3_600_000);
-    const when = ageHours >= MARKET_RECENT_HOURS ? ` (as of about ${ageHours} hours ago)` : '';
+    // Every floor carries when it was seen, and never reads as a minimum for the whole market (post-#54 QA,
+    // R3-B06): it is the lowest asking price in the sources we read, at that time, for that group size.
+    const when = ` (checked ${checkedAt(c.current.at, a.timeZone)}${ageHours >= MARKET_RECENT_HOURS ? `, about ${ageHours} hours ago` : ''})`;
     const party = q > 1 ? ` for ${countWord(q)}` : '';
     const groupFloor = floor * q;
     const where = isGroupBasis(m.basis) ? `listings with ${basisSize(m.basis!)} or more tickets` : m.basis === 'pair' ? 'listings for two together' : 'single tickets';
@@ -375,7 +392,7 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
       const room = budget - groupFloor;
       parts.push(`The cheapest ${where} I saw${when} were ${formatUsd(floor)} a ticket before fees; ${q > 1 ? `${countWord(q)} at that price would be ${formatUsd(groupFloor)}` : 'that'}, which leaves ${formatUsd(room)} of your ${formatUsd(budget)} for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.`);
     } else {
-      parts.push(`The cheapest ${where} start at ${formatUsd(floor)} a ticket before fees${when}${q > 1 ? ` (${formatUsd(groupFloor)}${party})` : ''}, anywhere in the venue. That’s where the market starts, not what particular seats are worth: any seats you pick will cost that or more, plus fees.`);
+      parts.push(`The lowest asking price I saw among ${where}${when} was ${formatUsd(floor)} a ticket before fees${q > 1 ? `, ${formatUsd(groupFloor)}${party}` : ''}, anywhere in the venue. That’s where those listings started when I looked, on StubHub and Vivid Seats only, not what particular seats are worth; fees come on top, and it can move either way.`);
     }
   }
   const s = m.supply;
@@ -383,6 +400,12 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   // is suggested only to someone who has said they can take the risk and by when they must decide. Otherwise
   // it says plainly that the evidence doesn't settle it.
   const fresh = !c.reasons.some((r) => r.startsWith('stale'));
+  // Their question was delivery, or which of their offers: a buy-or-wait passage only distracts from it, and
+  // their departure time is already the deadline that matters (post-#54 QA, R3-B03).
+  if (a.asks?.deliveryRisk || (a.textOffers && a.textOffers.length >= 2)) {
+    if (!parts.length) return null;
+    return readClaim(a, parts, c, s);
+  }
   const trendKnown = fresh && c.adequacy === 'sufficient' && !a.seatingPreference;
   const p = a.priorities;
   const canWait = !a.travelling && p.mustAttend !== true && (p.waitRiskTolerance === 'medium' || p.waitRiskTolerance === 'high') && p.decisionDeadline !== null;
@@ -395,16 +418,20 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   else if (fresh && s.now !== null && s.now < 15 && q > 1) parts.push('There aren’t many blocks for a group your size, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait long.');
   else if (!trendKnown && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
+  return readClaim(a, parts, c, s);
+}
+
+function readClaim(a: BuildPacketArgs, parts: string[], c: MarketContext, s: MarketContext['supply']): ClaimRecord {
   return {
     id: 'C_READ',
     kind: 'market_read',
     text: `My read: ${parts.join(' ').replace(/^./, (ch) => ch.toLowerCase())}`,
-    values: { floorCents: floor, budgetTotalCents: a.priorities.budgetTotalCents ?? null, direction: c.direction, supplyTrend: s.trend, listings: s.now },
-    scope: { quantity: q, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+    values: { floorCents: c.current!.priceCents, budgetTotalCents: a.priorities.budgetTotalCents ?? null, direction: c.direction, supplyTrend: s.trend, listings: s.now },
+    scope: { quantity: a.quantity, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current!.at.toISOString() },
     evidenceIds: [],
     methodVersion: c.methodVersion ?? 'market-1.0',
     limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'no_forecast'],
-    customerVisible: m.visible,
+    customerVisible: a.market!.visible,
   };
 }
 
@@ -412,7 +439,7 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
 function followUpQuestions(a: BuildPacketArgs): string[] {
   const out: string[] = [];
   const sub = a.subject ?? null;
-  if (!a.quote && !a.best && !sub) {
+  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2)) {
     // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link
       ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
@@ -422,7 +449,7 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   if (a.quote?.assumedPerTicket && a.quantity > 1 && (a.quote.source === 'screenshot' || a.quote.source === 'listing_text')) out.push(`Is ${formatUsd(a.quote.perTicketCents)} the price per ticket, or for all ${a.quantity}?`);
   // Only what would change the answer: a budget when we're finding options, and the timing questions when the
   // market could make waiting worth it or the policy needs them.
-  const askBudget = a.priorities.budgetTotalCents === null && !a.quote && !sub;
+  const askBudget = a.priorities.budgetTotalCents === null && !a.quote && !sub && !(a.textOffers && a.textOffers.length >= 2);
   // Timing questions only when timing is the open question: not over a delivery or offer question they asked,
   // whose own deadline (a noon departure) is already the one that matters (retest R2-B04).
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
@@ -467,7 +494,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       kind: 'market_price',
       text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${wholeVenue(a.seatingPreference ?? null)}`,
       items: [
-        `${ageHours < MARKET_RECENT_HOURS ? 'Cheapest' : `Cheapest as of about ${ageHours} hours ago`}${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' for two together' : ''}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
+        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' for two together' : ''}, checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
         ...(m.supply.now !== null
           ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${m.supply.now} resale listings in all${moved(m.supply)}.`]
           : []),
@@ -519,37 +546,78 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
 }
 
 /**
- * Their offers, side by side, as their question: whole-party totals on the basis each was given, which one fits
- * what they said (accessible spaces only for someone who needs them), and what they still need to check. Their
- * notes, not listings we've seen, so the choice is conditional and nothing is called a good price.
+ * Their offers, side by side, as their question (post-#54 QA, R3-B04/B05/B01). One record per offer; the
+ * whole-party total worked out once (per-ticket times the tickets they'd buy, plus a per-order fee once); the
+ * hard requirements they gave (quantity they can actually buy, view, access, together, budget) applied before
+ * any price is compared; and the comparison named against the offer they asked about. Their notes, not listings
+ * we've seen, so the pick is conditional on what they copied and nothing is called a good price.
  */
 function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const q = a.quantity;
   const party = q === 1 ? 'one' : q === 2 ? 'both' : `all ${countWord(q)}`;
-  const total = (o: TextOffer) => o.totalCents ?? (o.perTicketCents !== null ? o.perTicketCents * q : null);
-  const fees = (o: TextOffer) => (o.feeBasis === 'all_in' ? ' including fees' : o.feeBasis === 'before_fees' ? ' before fees' : '');
-  const what = (o: TextOffer) => {
-    const seat = [o.accessible ? 'wheelchair-accessible spaces' : 'ordinary seats', o.together ? 'together' : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
-    const price = o.perTicketCents !== null ? `${formatUsd(o.perTicketCents)} each${fees(o)}` : `${formatUsd(o.totalCents!)} in total${fees(o)}`;
-    const t = total(o);
-    return `Offer ${o.label} (${seat}): ${price}${t !== null && o.perTicketCents !== null && q > 1 ? `, ${formatUsd(t)} for ${party}` : ''}`;
+  const need = a.offerNeeds ?? { noObstructed: false, togetherRequired: false, baseline: null };
+  const budget = a.priorities.budgetTotalCents ?? null;
+  const price = (o: TextOffer, tot: ReturnType<typeof offerTotal>) => {
+    const fees = o.feeBasis === 'all_in' ? ' including fees' : o.feeBasis === 'before_fees' ? ' before fees' : '';
+    if (o.totalCents !== null) return `${formatUsd(o.totalCents)} in total${fees}${o.orderFeeCents !== null ? `, plus ${formatUsd(o.orderFeeCents)} for the order = ${formatUsd(tot!.cents)}` : ''}`;
+    const each = `${formatUsd(o.perTicketCents!)} each${fees}`;
+    if (!tot) return each;
+    const n = tot.tickets;
+    if (o.orderFeeCents !== null) return `${each}, plus ${formatUsd(o.orderFeeCents)} for the whole order: ${formatUsd(tot.cents)}${tot.allIn ? ' in total' : ''} for ${n === q ? party : countWord(n)}`;
+    return n > 1 ? `${each}, ${formatUsd(tot.cents)} for ${n === q ? party : `all ${countWord(n)}`}` : each;
   };
-  const fits = offers.filter((o) => (a.accessibilityRequired ? o.accessible : !o.accessible));
-  const ruledOut = offers.filter((o) => !fits.includes(o));
-  const lines = offers.map(what);
+  const describe = (o: TextOffer) =>
+    [o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.accessible ? 'wheelchair-accessible spaces' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
+  const rows = offers.map((o) => {
+    const tot = offerTotal(o, q);
+    const why: string[] = [];
+    if (a.accessibilityRequired && !o.accessible) why.push('it isn’t described as accessible seating, which you need');
+    if (!a.accessibilityRequired && o.accessible) why.push(`these are wheelchair or companion spaces, which ${q > 1 ? 'no one in your group needs' : 'you don’t need'}; they’re for people who need them, and the venue can ask you to move`);
+    if (o.quantity !== null && o.quantity < q) why.push(`it’s only ${countWord(o.quantity)} tickets, and you need ${countWord(q)}`);
+    if (o.quantity !== null && o.quantity > q && o.mustBuyAll) why.push(`it’s ${countWord(o.quantity)} tickets that can’t be split, and you want ${countWord(q)}`);
+    if (need.noObstructed && o.obstructed === true) why.push('it has an obstructed view, which you ruled out');
+    if (need.togetherRequired && o.together === false) why.push('the seats aren’t together');
+    if (budget !== null && tot && tot.cents > budget) why.push(`${formatUsd(tot.cents)}${tot.allIn ? ' in total' : ' before any other fees'} is over your ${formatUsd(budget)} budget`);
+    return { o, tot, why };
+  });
+  const fits = rows.filter((r) => !r.why.length);
+  const byTotal = (x: (typeof rows)[number], y: (typeof rows)[number]) => x.tot!.cents - y.tot!.cents;
+  const lines = rows.map((r) => {
+    const d = describe(r.o);
+    const verdict = r.why.length ? ` Left out: ${r.why.join('; and ')}.` : fits.length === 1 ? ' Meets what you asked for.' : '';
+    return `Offer ${r.o.label}${d ? ` (${d})` : ''}: ${price(r.o, r.tot)}.${verdict}`;
+  });
+  const provenance = 'That’s going by the details you copied; I haven’t checked these listings or that the seats are still for sale.';
   let choice: string;
   if (fits.length === 1) {
     const f = fits[0]!;
-    const why = ruledOut.map((o) => (o.accessible ? `Offer ${o.label} is wheelchair-accessible spaces, which ${a.quantity > 1 ? 'no one in your group needs' : 'you don’t need'}, so it isn’t one to buy even though it’s cheaper: those spaces are for people who need them, and the venue can ask you to move.` : `Offer ${o.label} isn’t accessible seating, which you need.`));
-    choice = `Of these, Offer ${f.label} is the one that fits what you told me. ${why.join(' ')} Before you buy ${f.label}, check its delivery date and seat numbers on the listing.`;
+    const base = need.baseline && need.baseline !== f.o.label ? rows.find((r) => r.o.label === need.baseline) ?? null : null;
+    const bits: string[] = [];
+    if (f.tot && base?.tot && base.tot.allIn === f.tot.allIn) {
+      const d = base.tot.cents - f.tot.cents;
+      bits.push(d > 0 ? `${formatUsd(d)} less than Offer ${base.o.label}` : d < 0 ? `${formatUsd(-d)} more than Offer ${base.o.label}` : `the same as Offer ${base.o.label}`);
+    }
+    if (f.tot && budget !== null && f.tot.allIn && f.tot.cents <= budget) bits.push(f.tot.cents === budget ? `exactly your ${formatUsd(budget)} budget` : `${formatUsd(budget - f.tot.cents)} under your ${formatUsd(budget)} budget`);
+    const total = f.tot ? `: ${formatUsd(f.tot.cents)}${f.tot.allIn ? ' in total including fees' : ' before any other fees'} for ${party}` : '';
+    const check = f.o.deliveryStated ? 'Before you buy, check the seat numbers on the listing.' : 'Before you buy, check its delivery date and seat numbers on the listing.';
+    choice = `Of these, Offer ${f.o.label} is the only one that meets what you asked for${total}${bits.length ? `, ${bits.join(' and ')}` : ''}. ${provenance} ${check}`;
   } else if (fits.length > 1) {
-    const priced = fits.filter((o) => total(o) !== null);
-    const sameBasis = priced.length === fits.length && new Set(priced.map((o) => o.feeBasis)).size === 1 && priced[0]!.feeBasis !== 'unknown';
+    const priced = fits.filter((r) => r.tot);
+    const sameBasis = priced.length === fits.length && (priced.every((r) => r.tot!.allIn) || new Set(priced.map((r) => r.o.feeBasis)).size === 1 && priced[0]!.o.feeBasis !== 'unknown' && priced.every((r) => r.o.orderFeeCents === null));
+    const names = fits.map((r) => `Offer ${r.o.label}`);
+    const all = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
     if (sameBasis) {
-      const [lo, hi] = [...priced].sort((x, y) => total(x)! - total(y)!);
-      choice = `Both fit what you told me. Offer ${lo!.label} is ${formatUsd(total(hi!)! - total(lo!)!)} less for ${party}, on the same basis; whether the seats are as good is something to check on the listings.`;
-    } else choice = 'Both fit what you told me, but their prices aren’t on the same basis (fees included in one, not the other, or not said), so compare the checkout totals before you choose.';
-  } else choice = a.accessibilityRequired ? 'Neither is described as accessible seating, which you need, so I’d check with the seller or venue before buying either.' : 'Neither fits what you told me as described.';
+      const sorted = [...priced].sort(byTotal);
+      const lo = sorted[0]!;
+      const named = need.baseline && need.baseline !== lo.o.label ? sorted.find((r) => r.o.label === need.baseline) : null;
+      const other = named ?? sorted[1]!;
+      const d = other.tot!.cents - lo.tot!.cents;
+      const basis = lo.tot!.allIn ? ' including fees' : ' before fees';
+      choice = d === 0
+        ? `${all} meet what you asked for, and cost the same: ${formatUsd(lo.tot!.cents)} for ${party}${basis}. ${provenance}`
+        : `${all} meet what you asked for. Offer ${lo.o.label} costs less: ${formatUsd(lo.tot!.cents)} for ${party}${basis}, against ${formatUsd(other.tot!.cents)} for Offer ${other.o.label}, so ${formatUsd(d)} less. ${provenance}`;
+    } else choice = `${all} meet what you asked for, but their prices aren’t on the same basis (fees included in one, not the other, or not said), so compare the checkout totals before you choose. ${provenance}`;
+  } else choice = a.accessibilityRequired && rows.every((r) => !r.o.accessible) ? 'Neither is described as accessible seating, which you need, so I’d check with the seller or venue before buying either.' : `None of ${offers.length === 2 ? 'the two' : 'these'} meets everything you asked for as described. ${provenance}`;
   return {
     id: 'C_OFFERS',
     kind: 'catches',
@@ -558,7 +626,7 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     values: { offers: offers.length, fits: fits.length },
     scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: a.observedAt.toISOString() },
     evidenceIds: [],
-    methodVersion: 'text-offers-1.0',
+    methodVersion: 'text-offers-2.0',
     limitations: ['customer_supplied_evidence', 'not_verified_offers'],
     customerVisible: true,
   };
@@ -784,6 +852,21 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // A link to one listing we can't open: said first, so the market figures after it aren't read as that
+  // listing's (post-#54 QA, L01).
+  if (a.link && !a.subject && !a.quote && !a.best) {
+    claims.push({
+      id: 'C_LINK_UNREAD',
+      kind: 'coverage',
+      text: `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
+      values: { marketplace: a.link.marketplace },
+      scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['link_read_from_url_only'],
+      customerVisible: true,
+    });
+  }
   // Their own question, when it isn't "is this a good price": delivery against their travel, and wheelchair
   // spaces weighed against ordinary seats. Neither answer promises delivery, entry or suitability.
   if (a.asks?.deliveryRisk) {
@@ -806,12 +889,26 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_REQS',
       kind: 'coverage',
-      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${((xs) => (xs.length === 1 ? xs[0]! : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
+      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${((xs) => (xs.length === 1 ? xs[0]! : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check automatically has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
       values: { requirements: reqs.length },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
       methodVersion: null,
       limitations: ['requirements_unverified'],
+      customerVisible: true,
+    });
+  }
+  if (a.staffFollowUp) {
+    // Owned, and said with its limits: what the person will do, where the answer comes, and no promised result.
+    claims.push({
+      id: 'C_STAFF',
+      kind: 'coverage',
+      text: `So you don’t have to do the shopping: a person on our team is now looking for seats that meet ${a.requirements?.length ? (a.requirements.length === 1 ? 'it' : 'all of them') : 'what you asked for'}, checking sellers by hand. They’ll reply in this thread with the options they find and their all-in totals, or tell you plainly if nothing fits. The team replies from ${a.staffFollowUp.hours}.`,
+      values: {},
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['staff_assisted'],
       customerVisible: true,
     });
   }
@@ -883,7 +980,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   }
   const market = marketClaims(a, obs);
   claims.push(...market);
-  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price') ? marketRead(a) : null;
+  // Their own offers are the question; what the market floor leaves of their budget isn't (post-#54 QA).
+  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price') && !(a.textOffers && a.textOffers.length >= 2) ? marketRead(a) : null;
   if (read) claims.push(read);
   const marketShown = market.some((c) => c.customerVisible);
 

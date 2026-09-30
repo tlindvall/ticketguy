@@ -197,6 +197,14 @@ const rawSchema = z.object({
   STAFF_EMAIL_ALLOWLIST: csv,
   /** Where "needs a person" alerts go; empty means every address in STAFF_EMAIL_ALLOWLIST. */
   STAFF_ALERT_ADDRESSES: csv,
+  /**
+   * The staffed comparison pilot (DECISION_LOG #54): the staff address that owns finding seats by hand for a
+   * request nothing verified meets. Unset, or not on STAFF_EMAIL_ALLOWLIST, and the follow-up is never offered:
+   * a person is only promised once a person owns it.
+   */
+  STAFF_COMPARISON_OWNER: z.string().trim().toLowerCase().email().optional().or(z.literal('').transform(() => undefined)),
+  /** How many customer requests the pilot takes before it stops offering; staff's own test requests don't count. */
+  STAFF_COMPARISON_LIMIT: z.coerce.number().int().min(0).max(500).default(20),
   INNGEST_EVENT_KEY: z.string().optional(),
   INNGEST_SIGNING_KEY: z.string().optional(),
   PREFERENCE_TOKEN_SIGNING_KEY: z.string().optional(),

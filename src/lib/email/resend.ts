@@ -142,9 +142,27 @@ export async function fetchReceivedEmail(apiKey: string, emailId: string, fetchI
   };
 }
 
-const ATTACHMENT_HOSTS = ['resend.com', 'resend-attachments.com', 'amazonaws.com'];
+/**
+ * The received-email detail lists attachments without their bytes or a download URL; signed URLs come only
+ * from the attachments endpoint (Resend SDK: GET /emails/receiving/{id}/attachments). Reading `download_url`
+ * off the detail skipped every attachment as `no_download_url`, so a screenshot never reached the reader
+ * (post-#54 QA, R3-B09). This fills the URLs in by attachment id; one it doesn't return stays without.
+ */
+export async function withAttachmentUrls(apiKey: string, detail: ReceivedEmailDetail, fetchImpl: typeof fetch = fetch): Promise<ReceivedEmailDetail> {
+  if (!detail.attachments.length || detail.attachments.every((a) => a.download_url)) return detail;
+  const res = await fetchImpl(`https://api.resend.com/emails/receiving/${encodeURIComponent(detail.id)}/attachments`, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`resend_attachments_fetch_failed:${res.status}${await providerErrorDetail(res)}`);
+  const j = (await res.json()) as { data?: Array<Record<string, unknown>> };
+  const urls = new Map((j.data ?? []).filter((a) => typeof a.download_url === 'string').map((a) => [String(a.id ?? ''), a.download_url as string]));
+  return { ...detail, attachments: detail.attachments.map((a) => ({ ...a, download_url: a.download_url ?? urls.get(a.id) ?? null })) };
+}
 
-/** Downloads attachment bytes from provider-supplied URLs only, bounded in size and host. */
+/**
+ * Downloads attachment bytes from provider-supplied URLs only, bounded in size. The URL comes from the
+ * authenticated provider API, never from the email, and its signed host isn't documented (a storage domain
+ * may change), so it is not held to a host list: it must be https, resolve to a public address, and not
+ * redirect. No credential is sent with it.
+ */
 export async function downloadAttachments(detail: ReceivedEmailDetail, fetchImpl: typeof fetch = fetch): Promise<{ attachments: NormalizedAttachment[]; skipped: Array<{ id: string; reason: string }> }> {
   const out: NormalizedAttachment[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
@@ -157,7 +175,7 @@ export async function downloadAttachments(detail: ReceivedEmailDetail, fetchImpl
       skipped.push({ id: a.id, reason: 'too_large' });
       continue;
     }
-    const syn = validateUrlSyntax(a.download_url, { allowedHosts: ATTACHMENT_HOSTS });
+    const syn = validateUrlSyntax(a.download_url);
     if (!syn.ok) {
       skipped.push({ id: a.id, reason: `url_${syn.reason}` });
       continue;
@@ -201,7 +219,7 @@ function extractAddress(s: string): string {
   return (m ? m[1]! : s).trim();
 }
 
-export function normalizeReceived(detail: ReceivedEmailDetail, attachments: NormalizedAttachment[], signatureVerified: boolean): NormalizedInbound {
+export function normalizeReceived(detail: ReceivedEmailDetail, attachments: NormalizedAttachment[], signatureVerified: boolean, unretrieved: NormalizedInbound['unretrieved'] = []): NormalizedInbound {
   return {
     provider: 'resend',
     providerEmailId: detail.id,
@@ -216,6 +234,7 @@ export function normalizeReceived(detail: ReceivedEmailDetail, attachments: Norm
     headers: detail.headers,
     receivedAt: new Date(detail.created_at),
     attachments,
+    unretrieved,
     authentication: { spf: detail.spf ?? null, dkim: detail.dkim ?? null, dmarc: detail.dmarc ?? null },
     signatureVerified,
   };
