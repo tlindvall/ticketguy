@@ -97,7 +97,7 @@ for (const mode of ['rules', 'live'] as Mode[]) {
       expect(turn('14', 1)).toContain('Offer B is the one that meets what you asked for: $390 for both, fees included.');
       expect(turn('14', 2)).toContain('None of the two meets all your requirements. The smallest change: if you can stretch to $390 in total, Offer B meets everything else.');
       expect(turn('14', 3)).toContain('Offer B is the one that meets what you asked for: $390 for both, fees included. It’s exactly your $390 budget.');
-      for (const n of [1, 2, 3]) expect(turn('14', n)).toContain('Delivery by 5pm New York time misses your 8am New York deadline by 9 hours.');
+      for (const n of [1, 2, 3]) expect(turn('14', n)).toContain('Delivery by 5pm misses your 8am deadline.');
       expect(all('14')).not.toMatch(/You mentioned \$180|Looking at Offer B on its own/);
     });
 

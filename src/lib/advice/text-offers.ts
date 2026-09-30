@@ -278,9 +278,12 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   }
   // The one offer kept from a comparison: what they say about it after its own sentence is still about it ("Neither
   // seat is a wheelchair space. The seller now says mobile transfer is immediate", live R05-F1).
-  if (minimum === 1 && out.length === 1 && out[0]!.deliveryMinutes === null) {
+  // A priceless mention beside it ("Ignore Offer A now") doesn't make it one of several.
+  const priced = out.filter((o) => o.totalCents !== null || o.perTicketCents !== null);
+  if (minimum === 1 && priced.length === 1 && priced[0]!.deliveryMinutes === null && out.every((o) => o === priced[0] || !o.deliveryStated)) {
     const d = deliveryIn(t);
-    if (d) out[0] = { ...out[0]!, deliveryStated: true, deliveryMinutes: toVenueMinutes(d.minutes, d.zone, venueTz) };
+    const i = out.indexOf(priced[0]!);
+    if (d) out[i] = { ...out[i]!, deliveryStated: true, deliveryMinutes: toVenueMinutes(d.minutes, d.zone, venueTz) };
   }
   return out.length >= minimum ? out : [];
 }
@@ -312,7 +315,8 @@ export function mergeOffer(old: TextOffer, u: TextOffer): TextOffer {
     entry: u.entry ?? old.entry,
     // The latest name is the one they use now; the old one stays as another name for it.
     label: u.label,
-    name: u.name,
+    // A bare "A at $360" keeps the name it was given ("Seller A"); a new name ("Offer A (Gold)") replaces it.
+    name: u.label === old.label && /^Offer [A-E]$/.test(u.name) ? old.name : u.name,
     alias: u.label !== old.label ? old.label : u.alias ?? old.alias ?? null,
     quantity: u.quantity ?? old.quantity,
     mustBuyAll: old.mustBuyAll || u.mustBuyAll,

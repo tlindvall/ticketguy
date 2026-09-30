@@ -69,7 +69,7 @@ describe('test mode', () => {
     await drain();
     expect(provider.sent.length).toBe(before);
     const intents = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId));
-    expect(intents.length).toBeGreaterThanOrEqual(2);
+    expect(intents.length).toBeGreaterThanOrEqual(1);
     for (const i of intents) expect([i.state, i.lastError]).toEqual(['provider_accepted', null]);
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
     expect(req!.state).toBe('recommendation_sent');

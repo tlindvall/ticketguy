@@ -638,7 +638,9 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const deadline = terms.deadlineMinutes;
   const tz = a.timeZone ?? 'America/New_York';
   // Their deadline, in the zone they wrote it in: "your 1pm New York deadline".
-  const dl = (m: number) => (terms.deadlineZone ? `${timeLabel(fromVenueMinutes(m, terms.deadlineZone, tz))} ${terms.deadlineZone}` : at(m));
+  // Only when it differs from the venue's does the zone need saying; "your noon deadline" is clear on its own.
+  const otherZone = !!terms.deadlineZone && terms.deadlineZone !== venueZoneName(tz);
+  const dl = (m: number) => (otherZone ? `${timeLabel(fromVenueMinutes(m, terms.deadlineZone!, tz))} ${terms.deadlineZone}` : at(m));
   const price = (o: TextOffer, tot: ReturnType<typeof offerTotal>) => {
     const fees = o.feeBasis === 'all_in' ? ' including fees' : o.feeBasis === 'before_fees' ? ' before fees' : '';
     if (o.totalCents === null && o.perTicketCents === null) return 'price not stated';
@@ -680,12 +682,12 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
         const late = o.deliveryMinutes - deadline;
         const by = late % 60 ? `${late} minutes` : late === 60 ? 'an hour' : `${late / 60} hours`;
         // In the zone they gave the deadline in, with the offer's own wording beside it (TGQA-R8 S02).
-        const promised = terms.deadlineZone ? `${timeLabel(fromVenueMinutes(o.deliveryMinutes, terms.deadlineZone, tz))} ${terms.deadlineZone} time` : at(o.deliveryMinutes);
+        const promised = otherZone ? `${timeLabel(fromVenueMinutes(o.deliveryMinutes, terms.deadlineZone!, tz))} ${terms.deadlineZone} time` : at(o.deliveryMinutes);
         // "11am Los Angeles time is 2pm New York time, an hour after your 1pm New York deadline": both clocks shown.
         const venueZone = venueZoneName(tz);
         const inVenue = `${timeLabel(o.deliveryMinutes)} ${venueZone ?? ''} time`.replace(/\s+/g, ' ');
         const crossZone = !!terms.deadlineZone && !!venueZone && terms.deadlineZone !== venueZone;
-        why.push({ kind: 'late', text: crossZone ? `delivery by ${inVenue} is ${promised}, ${by} after your ${dl(deadline)} deadline` : `delivery by ${promised} misses your ${dl(deadline)} deadline by ${by}` });
+        why.push({ kind: 'late', text: crossZone ? `delivery by ${inVenue} is ${promised}, ${by} after your ${dl(deadline)} deadline` : `delivery by ${promised} misses your ${dl(deadline)} deadline` });
       }
     }
     const feesUnknown = !!tot && !tot.allIn && o.feeBasis !== 'all_in';

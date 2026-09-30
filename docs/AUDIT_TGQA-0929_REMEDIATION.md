@@ -521,3 +521,4 @@ The second run reproduced the live failures: Philadelphia for 09 and 10, Oct 20 
 **Not proven here:**
 - **The model itself.** The recorded-fields replay puts back what the model read on Sep 30. A different model reading would need a live run on the new deploy.
 - **Live inventory, adjacency, transfers and price history.** They are unchanged, and every answer says so.
+- **Skipping the acknowledgment under auto-approve.** The answer is then the first reply. If research stalls, the customer hears nothing until the manual-attention holding reply fires. Turn auto-approve off and the acknowledgment comes back.

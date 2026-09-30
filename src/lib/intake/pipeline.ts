@@ -1491,7 +1491,7 @@ export class Concierge {
     return exact.length ? exact : rows;
   }
 
-  async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
+  async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null, depth = 0): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     // The performance a pasted link names ("…/event/0300643DF03B25CE") is that performance, not the first show that day.
     // Links are read lower-cased; provider ids are compared the same way ("0300643DF03B25CE").
@@ -1614,6 +1614,9 @@ export class Concierge {
     // which: claiming we searched listings we do not have is a claim about our own diligence.
     if (!sawEntity) return { kind: 'no_match', reason: 'unknown_performer' };
     let withEvents = perEntity.filter((p) => p.cands.length > 0);
+    // An alternative is looked for once: the lookup for it never looks for one of its own (it would loop forever
+    // when no alternative fits either).
+    if (withEvents.length === 0 && dropped.length && rules && depth > 0) return { kind: 'no_match', reason: 'constraint_conflict' };
     if (withEvents.length === 0 && dropped.length && rules) {
       // What they named exists but breaks their rules ("Oct 5 at MSG" is in Philadelphia): say which rule, and the
       // nearest event that keeps them all, dates aside.
@@ -1623,8 +1626,8 @@ export class Concierge {
       // keeps the venue and home rules.
       // Against the same opponent first ("Knicks vs 76ers on Oct 5 at MSG": they do play the 76ers at MSG, on Oct 20).
       const relaxed = { ...rules, window: null, next: true, weekdays: rules.weekdays, exactTime: null };
-      const vsSame = opponentFor(x.performerOrTeam, x.eventName) || splitMatchup(x.performerOrTeam) ? await this.resolveEvent({ ...x, dateExpression: null, resolvedLocalDate: null }, home, relaxed) : null;
-      const alt = await this.resolveEvent({ ...x, performerOrTeam: splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam, eventName: null, dateExpression: null, resolvedLocalDate: null }, home, relaxed);
+      const vsSame = opponentFor(x.performerOrTeam, x.eventName) || splitMatchup(x.performerOrTeam) ? await this.resolveEvent({ ...x, dateExpression: null, resolvedLocalDate: null }, home, relaxed, depth + 1) : null;
+      const alt = await this.resolveEvent({ ...x, performerOrTeam: splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam, eventName: null, dateExpression: null, resolvedLocalDate: null }, home, relaxed, depth + 1);
       const sameOpponent = vsSame?.kind === 'resolved' && (alt.kind !== 'resolved' || vsSame.event.id !== alt.event.id) ? { event: vsSame.event, venue: vsSame.venue, label: vsSame.label } : null;
       // Two or three that each break a rule are named together: "Mon, Oct 5: it's in Philadelphia; Thu, Oct 8: it's on a Thursday".
       const distinct = [...new Map(sorted.map((d) => [d.e.id, d])).values()];
@@ -3090,7 +3093,13 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
   const pick = (ls: TextOffer[]) => all.filter((o) => ls.some((l) => sameOffer(o, l)));
   let textOffers: TextOffer[] = [];
   let offersSetAside: string[] = [];
-  if (latest.length >= 2) textOffers = pick(latest);
+  // "Ignore Offer A now. I only want your view on Offer B": B alone, whatever else the message names (live R05-F1).
+  const onlyLabel = /\b(?:only|just)\b[^.?!]{0,30}\b(?:offer|option)\s+([A-Z])\b|\bassess(?:ing)?\s+(?:offer\s+)?([A-Z])\s+(?:alone|on its own|by itself)\b/i.exec(flat(said));
+  const onlyOne = onlyLabel ? all.find((o) => o.label === (onlyLabel[1] ?? onlyLabel[2])!.toUpperCase()) : undefined;
+  if (onlyOne && all.length >= 2) {
+    textOffers = [onlyOne];
+    offersSetAside = all.filter((o) => o !== onlyOne).map((o) => o.name);
+  } else if (latest.length >= 2) textOffers = pick(latest);
   else if (latest.length === 1 && all.length >= 2) {
     const kept = pick(latest)[0];
     // "Ignore A, only B", "B on its own": that one alone, the others set aside and named (live R05-F1).
