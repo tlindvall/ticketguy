@@ -62,11 +62,10 @@
 .tgx .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: center; gap: clamp(28px, 4vw, 64px); padding-block: clamp(32px, 5vw, 64px) clamp(40px, 6vw, 72px); }
 .tgx .hero h1 { max-width: 13ch; font-size: clamp(44px, 5.5vw, 84px); line-height: .94; font-weight: 800; letter-spacing: -.05em; text-wrap: balance; }
 .tgx .hero-lede { margin-top: clamp(16px, 2vw, 26px); max-width: 26ch; font-size: clamp(21px, 2.1vw, 30px); line-height: 1.2; font-weight: 700; letter-spacing: -.02em; text-wrap: balance; }
-.tgx .hero-sub { margin-top: 14px; max-width: 42ch; font-size: clamp(17px, 1.35vw, 19px); line-height: 1.5; color: var(--muted); text-wrap: pretty; }
-.tgx .hero-address { margin-top: 18px; font-size: clamp(18px, 1.6vw, 22px); font-weight: 700; overflow-wrap: anywhere; }
 .tgx .hero-demo { position: relative; }
 .tgx .compose-note { margin-top: 12px; font: 14px/1.5 var(--mono); color: var(--ink); }
 .tgx .mono-note { margin-top: 18px; font: 14px/1.5 var(--mono); color: var(--muted); }
+.tgx .hero-note { margin-top: 22px; font-size: 16px; color: var(--ink); }
 
 /* Hero demonstration: the reply window cascades under the composer; its space is reserved, so nothing shifts */
 .tgx .hero-reply { position: relative; z-index: 2; margin: -14px 0 0 48px; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .09); min-height: 236px; opacity: 0; transform: translateY(14px); transition: opacity .35s ease, transform .35s ease; }
@@ -147,42 +146,26 @@
 .tgx .reply-titlebar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 7px 14px; background: var(--ink); color: var(--cream); font: 14px/1.4 var(--mono); letter-spacing: .02em; }
 .tgx .reply-flag { color: var(--lime); letter-spacing: .06em; text-transform: uppercase; font-size: 12px; }
 
-/* Event types: four windows of tappable event chips, and what we check */
-.tgx .events { padding-block: clamp(40px, 6vw, 72px); border-top: 1px solid var(--line); }
-.tgx .events-grid { display: grid; grid-template-columns: 1.35fr 1fr 1fr; grid-template-areas: "sports music stage" "sports days checks"; gap: 22px; }
-.tgx .events-win { border: 1px solid var(--ink); box-shadow: 6px 6px 0 rgba(20, 36, 56, .1); background: var(--paper); }
-.tgx .events-win:nth-child(1) { grid-area: sports; }
-.tgx .events-win:nth-child(2) { grid-area: music; }
-.tgx .events-win:nth-child(3) { grid-area: stage; }
-.tgx .events-win:nth-child(4) { grid-area: days; }
-.tgx .events-checks { grid-area: checks; }
-.tgx .events-bar { padding: 7px 14px; background: var(--ink); color: var(--cream); font: 13px/1.4 var(--mono); letter-spacing: .02em; }
-.tgx .events-win ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 16px; list-style: none; }
-.tgx .events-win li a { display: inline-block; padding: 7px 12px; border: 1px solid var(--ink); border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; text-decoration: none; transition: transform .1s ease, box-shadow .1s ease, background .1s ease; }
-.tgx .events-win li a:hover, .tgx .events-win li a:focus-visible { background: var(--lime); transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--ink); }
-.tgx .events-navy { background: var(--ink); }
-.tgx .events-navy .events-bar { background: var(--lime); color: var(--ink); }
-.tgx .events-navy ul { gap: 10px; padding: 20px; }
-.tgx .events-navy li a { font-size: 18px; padding: 9px 16px; }
-.tgx .events-navy li a { background: transparent; color: var(--cream); border-color: rgba(247, 244, 236, .5); }
-.tgx .events-navy li a:hover, .tgx .events-navy li a:focus-visible { color: var(--ink); border-color: var(--ink); }
-.tgx .events-lime { background: #eef8c4; }
-.tgx .events-cream { background: var(--cream); }
-.tgx .events-gray { background: var(--desk-soft); }
-.tgx .events-checks ul { display: block; }
-.tgx .events-checks li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--desk-soft); font-size: 15px; font-weight: 600; }
-.tgx .events-checks li:last-child { border-bottom: 0; }
-.tgx .events-checks .check { display: inline-grid; place-items: center; flex: 0 0 20px; height: 20px; background: var(--lime); border: 1px solid var(--ink); font-size: 13px; font-weight: 800; }
-@media (max-width: 1000px) {
-  .tgx .events-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "sports sports" "music stage" "days checks"; }
-}
-@media (max-width: 640px) {
-  .tgx .events-grid { grid-template-columns: 1fr; grid-template-areas: "sports" "music" "stage" "days" "checks"; }
-  .tgx .events-win li a, .tgx .events-navy li a { font-size: 14px; padding: 6px 10px; }
-  .tgx .events-navy ul { padding: 16px; }
-}
+/* Every kind of event: a full-bleed navy ticker, three rows running in alternating directions */
+.tgx .ticker { padding-block: clamp(44px, 6vw, 80px); background: var(--ink); color: var(--cream); overflow: hidden; }
+.tgx .ticker-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; margin-bottom: clamp(22px, 3vw, 36px); }
+.tgx .ticker-head h2 { font-size: clamp(34px, 5vw, 64px); line-height: 1; font-weight: 800; letter-spacing: -.045em; }
+.tgx .ticker-head p { font-size: 15px; color: var(--lime); }
+.tgx .ticker-rows { display: grid; gap: 14px; }
+.tgx .ticker-row { display: flex; width: max-content; animation: tgx-tick 60s linear infinite; }
+.tgx .ticker-row.is-rev { animation-direction: reverse; animation-duration: 70s; }
+.tgx .ticker-row:nth-child(3) { animation-duration: 80s; }
+.tgx .ticker-rows:hover .ticker-row, .tgx .ticker-rows:focus-within .ticker-row { animation-play-state: paused; }
+.tgx .ticker-track { display: flex; gap: 14px; margin: 0; padding: 0 14px 0 0; list-style: none; }
+.tgx .ticker-track a { display: block; padding: 12px 22px; border: 1px solid rgba(247, 244, 236, .35); border-radius: 999px; color: var(--cream); font-size: clamp(18px, 2vw, 26px); font-weight: 800; letter-spacing: -.02em; white-space: nowrap; text-decoration: none; transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.tgx .ticker-row:nth-child(2) .ticker-track a { border-color: var(--lime); color: var(--lime); }
+.tgx .ticker-track a:hover, .tgx .ticker-track a:focus-visible { background: var(--lime); border-color: var(--lime); color: var(--ink); }
+@keyframes tgx-tick { to { transform: translateX(-50%); } }
 @media (prefers-reduced-motion: reduce) {
-  .tgx .events-win li a { transition: none; }
+  .tgx .ticker-row { width: auto; animation: none; padding-inline: var(--gutter); }
+  .tgx .ticker-track { flex-wrap: wrap; }
+  .tgx .ticker-track[aria-hidden="true"] { display: none; }
+  .tgx .ticker-track a { transition: none; }
 }
 
 /* Inline copy-address fallback in running text */

@@ -20,7 +20,7 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and an illustrative reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + composer (with its demo reply) → event types → request starters → source universe → how it works → demo animation → FAQ →
+ * Order: promise + composer (with its demo reply) → three things to ask → every kind of event (ticker) → source universe → how it works → demo animation → FAQ →
  * closing invitation. The animation is an optional demonstration lower down; the headline and the composer
  * carry the first screen on their own.
  *
@@ -92,21 +92,16 @@ export function InboxHome({ state, address, preview = false }: Props) {
           <div className="hero-copy">
             <h1 id="hero-title">You’ve finally got a ticket guy now.</h1>
             <p className="hero-lede">Found tickets? Get a second opinion before you buy.</p>
-            <p className="hero-sub">Send a link, a screenshot, or tell us what you’re looking for. We’ll check the price, flag important catches, and look for better options.</p>
-            <p className="hero-address">
-              <a className="link" href={mailto(general)}>{address}</a>
-            </p>
-            <p className="mono-note">Free. Usually a reply within 5 minutes.<br />No app. No account. Just email.</p>
+            <p className="mono-note hero-note">Free. No app. A reply in minutes.</p>
           </div>
           <HeroDemo address={address} cta={cta} />
         </section>
 
-        <EventTypes address={address} />
 
         <section className="starters wrap" aria-labelledby="starters-title">
           <div className="section-head">
-            <h2 id="starters-title">Start with a subject line.</h2>
-            <p>Tap one to start a draft in your email app. Nothing is sent until you press send. Email app not opening? <CopyAddress address={address} className="inline-copy" label={`Copy ${address}`} /></p>
+            <h2 id="starters-title">Three things to ask your guy.</h2>
+            <p>Tap one to start the email. <CopyAddress address={address} className="inline-copy" label="Or copy the address" /></p>
           </div>
           <ul className="starter-grid">
             {STARTERS.map((s) => (
@@ -128,6 +123,8 @@ export function InboxHome({ state, address, preview = false }: Props) {
             ))}
           </ul>
         </section>
+
+        <EventTypes address={address} />
 
         <SourceUniverse />
 
