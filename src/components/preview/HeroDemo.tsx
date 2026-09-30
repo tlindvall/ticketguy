@@ -5,16 +5,18 @@ import { PaperclipIcon } from './icons';
 import { PixelCursor } from './PixelCursor';
 
 /**
- * The hero: the one real "New message" window, playing its own demonstration once. The request types
- * itself, a pixel cursor presses the button, and an illustrative reply arrives with the call. Everything
+ * The hero: the one real "New message" window, playing its own demonstration once. A second-opinion request
+ * types itself (a listing link, the group, the budget), a pixel cursor presses the button, and an illustrative
+ * reply judges that listing: whether it meets the request, the group total with fees, the market, the call
+ * and when not to follow it, and the seller link. Everything
  * stays real: the fields are editable and the button opens the visitor's email app with exactly that text
  * (nothing reaches us until they press send there). Touching the composer stops the demonstration and
  * hands it over. Visitors who ask for reduced motion get the finished state at once.
  */
-const SUBJECT = 'Knicks next Saturday';
-const BODY = 'Four of us. Under $150 each.\nCan you find something decent?';
+const SUBJECT = 'Is this a good deal?';
+const BODY = 'stubhub.com/…/knicks-celtics\nFour of us, together. Under $600 total.';
 
-// Illustrative group price per ticket over 30 days: up to a peak, then trending down to $130.
+// Illustrative price per ticket for four together over 30 days: up to a peak, then trending down.
 const SERIES = [146, 145, 147, 144, 146, 145, 147, 146, 148, 147, 150, 149, 152, 155, 158, 161, 165, 168, 170, 169, 166, 162, 158, 153, 149, 145, 141, 137, 134, 130];
 
 type Phase = 'idle' | 'subject' | 'body' | 'cursor' | 'press' | 'checking' | 'reply' | 'done';
@@ -69,7 +71,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
     at(t, () => setPhase('checking'));
     t += 1300;
     at(t, () => { setCursor(null); setPhase('reply'); });
-    t += 3200;
+    t += 4000;
     at(t, () => setPhase('done'));
   }, []);
 
@@ -112,34 +114,39 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
         </div>
         <label className="compose-row">
           <span className="compose-label">Subject:</span>
-          <input className="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={140} placeholder={phase === 'done' ? 'What are you after?' : ''} />
+          <input className="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={140} placeholder={phase === 'done' ? 'Is this a good deal?' : ''} />
         </label>
         <label className="compose-body-wrap">
           <span className="sr-only">Message</span>
-          <textarea className="compose-body" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={2000} />
+          <textarea className="compose-body" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={2000} placeholder={phase === 'done' ? 'Paste your ticket link and tell me how many you need.' : ''} />
         </label>
         <div className="compose-footer">
-          <span className="compose-attach"><PaperclipIcon /><span>Links and screenshots welcome</span></span>
+          <span className="compose-attach"><PaperclipIcon /><span>Opens your email app. You send it from there.</span></span>
           <CopyAddress address={address} />
           <button type="submit" ref={button} className={`btn-lime${phase === 'press' ? ' is-pressed' : ''}`}>{cta} <span aria-hidden="true">›</span></button>
         </div>
       </form>
 
       <article className={`hero-reply${showReply ? ' is-shown' : ''}${replied ? ' is-replied' : ''}`} aria-label="Illustrative example of a reply, not a live offer" aria-hidden={!showReply}>
-        <div className="reply-titlebar"><span>Re: Knicks next Saturday</span><span className="reply-flag">Illustrative example</span></div>
+        <div className="reply-titlebar"><span>Re: Is this a good deal?</span><span className="reply-flag">Illustrative example</span></div>
         {replied ? (
           <div className="hero-reply-body">
-            <div className="hr-line hr-1 hr-found">
-              <p><strong>Found 4 together at $130 each.</strong> <span className="hr-trend">▼ 15% this week</span></p>
-              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Price for four together over the last 30 days: up to $170, now $130 and falling">
+            <ul className="hr-line hr-1 hr-facts">
+              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>4 together</strong>, Section 224, Row 6</span><span className="hr-tag">Meets your request</span></li>
+              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>$548 total</strong>, fees included</span><span className="hr-tag">Under your $600</span></li>
+            </ul>
+            <div className="hr-line hr-2 hr-found">
+              <p>Price for four together <span className="hr-trend">▼ 15% this week · 140 groups of 4 listed</span></p>
+              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Price for four together over the last 30 days: up to a peak, now falling">
                 <polyline points={line} className="hr-path" pathLength={1} />
                 <circle cx={lx} cy={ly} r="5" className="hr-dot" />
               </svg>
             </div>
-            <p className="hr-line hr-punch">Prices are trending down. <span>You’ll probably get them cheaper closer to the game.</span></p>
+            <p className="hr-line hr-punch">Prices are trending down. I’d hold off. <span>Plenty of groups of four are still listed, 9 days out. If these exact seats matter most, buy now.</span></p>
+            <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
           </div>
         ) : (
-          <p className="hero-reply-checking mono">Checking prices for 4 together<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
+          <p className="hero-reply-checking mono">Checking your listing<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
         )}
         {phase === 'done' ? <button type="button" className="hero-replay" onClick={play}>Replay</button> : null}
       </article>

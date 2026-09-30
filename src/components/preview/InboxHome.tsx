@@ -3,7 +3,6 @@ import type { LaunchState } from '@/lib/config/launch';
 import { SvgLibrary } from '@/components/public/Landing';
 import { HeroDemo } from './HeroDemo';
 import { CopyAddress } from './CopyAddress';
-import { HeroVideo } from './HeroVideo';
 import { SourceUniverse } from './SourceUniverse';
 import { PixelCursor } from './PixelCursor';
 import { FloatingGuy } from './FloatingGuy';
@@ -20,9 +19,8 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and an illustrative reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + composer (with its demo reply) → three things to ask → every kind of event (ticker) → source universe → how it works → demo animation → FAQ →
- * closing invitation. The animation is an optional demonstration lower down; the headline and the composer
- * carry the first screen on their own.
+ * Order: promise + composer (with its demo reply) → three things to ask → every kind of event (ticker) → how it works
+ * → where the data comes from (source universe) → a second example (a catch) → FAQ → closing.
  *
  */
 /** `preview` marks the page as the staff-only preview (a banner, and the logo links back to the preview). */
@@ -31,14 +29,14 @@ type Props = { state: LaunchState; address: string; preview?: boolean };
 type Starter = { tone: 'cream' | 'navy' | 'gray'; subject: string; lines: string[]; shows: string; body: string };
 const STARTERS: Starter[] = [
   {
-    tone: 'cream',
+    tone: 'navy',
     subject: 'Is $150 each for these Dua Lipa tickets a good price?',
     lines: ['Is $150 each for these', 'Dua Lipa tickets', 'a good price?'],
     shows: 'Check a price',
     body: 'Ticket link or screenshot:\nHow many tickets:\nAnything that matters (seats together, section, budget):\n',
   },
   {
-    tone: 'navy',
+    tone: 'cream',
     subject: 'Four Knicks tickets next Saturday. Under $600 total.',
     lines: ['Four Knicks tickets', 'next Saturday.', 'Under $600 total.'],
     shows: 'Find tickets',
@@ -56,6 +54,7 @@ const STARTERS: Starter[] = [
 const FAQ: Array<{ q: string; a: string }> = [
   { q: 'What does it cost?', a: 'Nothing. Ticket Guy is free. Some seller links pay us a commission if you buy, but that never decides what we recommend.' },
   { q: 'When will I hear back?', a: 'Usually within 5 minutes. If we need a detail, like how many tickets or your budget, we’ll ask.' },
+  { q: 'What happens after I email?', a: 'We reply in the same email thread. If a detail is missing, we ask first; then you get the call, the total for your group and a link to the seller. Reply any time to follow up. Emailing us doesn’t sign you up for anything else.' },
   { q: 'Which events can you help with?', a: 'Live events across the US: pro and college sports, concerts, theater, comedy, festivals and more. Name the event, or send the listing you’re looking at.' },
   { q: 'Where do you cover?', a: 'The whole United States, coast to coast: big arenas, stadiums and theaters, and smaller local venues too.' },
   { q: 'Who replies?', a: 'Ticket Guy, an AI assistant built for one job: getting you the right tickets at the right price. It reads the listing you send, checks the event against live resale market data from the major marketplaces, including StubHub and Vivid Seats, and prices your whole group with fees. It tracks how prices are moving, so it can tell you when to buy and when to wait. Our team oversees it and steps in when a request needs a person.' },
@@ -68,7 +67,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
   // The visitor's own subject is sent as written; only the plain address links carry a default subject.
   const general = live ? 'Tickets' : 'Ticket Guy early access';
   const mailto = (subject: string, body?: string) => `mailto:${address}?subject=${encodeURIComponent(subject)}${body ? `&body=${encodeURIComponent(body)}` : ''}`;
-  const cta = live ? 'Email your ticket guy' : 'Email for early access';
+  const cta = live ? 'Ask your ticket guy' : 'Email for early access';
   return (
     <div className="tgx">
       <SvgLibrary />
@@ -90,9 +89,10 @@ export function InboxHome({ state, address, preview = false }: Props) {
       <main id="main">
         <section className="hero wrap" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <h1 id="hero-title">You’ve finally got a ticket guy now.</h1>
+            <h1 id="hero-title">You’ve finally got a ticket guy.</h1>
             <p className="hero-lede">Found tickets? Get a second opinion before you buy.</p>
             <p className="mono-note hero-note">Free. No app. A reply in minutes.</p>
+            <p className="hero-alt">Don’t have tickets in mind? <a href={mailto('Looking for tickets', 'What you’d like to see:\nWhen and where:\nHow many tickets, and your budget:\n')}>Tell me what you’re looking for ›</a></p>
           </div>
           <HeroDemo address={address} cta={cta} />
         </section>
@@ -101,7 +101,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
         <section className="starters wrap" aria-labelledby="starters-title">
           <div className="section-head">
             <h2 id="starters-title">Three things to ask your guy.</h2>
-            <p>Tap one to start the email. <CopyAddress address={address} className="inline-copy" label="Or copy the address" /></p>
+            <p>Choose one to open a draft in your email app. <CopyAddress address={address} className="inline-copy" label="Or copy the address" /></p>
           </div>
           <ul className="starter-grid">
             {STARTERS.map((s) => (
@@ -124,9 +124,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
           </ul>
         </section>
 
-        <EventTypes address={address} />
-
-        <SourceUniverse />
+        <EventTypes />
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>
@@ -176,12 +174,25 @@ export function InboxHome({ state, address, preview = false }: Props) {
           </div>
         </section>
 
-        <section className="demo wrap" aria-labelledby="demo-title">
+        <SourceUniverse />
+
+        <section className="catch wrap" aria-labelledby="catch-title">
           <div className="section-head">
-            <h2 id="demo-title">See one request, start to finish.</h2>
-            <p>An illustrative example, in 20 seconds.</p>
+            <h2 id="catch-title">Cheap for a reason?</h2>
+            <p className="mono">An illustrative example.</p>
           </div>
-          <HeroVideo />
+          <article className="catch-mail" aria-label="Illustrative example of a reply that spots a catch, not a live offer">
+            <div className="reply-titlebar"><span>Re: These seats look cheap. What’s the catch?</span><span className="reply-flag">Illustrative example</span></div>
+            <p className="catch-asked"><span className="mono">You asked:</span> Two in Section 112 for $95 each. Seems low?</p>
+            <div className="catch-body">
+              <p className="catch-call">Two catches.</p>
+              <ul className="catch-list">
+                <li><span className="mono">Delivery</span> The seller sends the tickets 24 hours before the show, not now.</li>
+                <li><span className="mono">View</span> Listed as limited view, behind the sound desk.</li>
+              </ul>
+              <p className="catch-next">If you’re fine with both, $95 is fair for that section. If you’re travelling in or want a clear view, I’d skip these.</p>
+            </div>
+          </article>
         </section>
 
         <section id="faq" className="faq wrap" aria-labelledby="faq-title">
@@ -198,7 +209,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
 
         <section className="closing" aria-labelledby="closing-title">
           <div className="wrap">
-            <h2 id="closing-title">{live ? 'Got tickets in mind? Give us a try.' : 'Before you buy, ask your guy.'}</h2>
+            <h2 id="closing-title">{live ? 'Already looking at tickets? Send them over.' : 'Before you buy, ask your guy.'}</h2>
             <a className="closing-address" href={mailto(general)}>{address}</a>
             <p>{live ? 'Free. Usually a reply within 5 minutes.' : 'Email for early access.'}</p>
           </div>

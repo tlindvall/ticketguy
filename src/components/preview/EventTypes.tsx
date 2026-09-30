@@ -1,18 +1,17 @@
 /**
  * "Every kind of event": a full-width navy band with the event types Ticket Guy routes running past like a
  * stadium ticker, three rows in alternating directions. Taken from the category routes
- * (src/lib/sources/routing.ts), leaving out the two marked optional expansion (theme parks, cinema). Every
- * name starts an email about that kind of event. Rows pause on hover; reduced motion shows them still and
- * wrapped.
+ * (src/lib/sources/routing.ts), leaving out the two marked optional expansion (theme parks, cinema).
+ * Information only: the names are not links (the starter cards above start requests), so nobody mistakes
+ * them for event listings. Movement is slow; reduced motion shows the rows still and wrapped.
  */
 const ROWS: string[][] = [
   ['NFL', 'NBA', 'MLB', 'NHL', 'WNBA', 'MLS & NWSL', 'College football', 'March Madness', 'Bowl games', 'Minor league', 'High school'],
-  ['Stadium tours', 'Arena shows', 'Club nights', 'Festivals', 'Electronic & nightlife', 'Broadway', 'Touring musicals', 'Orchestra & opera', 'Ballet & dance', 'Comedy'],
+  ['Stadium concerts', 'Arena shows', 'Club nights', 'Festivals', 'Electronic & nightlife', 'Broadway', 'Touring musicals', 'Orchestra & opera', 'Ballet & dance', 'Comedy'],
   ['UFC & boxing', 'WWE & AEW', 'NASCAR', 'IndyCar', 'Formula 1', 'Tennis', 'Golf', 'Rodeo & PBR', 'Family shows', 'Fairs', 'Fan expos', 'Las Vegas shows', 'Museums & attractions'],
 ];
 
-export function EventTypes({ address }: { address: string }) {
-  const mailto = (what: string) => `mailto:${address}?subject=${encodeURIComponent(`${what} tickets`)}&body=${encodeURIComponent('Event, date or link:\nHow many tickets:\nBudget:\n')}`;
+export function EventTypes() {
   return (
     <section className="ticker" aria-labelledby="ticker-title">
       <div className="wrap ticker-head">
@@ -26,9 +25,7 @@ export function EventTypes({ address }: { address: string }) {
             {[0, 1].map((copy) => (
               <ul key={copy} className="ticker-track" aria-hidden={copy === 1 ? true : undefined}>
                 {row.map((item) => (
-                  <li key={item}>
-                    <a href={mailto(item)} tabIndex={copy === 1 ? -1 : undefined}>{item}</a>
-                  </li>
+                  <li key={item}><span>{item}</span></li>
                 ))}
               </ul>
             ))}
