@@ -800,3 +800,22 @@ A black-box audit sent 16 test emails. Each fix below is covered by the acceptan
 - B05: the quantity change that reopened a settled date, and the Bushwick window reset. Both predate #45 and #51 and need a retest.
 - B07: discovery exclusions.
 - Verified purchasable offers: a listing partner is still needed.
+
+## 53. Audit round 2: exact replay, no value bands, their offers compared
+
+The remediation review and the live retest after #53 found remaining floor-markup verdicts and a missed two-offer question. Replaying the exact audit emails also turned up cases the reconstructed tests had missed.
+
+- **No price band decides a verdict or a filter.** The ×1.15 and ×1.30 bands are gone from `verdictClaim` and `C_QUOTE_MARKET`, and the 1/1.3 fee allowance is gone from alternatives. The email states the observed gap and its basis.
+- **Budget framing.** "Five at that price would be $X, which leaves $Y for fees; unconfirmed" replaces "under your budget". Over budget: "that doesn't prove nothing cheaper exists now".
+- **Offers the customer writes out** are kept separate (`offersInText`) and compared as the question (`C_OFFERS`). Wheelchair spaces nobody needs are not the one to buy.
+- **Deterministic guards after any extractor:**
+  - an explicit watch cancel is a cancellation, but "stop this watch on <date>" is an expiry;
+  - "neither of us needs wheelchair seating" means no access need;
+  - "in London, UK" is out of scope.
+- **Watches.** None is stored while watch alerts are off. A cancel is scoped to its thread and closes the request.
+- **Other additions:**
+  - `C_REQS`: hard requirements are said as unchecked when nothing verified meets them.
+  - `C_LEFT_OUT`: rejected cheaper listings are named, with the reason.
+  - `C_SALES`: "asking prices, not sales".
+  - The official-sale reply is deduplicated per revision.
+  - The headline shows the budget.

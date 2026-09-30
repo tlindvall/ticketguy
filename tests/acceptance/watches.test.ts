@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { DbHandle } from '@/lib/db';
 import * as t from '@/lib/db/schema';
-import { openTestDb, makeConcierge, inbound } from '../harness';
+import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 
@@ -16,8 +16,8 @@ describe('price watches', () => {
     await h.close();
   });
 
-  const ask = async (from: string) => {
-    const c = makeConcierge(h);
+  const ask = async (from: string, env = testEnv({ WATCH_SEND_ENABLED: 'true' })) => {
+    const c = makeConcierge(h, { env });
     const r = await c.ingestInbound(inbound({ text: 'Rangers Oct 3, 5 tickets, $450 total. Let me know if it drops.', from, subject: 'Rangers' }));
     for (const ev of (await leaseDueOutbox(h.db, { limit: 50, now: FIXTURE_NOW })).filter((e) => e.eventType === 'request.interpret')) {
       const p = ev.payload as Record<string, string>;
@@ -30,6 +30,11 @@ describe('price watches', () => {
 
   it('is created when a seller with monitoring rights is enabled', async () => {
     expect(await ask('watch-yes@customer.example')).toHaveLength(1);
+  });
+
+  // A watch whose alerts can't be sent never ran: storing it made the cancellation say "stopped" (A07-R1).
+  it('is not created while watch alerts are switched off', async () => {
+    expect(await ask('watch-off@customer.example', testEnv())).toHaveLength(0);
   });
 
   it('is not created when no seller may be monitored', async () => {

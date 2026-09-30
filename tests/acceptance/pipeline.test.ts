@@ -128,7 +128,8 @@ describe('end-to-end fixture flow', () => {
     expect(await c.approveRecommendation({ recommendationId: rec1!.id, reviewerUserId: 's', expectedRevision: 1, draftHash: rec1!.draftHash, note: null })).toMatchObject({ ok: false, status: 409 });
     // Revision 2: no 4-seat fixture inventory → honest no-result path (no invented listings).
     const [rec2] = await h.db.select().from(t.recommendations).where(and(eq(t.recommendations.requestId, reqId), eq(t.recommendations.revision, 2)));
-    expect(rec2!.bodyText).toContain('Here’s what I can tell you so far.');
+    // Its requirement is said as unchecked, first, not implied by anything below it (audit replay A05-R1).
+    expect(rec2!.bodyText).toMatch(/I haven’t been able to check (this|these) against any seats yet: .*so I can’t recommend any yet\./);
     expect(rec2!.bodyText).not.toContain('Best verified option');
     const [advice2] = await h.db.select().from(t.adviceRuns).where(and(eq(t.adviceRuns.requestId, reqId), eq(t.adviceRuns.revision, 2)));
     expect(advice2!.decision).toBe('insufficient_evidence');

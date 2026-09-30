@@ -204,23 +204,29 @@ function renderBody(
       const rest = unverified.length
         ? ` is on general sale on ${seller}. I haven’t seen its seats or prices, so I can’t tell you yet whether any fit what you need.`
         : ` is still on general sale on ${seller}, and that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+      // Asked again whether we've checked: the answer is no, first, in plain words.
+      const recheckLine = v.recheck && unverified.length ? `No, I haven't checked any of these: I can't see ${seller}'s seats, their prices or their access from here.` : '';
       const lead = `${title}${where ? ` (${where})` : ''}${rest}`;
       const checkLead = `Check these on the event page before you buy${n && n !== 2 ? ` (set the number of tickets to ${n} first; the page may start at 2)` : ''}:`;
       const tail = [
         // The seller's page opens at its own default quantity, which is not always theirs.
         ...(!unverified.length && n && n !== 2 ? [`The page may start at 2 tickets, so set it to ${n}.`] : []),
         ...notes,
-        `${kind} that aren't sold out often go for less on resale. Want me to compare? Just reply "compare".`,
+        // The invitation says what a comparison can and can't do (retest R2-B03): resale price levels for the
+        // group, not a check of particular seats, their access or whether they sit together.
+        unverified.length
+          ? `If you'd like to see where resale prices start for ${n ? `${n} tickets` : 'your group'}, reply "compare". That shows price levels only: I can't check particular seats, their access or whether they sit together for you.`
+          : `${kind} that aren't sold out often go for less on resale. Want me to compare? Just reply "compare".`,
         v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '',
         v.affiliate ? AFFILIATE_DISCLOSURE : '',
       ].filter(Boolean);
       const linkLine = unverified.length ? `Event page on ${seller}: ${String(v.url)}` : `Buy tickets on ${seller}: ${String(v.url)}`;
-      const text = ['Hey,', lead, ...(unverified.length ? [checkLead, unverified.map((u) => `- ${u}`).join('\n')] : []), linkLine, ...tail];
+      const text = ['Hey,', ...(recheckLine ? [recheckLine] : []), lead, ...(unverified.length ? [checkLead, unverified.map((u) => `- ${u}`).join('\n')] : []), linkLine, ...tail];
       // The seller's name is the link; the event title links to the event's page.
       const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
       const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)}`, `on ${link(seller, String(v.url), true)}`)}`;
       const checks = unverified.length ? [`<p style="margin:0 0 8px;font-weight:600;">${esc(checkLead)}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${unverified.map((u) => `<li style="margin:0 0 8px;">${esc(u)}</li>`).join('')}</ul>`] : [];
-      const html = [para('Hey,'), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
+      const html = [para('Hey,'), ...(recheckLine ? [para(recheckLine)] : []), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
       return wrap(text, html);
     }
     case 'holding': {

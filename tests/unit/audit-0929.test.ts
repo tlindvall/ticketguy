@@ -30,16 +30,17 @@ describe('TG-B03/B04: the budget is checked against the group total; a venue-wid
     const p = buildPacket(args({ priorities: priorities(60000) }, ctx(12175)));
     const read = claim(p, 'C_READ');
     expect(read).toContain('My read: your budget is $600 for five ($120 a ticket).');
-    expect(read).toContain('$121.75 a ticket before fees (as of about 6 hours ago), $608.75 for five, so they were already over it before fees.');
-    expect(read).toContain('Unless cheaper seats have been listed since');
-    expect(read).not.toMatch(/fair|better deal|\$140/);
+    // What that price would come to for five, not a sellable five-seat offer; one sample doesn't prove the market.
+    expect(read).toContain('The cheapest listings with 5 or more tickets I saw (as of about 6 hours ago) were $121.75 a ticket before fees; five at that price would be $608.75, over your budget before any fees.');
+    expect(read).toContain('That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.');
+    expect(read).not.toMatch(/fair|better deal|\$140|won’t cover/);
   });
   it('A07: two under $180 total, floor $84.89: under before fees, with fees and seats still to check', () => {
     const p = buildPacket(args({ quantity: 2, priorities: priorities(18000) }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const read = claim(p, 'C_READ');
-    expect(read).toContain('$169.78 for two before fees');
-    expect(read).toContain('under your $180 budget. Fees come on top');
-    expect(read).not.toMatch(/fair|\$98/);
+    // $10.22 of room for every remaining charge: never a standalone "under budget" (remediation review §3).
+    expect(read).toContain('two at that price would be $169.78, which leaves $10.22 of your $180 for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.');
+    expect(read).not.toMatch(/fair|\$98|under your/);
   });
   it('no budget: where the market starts, not what seats are worth', () => {
     const read = claim(buildPacket(args({}, ctx(12175))), 'C_READ');
@@ -57,7 +58,7 @@ describe('TG-B01: an open sale is not an endorsement when there are needs it can
     const p = buildPacket(args({ quantity: 3, priorities: priorities(45000), accessibilityRequired: true, official: { seller: 'Ticketmaster', url: 'https://www.ticketmaster.com/x' } }, null));
     const off = p.claimRecords.find((c) => c.id === 'C_OFFICIAL')!;
     expect(off.text).not.toMatch(/where I’d buy/);
-    expect(off.text).toContain('check the all-in total, the access you need');
+    expect(off.text).toContain('check the all-in total and the access you need there before you buy');
     expect(off.linkLabel).toBe('Event page on Ticketmaster');
   });
 });
@@ -65,12 +66,12 @@ describe('TG-B01: an open sale is not an endorsement when there are needs it can
 describe('TG-B02: their own question is answered first', () => {
   it('A08: delivery at 6pm for a 7pm game with a noon departure is a delivery question, answered first', () => {
     const text = 'Two tickets $220 total for the game at 7pm. Seller says delivery by 6pm but we leave at noon to drive there. If they don’t arrive, is a refund enough?';
-    expect(questionsAsked(text)).toEqual({ deliveryRisk: true, accessibleSpaces: false });
+    expect(questionsAsked(text)).toEqual({ deliveryRisk: true, accessibleSpaces: false, salesAsked: false });
     const p = buildPacket(args({ quantity: 2, asks: questionsAsked(text) }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const body = render(p);
     const opening = body.split('\n\n')[2]!;
     expect(opening).toMatch(/^On delivery:/);
-    expect(opening).toContain('a seller’s guarantee refunds the money if they never come; it doesn’t get you into the game');
+    expect(opening).toContain('a refund guarantee, if the seller offers one, gives the money back; it doesn’t get you into the game');
     expect(body).not.toMatch(/guaranteed|will arrive|will be delivered|you’ll get in/i);
   });
   it('A03: wheelchair spaces beside ordinary seats are not a cheaper version of them', () => {
@@ -80,7 +81,20 @@ describe('TG-B02: their own question is answered first', () => {
     expect(claim(p, 'C_ACCESS')).toContain('not a cheaper version of ordinary seats');
   });
   it('a passing "transfer" or "accessible" is not a question about them', () => {
-    expect(questionsAsked('Two Knicks tickets, mobile transfer is fine')).toEqual({ deliveryRisk: false, accessibleSpaces: false });
+    expect(questionsAsked('Two Knicks tickets, mobile transfer is fine')).toEqual({ deliveryRisk: false, accessibleSpaces: false, salesAsked: false });
+  });
+  // The remediation review's intent cases (§1).
+  it('a paraphrase of the delivery question counts', () => {
+    expect(questionsAsked('Will these reach my phone before we get on the train at noon?').deliveryRisk).toBe(true);
+  });
+  it('turning wheelchair spaces down is not a question about them', () => {
+    expect(questionsAsked("I don't need wheelchair spaces; compare these two ordinary offers").accessibleSpaces).toBe(false);
+  });
+  it('A03 exact wording: an accessible offer on the table, which neither of them needs', () => {
+    expect(questionsAsked("We're two adults and neither of us needs wheelchair-accessible seating. Offer A says wheelchair-accessible spaces, $80 each including fees. Offer B is ordinary seats together, section 211 row 12, $105 each including fees.").accessibleSpaces).toBe(true);
+  });
+  it('A08-R1 exact wording is still the delivery question', () => {
+    expect(questionsAsked('My question is about delivery risk, not whether prices will fall. Delivery is promised by 6pm on October 1, the game is at 7pm, and we leave home at noon for a three-hour trip with a child. A refund could still mean missing the game, right? Please address that.').deliveryRisk).toBe(true);
   });
 });
 
