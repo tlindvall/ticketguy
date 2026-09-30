@@ -28,6 +28,8 @@ export type ClaimRecord = {
   url?: string | null;
   /** What the link says ("Buy on Ticketmaster"); "View this offer" when not set. */
   linkLabel?: string | null;
+  /** The same facts as `text`, one per bullet, for the email; `text` is what the model reads and cites. */
+  items?: string[];
 };
 
 export type AdvicePacket = {
@@ -48,6 +50,8 @@ export type AdvicePacket = {
   claimRecords: ClaimRecord[];
   /** Questions the email ends with, server-written from what we still don't know (never model-authored). */
   followUps?: string[];
+  /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
+  headline?: string;
   evidenceExpiresAt: string | null;
   nextCheckpointAt: string | null;
   stopConditions: string[];
@@ -373,6 +377,12 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   return out.slice(0, 3);
 }
 
+/** "No obstructed views" is their words; the figures cover every seat in the venue, and say so. */
+function wholeVenue(pref: string | null): string {
+  const p = pref?.trim().replace(/[.!]+$/, '');
+  return p ? ` These cover every seat in the venue, so they don’t reflect your preference (“${p.replace(/^./, (ch) => ch.toLowerCase())}”).` : '';
+}
+
 /** Resale market claims. Every number is the calculated context's; wording says what the figure is and is not. */
 function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const m = a.market;
@@ -399,7 +409,14 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${a.seatingPreference ? ` That’s across the whole venue, not only ${a.seatingPreference} seats.` : ''}`,
+      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${wholeVenue(a.seatingPreference ?? null)}`,
+      items: [
+        `${ageHours < MARKET_RECENT_HOURS ? 'Cheapest' : `Cheapest as of about ${ageHours} hours ago`}${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' for two together' : ''}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
+        ...(m.supply.now !== null
+          ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${m.supply.now} resale listings in all${moved(m.supply)}.`]
+          : []),
+        ...(a.seatingPreference ? [wholeVenue(a.seatingPreference ?? null).trim()] : []),
+      ],
       values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
       scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
       limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict', ...(group !== null ? ['group_split_not_guaranteed'] : [])],
@@ -726,6 +743,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     abstentions: a.policy.abstentions,
     claimRecords: claims,
     followUps: followUpQuestions(a),
+    headline: `${a.eventLabel} · ${a.quantity === 1 ? '1 ticket' : `${a.quantity} tickets`}${a.link ? ` · from the ${a.link.marketplace} link you sent` : ''}`,
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,
     stopConditions: a.policy.stopConditions,

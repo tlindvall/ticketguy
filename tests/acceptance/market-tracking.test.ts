@@ -133,7 +133,9 @@ describe('resale market tracking', () => {
     const requestId = await ask(c, '2 Testers tickets Oct 30 — is resale cheaper?', 'shown@customer.example');
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
-    expect(rec!.bodyText).toContain('Resale listings for two tickets together currently start at $130 a ticket (listed price, before fees).');
+    // Answer first, then the market as bullets with its source under them.
+    expect(rec!.bodyText).toContain('The resale market right now:\n\n- Cheapest for two together: $130 a ticket before fees (about $260 for two). That’s down from $160 three days ago.\n- About 400 resale listings in all.');
+    expect(rec!.bodyHtml).toContain('<strong>$130</strong>');
     expect(rec!.bodyText).toContain('the cheapest listed price for two together at this point before the game was typically $122.50 to $147.50 (median $135)');
     expect(rec!.bodyText).not.toContain('enough comparable history');
     expect(rec!.bodyText).toContain('Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked');
@@ -176,8 +178,9 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body.startsWith('Hey,\n\nGoing by the StubHub link you sent, here’s what I have for two tickets to Metro Testers vs. Boston at Test Garden')).toBe(true);
-    expect(body).toContain('Resale listings for two tickets together currently start at $130');
+    // The event and the link they sent in one line at the top, then the answer.
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston at Test Garden, New York, Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nMy read: ')).toBe(true);
+    expect(body).toContain('- Cheapest for two together: $130 a ticket before fees');
     expect(body).toContain('up to about $150 a ticket before fees is a fair price');
     expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
     expect(body).not.toMatch(/send me the (link|listing)/i);
@@ -252,7 +255,7 @@ describe('resale market tracking', () => {
     const requestId = await ask(c, '5 Testers tickets Oct 30 together, should I buy now or hold off?', 'rangers5@customer.example');
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
-    expect(rec!.bodyText).toContain('Resale listings with 5 or more tickets');
+    expect(rec!.bodyText).toContain('- Cheapest with 5 or more tickets: $140 a ticket before fees (about $700 for five).');
     expect(rec!.bodyText).toContain('listings have 5 or more tickets');
     expect(rec!.bodyText).toContain('StubHub and Vivid Seats resale prices before fees');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
@@ -269,7 +272,7 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body.startsWith('Hey,\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston at Test Garden, New York, Fri, Oct 30, 7:30 PM EDT · 4 tickets\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
     expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);
