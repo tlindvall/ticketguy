@@ -1,3 +1,4 @@
+import { concertBudget, concertQuestion, similarMusicGoal } from '@/lib/advice/concert-terms';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
@@ -370,6 +371,12 @@ export class Concierge {
     // Likewise a quoted price: with offers side by side there is no single price they're asking about.
     if (latestOffers.length >= 2 && extraction.quotedPriceCents != null) extraction = { ...extraction, quotedPriceCents: null, quotedPriceBasis: null };
 
+    // Music quotes often put the real budget after several product prices. Bind it to its own words.
+    if (/\bconcert|festival|house night|entry|VIP|parking\b/i.test(latestText) && latestOffers.length) {
+      const budget = concertBudget(latestText);
+      if (budget) extraction = { ...extraction, budgetCents: budget.cents, budgetBasis: budget.basis ?? (priorBrief?.budgetCents === budget.cents ? priorBrief.budgetBasis : null), ambiguities: extraction.ambiguities.filter((x) => !x.startsWith('budget_basis')) };
+    }
+
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
     extraction = applyTicketLinks(extraction, known);
     // So does the listing they show us: a screenshot, or listing text pasted into the email. What it showed is
@@ -398,6 +405,8 @@ export class Concierge {
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    if (similarMusicGoal(latestText)) merged = { ...merged, performerOrTeam: null, eventName: null, intent: 'browse', categoryHint: 'concert', genreHint: extraction.genreHint ?? (/\bpop\b/i.test(latestText) ? 'pop' : merged.genreHint), resolvedLocalDate: extraction.resolvedLocalDate, dateExpression: extraction.dateExpression, submittedUrls: extraction.submittedUrls };
+
 
     // Intents with side effects but no research. Their words decide, whatever the extractor read: "stop emailing me".
     if (classifyOptOutText(latestText)) extraction = { ...extraction, intent: 'marketing_opt_out' };
@@ -537,6 +546,52 @@ export class Concierge {
       }
     }
 
+    // Concert quote decisions run before discovery: entry and product terms need no catalog match.
+    // Other unresolved offer questions retain the same comparison path (TGQA-R6 1006: "you don't need the event date to add these up").
+    const threadTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const supplied = suppliedOffers(latestText, threadTexts, venueTz ?? 'America/New_York');
+    const answerSupplied = async (recordVersion: boolean) => {
+      const tz = venueTz ?? 'America/New_York';
+      const terms = partyTerms(threadTexts, tz);
+      const quantity = terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
+      const threadFlat = flat(threadTexts.join('\n'));
+      const comparison = suppliedOffersAnswer({
+        offers: supplied.textOffers, quantity, offersSetAside: supplied.offersSetAside, accessibilityRequired: !!merged.accessibilityNeeds, timeZone: tz, observedAt: now,
+        // A budget only when they gave one: a price they quoted is not a cap (TGQA-R6 13: "$162 of your $412 budget").
+        budgetTotalCents: BUDGET_WORDS.test(threadFlat) ? wholePartyBudgetCents(merged.budgetCents, merged.budgetBasis, quantity) : null,
+        needs: { noObstructed: NO_OBSTRUCTED.test(`${threadFlat}\n${merged.seatingPreference ?? ''}`), togetherRequired: !!merged.togetherRequired, baseline: comparedAgainst(latestText, supplied.textOffers.map((o) => o.label)), terms },
+      });
+      const { lead } = comparison;
+      const items = [...comparison.items];
+      if (/\b(?:correct|mixed up|exclude)\b/i.test(latestText) && supplied.textOffers.some((o) => o.admission === 'excluded')) items.push('To be clear: the non-admission product cannot beat an admission ticket at any fee level. Disregard any earlier comparison that treated it as admission.');
+      if (/\bRed Rocks\b/i.test(threadFlat) && /\bMorrison\b/i.test(threadFlat)) items.push('The location you supplied is Red Rocks in Morrison, rather than Denver.');
+      const links = musicSourceLinks(threadTexts);
+      const text = ['Hey,', lead, items.map((i) => `- ${i}`).join('\n'), ...links.map((url) => `Link you supplied: ${url}`)].join('\n\n');
+      const first = /^(.+?[.!?])(\s|$)/.exec(lead)?.[1] ?? lead;
+      const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(lead.slice(first.length))}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i)}</li>`).join('')}</ul>`, ...links.map((url) => `<p><a href="${esc(url)}">Link you supplied</a></p>`)].join('\n');
+      if (recordVersion) {
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+        await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+        if (revision > 1) await this.invalidateForRevision(req.id, revision);
+      }
+      await this.transition(req.id, 'recommendation_sent', 'supplied_offers_compared');
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
+      return { state: 'recommendation_sent', revision, extraction: merged };
+    };
+    if (supplied.textOffers.length && partyTerms(threadTexts).concertAdmission) return answerSupplied(true);
+    const concert = concertQuestion(threadTexts);
+    if (concert) {
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+      if (revision > 1) await this.invalidateForRevision(req.id, revision);
+      const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const links = musicSourceLinks([latestText]);
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your concert question'), template: 'raw_auto', vars: { text: [concert.lead, ...concert.items, ...links.map((url) => `Link you supplied: ${url}`)].join('\n\n'), html: `<p><strong>${esc(concert.lead)}</strong></p>${concert.items.map((i) => `<p>${esc(i)}</p>`).join('')}${links.map((url) => `<p><a href="${esc(url)}">Link you supplied</a></p>`).join('')}` }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `concert:${msg.id}` });
+      await this.transition(req.id, 'recommendation_sent', 'concert_terms_answered');
+      return { state: 'recommendation_sent', revision, extraction: merged };
+    }
+
     // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
     // instead of asking which event, how many tickets and which date.
     let picked: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
@@ -636,29 +691,7 @@ export class Concierge {
       if (set) return set;
     }
 
-    // Their offers, compared from what they sent, when the event itself isn't settled: the arithmetic and their
-    // hard rules need no calendar date (TGQA-R6 1006: "you don't need the event date to add these up").
-    const threadTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
-    const supplied = suppliedOffers(latestText, threadTexts, venueTz ?? 'America/New_York');
-    if (supplied.textOffers.length && resolution.kind !== 'resolved') {
-      const tz = venueTz ?? 'America/New_York';
-      const terms = partyTerms(threadTexts, tz);
-      const quantity = terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
-      const threadFlat = flat(threadTexts.join('\n'));
-      const { lead, items } = suppliedOffersAnswer({
-        offers: supplied.textOffers, quantity, offersSetAside: supplied.offersSetAside, accessibilityRequired: !!merged.accessibilityNeeds, timeZone: tz, observedAt: now,
-        // A budget only when they gave one: a price they quoted is not a cap (TGQA-R6 13: "$162 of your $412 budget").
-        budgetTotalCents: BUDGET_WORDS.test(threadFlat) ? wholePartyBudgetCents(merged.budgetCents, merged.budgetBasis, quantity) : null,
-        needs: { noObstructed: NO_OBSTRUCTED.test(`${threadFlat}\n${merged.seatingPreference ?? ''}`), togetherRequired: !!merged.togetherRequired, baseline: comparedAgainst(latestText, supplied.textOffers.map((o) => o.label)), terms },
-      });
-      const text = ['Hey,', lead, items.map((i) => `- ${i}`).join('\n')].join('\n\n');
-      const first = /^(.+?[.!?])(\s|$)/.exec(lead)?.[1] ?? lead;
-      const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(lead.slice(first.length))}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i)}</li>`).join('')}</ul>`].join('\n');
-      await this.transition(req.id, 'recommendation_sent', 'supplied_offers_compared');
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
-      return { state: 'recommendation_sent', revision, extraction: merged };
-    }
+    if (supplied.textOffers.length && resolution.kind !== 'resolved') return answerSupplied(false);
 
     if (unresolved.some((u) => CLARIFIABLE.includes(u))) {
       const count = req.clarificationCount + 1;
@@ -1212,7 +1245,8 @@ export class Concierge {
     // 7pm, not at 7", "MSG or Barclays ONLY" (TGQA-R6 1004). Every pick must keep all of them.
     const threadMsgs = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
     const venueNames = (await this.db.select({ name: t.venues.name, aliases: t.venues.aliases }).from(t.venues).limit(5000)).map((v) => ({ name: v.name.length >= 6 ? v.name : '', aliases: v.aliases.filter((x) => x.length >= 6 || /^[A-Z]{3,4}$/.test(x)) }));
-    const rules = eventConstraints(threadMsgs, { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames });
+    const goalChange = threadMsgs.findLastIndex(similarMusicGoal);
+    const rules = eventConstraints(goalChange >= 0 ? threadMsgs.slice(goalChange) : threadMsgs, { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames });
     let win = rules.window ? { from: rules.window.from, to: rules.window.to } : merged.dateExpression ? dateWindowFor(merged.dateExpression, msg.receivedAt, tz) : null;
     if (!win && merged.resolvedLocalDate) win = { from: merged.resolvedLocalDate, to: merged.resolvedLocalDate };
     // A window they fenced ("November ONLY", "not September or October", "say so rather than give me other dates")
@@ -2905,12 +2939,72 @@ export function withFaceValueCheck(reqs: string[], x: RequestExtraction, event: 
   return reqs.map((r) => (r.startsWith(`${formatUsd(total)} in total`) ? line : r));
 }
 
+/** Keep supplied HTTPS references as references, without inventing a checkout or claiming a source was read. */
+function musicSourceLinks(messages: string[]): string[] {
+  return [...new Set(messages.flatMap((m) => flat(m).match(/https:\/\/[^\s<>"']+/g) ?? []))].slice(-3);
+}
+
+/** Latest explicit concert facts win; omitted facts stay bound to the same product. */
+function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
+  const hasPrice = next.totalCents !== null || next.perTicketCents !== null;
+  const samePrice = (next.totalCents ?? next.perTicketCents) === (old.totalCents ?? old.perTicketCents);
+  const retainPrice = !hasPrice || samePrice && !next.priceBasisStated;
+  const replaced = next.productKind !== 'unknown' && old.productKind !== 'unknown' && next.productKind !== old.productKind;
+  if (replaced) return next;
+  return { ...next,
+    admission: next.admissionStated ? next.admission : old.admission,
+    admissionStated: next.admissionStated || old.admissionStated,
+    productKind: next.productKind !== 'unknown' ? next.productKind : old.productKind,
+    entry: next.entry ?? old.entry,
+    totalCents: retainPrice ? old.totalCents : next.totalCents,
+    perTicketCents: retainPrice ? old.perTicketCents : next.perTicketCents,
+    feeBasis: next.feeBasis !== 'unknown' ? next.feeBasis : old.feeBasis,
+    orderFeeCents: next.orderFeeCents ?? old.orderFeeCents,
+    perTicketFeeCents: next.perTicketFeeCents ?? old.perTicketFeeCents,
+    noOtherCharges: next.noOtherCharges || old.noOtherCharges,
+    quantity: next.quantity ?? old.quantity,
+    together: next.together ?? old.together,
+    mustBuyAll: next.mustBuyAll || old.mustBuyAll,
+    obstructed: next.obstructed ?? old.obstructed,
+    section: next.section ?? old.section,
+    row: next.row ?? old.row,
+    deliveryStated: next.deliveryStated || old.deliveryStated,
+    deliveryMinutes: next.deliveryMinutes ?? old.deliveryMinutes,
+    deliveryAsWritten: next.deliveryAsWritten ?? old.deliveryAsWritten,
+  };
+}
+
 /**
  * The offers this message is about: the ones it lays out; else, when it talks about offers without naming new ones
  * ("which of the same offers?", "just compare the three offers I pasted"), the ones laid out earlier in the thread;
  * else the one it keeps from an earlier comparison ("ignore Offer A, only B"), with the others set aside.
  */
 export function suppliedOffers(said: string, threadMessages: string[], tz: string): { textOffers: TextOffer[]; offersSetAside: string[] } {
+  // Fold each concert correction into the product records. A one-product correction must not erase the other
+  // product, nor lose an exclusion after several price-only turns. An explicit "only B" still sets A aside.
+  if (partyTerms(threadMessages).concertAdmission) {
+    let retained: TextOffer[] = [];
+    let offersSetAside: string[] = [];
+    const history = threadMessages.at(-1) === said ? threadMessages : [...threadMessages, said];
+    for (const message of history) {
+      const updates = offersInText(message, tz, 1);
+      if (!updates.length) continue;
+      const only = /\b(?:only|just) (?:offer |option )?([A-E])\b/i.exec(message)?.[1]?.toUpperCase();
+      if (only && updates.some((o) => o.label === only) && /\b(?:ignore|set aside|on its own|only|just)\b/i.test(message)) {
+        offersSetAside = retained.filter((o) => o.label !== only).map((o) => o.name);
+        retained = retained.filter((o) => o.label === only);
+      }
+      for (const update of updates) {
+        if (only && update.label !== only) continue;
+        const i = retained.findIndex((o) => o.label === update.label);
+        if (i < 0) retained.push(update);
+        else retained[i] = mergeConcertOffer(retained[i]!, update);
+      }
+    }
+    const latestNames = offersInText(said, tz, 1).length > 0;
+    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these)\b/i.test(said);
+    if ((latestNames || referringBack) && (retained.length >= 2 || offersSetAside.length)) return { textOffers: retained, offersSetAside };
+  }
   let textOffers = offersInText(said, tz);
   // Restated offers keep what they said before: "A at $360 arrives by 5pm" after "Seller A is $360 total" is the same
   // $360 total, not $360 a ticket (TGQA-R6 09). Only a same-label offer at the same amount is carried over.
