@@ -1,0 +1,132 @@
+{
+  "source": "Live QA 2026-09-30 late morning (post-#56): the 18 sends in send order; addresses, names and message ids removed. A11 attached a synthetic PNG (not committed).",
+  "clock": "2026-09-30T13:40:00Z",
+  "cases": [
+    {
+      "id": "M01",
+      "parent": null,
+      "subject": "Four options, listed cheapest first [TGQA-R5-M01]",
+      "body": "I need exactly FIVE ordinary seats together for Rangers vs Tampa Bay at MSG on October 1, 2026. Maximum $600 for the whole group including all fees. No obstructed views; I will not buy an extra ticket. Please compare these hypothetical offers using only what I give you, not market averages. Offer A: five together, OBSTRUCTED view, $425 total all-in. Offer B: six ordinary unobstructed seats together, $480 total all-in, seller requires buying all six. Offer C: five ordinary unobstructed seats together, $650 total all-in. Offer D: five ordinary unobstructed seats together, $585 total all-in. All say transfer before noon. Which can I actually choose and why?",
+      "attachment": false
+    },
+    {
+      "id": "M03",
+      "parent": null,
+      "subject": "Can any of these work? [TGQA-R5-M03]",
+      "body": "I need TWO seats together for Rangers vs Tampa Bay at MSG, October 1, 2026. Hard cap $220 TOTAL including every fee, no obstructed views, and I need the tickets delivered before we leave home at NOON on game day. Hypothetical Offer A: two ordinary adjacent unobstructed seats, $230 total including fees, immediate transfer. Offer B: two ordinary adjacent unobstructed seats, $200 total including fees, delivery BY 6pm game day. Offer C: two adjacent OBSTRUCTED seats, $180 total including fees, immediate transfer. Do any meet ALL my requirements? Don't relax one without telling me. What is the smallest practical change to make one workable?",
+      "attachment": false
+    },
+    {
+      "id": "X01",
+      "parent": null,
+      "subject": "Which total is cheaper? [TGQA-R5-X01]",
+      "body": "Please compare these two offers for TWO ordinary seats together at Rangers vs Tampa Bay, MSG, October 1, 2026. Both say section 211 row 12, unobstructed, with mobile transfer before noon on game day. Offer A: $90 per ticket BEFORE fees, plus $40 in fees for the whole order, no other charges. Offer B: $105 per ticket INCLUDING every fee, no other charges. These are details copied from the offers, not verified by you. Which costs less for both of us, and by how much? I'm asking about the final totals, not a market average.",
+      "attachment": false
+    },
+    {
+      "id": "M02",
+      "parent": null,
+      "subject": "Two offers with one unknown fee [TGQA-R5-M02]",
+      "body": "Two ordinary adjacent unobstructed seats for Rangers vs Tampa Bay at MSG, October 1, 2026. Budget $250 total including everything. Both listings say section 211 row 12 and immediate transfer. Offer A: $85 EACH before fees; the order fee has not been shown yet. Offer B: $105 EACH including ALL fees, $210 total. Treat these as my supplied details, not something you've verified. What is the maximum total fee on A that would make it cheaper than B? If I don't have time to go to A's checkout, what would you do? Please don't invent A's fees.",
+      "attachment": false
+    },
+    {
+      "id": "A11",
+      "parent": null,
+      "subject": "Can you read this ticket screenshot? [TGQA-R5-A11]",
+      "body": "Could you read the attached offer image and tell me the event, date, quantity, section and row, total including fees, and any catches? All the details are in the image. This is a synthetic QA example, not an actual offer to purchase.",
+      "attachment": true
+    },
+    {
+      "id": "G02",
+      "parent": null,
+      "subject": "Comedy night with our teenager [TGQA-R5-G02]",
+      "body": "We're two adults and our 16-year-old in Manhattan on Saturday October 3, 2026. We'd like a stand-up comedy show after 6pm. Maximum $150 total including fees and any mandatory food or drink minimums for all THREE. No 21+ venues. Could you find two suitable options with direct event links and explain the age policy and true total? If you can't verify either, say what is missing instead of calling it a match.",
+      "attachment": false
+    },
+    {
+      "id": "M01-F1",
+      "parent": "M01",
+      "subject": "Re: Four options, listed cheapest first [TGQA-R5-M01]",
+      "body": "Change one thing: I'm now happy to buy SIX tickets even though only five of us are going. The sixth can go unused. Keep the $600 total cap and the no-obstructed-view requirement. With that change, which of the same offers should I choose and what is the total saving versus D?",
+      "attachment": false
+    },
+    {
+      "id": "G03",
+      "parent": null,
+      "subject": "We already bought tickets, no more shopping [TGQA-R5-G03]",
+      "body": "I already bought TWO ordinary seats together for Rangers vs Tampa Bay at Madison Square Garden tomorrow, Thursday October 1, 2026 at 7pm. Please don't recommend more tickets or start a price watch. My question is entry: the seller sent a PDF screenshot of a mobile ticket barcode. Will that get us in, or should I insist on an official transfer? Please link the venue's actual guidance and give me the next step.",
+      "attachment": false
+    },
+    {
+      "id": "M03-F1",
+      "parent": "M03",
+      "subject": "Re: Can any of these work? [TGQA-R5-M03]",
+      "body": "I can raise the TOTAL budget to $230 including all fees. The noon delivery deadline and unobstructed-view requirements are still hard rules. Using only my supplied offers, does that change your recommendation?",
+      "attachment": false
+    },
+    {
+      "id": "A04",
+      "parent": null,
+      "subject": "Adult electronic nights in Brooklyn [TGQA-R5-A04]",
+      "body": "Looking for underground house / techno nights with a Burning Man vibe in Bushwick or nearby Brooklyn, October 1–31, 2026. Two adults, 21+, up to $60 each including fees. No kids' events, tribute acts or pop concerts. Give me three relevant picks with dates, venues, why they fit, and links to listen and buy.",
+      "attachment": false
+    },
+    {
+      "id": "A11-F1",
+      "parent": "A11",
+      "subject": "Re: Can you read this ticket screenshot? [TGQA-R5-A11]",
+      "body": "Please check the arithmetic and fee basis. This is a synthetic example, not a real offer. The image says $72 per ticket BEFORE fees, plus $48 for the whole order, $264 total for three. That's $88 each including fees, not $72. It also gives delivery by 6pm, not just the date. Can you correct your summary? And if another offer is $98.89 each BEFORE fees, would adding its fees make its gap from our $88 all-in price larger or smaller?",
+      "attachment": false
+    },
+    {
+      "id": "R05",
+      "parent": null,
+      "subject": "Cheaper wheelchair seats? [TGQA-R5-R05]",
+      "body": "I'm comparing two offers for Rangers vs Tampa Bay at MSG on October 1, 2026. We're two adults and neither of us needs wheelchair-accessible seating. Offer A says wheelchair-accessible spaces, $80 each including fees. Offer B is ordinary seats together, section 211 row 12, $105 each including fees. On price alone A seems better. Which should I choose? These are details copied from the offers; I haven't bought anything.",
+      "attachment": false
+    },
+    {
+      "id": "V01",
+      "parent": null,
+      "subject": "Four of us, should I buy the bigger block? [TGQA-R5-V01]",
+      "body": "For Rangers vs Tampa Bay at Madison Square Garden, October 1, 2026, there are FOUR of us. Budget $200 for the whole order. The green listing is four ordinary unobstructed seats together for $180 including all fees. The gold listing is five ordinary unobstructed seats together for $150 including all fees, but I must purchase every ticket in that block. Both transfer immediately. I don't want to pay for or deal with an extra ticket, even if the block costs less. Which works for me? These are supplied offer details, not verified availability.",
+      "attachment": false
+    },
+    {
+      "id": "V02",
+      "parent": null,
+      "subject": "Seller's delivery time uses a different timezone [TGQA-R5-V02]",
+      "body": "Two adjacent unobstructed ordinary seats for Rangers vs Tampa Bay at MSG on October 1, 2026, $230 total maximum including all fees. We need the tickets in our account no later than 1pm NEW YORK time on October 1. Offer A costs $190 all-in for both and guarantees transfer by 10:30am LOS ANGELES time that day. Offer B costs $220 all-in for both and guarantees transfer by 9:30am LOS ANGELES time that day. Assume the supplied facts are accurate for this comparison. Which meets the deadline? Please convert both delivery times before deciding.",
+      "attachment": false
+    },
+    {
+      "id": "V03",
+      "parent": null,
+      "subject": "Cheap Rangers listing says parking only [TGQA-R5-V03]",
+      "body": "I want to attend Rangers vs Tampa Bay at MSG on October 1, 2026, with a friend. I found a listing titled 'New York Rangers PARKING ONLY' at $20 each and an ordinary event admission listing at $95 each including fees. Is the $20 listing a good cheap way for both of us to get into the game? I don't need parking. Please explain the catch and what type of listing I actually need; don't infer that I own game tickets already.",
+      "attachment": false
+    },
+    {
+      "id": "A11-F2",
+      "parent": "A11",
+      "subject": "Re: Can you read this ticket screenshot? [TGQA-R5-A11]",
+      "body": "New version of the synthetic offer: same event, but now FOUR seats together in section 212, row 18, seats 7–10. The base price is $70 each, plus a $36 fee for the WHOLE ORDER, $316 total. Delivery is now by 4pm on October 1. The limited-view warning still applies. These new details replace the old image's numbers and deadline. Please summarize only this updated example, including effective price per ticket with fees. Don't search live inventory or treat it as a real offer.",
+      "attachment": false
+    },
+    {
+      "id": "V04",
+      "parent": null,
+      "subject": "Can you check the math on these four tickets? [TGQA-R5-V04]",
+      "body": "Four ordinary adjacent unobstructed seats for Rangers vs Tampa Bay at MSG on October 1, 2026. Same section and row; both offers say immediate transfer. First seller: $52.50 per ticket, a $12.75 fee PER TICKET, and an $8 fee for the WHOLE ORDER. No taxes or other charges. Second seller: $68 per ticket INCLUDING every fee, no other charges. My cap is $275 for all four. Which final order total is lower, by how much, and do both fit my cap? Use my supplied details only.",
+      "attachment": false
+    },
+    {
+      "id": "R05-F1",
+      "parent": "R05",
+      "subject": "Re: Cheaper wheelchair seats? [TGQA-R5-R05]",
+      "body": "Ignore Offer A now. I only want your view on Offer B: TWO ordinary seats together in section 211 row 12, $105 each INCLUDING ALL FEES, $210 total. Neither seat is a wheelchair or companion space. We do not need accessible seating. The seller now says mobile transfer is immediate. Please confirm you are assessing B alone and don't apply A's price or restrictions to B.",
+      "attachment": false
+    }
+  ]
+}

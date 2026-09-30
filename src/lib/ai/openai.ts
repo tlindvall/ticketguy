@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import type { z } from 'zod';
-import { ModelOutputError, type StructuredClient, type StructuredRequest, type StructuredResult } from './model-client';
+import { ModelOutputError, providerError, type StructuredClient, type StructuredRequest, type StructuredResult } from './model-client';
 
 /**
  * OpenAI Responses API client. Structured output via `text.format` + Zod, so a response that does not
@@ -32,7 +32,7 @@ export class OpenAiClient implements StructuredClient {
         text: { format: zodTextFormat(args.schema, args.schemaName) },
       });
     } catch (e) {
-      if (e instanceof OpenAI.APIError) throw new ModelOutputError('transport', `${e.status ?? 'api'}: ${e.message}`);
+      if (e instanceof OpenAI.APIError) throw providerError(e.status, (e as { code?: string | null }).code ?? null, e.message);
       throw new ModelOutputError('transport', e instanceof Error ? e.message : String(e));
     }
     // A refusal is an output item, not a status, so it is checked before the incomplete/malformed paths:

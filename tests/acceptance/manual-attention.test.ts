@@ -39,7 +39,7 @@ describe('waiting on a person', () => {
     }
   };
   const alertsFor = (requestId: string) => h.db.select().from(t.outboxEvents).where(and(eq(t.outboxEvents.eventType, 'staff.alert'), eq(t.outboxEvents.entityId, requestId)));
-  const holdingFor = async (requestId: string) => (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).filter((s) => /this one needs a person/i.test(s.bodyText));
+  const holdingFor = async (requestId: string) => (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).filter((s) => /needs a manual check/i.test(s.bodyText));
 
   it('after three rounds of questions, the customer is told a person has it and staff are alerted', async () => {
     const c = makeConcierge(h, { env });
@@ -56,8 +56,9 @@ describe('waiting on a person', () => {
 
     const holding = await holdingFor(requestId);
     expect(holding).toHaveLength(1);
-    expect(holding[0]!.bodyText).toContain('Thanks for bearing with me. This one needs a person, so I’ve passed it to the team.');
-    expect(holding[0]!.bodyText).toContain('The team replies from 9am to 9pm ET.');
+    expect(holding[0]!.bodyText).toContain('I couldn’t finish this one automatically, so it needs a manual check. I’ve passed it to the team, and the answer will come in this thread.');
+    // No response window it can't back up: office hours are not a reply time (post-#56 writing review).
+    expect(holding[0]!.bodyText).not.toMatch(/replies from|within \d|hours?\b/);
     expect(holding[0]!.bodyText).toContain('AI-assisted ticket advice.');
     expect(await alertsFor(requestId)).toHaveLength(1);
 
