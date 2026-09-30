@@ -32,12 +32,13 @@ describe('one thread, and the customer by name', () => {
     }
   };
 
-  it('no subject from the customer: the acknowledgment and the answer share one subject, and both say "Hey Tobias,"', async () => {
+  it('no subject from the customer: every reply shares one subject, and each says "Hey Tobias,"', async () => {
     const c = makeConcierge(h, { env: testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: 'tobias@customer.example' }) });
     const r = (await c.ingestInbound(inbound({ text: 'Hey hey, Tobias here. Two Rangers tickets Oct 3, $300 total. Should I buy now?', from: 'tobias@customer.example', subject: null }))) as { requestId: string };
     await drain(c);
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
-    expect(sends.length).toBeGreaterThanOrEqual(2);
+    // Under auto-approve the answer is the first reply; no separate acknowledgment (TGQA-R8 writing review).
+    expect(sends.length).toBeGreaterThanOrEqual(1);
     // Gmail threads a reply only when its subject matches the thread's: a subject of our own ("A couple of
     // quick questions") opened a second thread beside the customer's subjectless one. Every reply is "Re:".
     for (const s of sends) {
@@ -54,7 +55,8 @@ describe('one thread, and the customer by name', () => {
     const r = (await c.ingestInbound(inbound({ text: 'Two Rangers tickets Oct 3, $300 total.', from: 'priya@customer.example', fromName: 'Priya Patel', subject: 'Rangers' }))) as { requestId: string };
     await drain(c);
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
-    expect(sends.length).toBeGreaterThanOrEqual(2);
+    // Under auto-approve the answer is the first reply; no separate acknowledgment (TGQA-R8 writing review).
+    expect(sends.length).toBeGreaterThanOrEqual(1);
     for (const s of sends) {
       expect(s.subject).toBe('Re: Rangers');
       expect(s.bodyText.startsWith('Hey Priya,')).toBe(true);

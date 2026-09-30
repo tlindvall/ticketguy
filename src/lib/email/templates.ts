@@ -47,7 +47,8 @@ function pickHtml(p: Pick): string {
   const i = after.indexOf(p.title);
   const titled = i >= 0 ? `${esc(after.slice(0, i))}${p.eventUrl ? link(p.title, p.eventUrl, true) : `<strong>${esc(p.title)}</strong>`}${esc(after.slice(i + p.title.length))}` : esc(after);
   const links = p.links.map((l) => link(l.label, l.url)).join(' · ');
-  return `<li style="margin:0 0 10px;">${esc(when ?? '')}: ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
+  // The date and start time are what a schedule question turns on, so they carry the emphasis (TGQA-R8 writing review 3).
+  return `<li style="margin:0 0 10px;"><strong>${esc(when ?? '')}</strong>: ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
 }
 
 /** The Resident Advisor pointer for electronic music: a sentence and a plain link to the city's RA page. */

@@ -59,7 +59,7 @@ describe('the emails', () => {
     const plain = renderTemplate('browse_options', { headline: 'Rock and indie in Brooklyn, Oct 1 to 7. Here are my two picks:', options: [pick.line], picks: [pick], moreCount: 0 }, ctx);
     expect(plain.text).toContain('• Sat, Oct 3: Big Thief at Brooklyn Steel. Indie rock.\n  Listen: https://open.spotify.com/a\n  Tickets: https://www.ticketmaster.com/e/1');
     // Inline links in an ordinary list: the title links to its page, then "Listen · Tickets". No cards or buttons.
-    expect(plain.html).toContain('<li style="margin:0 0 10px;">Sat, Oct 3: <a href="https://www.ticketmaster.com/e/1"');
+    expect(plain.html).toContain('<li style="margin:0 0 10px;"><strong>Sat, Oct 3</strong>: <a href="https://www.ticketmaster.com/e/1"');
     expect(plain.html).toContain('>Big Thief</a> at Brooklyn Steel. Indie rock. <a href="https://open.spotify.com/a"');
     expect(plain.html).toContain('>Listen</a> · <a href="https://www.ticketmaster.com/e/1"');
     expect(plain.html).not.toMatch(/border-radius|display:inline-block|<div style="margin:0 0 14px;padding/);

@@ -469,3 +469,56 @@ It returns no attachment URLs, signed links, email lookups or credentials.
 - **Live inventory, trend history and checkout.** Every "can't see live listings" line is still true.
 - **Deletion completion.** It stays a staff step.
 - **A custom clarification template on /admin/templates.** An override saved earlier keeps its old closer.
+
+# Round 8: the TGQA-R8 sports QA (27 scenarios, deploy 2a0b5d1)
+
+**How it was replayed.** The 27 scenarios and their 61 turns are in `tests/fixtures/qa-r8-sports-cases.json`. They use the QA's synthetic example.com customers, the QA's texts and the QA's thread links. The harness, `tests/acceptance/qa-r8-harness.ts`, seeds the catalog as Discovery gives it to the live service:
+- no venue aliases (no "MSG");
+- no team home venues;
+- the Knicks' Oct 5 game in Philadelphia marked as a home game, because the sync reads "New York Knicks v Philadelphia 76ers" that way;
+- the Knicks also playing the 76ers at MSG on Oct 20, and in Boston on Fri, Oct 23.
+
+Every scenario runs twice:
+1. **Rules reader.** The rules reader reads every email.
+2. **Recorded model fields.** The rules reader runs, then the fields the production model read on the day are put back over its output. Those fields come from the QA's own trace: city, date, budget, quantity, intent and ambiguities.
+
+The second run reproduced the live failures: Philadelphia for 09 and 10, Oct 20 for 07, C at $520 for 15, and A for 17. It is recorded model output, not a new model call; no model is reachable here. Eight semantic variants (`tests/fixtures/qa-r8-variants.json`) change one thing each: labels, word order, one rule relaxed or tightened, or the wording. Snapshots: `docs/qa/TGQA-R8-{before,after}-{rules,live}.txt`.
+
+**Causes found.**
+- **S03, Philadelphia chosen for a home-at-MSG request** [Certain]. Three causes combined:
+  - the synced Philadelphia event is marked home;
+  - "MSG" matches no alias on a synced venue;
+  - the model left the city empty, so no city filter ran.
+
+  Case 01 only worked because the model read "New York" there.
+- **S03, Oct 20 chosen for "Monday October 5 at MSG"** [Certain]. The model left `resolvedLocalDate` empty, so the date never filtered, and the opponent rule picked the 76ers game at MSG.
+- **S01, C at $520 chosen** [Certain]. "$500 TOTAL" has no budget word, so the comparison dropped the budget. "Each child must sit directly beside an adult" wasn't read as the pairs rule, so "together" rejected B.
+- **S02, A chosen past the deadline** [Certain]. "My delivery deadline is 1pm" matched no deadline pattern. In turn 2 the sentence also named Offer A, so it was skipped entirely.
+- **S05, labels and follow-ups** [Certain]:
+  - "Offer Gold" isn't a letter;
+  - restatements without a price ("B is still immediate transfer") dropped the offer;
+  - a same-label restatement at the same amount was the only thing carried over;
+  - a first mention without a price swallowed the next offer's fee (turn 2 of case 11 would have become Vivid Seats).
+- **S06** [Certain]. The official-sale shortcut ran before the trend question.
+- **S07** [Certain]. On-sale capability questions and food-only follow-ups weren't routes of their own, so they reached event intake.
+- **S09** [Certain]. The follow-up was classified as marketing-only and worded from that, not from the stored stops.
+- **S10** [Certain]. The delivery line was fixed text ("leaves no time").
+
+| Item | Now, on both replays | Tests | Still limited |
+|---|---|---|---|
+| S01 | B at $480 on the opening and when restated; A at $400 once singles are allowed. Other labels, a cap stated last, and a higher cap with the child rule kept all give the right answer. | qa-r8-replay S01 and variants | Seat adjacency is as the customer typed it, not verified. |
+| S02 | "Delivery by 11am Los Angeles time is 2pm New York time, an hour after your 1pm New York deadline." B is chosen on turns 1 and 2; A on turn 3, with its delivery time kept. "Need them by 12pm Pacific" is read. | S02 and v17 | The deadline is minutes on the event day. A different-day deadline ("the day before") isn't modelled. |
+| S03 | 01, 09, 10 and 20 resolve to Oct 8 at MSG. For 07: "Oct 5 … doesn't fit: it's in Philadelphia, not at Madison Square Garden. Two that fit everything else: [Oct 20 vs 76ers] … or [Oct 8], the next one. Which would you like?" | S03 and v09 | Home is judged by team-name market. A team whose name doesn't say its market (for example "Golden State") falls back to the catalog's flag. |
+| S04 | UBS and Prudential stay excluded. Start times are shown when a time rule applies. "Do those still match?" is answered. For 04, the Sunday Oct 25 game at MSG is offered "on another date", never Friday in Boston. | S04 and v16 | Rules path: 16 turn 3 resolves the first named game instead of answering the schedule question. |
+| S05 | Gold/Green, A/B, seller names in either order and "North:" labels give the same totals. 14 goes B → neither → B; 15 goes B → B → A; 11 keeps each seller's fees. | S05 and v15/v18 | |
+| S06 | The trend answer comes first on every turn, "I haven't set an alert.", and there's no "compare" invitation. | S06 | No price history exists, so every answer is an abstention. |
+| S07 | Capability-only replies are answered and closed ("No. Automatic on-sale alerts are switched off for now…"). Dinner-only follow-ups stay out of scope. | S07 and v25/v26 | |
+| S08 | "fri" and "this coming Friday" read as Fri, Oct 2 without the model. Each missing thing is asked once. | S08 | "About six weeks from now" still asks for a date. |
+| S09 | Both replies list the full stored scope. | S09 | Scheduled-send enforcement isn't exercised here. The send gate's suppression check is unit-tested. |
+| S10 | "The latest promised transfer is 4pm on Oct 8, 3.5 hours before the 7:30pm start." The market limitation is said once, and "game" replaces "show" for games. | S10 | |
+| Writing | An answer that goes out unreviewed comes alone. The comparison decision is bold, and so are the discovery date and time. | writing | Gmail, mobile and dark-mode rendering not checked. |
+
+**Not proven here:**
+- **The model itself.** The recorded-fields replay puts back what the model read on Sep 30. A different model reading would need a live run on the new deploy.
+- **Live inventory, adjacency, transfers and price history.** They are unchanged, and every answer says so.
+- **Skipping the acknowledgment under auto-approve.** The answer is then the first reply. If research stalls, the customer hears nothing until the manual-attention holding reply fires. Turn auto-approve off and the acknowledgment comes back.

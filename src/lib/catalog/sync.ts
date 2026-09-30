@@ -4,6 +4,7 @@ import * as t from '@/lib/db/schema';
 import type { DiscoveredAttraction, DiscoveredEvent, DiscoveredVenue, DiscoveryQuery, TicketmasterDiscoveryAdapter } from '@/lib/sources/adapters';
 import type { SourceStatus } from '@/lib/domain/types';
 import { localToInstant } from '@/lib/domain/dates';
+import { inMarket, teamHomeMarket } from '@/lib/domain/markets';
 
 /**
  * Turns Ticketmaster Discovery results into the canonical catalog — venues, performers/teams, events and the
@@ -238,6 +239,11 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
     const homeName = normalizeKeyword(m.homeIs === 'first' ? m.first : m.second);
     isHome = homeName.includes(primaryName) || primaryName.includes(homeName);
   }
+  // "X v Y" is how Discovery names some away preseason games ("New York Knicks v Philadelphia 76ers" in
+  // Philadelphia), so the name alone isn't proof: a game outside the team's own market is away (TGQA-R8 S03).
+  const primaryAttraction = e.attractions[primaryIdx];
+  const homeMk = primaryAttraction ? teamHomeMarket(primaryAttraction.name) : null;
+  if (homeMk && isHome !== false && e.venue.city && !inMarket({ city: e.venue.city, latitude: e.venue.latitude ?? null, longitude: e.venue.longitude ?? null }, homeMk)) isHome = false;
 
   const category = categoryFor(e);
   const subtype = subtypeFor(e);

@@ -1,0 +1,1205 @@
+{
+ "source": "TGQA-R8-SPORTS live API QA, 30 Sep 2026 (deploy 2a0b5d1, PR #59). Synthetic example.com customers.",
+ "clock": "2026-09-30T19:30:00Z",
+ "cases": [
+  {
+   "id": "01",
+   "scenario": "complete",
+   "turns": [
+    {
+     "text": "Hey, can you help with 2 tickets to the next Knicks home game at MSG? $300 total including all fees, and we want to sit together.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "next Knicks home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-01@example.com",
+   "name": "Alex Rivera",
+   "subject": "Next Knicks home game"
+  },
+  {
+   "id": "02",
+   "scenario": "per ticket budget",
+   "turns": [
+    {
+     "text": "Looking for 2 Knicks tickets at MSG next month. Up to $150 each including fees. Together please.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "next month",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 15000,
+      "budgetBasis": "per_ticket",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "Any Saturday or Sunday Knicks home game at MSG in October 2026 is fine. Which is cheapest? $150 each means $300 for both including fees, and we need to sit together.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "Any Saturday or Sunday Knicks home game at MSG in October 2026",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-02@example.com",
+   "name": "Jamie Chen",
+   "subject": "Knicks for two"
+  },
+  {
+   "id": "03",
+   "scenario": "missing quantity",
+   "turns": [
+    {
+     "text": "Could you find tickets to the next Rangers home game? I can spend $240 altogether, fees included.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Rangers",
+      "city": null,
+      "dateExpression": "the next Rangers home game",
+      "resolvedLocalDate": null,
+      "quantity": null,
+      "budgetCents": 24000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": [
+       "performer_ambiguous",
+       "event_location_unknown",
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "There are 3 of us and we need to sit together. $240 is for all three including fees. New York Rangers at MSG, their next home game, not an away game. Can you find the date?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Rangers",
+      "city": "New York",
+      "dateExpression": "their next home game",
+      "resolvedLocalDate": null,
+      "quantity": 3,
+      "budgetCents": 24000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-03@example.com",
+   "name": "Morgan Ellis",
+   "subject": "Rangers next home game"
+  },
+  {
+   "id": "04",
+   "scenario": "vague date",
+   "turns": [
+    {
+     "text": "Can you sort out Knicks tickets for next weekend? Two of us, together.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "next weekend",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown",
+       "date_venue_timezone_unknown"
+      ]
+     }
+    },
+    {
+     "text": "I mean Saturday or Sunday, not Monday or Thursday. A home game at MSG, and $300 for both including fees. Can you find a weekend that works?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "Saturday or Sunday, not Monday or Thursday",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-04@example.com",
+   "name": "Casey Brooks",
+   "subject": "Next weekend"
+  },
+  {
+   "id": "05",
+   "scenario": "informal",
+   "turns": [
+    {
+     "text": "2 tix knicks fri under 3 bills all in, together pls",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "fri",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown",
+       "date_venue_timezone_unknown"
+      ]
+     }
+    },
+    {
+     "text": "This coming Friday in New York, at MSG. If they are away or dont play that day, just say so \u2014 dont change the day. $300 total for both with fees.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "This coming Friday",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "Friday October 2, 2026, at MSG. Two together, $300 total with fees. Please tell me if there isnt a Knicks home game that day; dont offer Monday or Thursday.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "Friday October 2, 2026",
+      "resolvedLocalDate": "2026-10-02",
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-05@example.com",
+   "name": "Sam Patel",
+   "subject": "knicks fri"
+  },
+  {
+   "id": "06",
+   "scenario": "five together",
+   "turns": [
+    {
+     "text": "Five of us want the next Rangers home game at MSG. We must all sit together. $600 total including fees. No extra ticket and no obstructed views.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Rangers",
+      "city": null,
+      "dateExpression": "the next Rangers home game",
+      "resolvedLocalDate": null,
+      "quantity": 5,
+      "budgetCents": 60000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "At MSG in New York. I am looking at three listings for that game: A is five ordinary seats together with a clear view, $620 total all-in. B is six together for $500 total all-in but I must buy all six. C is five together for $580 all-in with an obstructed view. I still need exactly five, together, clear view, under $600 total. Does any actually work?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Rangers",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 5,
+      "budgetCents": 60000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "Please just compare the three offers I pasted. You dont need the calendar date to tell me whether A, B or C meets exactly five tickets, all together, no extra ticket, no obstructed view and $600 total including fees. Does any fit?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Rangers",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 5,
+      "budgetCents": 60000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "performer_ambiguous",
+       "event_location_unknown"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-06@example.com",
+   "name": "Riley Park",
+   "subject": "Five Rangers seats"
+  },
+  {
+   "id": "07",
+   "scenario": "wheelchair companion",
+   "turns": [
+    {
+     "text": "I use a wheelchair and my partner is coming with me. We need one wheelchair space and one companion seat next to it for the next Knicks home game at MSG. $300 total with fees. Step-free route, please.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "the next Knicks home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": true,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "Monday October 5, Knicks vs Philadelphia 76ers at MSG. Please keep this as one wheelchair space with one ordinary companion seat beside it, a step-free route, and $300 total with fees. What can you verify and what is still missing?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "Monday October 5",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": true,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "That is in Philadelphia, but I only want a Knicks HOME game at MSG in New York. Please dont substitute an away game. I still need one wheelchair space plus one companion seat beside it and a step-free route, $300 total with fees. Can you find an actual home game instead?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": true,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-07@example.com",
+   "name": "Jordan Lee",
+   "subject": "Accessible Knicks seats"
+  },
+  {
+   "id": "08",
+   "scenario": "quantity change",
+   "turns": [
+    {
+     "text": "Can you find 2 seats together for the next Nets home game at Barclays? Up to $200 total including fees.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Brooklyn Nets",
+      "city": null,
+      "dateExpression": "the next Nets home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 20000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "Actually there are 3 of us now, and we need to sit together. The $200 total cap is still for the whole group, not each. Home game at Barclays only. Can you find the next date?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Brooklyn Nets",
+      "city": null,
+      "dateExpression": "the next date",
+      "resolvedLocalDate": null,
+      "quantity": 3,
+      "budgetCents": 20000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-08@example.com",
+   "name": "Quinn Davis",
+   "subject": "Nets night"
+  },
+  {
+   "id": "09",
+   "scenario": "impossible budget",
+   "turns": [
+    {
+     "text": "Can you get me 2 courtside Knicks seats at MSG for $50 total including fees? Next home game, together.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "Next home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 5000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "I cant raise the $50 total budget for both. Happy to sit upstairs rather than courtside if there is something real. Can you tell me whether that is practical and what you can check? Still a Knicks home game at MSG.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 5000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-09@example.com",
+   "name": "Harper Green",
+   "subject": "Courtside for cheap"
+  },
+  {
+   "id": "10",
+   "scenario": "pasted offer",
+   "turns": [
+    {
+     "text": "Looking at the next Knicks home game at MSG: StubHub, sec 112 row 8, two seats together, $412 total all-in. Normal seats, no restricted view mentioned. Is that a good deal?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "next Knicks home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "Thursday October 8, Knicks vs Washington Wizards, the listing says MSG in New York. Still two seats together, sec 112 row 8, $412 total including all fees on StubHub. I care more about not overpaying than sitting low. What can you tell from that, and what havent you checked?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "Thursday October 8",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "I found another option for the same Thursday October 8 Knicks-Wizards game at MSG. Offer A is my original StubHub pair, section112 row8, $412 TOTAL all-in. Offer B is two ordinary adjacent unobstructed upper-level seats for $250 TOTAL all-in. Both say immediate transfer. I prefer saving money to sitting low. Which would you choose and whats the saving?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": "2026-10-08",
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-10@example.com",
+   "name": "Blake Martin",
+   "subject": "Is this a good deal?"
+  },
+  {
+   "id": "11",
+   "scenario": "three offers",
+   "turns": [
+    {
+     "text": "For 2 ordinary seats together at the next Rangers home game, same section and row, all unobstructed and immediate transfer: StubHub $90 each plus $40 fees for the order; TickPick $105 each including all fees; Vivid Seats $95 each BEFORE fees that I havent seen. Nothing else added on the first two. Which would you pick?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Rangers",
+      "city": null,
+      "dateExpression": "the next Rangers home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "performer_ambiguous",
+       "event_location_unknown",
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "MSG, New York Rangers home game. Vivid now shows $25 in fees for the whole order and no other charges. Please compare the final totals I gave: StubHub $90 each plus $40 for the order, TickPick $105 each all-in, Vivid $95 each plus $25 for the order. Two seats on each, same seat terms. Which costs less?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Rangers",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-11@example.com",
+   "name": "Cameron Ross",
+   "subject": "Which seller?"
+  },
+  {
+   "id": "12",
+   "scenario": "already bought",
+   "turns": [
+    {
+     "text": "Already paid for 2 Rangers tickets at MSG for the next home game. The seller sent a barcode screenshot but the actual mobile transfer hasnt arrived. Will that barcode get us in?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "New York Rangers",
+      "city": "New York",
+      "dateExpression": "the next home game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "The game is tomorrow at MSG and the seller just says trust me. I already PAID; I am not shopping. No tickets have been transferred into my account. What should I ask the seller for, and is a barcode screenshot enough to get in?",
+     "live": {
+      "intent": "other",
+      "performerOrTeam": null,
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": null,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-12@example.com",
+   "name": "River Bennett",
+   "subject": "Transfer hasnt arrived"
+  },
+  {
+   "id": "13",
+   "scenario": "buy or wait",
+   "turns": [
+    {
+     "text": "Looking at Knicks tickets for about six weeks from now, at MSG. Two together, up to $300 for both including fees. Better to buy now or wait?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "about six weeks from now",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "I'm flexible about which Knicks home game in mid-November. I can risk missing out. Do you actually have price history showing prices falling for comparable seats together, or would waiting just be a guess? Please don't set up any alerts.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "mid-November",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "For a concrete game instead, Thursday October 8, 2026: Knicks vs Wizards at MSG. Two together, $300 TOTAL including fees. Do you have evidence comparable two-seat asking prices are trending down or up, and what is the history window? If you don't have that evidence, say so. I can risk missing out; don't set any alerts.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "Thursday October 8, 2026",
+      "resolvedLocalDate": "2026-10-08",
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-13@example.com",
+   "name": "Alexis Nguyen",
+   "subject": "Buy now or hold off?"
+  },
+  {
+   "id": "14",
+   "scenario": "Knicks offer deadline",
+   "turns": [
+    {
+     "text": "Two ordinary seats together for the Knicks vs Wizards at MSG on October 8, 2026. $400 TOTAL including fees. Both clear view. Offer A: $360 TOTAL for the pair, all fees included, transfer by 5pm New York time on October 8. Offer B: $390 TOTAL for the pair, all fees included, immediate transfer. I need the tickets in my account by 8am New York time on October 8 before my flight. Which offer meets that deadline?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": "October 8, 2026",
+      "resolvedLocalDate": "2026-10-08",
+      "quantity": 2,
+      "budgetCents": 40000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "Correction: my budget is now $380 TOTAL for both tickets, but the offers have NOT changed. A is still $360 total with delivery by 5pm, B still $390 total with immediate transfer. The 8am New York deadline is mandatory. Does either fit everything?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 38000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "I can stretch my total budget to $390. The same two-seat Offer B is immediate transfer, all fees included; A is $360 for both but delivers after my 8am deadline. What would you choose from those terms?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 39000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-14@example.com",
+   "name": "Alex Rivera",
+   "subject": "Knicks offer deadline"
+  },
+  {
+   "id": "15",
+   "scenario": "Family Knicks seats",
+   "turns": [
+    {
+     "text": "Four of us for the same Knicks game: two adults and two children, aged 10 and 13. Each child must sit directly beside an adult; two adjacent adult-child pairs are fine, four scattered singles are not. $500 TOTAL including fees. Offer A: four scattered single ordinary seats, $400 TOTAL all-in. Offer B: two adjacent pairs, all clear view, $480 TOTAL all-in for all four. Offer C: four together, clear view, $520 TOTAL all-in. All immediate transfer. Which offer fits?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 4,
+      "budgetCents": 50000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "I do NOT require all four seats together. TWO ADJACENT ADULT-CHILD PAIRS are acceptable. Offer B covers all FOUR of us for $480 TOTAL including fees. My total cap is $500, so Offer C at $520 is over budget. Offer A is four scattered singles and does not place a child beside an adult. Based on the same terms, which fits?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 4,
+      "budgetCents": 50000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": false,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "We no longer require each child beside an adult. All four are comfortable sitting separately, so scattered singles are now acceptable. The prices have not changed: A $400 TOTAL for all four, B $480 TOTAL, C $520 TOTAL. $500 is still the total cap. Does that change your pick?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 4,
+      "budgetCents": 50000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": false,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-15@example.com",
+   "name": "Alex Rivera",
+   "subject": "Family Knicks seats"
+  },
+  {
+   "id": "16",
+   "scenario": "Weekend late NYC sports",
+   "turns": [
+    {
+     "text": "Find NBA or NHL HOME games at Madison Square Garden or Barclays Center in November 2026. Saturday or Sunday ONLY, and the game must START strictly after 7pm, not at 7pm. Two adults, seats together, $300 TOTAL including fees. No other venues. If none fit the schedule, say so rather than broadening it.",
+     "live": {
+      "intent": "browse",
+      "performerOrTeam": null,
+      "city": "New York",
+      "dateExpression": "November 2026. Saturday or Sunday ONLY, and the game must START strictly after 7pm, not at 7pm.",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "Please keep November, Saturday or Sunday, and start AFTER 7pm. A 7pm game is not a match. No Prudential Center or UBS Arena. Can you name only games that meet those schedule rules?",
+     "live": {
+      "intent": "browse",
+      "performerOrTeam": null,
+      "city": "New York",
+      "dateExpression": "November, Saturday or Sunday, and start AFTER 7pm",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "Please correct the venue filter: Madison Square Garden OR Barclays Center are the ONLY permitted venues. Prudential Center and UBS Arena are EXCLUDED, not requested. Keep November 2026, Saturday or Sunday, game START strictly after 7pm, two together, $300 TOTAL. You already found Knicks-Portland November 21 and Knicks-Pacers November 22. Do those still match the schedule? No purchase or inventory verification is needed for the schedule question.",
+     "live": {
+      "intent": "browse",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "November 2026, Saturday or Sunday, game START strictly after 7pm",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-16@example.com",
+   "name": "Alex Rivera",
+   "subject": "Weekend late NYC sports"
+  },
+  {
+   "id": "17",
+   "scenario": "Lakers deadline from NYC",
+   "turns": [
+    {
+     "text": "For the same Lakers home game in Los Angeles on October 9, 2026, two ordinary adjacent seats with clear view. My delivery deadline is 1pm NEW YORK time on October 9. Offer A is $190 TOTAL all-in for both, delivery by 11am LOS ANGELES time. Offer B is $220 TOTAL all-in for both, immediate transfer. Budget $230 TOTAL. Based only on those terms, which meets my deadline?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "Lakers",
+      "city": "Los Angeles",
+      "dateExpression": "October 9, 2026",
+      "resolvedLocalDate": "2026-10-09",
+      "quantity": 2,
+      "budgetCents": 23000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "My delivery deadline is 1PM NEW YORK TIME, and you correctly said Offer A arrives by 2PM NEW YORK TIME (11am Los Angeles). That is one hour too late. A is $190 TOTAL for two, B is $220 TOTAL for two with immediate transfer, budget $230 TOTAL. Which actually meets my mandatory deadline?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "Los Angeles Lakers",
+      "city": "Los Angeles",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 23000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "Same offers, but I can now accept delivery until 3pm New York time. A remains $190 TOTAL for the pair with delivery by 2pm New York time and B $220 TOTAL for the pair with immediate transfer. Which is the cheaper qualifying offer now?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "Los Angeles Lakers",
+      "city": "Los Angeles",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 23000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-17@example.com",
+   "name": "Alex Rivera",
+   "subject": "Lakers deadline from NYC"
+  },
+  {
+   "id": "18",
+   "scenario": "Baseball checkout comparison",
+   "turns": [
+    {
+     "text": "Two ordinary seats together for the same Dodgers game. Offer Gold: $72.50 EACH before fees plus $23.75 for the entire order, no other charges. Offer Green: $84.25 EACH including every fee. Both immediate transfer, unobstructed. $180 TOTAL budget. Please compare whole-party totals and the actual saving, without looking up a market average.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Dodgers",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 18000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "You do not need the game date to compare the same two seats. Offer Gold costs $72.50 EACH x TWO plus $23.75 for the ENTIRE ORDER, no other charges. Offer Green costs $84.25 EACH x TWO including every fee. Both are adjacent unobstructed seats and immediate transfer. $180 TOTAL cap. What are the final totals and which is cheaper?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Dodgers",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 18000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "Let me label them A and B instead. Same two adjacent unobstructed seats for the same Dodgers game, immediate transfer. Offer A (Gold): $72.50 EACH before fees plus $23.75 for the ENTIRE ORDER, no other charges. Offer B (Green): $84.25 EACH including every fee. Two tickets, $180 TOTAL cap. Please compare these totals only; no game-date lookup is needed.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Los Angeles Dodgers",
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 18000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-18@example.com",
+   "name": "Alex Rivera",
+   "subject": "Baseball checkout comparison"
+  },
+  {
+   "id": "19",
+   "scenario": "Rangers London request",
+   "turns": [
+    {
+     "text": "Two tickets to a New York Rangers exhibition game in London, UK, this Saturday. Not New York. \u00a3200 TOTAL. Can you help?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Rangers",
+      "city": "London",
+      "dateExpression": "this Saturday",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": null,
+      "budgetBasis": "whole_party",
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-19@example.com",
+   "name": "Alex Rivera",
+   "subject": "Rangers London request"
+  },
+  {
+   "id": "20",
+   "scenario": "Knicks NYC for my sister",
+   "turns": [
+    {
+     "text": "My sister lives in London, UK, and is visiting me in New York. We want the next Knicks HOME game at MSG here in New York, two seats together, $300 TOTAL including fees. Can you work out the date?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "the next Knicks HOME game",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-20@example.com",
+   "name": "Alex Rivera",
+   "subject": "Knicks NYC for my sister"
+  },
+  {
+   "id": "21",
+   "scenario": "Bought them",
+   "turns": [
+    {
+     "text": "bought them, thanks!"
+    }
+   ],
+   "thread": "01"
+  },
+  {
+   "id": "22",
+   "scenario": "Stop messages",
+   "turns": [
+    {
+     "text": "stop emailing me"
+    },
+    {
+     "text": "Please confirm what you stopped. I do not want ticket suggestions, price-watch emails or marketing emails. Have you recorded that preference?"
+    }
+   ],
+   "thread": "13"
+  },
+  {
+   "id": "23",
+   "scenario": "Delete data",
+   "turns": [
+    {
+     "text": "please delete my data and dont keep my preferences"
+    },
+    {
+     "text": "CONFIRM"
+    },
+    {
+     "text": "I replied CONFIRM to the data-deletion request. Is it verified and waiting for staff now? Please do not restart the Knicks search."
+    }
+   ],
+   "thread": "02"
+  },
+  {
+   "id": "24",
+   "scenario": "New plan \u2014 Nets",
+   "turns": [
+    {
+     "text": "Hey, back for another one. This time 3 Nets tickets for the next home game at Barclays, together, $240 TOTAL including fees.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Brooklyn Nets",
+      "city": null,
+      "dateExpression": "the next home game",
+      "resolvedLocalDate": null,
+      "quantity": 3,
+      "budgetCents": 24000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "date_unsupported_expression"
+      ]
+     }
+    },
+    {
+     "text": "Home game at Barclays only, not away. Three seats together, $240 for all three with fees. Please look up the next Nets home date for me; I do not know it.",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "Brooklyn Nets",
+      "city": null,
+      "dateExpression": "the next Nets home date",
+      "resolvedLocalDate": null,
+      "quantity": 3,
+      "budgetCents": 24000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-01@example.com",
+   "name": "Alex Rivera",
+   "subject": "New plan \u2014 Nets"
+  },
+  {
+   "id": "25",
+   "scenario": "NBA Finals sale alerts",
+   "turns": [
+    {
+     "text": "Can you automatically email me when tickets go on sale for the 2027 NBA Finals at MSG? I know the Knicks may not make it; please do not invent a game or sale date. Two tickets, $300 TOTAL all-in. Is the automatic on-sale alert feature actually available?",
+     "live": {
+      "intent": "new_search",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "2027",
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "I am only asking whether you can automatically email an on-sale alert. If that feature is off, just say so. Do not create a Knicks ticket search or a price watch.",
+     "live": {
+      "intent": "other",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 2,
+      "budgetCents": 30000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-25@example.com",
+   "name": "Alex Rivera",
+   "subject": "NBA Finals sale alerts"
+  },
+  {
+   "id": "26",
+   "scenario": "Dinner before Rangers",
+   "turns": [
+    {
+     "text": "Any easy dinner spots near MSG before a Rangers game? Two adults, about $60 total for food. We already have the game tickets.",
+     "live": {
+      "intent": "other",
+      "performerOrTeam": null,
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": null,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    },
+    {
+     "text": "This is only about dinner; I already bought my game tickets. If food is outside your service, say so without asking for ticket dates or seats.",
+     "live": {
+      "intent": "other",
+      "performerOrTeam": null,
+      "city": null,
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": null,
+      "budgetCents": null,
+      "budgetBasis": null,
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": []
+     }
+    }
+   ],
+   "from": "qa+r8-sports-26@example.com",
+   "name": "Alex Rivera",
+   "subject": "Dinner before Rangers"
+  },
+  {
+   "id": "27",
+   "scenario": "Screenshot then party-size correction",
+   "turns": [
+    {
+     "text": "Worth it for the three of us? Budget is $200 TOTAL for everyone including fees. Please read the screenshot and point out the catch.",
+     "attachment": "knicks-listing.png",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": "2026-10-08",
+      "resolvedLocalDate": "2026-10-08",
+      "quantity": 3,
+      "budgetCents": 20000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": null,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    },
+    {
+     "text": "One more person wants to join, so there are four of us now. Budget stays $200 TOTAL. Does that original three-ticket screenshot cover four together, or do we need a different listing?",
+     "live": {
+      "intent": "clarification",
+      "performerOrTeam": "New York Knicks",
+      "city": "New York",
+      "dateExpression": null,
+      "resolvedLocalDate": null,
+      "quantity": 4,
+      "budgetCents": 20000,
+      "budgetBasis": "whole_party",
+      "togetherRequired": true,
+      "accessibility": false,
+      "ambiguities": [
+       "event_location_unknown"
+      ]
+     }
+    }
+   ],
+   "from": "qa+r8-sports-27@example.com",
+   "name": "Devon Grant",
+   "subject": "Worth it for us?"
+  }
+ ]
+}

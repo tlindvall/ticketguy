@@ -28,7 +28,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
   // P1: unsafe recommendations blocked (TGQA-R6 1001-1005).
   it('08: explains the Philadelphia mismatch, never recommends it, keeps the access needs', () => {
     expect(turn('08', 2)).toContain("Preseason: New York Knicks v Philadelphia 76ers at Xfinity Mobile Arena, Philadelphia, Mon, Oct 5, 7:00 PM EDT doesn't fit: it's in Philadelphia, not at Madison Square Garden.");
-    expect(turn('08', 2)).toContain('The next one that fits everything you said is Preseason: New York Knicks v Washington Wizards at Madison Square Garden, New York, Thu, Oct 8, 7:30 PM EDT. Shall I go with that one?');
+    expect(turn('08', 2)).toContain('On another date, the next one that fits everything else you said is Preseason: New York Knicks v Washington Wizards at Madison Square Garden, New York, Thu, Oct 8, 7:30 PM EDT. Want that one instead?');
     expect(turn('08', 3)).toMatch(/^Hey Jordan,\n\nPreseason: New York Knicks v Washington Wizards at Madison Square Garden, New York, Thu, Oct 8/);
     for (const n of [1, 2, 3]) expect(turn('08', n)).toContain(n === 2 ? 'Two New York Knicks tickets' : 'a wheelchair space with a companion seat beside it and a step-free route');
     expect(all('08')).not.toMatch(/Buy on|Event page on/);
@@ -40,7 +40,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
       expect(turn('09', n)).toContain('Hamilton (NY) at Richard Rodgers Theatre, New York, Sat, Oct 3, 8:00 PM EDT');
       expect(turn('09', n)).toContain('Seller B is the one that meets what you asked for: $390 for both, fees included.');
       expect(turn('09', n)).toContain('- Seller A (ordinary seats, delivery by 5pm): $360 in total including fees. Delivery by 5pm misses your 8am deadline.');
-      expect(turn('09', n)).toContain('Based on the details you sent; I haven’t verified availability.');
+      expect(turn('09', n)).toContain('Based on the terms you sent; I haven’t verified availability, and a promised transfer time isn’t a completed transfer.');
     }
     expect(all('09')).not.toMatch(/1:00 PM|at 1pm|\$720|\$780/);
   });
@@ -65,7 +65,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
   it('18: B at $480 is eligible; A (scattered singles) and C ($520, over $500) are not', () => {
     expect(turn('18', 2)).toContain('- Two adjacent pairs, with each adult beside a child');
     expect(turn('18', 3)).toContain('Offer B is the one that meets what you asked for: $480 for all four, fees included. It leaves $20 of your $500 budget.');
-    expect(turn('18', 3)).toContain('- Offer A (ordinary seats, not together, immediate transfer): $400 in total including fees. They’re separate seats, so each adult can’t sit with a child.');
+    expect(turn('18', 3)).toContain('- Offer A (ordinary seats, not together, immediate transfer): $400 in total including fees. They’re separate seats, so each child can’t sit beside an adult.');
     expect(turn('18', 3)).toContain('- Offer C (four together, immediate transfer): $520 in total including fees. Over your $500 budget by $20.');
   });
 

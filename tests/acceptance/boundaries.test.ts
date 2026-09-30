@@ -116,6 +116,12 @@ describe('boundaries', () => {
     const limited = (await h.db.select().from(t.auditLog).where(eq(t.auditLog.action, 'intake.rate_limited'))).filter((a) => String((a.diff as { messageId?: string }).messageId ?? '') && a.entityId !== null);
     const [contact] = await h.db.select().from(t.contacts).where(eq(t.contacts.emailLookup, from));
     expect(limited.filter((a) => a.entityId === contact!.id)).toHaveLength(0);
-    expect(new Set((await sendsTo(from)).map((s) => s.requestId)).size).toBe(INBOUND_PER_HOUR + 3);
+    // Every one was read and went on to research; none got a holding reply. (Under auto-approve the answer is
+    // the first reply, so there is no separate acknowledgment to count here, TGQA-R8 writing review.)
+    const research = (await h.db.select().from(t.outboxEvents).where(eq(t.outboxEvents.eventType, 'research.requested'))).filter((e) => (e.payload as { requestId?: string }).requestId);
+    const mineReqs = await h.db.select().from(t.requests).where(eq(t.requests.contactId, contact!.id));
+    expect(mineReqs).toHaveLength(INBOUND_PER_HOUR + 3);
+    expect(mineReqs.every((q) => research.some((e) => (e.payload as { requestId?: string }).requestId === q.id) || q.state !== 'new')).toBe(true);
+    expect((await sendsTo(from)).filter((x) => x.dedupeKey?.startsWith('holding:'))).toHaveLength(0);
   });
 });

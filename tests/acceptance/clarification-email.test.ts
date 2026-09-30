@@ -142,7 +142,7 @@ describe('the clarification email', () => {
     if (both.kind !== 'ambiguous') return;
     expect(both.candidates.map((x) => x.name)).not.toContain('New York Rangers Alumni Classic');
     const homeOnly = both.candidates.filter((x) => x.isHome);
-    expect(decisiveEventQuestion(homeOnly, brief({ performerOrTeam: 'Rangers' }))).toBe('Which game: Sat, Oct 3 (New York Rangers vs. New York Islanders (preseason)) or Thu, Oct 15 (New York Rangers vs. Fixture Opponent (regular season))?');
+    expect(decisiveEventQuestion(homeOnly, brief({ performerOrTeam: 'Rangers' }))).toBe('Which game: Sat, Oct 3 at 7pm (New York Rangers vs. New York Islanders (preseason)) or Thu, Oct 15 at 7pm (New York Rangers vs. Fixture Opponent (regular season))?');
     const many = [...homeOnly, ...homeOnly, ...homeOnly];
     expect(decisiveEventQuestion(many, brief({ performerOrTeam: 'Rangers' }))).toBe('Which date are you looking at? Send a date or ticket link if you have one.');
   });
