@@ -71,9 +71,11 @@ describe('reading the listing a customer sends', () => {
     expect(body).toContain('The screenshot you sent shows $245 a ticket including fees on StubHub. That’s what the listing showed when you took it; I haven’t checked that the seats are still there.');
     expect(body).toContain('That’s 2 tickets, in section 212, row D, on StubHub, for $490 in total including fees.');
     expect(body).toContain('Worth checking before you buy:');
-    expect(body).toContain('- It doesn’t say the seats are together. Check before you buy if that matters.');
-    expect(body).toContain('- It doesn’t say when the tickets will be delivered.');
-    expect(body).toContain('- It doesn’t show seat numbers, so you won’t know exactly where you’re sitting until after you buy.');
+    // Missing details are about the screenshot, not claims about the seller's page (TG-B08).
+    expect(body).toContain('- The screenshot doesn’t show whether the seats are together. Check the listing before you buy if that matters.');
+    expect(body).toContain('- The screenshot doesn’t show when the tickets will be delivered. Check the listing’s delivery date before you buy.');
+    expect(body).toContain('- The screenshot doesn’t show seat numbers. Check the listing if you want to know exactly where you’ll sit.');
+    expect(body).not.toContain('until after you buy');
     // A verified option (staff-checked here) that is cheaper comes first, with the difference for the whole party.
     expect(body.split('\n\n')[2]).toBe('I’d look at the verified option below first: it’s $250 less for both.');
     expect(body).toContain('including the verified charges, checked Sep 22, 11:00 AM EDT.');
@@ -105,7 +107,7 @@ describe('reading the listing a customer sends', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
     expect(rec!.bodyText).toContain('The listing you pasted shows $180 a ticket before fees on Vivid Seats.');
     expect(rec!.bodyText).toContain('- Fees are extra, so the total at checkout will be higher than the listed price.');
-    expect(rec!.bodyText).not.toContain('doesn’t say the seats are together');
+    expect(rec!.bodyText).not.toContain('whether the seats are together');
   });
 
   it('without a reader (fixture mode) a screenshot is kept unread and nothing is guessed', async () => {

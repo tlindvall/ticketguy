@@ -769,3 +769,34 @@ Live, "Two Metallica tickets soon in NY" still got "couldn't find a scheduled Me
 - A state as the place ("Connecticut", "CT") filters venues by state and asks Ticketmaster with `stateCode`. "NY", "New York" and "Washington" still mean the metro.
 - Replies to a subjectless email are "Re:", so they stay in the customer's thread.
 - Message-IDs are bracketed on the way in and on the way out.
+
+## 52. The Sep 29 live-email audit (TGQA-0929): answer their question, keep their requirements
+
+A black-box audit sent 16 test emails. Each fix below is covered by the acceptance test named in `tests/unit/audit-0929.test.ts`.
+
+- **TG-B01 (Hamilton, A05).**
+  - An open official sale no longer stands in for seats. Seats together, a budget, access needs or a seat preference turn "that's where I'd buy" into a neutral event link, with each need listed as still to check.
+  - Any quantity other than 2 comes with a line saying the seller's page may start at 2 tickets.
+- **TG-B03/B04.**
+  - `C_READ` called the venue-wide floor × 1.15 "a fair price" (confirmed in code: `packet.ts` `fairUpTo`). That is gone.
+  - With a budget, the reply sets the cheapest price for the whole group, before fees and with its age, against the whole-party budget.
+  - Without a budget, it says where the market starts, not what seats are worth.
+- **TG-B02 (A08, A03).**
+  - A delivery-against-travel question gets `C_DELIVERY` first. It says a refund is not admission and promises nothing.
+  - A question about wheelchair spaces gets `C_ACCESS`: they are not a cheaper version of ordinary seats.
+- **TG-B08.** A detail missing from a pasted summary is "You haven't included …", and from a screenshot "The screenshot doesn't show …". It is never a claim about what the seller shows.
+- **TG-B10 (A07).**
+  - A watch request is answered with the stored watch's status. It counts as running only when a stored watch is active and `WATCH_SEND_ENABLED` is on.
+  - A cancellation is always acknowledged, from what was actually stopped.
+  - It is scoped to the thread's requests: other requests and email preferences are untouched.
+- **TG-B06.**
+  - The first rate-limited email gets one holding reply.
+  - The staff alert states what the customer was actually sent, read from the send record.
+  - Cancellations and opt-outs skip the inbound limit, up to 3 times a day.
+
+**Already fixed before this audit's findings were read:** B05 (Connecticut), B09 (US-only), B11 (no-subject threading) and B12 (unfinished template lines), in #51 and #52.
+
+**Still open:**
+- B05: the quantity change that reopened a settled date, and the Bushwick window reset. Both predate #45 and #51 and need a retest.
+- B07: discovery exclusions.
+- Verified purchasable offers: a listing partner is still needed.

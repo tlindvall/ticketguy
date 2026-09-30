@@ -86,9 +86,24 @@ describe('boundaries', () => {
     expect(mine.filter((a) => (a.diff as { staffTold?: boolean }).staffTold).length).toBe(1);
     const alerts = await h.db.select().from(t.outboxEvents).where(like(t.outboxEvents.eventKey, 'staff_alert:%:rate_limited'));
     expect(alerts).toHaveLength(1);
-    // The ten within the limit were answered; the three over it were not.
-    const answered = new Set((await sendsTo(from)).map((s) => s.requestId));
-    expect(answered.size).toBe(INBOUND_PER_HOUR);
+    // The ten within the limit were answered; of the three over it, the first got one "a person is picking
+    // this up" reply (so the staff alert's claim is true, TG-B06), and the other two got nothing.
+    const sends = await sendsTo(from);
+    const holding = sends.filter((x) => x.dedupeKey?.startsWith('holding:'));
+    expect(holding).toHaveLength(1);
+    expect(new Set(sends.filter((x) => !x.dedupeKey?.startsWith('holding:')).map((x) => x.requestId)).size).toBe(INBOUND_PER_HOUR);
+  });
+
+  it('a cancellation is never held behind the limit', async () => {
+    const c = makeConcierge(h);
+    const from = 'flood-cancel@customer.example';
+    for (let i = 0; i < INBOUND_PER_HOUR + 1; i++) await c.ingestInbound(inbound({ text: `Two Knicks tickets please, message ${i}`, from, subject: `Knicks ${i}` }));
+    await c.ingestInbound(inbound({ text: 'Please cancel the price watch, we no longer need tickets.', from, subject: 'Cancel' }));
+    await interpretAll(h, c);
+    const [contact] = await h.db.select().from(t.contacts).where(eq(t.contacts.emailLookup, from));
+    const limited = (await h.db.select().from(t.auditLog).where(eq(t.auditLog.action, 'intake.rate_limited'))).filter((a) => a.entityId === contact!.id);
+    // The one Knicks email over the limit was held; the cancellation went through to be read.
+    expect(limited).toHaveLength(1);
   });
 
   it('an address on the test allowlist is ours, testing on purpose, and is not held to the limit', async () => {

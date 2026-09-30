@@ -191,27 +191,36 @@ function renderBody(
       return wrap(text, html);
     }
     case 'official_sale': {
-      // One clear recommendation and a direct link to buy, written as a sentence. No prices: buy/wait is for
-      // resale, and resale is one reply away.
+      // No prices: buy/wait is for resale, and resale is one reply away. "That's where I'd buy" only when they
+      // asked for nothing the sale being open can't vouch for; with a budget, seats together or access needs, the
+      // event page is offered neutrally with what to check on it (TG-B01).
       const notes = (v.notes as string[] | undefined) ?? [];
+      const unverified = ((v.unverified as string[] | undefined) ?? []).filter(Boolean);
       const n = v.quantity ? Number(v.quantity) : null;
       const kind = v.sportsGame ? 'Games' : 'Events';
       const seller = String(v.seller);
       const title = String(v.eventTitle ?? v.eventLabel);
       const where = [v.eventWhen ? String(v.eventWhen) : '', v.venueName ? `at ${String(v.venueName)}` : ''].filter(Boolean).join(' ');
-      const rest = ` is still on general sale on ${seller}, and that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+      const rest = unverified.length
+        ? ` is on general sale on ${seller}. I haven’t seen its seats or prices, so I can’t tell you yet whether any fit what you need.`
+        : ` is still on general sale on ${seller}, and that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
       const lead = `${title}${where ? ` (${where})` : ''}${rest}`;
+      const checkLead = `Check these on the event page before you buy${n && n !== 2 ? ` (set the number of tickets to ${n} first; the page may start at 2)` : ''}:`;
       const tail = [
+        // The seller's page opens at its own default quantity, which is not always theirs.
+        ...(!unverified.length && n && n !== 2 ? [`The page may start at 2 tickets, so set it to ${n}.`] : []),
         ...notes,
         `${kind} that aren't sold out often go for less on resale. Want me to compare? Just reply "compare".`,
         v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '',
         v.affiliate ? AFFILIATE_DISCLOSURE : '',
       ].filter(Boolean);
-      const text = ['Hey,', lead, `Buy tickets on ${seller}: ${String(v.url)}`, ...tail];
-      // The seller's name is the link to buy; the event title links to the event's page.
+      const linkLine = unverified.length ? `Event page on ${seller}: ${String(v.url)}` : `Buy tickets on ${seller}: ${String(v.url)}`;
+      const text = ['Hey,', lead, ...(unverified.length ? [checkLead, unverified.map((u) => `- ${u}`).join('\n')] : []), linkLine, ...tail];
+      // The seller's name is the link; the event title links to the event's page.
       const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
-      const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)},`, `on ${link(seller, String(v.url), true)},`)}`;
-      const html = [para('Hey,'), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...tail.map(para)];
+      const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)}`, `on ${link(seller, String(v.url), true)}`)}`;
+      const checks = unverified.length ? [`<p style="margin:0 0 8px;font-weight:600;">${esc(checkLead)}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${unverified.map((u) => `<li style="margin:0 0 8px;">${esc(u)}</li>`).join('')}</ul>`] : [];
+      const html = [para('Hey,'), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
       return wrap(text, html);
     }
     case 'holding': {
