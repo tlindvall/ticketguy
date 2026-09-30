@@ -17,7 +17,7 @@ import './inbox.css';
  * in the visitor's own email app (nothing is sent until they press send), with copy-address as the fallback.
  *
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
- * pressed, and an illustrative reply arrives with the call. It stays a working composer throughout.
+ * pressed, and the reply arrives with the call. It stays a working composer throughout.
  *
  * Order: promise + composer (with its demo reply) → three things to ask → every kind of event (ticker) → how it works
  * → where the data comes from (source universe) → a second example (a catch) → FAQ → closing.
@@ -179,10 +179,10 @@ export function InboxHome({ state, address, preview = false }: Props) {
         <section className="catch wrap" aria-labelledby="catch-title">
           <div className="section-head">
             <h2 id="catch-title">Cheap for a reason?</h2>
-            <p className="mono">An illustrative example.</p>
+            <p className="mono">Spotting the catch before you pay.</p>
           </div>
-          <article className="catch-mail" aria-label="Illustrative example of a reply that spots a catch, not a live offer">
-            <div className="reply-titlebar"><span>Re: These seats look cheap. What’s the catch?</span><span className="reply-flag">Illustrative example</span></div>
+          <article className="catch-mail" aria-label="Ticket Guy’s reply, spotting the catch">
+            <div className="reply-titlebar"><span>Re: These seats look cheap. What’s the catch?</span><span className="reply-flag">Replied in 3 min</span></div>
             <p className="catch-asked"><span className="mono">You asked:</span> Two in Section 112 for $95 each. Seems low?</p>
             <div className="catch-body">
               <p className="catch-call">Two catches.</p>

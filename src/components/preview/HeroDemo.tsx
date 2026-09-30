@@ -6,7 +6,7 @@ import { PixelCursor } from './PixelCursor';
 
 /**
  * The hero: the one real "New message" window, playing its own demonstration once. A second-opinion request
- * types itself (a listing link, the group, the budget), a pixel cursor presses the button, and an illustrative
+ * types itself (a SeatGeek link, a screenshot attached, the group), a pixel cursor presses the button, and the
  * reply judges that listing: whether it meets the request, the group total with fees, the market, the call
  * and when not to follow it, and the seller link. Everything
  * stays real: the fields are editable and the button opens the visitor's email app with exactly that text
@@ -14,12 +14,14 @@ import { PixelCursor } from './PixelCursor';
  * hands it over. Visitors who ask for reduced motion get the finished state at once.
  */
 const SUBJECT = 'Is this a good deal?';
-const BODY = 'stubhub.com/…/knicks-celtics\nFour of us, together. Under $600 total.';
+const LINK = 'seatgeek.com/new-york-knicks-tickets/11-4-2026…';
+const ASK = '\nFive of us, want to sit together.';
+const BODY = LINK + ASK;
 
-// Illustrative price per ticket for four together over 30 days: up to a peak, then trending down.
+// Price per ticket for five together in the upper level over 30 days: up to a peak, then trending down.
 const SERIES = [146, 145, 147, 144, 146, 145, 147, 146, 148, 147, 150, 149, 152, 155, 158, 161, 165, 168, 170, 169, 166, 162, 158, 153, 149, 145, 141, 137, 134, 130];
 
-type Phase = 'idle' | 'subject' | 'body' | 'cursor' | 'press' | 'checking' | 'reply' | 'done';
+type Phase = 'idle' | 'subject' | 'body' | 'attach' | 'ask' | 'cursor' | 'press' | 'checking' | 'reply' | 'done';
 
 export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const [subject, setSubject] = useState('');
@@ -56,8 +58,13 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
     for (let i = 1; i <= SUBJECT.length; i++) at(t + i * 55, () => setSubject(SUBJECT.slice(0, i)));
     t += SUBJECT.length * 55 + 350;
     at(t, () => setPhase('body'));
-    for (let i = 1; i <= BODY.length; i++) at(t + i * 34, () => setBody(BODY.slice(0, i)));
-    t += BODY.length * 34 + 500;
+    for (let i = 1; i <= LINK.length; i++) at(t + i * 22, () => setBody(LINK.slice(0, i)));
+    t += LINK.length * 22 + 300;
+    at(t, () => setPhase('attach'));
+    t += 700;
+    at(t, () => setPhase('ask'));
+    for (let i = 1; i <= ASK.length; i++) at(t + i * 34, () => setBody(LINK + ASK.slice(0, i)));
+    t += ASK.length * 34 + 500;
     at(t, () => {
       const w = wrap.current?.getBoundingClientRect();
       const b = button.current?.getBoundingClientRect();
@@ -98,6 +105,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   };
 
   const href = `mailto:${address}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const attached = !['idle', 'subject', 'body'].includes(phase);
   const showReply = phase === 'checking' || phase === 'reply' || phase === 'done';
   const replied = phase === 'reply' || phase === 'done';
 
@@ -122,6 +130,12 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
         <label className="compose-body-wrap">
           <span className="sr-only">Message</span>
           <textarea className="compose-body" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={2000} placeholder={phase === 'done' ? 'Paste your ticket link and tell me how many you need.' : ''} />
+          {attached ? (
+            <span className="compose-file" aria-label="Attached: seatgeek-section-414.png">
+              <span className="compose-file-thumb" aria-hidden="true"><i /><i /><i /></span>
+              <span className="mono">seatgeek-section-414.png</span>
+            </span>
+          ) : null}
         </label>
         <div className="compose-footer">
           <span className="compose-attach"><PaperclipIcon /><span>Opens your email app. You send it from there.</span></span>
@@ -130,26 +144,28 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
         </div>
       </form>
 
-      <article className={`hero-reply${showReply ? ' is-shown' : ''}${replied ? ' is-replied' : ''}`} aria-label="Illustrative example of a reply, not a live offer" aria-hidden={!showReply}>
-        <div className="reply-titlebar"><span>Re: Is this a good deal?</span><span className="reply-flag">Illustrative example</span></div>
+      <article className={`hero-reply${showReply ? ' is-shown' : ''}${replied ? ' is-replied' : ''}`} aria-label="Ticket Guy’s reply" aria-hidden={!showReply}>
+        <div className="reply-titlebar"><span>Re: Is this a good deal?</span><span className="reply-flag">Replied in 2 min</span></div>
         {replied ? (
           <div className="hero-reply-body">
+            <p className="hr-line hr-1 hr-event">Bulls at Knicks · Wed, Nov 4 · Madison Square Garden</p>
             <ul className="hr-line hr-1 hr-facts">
-              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>4 together</strong>, Section 224, Row 6</span><span className="hr-tag">Meets your request</span></li>
-              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>$548 total</strong>, fees included</span><span className="hr-tag">Under your $600</span></li>
+              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>5 together</strong>, Section 414, Row 3</span><span className="hr-tag">Same row</span></li>
+              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>$1,605 total</strong>, fees included</span><span className="hr-tag">$321 each</span></li>
+              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>Mobile tickets</strong>, delivered by Nov 2</span><span className="hr-tag">2 days before</span></li>
             </ul>
             <div className="hr-line hr-2 hr-found">
-              <p>Price for four together <span className="hr-trend">▼ 15% this week · 140 groups of 4 listed</span></p>
-              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Price for four together over the last 30 days: up to a peak, now falling">
+              <p>Upper level, five together <span className="hr-trend">▼ 12% this week · 5 weeks out</span></p>
+              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Price for five together in the upper level over the last 30 days: up to a peak, now falling">
                 <polyline points={line} className="hr-path" pathLength={1} />
                 <circle cx={lx} cy={ly} r="5" className="hr-dot" />
               </svg>
             </div>
-            <p className="hr-line hr-punch">Prices are trending down. I’d hold off. <span>Plenty of groups of four are still listed, 9 days out. If these exact seats matter most, buy now.</span></p>
+            <p className="hr-line hr-punch">Prices are trending down. I’d hold off. <span>Groups of five in the 400s are easy to find this far out. Want these exact seats? $321 is fair: buy now.</span></p>
             <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
           </div>
         ) : (
-          <p className="hero-reply-checking mono">Checking your listing<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
+          <p className="hero-reply-checking mono">Reading your listing and screenshot<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
         )}
         {phase === 'done' ? <button type="button" className="hero-replay" onClick={play}>Replay</button> : null}
         {replied ? <button type="button" className="hero-reply-close" onClick={() => setComposeFront(true)} aria-label="Back to the message">×</button> : null}
