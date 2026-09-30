@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 export function generateMetadata(): Metadata {
   return {
-    title: 'Ticket Guy — You’ve finally got a ticket guy now.',
+    title: 'Ticket Guy — You’ve finally got a ticket guy.',
     description: 'Found tickets? Get a second opinion before you buy. Email a link, a screenshot or your plans to my@ticketguy.now. Free, for live events across the US.',
   };
 }
