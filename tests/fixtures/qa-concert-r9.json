@@ -1,0 +1,190 @@
+[
+  {
+    "id": "01",
+    "scenario": "Stadium pop; unconfirmed Dua Lipa premise",
+    "messages": [
+      "Hey, can you get me two tickets to Dua Lipa at MetLife Stadium? I'm in New York but happy to go to East Rutherford. Up to $400 total including fees. I don't have a date; first tell me if she actually has an upcoming show there. If she doesn't, suggest a genuinely similar big pop show in the New York/New Jersey area, not a Dua Lipa tribute or DJ party.",
+      "Thanks. I don't need Dua Lipa specifically. Could you choose two upcoming big pop shows anywhere in NYC or nearby New Jersey? Two adults, up to $400 total including fees. We like Dua Lipa and Sabrina Carpenter. I don't have another artist or date to give you; discovering a suitable show is what I need help with."
+    ]
+  },
+  {
+    "id": "02",
+    "scenario": "Atlanta pop with minor admission constraints",
+    "messages": [
+      "Hey, my daughter and her friend are both 16 and want a pop concert in Atlanta Oct 9 or 10, 2026. Two tickets, $80 each max with fees. They like Dua Lipa and Olivia Rodrigo. They'll go without an adult. Please only suggest events you can verify admit unaccompanied 16-year-olds, or clearly say that you couldn't verify it.",
+      "Did you actually check whether either 16-year-old can enter without a guardian? That's the deciding factor, not just the genre. Don't assume an adult can accompany them; none will. Please answer that question directly and tell me which admission policies, if any, you verified."
+    ]
+  },
+  {
+    "id": "03",
+    "scenario": "Concert ticket entry cutoff; next calendar day",
+    "messages": [
+      "I have two ticket options for the same house night in Miami. It starts Friday Oct 2, 2026 at 11pm; we arrive Saturday Oct 3 at 1am. Both prices include fees. A is $25 each, marked 'entry before midnight'; B is $40 each, marked 'anytime entry'. Two of us, budget $90 total. Is A actually usable for us, or which one should we choose? These are quotes I copied; I don't need you to verify availability.",
+      "The event starts Friday October 2, 2026 at 11pm Miami local time. We arrive two hours later, at 1am Saturday October 3. That is not an ambiguous date. Just compare the ticket restrictions I gave you: Offer A, $50 total with fees, entry BEFORE MIDNIGHT; Offer B, $80 total with fees, ANYTIME ENTRY. Can A be used at 1am? Which fits our $90 budget and arrival? Don't silently pick a different event."
+    ]
+  },
+  {
+    "id": "04",
+    "scenario": "VIP upgrade excludes admission",
+    "messages": [
+      "For The Chicks at The Auditorium in Chicago on Oct 3, 2026, I need two actual concert tickets. Here are two copied offers, both fees included: A, VIP merchandise upgrade, $60 each, 'concert ticket NOT included'; B, balcony concert admission, two seats together, $110 each. Budget $250 total. Which offer gets both of us into the show? If A needs an additional admission ticket, don't call it the cheaper concert ticket.",
+      "Same October 3, 2026 Chicks show at The Auditorium in Chicago. Offer A is two VIP merchandise upgrades for $120 TOTAL all-in; the terms explicitly say CONCERT TICKET NOT INCLUDED. Offer B is two ordinary balcony concert admission seats together for $220 TOTAL all-in. Both say immediate delivery. Our $250 TOTAL budget is for the pair. Which offer gets us into the concert? Please compare A and B using these terms, not a market average.",
+      "Offer A does NOT include a concert ticket. It's just merchandise, not ordinary seats. Neither of us has an admission ticket yet. Offer B is the only actual concert admission: two balcony seats for $220 total including all fees. Please correct your recommendation. Buying A would leave us unable to enter the concert."
+    ]
+  },
+  {
+    "id": "05",
+    "scenario": "Festival admission versus shuttle and extra days",
+    "messages": [
+      "We're going to a Las Vegas electronic festival together and only want Saturday. Two adults. These copied quotes include all fees: A is a Saturday shuttle-only pass, $70 each, no festival admission; B is Saturday festival admission, $160 each; C is a three-day festival pass, $240 each. Our admission budget is $350 total and we have our own ride. Which option meets the request, and what would it cost for both of us? I'm asking you to compare these quotes, not look up availability."
+    ]
+  },
+  {
+    "id": "06",
+    "scenario": "Tribute show versus original mainstream artist",
+    "messages": [
+      "Is '$30 Dua Lipa Dance Party' in Boston a cheap way to see Dua Lipa herself? The description says 'a DJ spins all your favorite Dua tracks; artist will not appear'. Two of us, $100 total. I only want a concert with the actual artist performing. Should I buy this or skip it? Don't search for another city yet.",
+      "I'm not asking for a date search. The seller's own description says Dua Lipa will NOT appear. It is a DJ dance party playing her recordings. If I want to see Dua Lipa herself perform, should I buy this $30 ticket or skip it? Please answer that directly, without asking me to find a different concert first."
+    ]
+  },
+  {
+    "id": "07",
+    "scenario": "Denver metro country and parking versus admission",
+    "messages": [
+      "Ella Langley at Red Rocks on Oct 7, 2026: two adults, budget $200 total. A copied offer says 'Parking only, no event admission', $45 total. B says two general-admission concert tickets, $85 each including fees. Can either get both of us into the concert? We're staying in Denver; please flag that Red Rocks is in Morrison. https://www.axs.com/venues/101164/red-rocks-amphitheatre-morrison-tickets?skin=redrocks",
+      "You mixed up the prices. Offer A is a PARKING PASS for $45 TOTAL and includes ZERO concert admissions. Offer B is TWO GA CONCERT ADMISSIONS for $170 TOTAL including all fees ($85 each). Ella Langley, Red Rocks in Morrison, Oct 7, 2026. Our budget is $200 TOTAL for the pair. Which offer gets both of us into the show and what do the concert tickets cost?",
+      "Offer A includes ZERO event admissions. Its $45 price is parking for the car only; no amount of extra fees turns it into a concert ticket. Neither of us has a concert ticket yet. Offer B includes two GA concert admissions for $170 total with all fees. Please exclude A from the admission comparison, say what the two actual concert tickets cost, and correct the idea that A could beat B."
+    ]
+  },
+  {
+    "id": "08",
+    "scenario": "Admission-inclusive VIP versus unknown package",
+    "messages": [
+      "Two of us for the same Chicago country concert. Copied offers, fees included: Offer A is a VIP package for $90 each and explicitly INCLUDES one concert admission per package plus merchandise. Offer B is two ordinary concert tickets for $200 TOTAL. Neither of us has tickets. $250 TOTAL budget. Which gets us in for less? Do not exclude A just because it says VIP.",
+      "Correction to Offer A only: its description now says VIP package, admission entitlement UNKNOWN; the seller hasn't answered. B is unchanged. We still need two actual concert admissions. Which is safe to compare on the supplied terms?",
+      "A's updated terms explicitly include one concert admission per $90 package. B remains $200 for two. Please replace the unknown status with this new supplied fact, don't claim you verified the seller, and compare again."
+    ]
+  },
+  {
+    "id": "09",
+    "scenario": "Single-product corrections preserve the other offer",
+    "messages": [
+      "Same Chicago show, two people, $250 TOTAL with fees. Offer A: two merchandise-only upgrades, $120 TOTAL, no concert admission. Offer B: two balcony concert admission seats together, $220 TOTAL all-in. Both immediate delivery. Which should we buy to actually enter?",
+      "Only update Offer A: the replacement is two VIP packages, including two concert admissions and merchandise, $180 TOTAL including all fees, immediate delivery. Offer B is unchanged. Which offer wins now?",
+      "Only update Offer A again: those $180 packages are merchandise only; event admission is NOT included. Keep the previous Offer B facts. Which two admissions can we buy within the same budget?"
+    ]
+  },
+  {
+    "id": "10",
+    "scenario": "Three concert admissions and an order-total correction",
+    "messages": [
+      "Three of us need admission to a Red Rocks concert. Copied quotes: Offer A is PARKING ONLY for $45 TOTAL per car, ZERO event admissions. Offer B includes three GA concert admissions at $85 EACH including fees. Our budget is $270 TOTAL for all three. Which gets all three into the concert?",
+      "Correction to B's price only: $90 is the TOTAL for all THREE GA concert admissions together, including all fees, not each. A remains the $45 parking pass with no admission. Our updated budget is $100 TOTAL. What do the concert tickets cost and how much budget remains?",
+      "Correction to Offer B: THREE GA concert admissions together for $90 TOTAL including all fees, not per ticket. Offer A is unchanged: parking only, $45 TOTAL, ZERO concert admissions. Budget $100 TOTAL for all three. Just compare these two copied offers: which admits all three, at what whole-party price and budget remainder?"
+    ]
+  },
+  {
+    "id": "11",
+    "scenario": "Cheaper multiday admission explicitly allowed",
+    "messages": [
+      "Two adults only plan to attend Saturday at a Las Vegas festival, but a multiday pass is OK if cheaper and valid Saturday. We have our own ride. Quotes including fees: Offer A Saturday shuttle ONLY, $70 each, NO festival admission. Offer B Saturday festival admission $160 each. Offer C three-day festival admission INCLUDING Saturday, $140 each. $350 TOTAL admission budget. Which gets both of us into Saturday for the least?",
+      "If C's corrected price is $200 EACH, everything else unchanged, which is now cheapest for two? The shuttle still grants no admission.",
+      "Please use these explicit final prices: Offer A is shuttle only, $70 EACH INCLUDING ALL FEES and NO festival admission. Offer B is Saturday festival admission, $160 EACH INCLUDING ALL FEES. Offer C is three-day festival admission including Saturday, $200 EACH INCLUDING ALL FEES. Two adults, $350 TOTAL budget, own ride. We allow extra days but will only attend Saturday. Which admission offer costs less and fits?"
+    ]
+  },
+  {
+    "id": "12",
+    "scenario": "Original artist goal changes to an affordable DJ party",
+    "messages": [
+      "Two of us in Boston. Offer A: Dua Lipa DJ dance party, $30 each all-in, Dua Lipa will NOT appear. Offer B: concert where Dua Lipa herself performs live, $90 each all-in. $200 TOTAL budget. We only want Dua Lipa herself performing. Using just these copied descriptions, which offer meets that goal?",
+      "We've changed our plan: we now WANT a DJ night dancing to Dua's recordings, and don't need Dua herself there. Same two adults, new $80 TOTAL budget. A and B are unchanged. Which suits the new goal? Don't treat artist absence as a problem for our new plan."
+    ]
+  },
+  {
+    "id": "13",
+    "scenario": "Quoted guardian and ID policies stay separate",
+    "messages": [
+      "My daughter and friend are both 16 and going without any adult to an Atlanta pop gig. The event-specific ticket page I copied says: minimum age 16; anyone under 18 MUST attend with a parent or legal guardian; valid photo ID required. Is being 16 enough for them to get in alone? Treat this as supplied policy, not independently verified.",
+      "Updated policy from the same event page: attendees aged 16 and above may enter UNACCOMPANIED, but must present a GOVERNMENT-issued photo ID. They only have school photo IDs, not government ID. Does the change mean their current plan meets all the terms?",
+      "Final corrected ID term from the same page: school-issued photo ID IS accepted for 16- and 17-year-olds. All other updated terms remain: minimum 16, unaccompanied permitted. Do both 16-year-olds now meet those supplied terms, subject to checking the actual current page?"
+    ]
+  },
+  {
+    "id": "14",
+    "scenario": "Before-midnight strict boundary and changed arrival",
+    "messages": [
+      "Same Miami house night starts Friday Oct 2, 2026 at 11pm. Two adults. Offer A: $25 each all-in, entry BEFORE midnight that night. Offer B: $40 each all-in, anytime entry. Budget $90 TOTAL. We arrive Saturday Oct 3 at exactly 12:00am Miami local time, not a minute before. Which ticket fits our arrival?",
+      "Only our arrival changes: Friday Oct 2 at 11:59pm Miami local time. A and B and the $90 total budget are unchanged. Which is now usable and cheaper?",
+      "We are back to arriving at 1am Saturday Oct 3. A's revised entry condition says admission valid UNTIL 2am Saturday Oct 3, not before midnight. B is unchanged. Using the revised copied terms, does A now fit and what is the total for two?"
+    ]
+  },
+  {
+    "id": "15",
+    "scenario": "Doors time is not a last-entry deadline",
+    "messages": [
+      "Two of us for a Miami house night starting Friday Oct 2, 2026 at 11pm; we arrive Saturday Oct 3 at 1am. Offer A $25 each all-in says DOORS AT 11PM, but says nothing about last entry. Offer B $40 each all-in explicitly says ANYTIME ENTRY. $90 TOTAL budget. Does doors at 11pm prove A accepts us at 1am, or is that still unknown? Compare only these supplied terms."
+    ]
+  },
+  {
+    "id": "16",
+    "scenario": "Missing overnight chronology should stay unknown",
+    "messages": [
+      "Two ticket quotes for one Miami DJ night: event Friday Oct 2, 2026 starts 11pm. Offer A $25 each all-in, entry before midnight. Offer B $40 each all-in, anytime entry. Two of us, $90 TOTAL budget. We arrive at 1am but I have not specified which calendar date. Can you tell for sure whether A works? If the arrival date matters, ask only that missing detail.",
+      "We mean 1am Saturday October 3, Miami local time, two hours after the Friday start. The prices and budget are unchanged. Which fits now?"
+    ]
+  },
+  {
+    "id": "17",
+    "scenario": "Plain language ticketless upgrade and unrelated cheap option",
+    "messages": [
+      "Can you sanity check these for two of us at a country concert? Offer A is $60 each all-in for a souvenir bundle. The small print says 'you must already hold a separate show ticket; this purchase does not get you through the door'. Offer B is $110 each all-in for two concert admissions together. We don't have admission tickets yet. $250 TOTAL. What should we get?"
+    ]
+  },
+  {
+    "id": "18",
+    "scenario": "One merchandise offer without a comparison partner",
+    "messages": [
+      "I'm about to buy two $60 VIP merchandise upgrades for a country show. The description says concert ticket NOT included. Neither of us has an admission ticket. Would these two upgrades get us into the concert? I am asking about the entitlement, not the date or price trend."
+    ]
+  },
+  {
+    "id": "19",
+    "scenario": "Different-room ticket does not buy the desired performance",
+    "messages": [
+      "Two of us want Kiefer at Elsewhere on Oct 2, 2026. I have two quotes, both fees included: A is $30 each for Kiefer in The Hall at 7pm; B is $20 each for a different DJ event in Zone One at 10:30pm. Does buying B let us into Kiefer too because it's all Elsewhere? Which one should we buy to see Kiefer? Don't treat a cheaper ticket to a different event as a deal.",
+      "Kiefer, Friday October 2, 2026 at Elsewhere's Hall in Brooklyn. Please use my copied quotes: Offer A, two Kiefer Hall concert admissions, $60 TOTAL including fees. Offer B, two separate Zone One DJ-event admissions, $40 TOTAL including fees, Kiefer not on its lineup. We want Kiefer. Which ticket is valid for what we want? Elsewhere's FAQ says most events are separately ticketed: https://www.elsewhere.club/help . Availability is not the question.",
+      "Here is the exact official Kiefer event: https://www.elsewhere.club/events/1992080179442 . It says Oct 2, 2026, The Hall, 7pm doors, 16+, and GA tickets $33.33 including fees ($25 face value plus $8.33 fees). Two adults. Does a separate $20 Zone One DJ ticket let us into this Kiefer show? Please answer the room-access question and use the correct event page, even if you can't verify current availability."
+    ]
+  },
+  {
+    "id": "20",
+    "scenario": "Explicit absence replaced by an affirmative artist appearance",
+    "messages": [
+      "A Boston event is called Dua Lipa Dance Party. Its description says a DJ plays her recordings and Dua Lipa will not appear. Two of us want to see Dua Lipa herself perform. Should we skip it?",
+      "The seller has corrected the description for this same event: Dua Lipa WILL appear and perform a live set herself, not just recordings or a tribute. I know this is only supplied information and could need verification. Does the new description meet our original-artist goal on its own terms? Please don't keep applying the old absence statement."
+    ]
+  },
+  {
+    "id": "21",
+    "scenario": "All ages and a guardian threshold below the attendees age",
+    "messages": [
+      "Two 16-year-olds without adults want to attend a pop gig in Atlanta. I copied its specific policy: ALL AGES; under-16s require a parent; guests aged 16 or older may attend unaccompanied; school-issued photo ID accepted. Both have school photo IDs. Do these two 16-year-olds meet the quoted entry requirements? No need to search dates; I know the current page still needs checking."
+    ]
+  },
+  {
+    "id": "22",
+    "scenario": "Explicit two-package availability isolates per-package entitlement",
+    "messages": [
+      "Two of us need entry to the same Chicago country concert. Offer A: TWO VIP packages are available, $90 EACH including all fees; each package includes ONE concert admission. We would buy both packages, $180 TOTAL for two admissions. Offer B: TWO ordinary concert tickets, $200 TOTAL including all fees. $250 TOTAL budget. Using only these copied terms, which gets BOTH of us into the concert for less?",
+      "Same facts, stated another way: Offer A is two concert admissions bundled with merchandise for $180 TOTAL all-in. Offer B is two ordinary concert admissions for $200 TOTAL all-in. Both include two admissions for the same concert; our budget is $250 TOTAL. Which is cheaper, and how much do we save?"
+    ]
+  },
+  {
+    "id": "23",
+    "scenario": "Both products include admission but only one has original artist",
+    "messages": [
+      "Two of us want to see Dua Lipa herself performing live in Boston. These are copied ticket offers, $200 TOTAL budget. Offer A: TWO event admissions to a Dua Lipa DJ dance party, $60 TOTAL including all fees; its terms say Dua Lipa WILL NOT APPEAR, a DJ plays recordings only. Offer B: TWO concert admissions to Dua Lipa herself performing LIVE, $180 TOTAL including all fees. Both offers include admission to their own named event. We want the actual artist performing, not recordings. Which offer fits that goal? Do not look up availability.",
+      "We have changed our goal and now want the DJ dance party, not Dua herself performing. The same Offer A is two DJ-party event admissions for $60 TOTAL all-in, with Dua NOT appearing. Offer B is two original-artist concert admissions for $180 TOTAL all-in. Our new budget is $80 TOTAL. Which fits the new plan and why?"
+    ]
+  }
+]
