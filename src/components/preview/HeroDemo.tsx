@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CopyAddress } from './CopyAddress';
 import { PaperclipIcon } from './icons';
+import { PixelCursor } from './PixelCursor';
 
 /**
  * The hero: the one real "New message" window, playing its own demonstration once. The request types
@@ -68,7 +69,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
     at(t, () => setPhase('checking'));
     t += 1300;
     at(t, () => { setCursor(null); setPhase('reply'); });
-    t += 2600;
+    t += 3200;
     at(t, () => setPhase('done'));
   }, []);
 
@@ -95,7 +96,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const showReply = phase === 'checking' || phase === 'reply' || phase === 'done';
   const replied = phase === 'reply' || phase === 'done';
 
-  const W = 320, H = 96, P = 6;
+  const W = 320, H = 64, P = 6;
   const lo = Math.min(...SERIES), hi = Math.max(...SERIES);
   const pts = SERIES.map((v, i) => `${(P + (i / (SERIES.length - 1)) * (W - 2 * P)).toFixed(1)},${(P + (1 - (v - lo) / (hi - lo)) * (H - 2 * P)).toFixed(1)}`);
   const line = pts.join(' ');
@@ -128,16 +129,14 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
         <div className="reply-titlebar"><span>Re: Knicks next Saturday</span><span className="reply-flag">Illustrative example</span></div>
         {replied ? (
           <div className="hero-reply-body">
-            <p className="hr-line hr-1"><strong>Found 4 together at $130 each.</strong></p>
-            <div className="hr-line hr-2 hr-chart">
+            <div className="hr-line hr-1 hr-found">
+              <p><strong>Found 4 together at $130 each.</strong> <span className="hr-trend">▼ 15% this week</span></p>
               <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Price for four together over the last 30 days: up to $170, now $130 and falling">
-                <polygon points={`${P},${H - P} ${line} ${W - P},${H - P}`} className="hr-area" />
                 <polyline points={line} className="hr-path" pathLength={1} />
                 <circle cx={lx} cy={ly} r="5" className="hr-dot" />
               </svg>
-              <span className="hr-badge">▼ 15% this week</span>
             </div>
-            <p className="hr-line hr-3">Prices are trending down. I’d hold off: you can probably get these cheaper closer to the game.</p>
+            <p className="hr-line hr-punch">Prices are trending down. <span>You’ll probably get them cheaper closer to the game.</span></p>
           </div>
         ) : (
           <p className="hero-reply-checking mono">Checking prices for 4 together<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
@@ -146,10 +145,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
       </article>
 
       {cursor ? (
-        <svg className={`hero-cursor${phase === 'press' ? ' is-down' : ''}`} style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} viewBox="0 0 11 17" shapeRendering="crispEdges" aria-hidden="true">
-          <path d="M0 0h1v1H0zM0 1h2v1H0zM0 2h1v1H0zM2 2h1v1H2zM0 3h1v1H0zM3 3h1v1H3zM0 4h1v1H0zM4 4h1v1H4zM0 5h1v1H0zM5 5h1v1H5zM0 6h1v1H0zM6 6h1v1H6zM0 7h1v1H0zM7 7h1v1H7zM0 8h1v1H0zM8 8h1v1H8zM0 9h1v1H0zM9 9h1v1H9zM0 10h1v1H0zM6 10h5v1H6zM0 11h1v1H0zM3 11h1v1H3zM6 11h1v1H6zM0 12h1v1H0zM2 12h1v1H2zM4 12h1v1H4zM7 12h1v1H7zM0 13h2v1H0zM4 13h1v1H4zM7 13h1v1H7zM0 14h1v1H0zM5 14h1v1H5zM8 14h1v1H8zM5 15h1v1H5zM8 15h1v1H8zM6 16h2v1H6z" fill="#000" />
-          <path d="M1 2h1v1H1zM1 3h2v1H1zM1 4h3v1H1zM1 5h4v1H1zM1 6h5v1H1zM1 7h6v1H1zM1 8h7v1H1zM1 9h8v1H1zM1 10h5v1H1zM1 11h2v1H1zM4 11h2v1H4zM1 12h1v1H1zM5 12h2v1H5zM5 13h2v1H5zM6 14h2v1H6zM6 15h2v1H6z" fill="#fff" />
-        </svg>
+        <PixelCursor className={`hero-cursor${phase === 'press' ? ' is-down' : ''}`} style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} />
       ) : null}
       <svg className="mascot" aria-hidden="true"><use href="#ticket-friend" /></svg>
     </div>

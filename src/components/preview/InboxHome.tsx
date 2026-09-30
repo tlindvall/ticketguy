@@ -5,6 +5,7 @@ import { HeroDemo } from './HeroDemo';
 import { CopyAddress } from './CopyAddress';
 import { HeroVideo } from './HeroVideo';
 import { SourceUniverse } from './SourceUniverse';
+import { PixelCursor } from './PixelCursor';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
@@ -159,21 +160,44 @@ export function InboxHome({ state, address, preview = false }: Props) {
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>
-          <ol className="steps">
-            <li>
-              <EnvelopeIcon className="step-icon" />
-              <h3>Send your request.</h3>
-              <p>A ticket link, a screenshot, or a few words about your plans.</p>
+          <ol className="steps3">
+            <li className="step3">
+              <span className="step3-num" aria-hidden="true">1</span>
+              <div className="step3-win">
+                <div className="step3-bar"><EnvelopeIcon /> New message</div>
+                <div className="step3-body">
+                  <h3>Send your request.</h3>
+                  <p>A ticket link, a screenshot, or a few words about your plans.</p>
+                  <div className="step3-demo">
+                    <span className="mono">To: {address}</span>
+                    <span className="step3-send">Send ›<PixelCursor className="step3-click" /></span>
+                  </div>
+                </div>
+              </div>
+              <PixelCursor className="step3-arrow" />
             </li>
-            <li>
-              <ReplyIcon className="step-icon" />
-              <h3>Get a straight answer.</h3>
-              <p>A recommendation, the total for your group, and anything worth knowing before you buy.</p>
+            <li className="step3">
+              <span className="step3-num" aria-hidden="true">2</span>
+              <div className="step3-win">
+                <div className="step3-bar"><ReplyIcon /> Re: your tickets</div>
+                <div className="step3-body">
+                  <h3>Get a straight answer.</h3>
+                  <p>The call, the total for your group, and anything worth knowing before you buy.</p>
+                  <div className="step3-demo"><span className="step3-call">Buy now, or hold off.</span></div>
+                </div>
+              </div>
+              <PixelCursor className="step3-arrow" />
             </li>
-            <li>
-              <PaperclipIcon className="step-icon" />
-              <h3>You buy direct.</h3>
-              <p>A link to the seller. The decision is yours.</p>
+            <li className="step3">
+              <span className="step3-num" aria-hidden="true">3</span>
+              <div className="step3-win">
+                <div className="step3-bar"><PaperclipIcon /> Seller’s listing</div>
+                <div className="step3-body">
+                  <h3>You buy direct.</h3>
+                  <p>A link to the seller. The decision is always yours.</p>
+                  <div className="step3-demo"><span className="link">View the seller’s listing ↗</span></div>
+                </div>
+              </div>
             </li>
           </ol>
           <div className="independence">
