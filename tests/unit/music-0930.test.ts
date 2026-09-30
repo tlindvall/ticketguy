@@ -42,6 +42,8 @@ describe('concert entitlement and copied terms', () => {
   it('new explicit per-ticket basis overrides an old total with the same number', () => {
     const r = answer(['Offer A: concert admission $100 total. Offer B: concert admission $150 total.', 'Offer A: concert admission $100 each all-in. Offer B: concert admission $150 total.']);
     expect(offerTotal(r.textOffers[0]!, 2)?.cents).toBe(20000);
+    const updated = answer(['Concert tickets. Offer A: concert admission $100 each plus $20 for the whole order, no other charges. Offer B: concert admission $250 total.', 'Offer A: concert admission $220 total all-in. Offer B: concert admission $250 total.']);
+    expect(offerTotal(updated.textOffers[0]!, 2)?.cents).toBe(22000);
   });
   it('paraphrased extras and affirmative bundles', () => {
     expect(admissionTerms('Shuttle-only pass; separate event ticket required').admission).toBe('excluded');

@@ -2949,6 +2949,7 @@ function musicSourceLinks(messages: string[]): string[] {
 function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
   const hasPrice = next.totalCents !== null || next.perTicketCents !== null;
   const samePrice = (next.totalCents ?? next.perTicketCents) === (old.totalCents ?? old.perTicketCents);
+  const newAllInPrice = hasPrice && next.feeBasis === 'all_in';
   const retainPrice = !hasPrice || samePrice && !next.priceBasisStated;
   const replaced = next.productKind !== 'unknown' && old.productKind !== 'unknown' && next.productKind !== old.productKind;
   if (replaced) return next;
@@ -2960,8 +2961,8 @@ function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
     totalCents: retainPrice ? old.totalCents : next.totalCents,
     perTicketCents: retainPrice ? old.perTicketCents : next.perTicketCents,
     feeBasis: next.feeBasis !== 'unknown' ? next.feeBasis : old.feeBasis,
-    orderFeeCents: next.orderFeeCents ?? old.orderFeeCents,
-    perTicketFeeCents: next.perTicketFeeCents ?? old.perTicketFeeCents,
+    orderFeeCents: newAllInPrice ? next.orderFeeCents : next.orderFeeCents ?? old.orderFeeCents,
+    perTicketFeeCents: newAllInPrice ? next.perTicketFeeCents : next.perTicketFeeCents ?? old.perTicketFeeCents,
     noOtherCharges: next.noOtherCharges || old.noOtherCharges,
     quantity: next.quantity ?? old.quantity,
     together: next.together ?? old.together,
