@@ -145,4 +145,12 @@ describe('R9: quoted admission policies are conditional, with independent ID and
     const r = concertQuestion(['Two 16-year-olds without adults want a pop gig. The event policy says minimum age 16; 16-year-olds may NOT enter unaccompanied; school photo ID accepted. Both have school photo IDs. Can they enter?']);
     expect(r?.lead).toContain('cannot attend unaccompanied');
   });
+  it('both attendees must qualify, including a younger companion', () => {
+    const r = concertQuestion(['My 16-year-old daughter and her 15-year-old friend want a pop gig without adults. The event policy says minimum age 16; no guardian required; school photo ID accepted. Both have school photo IDs. Can they enter?']);
+    expect(r?.lead).toContain('cannot attend unaccompanied');
+  });
+  it('a new attendee-age statement replaces old ages, without reading the policy threshold as their age', () => {
+    const r = concertQuestion(['Two 16-year-olds want a pop gig without adults. The event policy says minimum age 17; no guardian required; school photo ID accepted. Both have school photo IDs. Can they enter?', 'Correction: both are 17, not 16. Are those supplied terms now met?']);
+    expect(r?.lead).toContain('both meet the supplied entry requirements');
+  });
 });

@@ -209,14 +209,29 @@ function policyAnswer(messages: string[], youngest: number | null): { lead: stri
   return { lead, items: [policy.acceptedId ? `The supplied policy names ${policy.acceptedId}${idPasses ? ', which matches the ID you say they have.' : idFails ? '; school photo ID isn’t that form of ID.' : '; confirm they each have an accepted form.'}` : 'Accepted ID is not established by the supplied policy.', 'I haven’t independently verified that this policy is current or applies to the exact event. Check the actual event page before buying.'] };
 }
 
+/** Attendee ages come from the customer's plan, never age thresholds inside the copied policy. */
+function youngestAttendee(messages: string[]): number | null {
+  let youngest: number | null = null;
+  for (const raw of messages) {
+    for (const sentence of flat(raw).split(/(?<=[.!?])\s+/)) {
+      const both = /\bboth (?:are |aged? )?(\d{1,2})\b/i.exec(sentence);
+      if (both) { youngest = Number(both[1]); continue; }
+      if (!/^(?:My|Our|We|They|Two|Three|Four|\d+)\b/i.test(sentence)) continue;
+      const own = sentence.split(/\b(?:policy|terms|(?:event|ticket)[- ](?:specific[- ])?page|I copied)\b/i)[0]!;
+      const ages = [...own.matchAll(/\b(\d{1,2})[- ]year[- ]olds?\b|\baged? (\d{1,2})(?: and (\d{1,2}))?\b/gi)].flatMap((m) => [m[1] ?? m[2], m[3]].filter((a) => a !== undefined).map(Number));
+      if (ages.length) youngest = Math.min(...ages);
+    }
+  }
+  return youngest;
+}
+
 export function concertQuestion(messages: string[]): { lead: string; items: string[] } | null {
   const latest = flat(messages.at(-1) ?? '');
   const all = flat(messages.join(' '));
   const minor = /\b(?:1[0-7][- ]year[- ]olds?|minors?|both 1[0-7]|aged? 1[0-7])\b/i.test(all);
   const alone = /\bunaccompanied\b|\bwithout (?:any |an? )?(?:adults?|guardians?|parents?)\b/i.test(all);
   if (minor && alone && concertContext(messages) && /\b(?:enter|entry|admi\w*|policy|policies|terms|guardian|adult|unaccompanied)\b/i.test(latest)) {
-    const age = /\b(1[0-7])[- ]year[- ]old|\bboth (1[0-7])\b/i.exec(all);
-    return policyAnswer(messages, age ? Number(age[1] ?? age[2]) : null);
+    return policyAnswer(messages, youngestAttendee(messages));
   }
   // A single entitlement question needs no calendar search or second offer.
   if (concertContext(messages) && admissionTerms(latest).admission === 'excluded' && /\b(?:get us into|through the door|entitlement|would these|would this)\b/i.test(latest)) return { lead: 'No — these upgrades include no concert admission, so they cannot get you into the concert.', items: ['You need a separate concert admission ticket for each person. The merchandise or upgrade price does not change that.', 'That is based on the description you sent; I haven’t independently verified the seller’s terms.'] };
