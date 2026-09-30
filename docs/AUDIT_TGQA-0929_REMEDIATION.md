@@ -326,3 +326,38 @@ Every fix below is checked on the full rendered email, not the opening line. The
 **Not proven here:**
 - **The live Resend attachment path:** the signed URL host isn't documented, so it isn't held to a host list. It must be https, resolve to a public address and not redirect. Verify one real attachment in production; the audit log records `skippedAttachments` with reasons.
 - **The model extraction of these emails:** the replay uses the deterministic extractor. The deterministic guards (no budget taken from an offer price, negated access) are there because the model can make the same mistakes.
+
+---
+
+# Round 5: the Sep 30 morning live QA after #55 (27 sends)
+
+**Status:** new PR from `claude/relaxed-faraday-x955vr` (restarted on main after #55 merged). Not deployed.
+
+**How it's tested.**
+- `tests/acceptance/qa0930-replay.test.ts` replays all 27 sends in send order, with each body wrapped at 76 characters as live text arrives. A11's image goes through a stand-in reader that makes the live model's mistake (it calls the $72 base price all-in).
+- `tests/unit/qa0930-offers.test.ts` has the counterexamples:
+  - renamed and reordered labels, and four wordings of "won't split";
+  - a changed requirement that changes the winner;
+  - nothing that fits;
+  - fees that are known, unknown, per ticket and per order, including the break-even crossing and a tie.
+
+| Bug | Cause (traced) | Fix |
+|---|---|---|
+| R4-B01 M01 picks the unsplittable six | "seller requires buying all six" wasn't read as can't-split. "six ordinary unobstructed seats" wasn't read as six, because two adjectives broke the pattern. The refusal of an extra ticket wasn't a rule. | Quantity pattern allows up to three words and ignores prices and seat numbers. The can't-split wordings are widened. Attendees, extra tickets (refused or allowed) and the maximum to buy are read across the thread, and the latest word wins. |
+| R4-B02 M03 calls late delivery a fit | Delivery was never an eligibility rule. | The customer's deadline ("before we leave at noon", "noon delivery deadline") is parsed. Each offer's delivery time is parsed ("immediate", "by 6pm", or said once for all offers). A delivery that's too late, or has no time, is ruled out. With nothing fitting, the smallest single change is named. |
+| R4-B03 X01 "can't compare"; M02 unknown fee "fits"; A11 fee basis | [Likely] Live text is generated from HTML and wrapped, so "no other\ncharges" failed a literal-space pattern. An unknown fee counted as a fit. The reader's all-in label on a $72 base beside a $264 total wasn't cross-checked. | All offer text is flattened to single spaces before parsing. An offer with unknown fees is compared by break-even ("only beats it if its fees are under $40"), and a budget fit is shown as conditional. A per-ticket price below its total's share is treated as before fees, and the quote is the all-in share (A11: $88 each). The fee-gap direction is fixed: an all-in price below a before-fees floor only gets further below it. |
+| R4-B04 follow-ups lose the offers | Offers were read from the latest message only. | When a follow-up talks about offers without naming new ones, the offers from earlier in the thread are re-judged on the new terms. A typed correction to an earlier screenshot or listing read (fee basis, per-order fee, total, delivery time) is applied and said first. |
+| R4-B05 G02 4pm show for "after 6pm", "the only show in Manhattan" | Discovery had no time window or age rule. | Start-time windows are enforced. A named teenager or "no 21+" becomes an unverified requirement, the venue's age policy. The line reads "the only one I found", not "the only show". |
+| R4-B06 G03 barcode question sent to intake | No post-purchase intent. | Already bought plus asking about entry now gets official-transfer guidance with the Ticketmaster and MSG sources the QA checked, and one next step. The request is closed as a reported purchase. |
+| R4-B07 unproven saving and urgency | A before-fees alternative was headlined against an all-in price. "Thinning out" was drawn from all-event counts. | Alternatives within a normal fee margin of an all-in price are dropped. The rest carry their fee break-even. Group scarcity is claimed only from counts for that group size. |
+| R4-B09 doors vs show | Doors weren't stored. | New `events.doors_at` column (migration 0016), read from Discovery `dates.doorsTimes` [Likely field name; verify on a live sync]. The event line shows "(doors 8:00 PM)" when doors come before the start, and never infers one from the other. |
+
+**Writing-review changes.**
+- Comparisons open with the decision ("Offer B wins this one: $210 for both, fees included. That's $10 less than Offer A."). Only that first sentence is bold, not every amount.
+- A comparison carries no market floor, no history or group-count paragraphs, no generic delivery warning, and no "send me a link" ask.
+- There's no "I'll look at how the tickets are trading" acknowledgment before an answer that needs no search (offers compared, a screenshot, a delivery question), unless something was assumed.
+
+**Not changed, and why:**
+- **Signature:** your design gives the full signature on the first reply in a thread and the short one on follow-ups. Dropping the extra acknowledgments makes it more consistent; changing the design is your call.
+- **R4-B08 house/techno precision:** still category-level matching. It needs genre evidence we don't have.
+- **R4-F01–F04 (verified inventory, monitoring, group trends, visitor policy):** capability and policy gaps, unchanged.

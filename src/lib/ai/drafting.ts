@@ -47,6 +47,8 @@ export class FixtureDrafter implements Drafter {
     const alts = ['C_ALT1', 'C_ALT2'].filter((id) => ids.has(id) && !(paragraphs[0]?.claimIds.includes(id)));
     if (alts.length) paragraphs.push({ claimIds: alts, prose: 'Alternatives, clearly labeled as different seats or conditions:' });
     if (ids.has('C_CHECKPOINT')) paragraphs.push({ claimIds: ['C_CHECKPOINT'], prose: 'What I would do next:' });
+    // Everything shown is placed by the server (their offers compared): cite the answer, which the renderer places.
+    if (!paragraphs.length && ids.size) paragraphs.push({ claimIds: [ids.has('C_OFFERS') ? 'C_OFFERS' : [...ids][0]!], prose: '' });
     const closing: Record<AdvicePacket['decision'], string> = {
       buy_now: ctx.mustAttend ? 'Since attending together matters more than the last few dollars, I would secure this rather than risk losing it.' : 'This is a reasonable buy on the evidence we have; reply if you want us to keep looking instead.',
       wait_and_recheck: 'Waiting carries the risk that these options disappear; if that would be a problem, buy now instead.',

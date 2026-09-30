@@ -868,3 +868,21 @@ That comparison is the whole answer. The same email is not also read as one list
 - Discovery honours "no pop / tribute / kids".
 - A delivery or offer question gets no buy-or-wait passage.
 - A no-match with a date and place already given offers a next step instead of re-asking.
+
+## 56. Every hard requirement before any price; the same offers across the thread; entry help
+
+**Their offers.** Each supplied offer is judged on every requirement the customer gave before any price comparison:
+- attendees versus tickets bought, extra tickets refused or allowed (the latest word wins), and a block that won't split;
+- view, access and together;
+- the time the tickets must arrive, which a late or unstated delivery fails;
+- the budget.
+
+An offer with unknown fees is compared by break-even, never called a fit. When nothing fits, the one change that would make an offer work is named. A follow-up that changes a requirement re-judges the same offers.
+
+**The listing we read.** One price object: a total that carries fees over a before-fees ticket price is compared as its all-in share. A typed correction overrides the read and is acknowledged first.
+
+**Other changes.**
+- Discovery enforces start-time windows and flags an unverified age policy.
+- "I already bought, will this barcode get us in?" gets sourced official-transfer guidance, not intake.
+- Doors are stored and shown apart from the start.
+- Writing: the decision comes first and is the only emphasis, and comparisons carry nothing that doesn't change the choice.

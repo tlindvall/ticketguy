@@ -88,10 +88,16 @@ const MARKET_LEAD = 'The resale market when I last checked:';
 const P = (inner: string) => `<p style="margin:0 0 18px;">${inner}</p>`;
 
 /** Escaped, with prices in bold and a leading "My read:" in bold: the numbers and the answer are what people scan for. */
+/**
+ * Emphasis is for the decision, not every number: bolding each dollar amount made a dozen things compete with
+ * the answer (post-#55 writing review). The opener's first sentence carries it; "My read:" marks the read.
+ */
 function rich(s: string): string {
-  return esc(s)
-    .replace(/^(My read:)/, '<strong>$1</strong>')
-    .replace(/\$\d[\d,]*(?:\.\d{2})?/g, (m) => `<strong>${m}</strong>`);
+  return esc(s).replace(/^(My read:)/, '<strong>$1</strong>');
+}
+function leadRich(s: string): string {
+  const m = /^(.+?[.!?])(\s|$)/.exec(s);
+  return m ? `<strong>${esc(m[1]!)}</strong>${rich(s.slice(m[1]!.length))}` : `<strong>${esc(s)}</strong>`;
 }
 
 /** A bold lead line and its bullets, in both bodies. */
@@ -182,21 +188,22 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [watch, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [claim('C_CORRECTION'), watch, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
-  const put = (c: ClaimRecord) => {
+  const put = (c: ClaimRecord, lead = false) => {
+    const fmt = lead ? leadRich : rich;
     if (c.items?.length && c.text.includes('\n')) {
       const head = c.text.split('\n')[0]!;
       lines.push(head, c.items.map((i) => `- ${i}`).join('\n'));
-      html.push(P(rich(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
+      html.push(P(fmt(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
     } else {
       lines.push(c.text);
-      html.push(P(rich(c.text)));
+      html.push(P(fmt(c.text)));
     }
   };
   const opener = primary[0] ?? (read && !subject && !somethingToBuy ? read : undefined) ?? (packet.headline ? undefined : link);
   if (opener) {
-    put(opener);
+    put(opener, true);
   } else if (b.opening.trim()) {
     lines.push(b.opening.trim());
     html.push(P(rich(b.opening.trim())));
@@ -237,7 +244,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set(['C_LINK', 'C_LINK_UNREAD', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set(['C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -247,7 +254,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(P([esc(prose), ...claimTexts.map((c) => rich(c.text))].filter(Boolean).join(' ')));
   }
   // The coverage line is always there, from the packet (never model-authored).
-  if (coverage && !marketSource && !used.has('C_COVERAGE')) {
+  if (coverage && coverage.customerVisible && !marketSource && !used.has('C_COVERAGE')) {
     lines.push(coverage.text);
     html.push(P(esc(coverage.text)));
   }
@@ -286,8 +293,10 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
   const link = visible.find((c) => c.id === 'C_VERDICT') ?? visible.find((c) => c.id === 'C_LINK');
+  // Their offers compared: the answer is the comparison's first line, not a generic lead.
+  const answer = visible.find((c) => c.id === 'C_OFFERS');
   const rest = visible.filter((c) => c !== link).map((c) => (c.id === 'C_CATCHES' ? { ...c, text: `${CATCHES_LEAD}\n${c.text.split('\n').map((i) => `- ${i}`).join('\n')}` } : c.items?.length ? { ...c, text: c.items.map((i) => `- ${i}`).join('\n') } : c));
-  const lead = link ? link.text : decisionLine[packet.decision];
+  const lead = link ? link.text : answer ? answer.text.split('\n')[0]! : decisionLine[packet.decision];
   const asks = packet.followUps ?? [];
   const linked = rest.filter((c) => c.url);
   const head = packet.headline ? [packet.headline] : [];

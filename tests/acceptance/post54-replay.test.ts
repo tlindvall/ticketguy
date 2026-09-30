@@ -84,24 +84,24 @@ describe('the post-#54 QA, replayed exactly', () => {
 
   it('X02 (R3-B04): B is the only suitable offer, $65 less than A and $15 under budget; A, C and D each left out for its reason', () => {
     const body = all('X02');
-    expect(body).toContain('Of these, Offer B is the only one that meets what you asked for: $585 in total including fees for all five, $65 less than Offer A and $15 under your $600 budget.');
-    expect(body).toContain('- Offer A (five together, unobstructed): $650 in total including fees. Left out: $650 in total is over your $600 budget.');
-    expect(body).toContain('- Offer C (five together, obstructed view): $425 in total including fees. Left out: it has an obstructed view, which you ruled out.');
-    expect(body).toContain('- Offer D (six together, can’t be split): $480 in total including fees. Left out: it’s six tickets that can’t be split, and you want five.');
+    expect(body).toContain('Offer B is the one that meets what you asked for: $585 for all five, fees included. That’s $65 less than Offer A. It leaves $15 of your $600 budget.');
+    expect(body).toContain('- Offer A (five together, unobstructed, delivery by noon): $650 in total including fees. Left out: $650 in total is over your $600 budget.');
+    expect(body).toContain('- Offer C (five together, obstructed view, delivery by noon): $425 in total including fees. Left out: it has an obstructed view, which you ruled out.');
+    expect(body).toContain('- Offer D (six together, can’t be split, delivery by noon): $480 in total including fees for six tickets. Left out: it’s six tickets the seller won’t split, and you won’t buy an extra.');
     expect(body).toContain('I haven’t checked these listings');
     expect(body).not.toMatch(/Both fit|\$55 less|My read|Found seats you like/);
   });
 
   it('X01 (R3-B05): A is 2 × $90 + $40 = $220, B is $210 all-in, so B is $10 less', () => {
     const body = all('X01');
-    expect(body).toContain('Offer B costs less: $210 for both including fees, against $220 for Offer A, so $10 less.');
-    expect(body).toContain('- Offer A (ordinary seats): $90 each before fees, plus $40 for the whole order: $220 in total for both.');
+    expect(body).toContain('Offer B wins this one: $210 for both, fees included. That’s $10 less than Offer A.');
+    expect(body).toContain('- Offer A (ordinary seats, delivery by noon): $90 each before fees, plus $40 for the whole order: $220 in total for both.');
     expect(body).not.toMatch(/aren’t on the same basis|Budget: \$90|over your \$180|most you’d want to pay/);
   });
 
   it('R05 (R3-B01): one answer, B; A’s price and access never describe B; no single-offer verdict after it', () => {
     const body = all('R05');
-    expect(body).toContain('Of these, Offer B is the only one that meets what you asked for: $210 in total including fees for both.');
+    expect(body).toContain('Offer B is the one that meets what you asked for: $210 for both, fees included.');
     expect(body).not.toMatch(/I wouldn’t buy this one|You mentioned \$80|Budget: \$80|These are accessible seats|Against resale/);
   });
 

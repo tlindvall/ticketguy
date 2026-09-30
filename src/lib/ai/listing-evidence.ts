@@ -116,7 +116,9 @@ export function fieldsFromRead(r: ListingRead): ListingFields {
     perTicketCents: perTicket,
     wholePartyCents: whole,
     priceBasis: r.priceBasis,
-    feeBasis: r.feeBasis,
+    // "$72 each + $48 per order = $264": a per-ticket price below the total's share can't itself include the fees,
+    // whatever the read said (live A11: the $72 base was called all-in beside a $264 total for three).
+    feeBasis: r.feeBasis === 'all_in' && perTicket !== null && whole !== null && q && whole > perTicket * q + 50 ? 'before_fees' : r.feeBasis,
     section: r.section,
     row: r.row,
     seatNumbers: r.seatNumbers?.length ? r.seatNumbers : null,

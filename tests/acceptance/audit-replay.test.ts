@@ -148,12 +148,13 @@ describe('the TGQA-0929 audit, replayed exactly', () => {
   it('A03/R05: the two offers are compared as asked; the wheelchair spaces nobody needs are not the one to buy', () => {
     for (const id of ['A03', 'R05']) {
       const body = all(id);
-      expect(body, id).toContain('Of these, Offer B is the only one that meets what you asked for: $210 in total including fees for both.');
+      expect(body, id).toContain('Offer B is the one that meets what you asked for: $210 for both, fees included.');
       expect(body, id).toContain('- Offer A (wheelchair-accessible spaces): $80 each including fees, $160 for both. Left out: these are wheelchair or companion spaces, which no one in your group needs');
       expect(body, id).toContain('- Offer B (ordinary seats, together, section 211, row 12): $105 each including fees, $210 for both. Meets what you asked for.');
       // One offer's fields never describe the other, and no single-listing verdict follows the comparison (R3-B01).
       expect(body, id).not.toMatch(/I wouldn’t buy this one|You mentioned \$80|That’s 2 tickets, in section 211/);
-      expect(body, id).toContain('You asked: which of the two offers to choose');
+      // Answered once: no "I'll look at how the tickets are trading" before an answer that needs no search.
+      expect(body, id).not.toContain('look at how the tickets are trading');
       expect(body, id).not.toMatch(/Offer B: 211|suits your needs|I haven’t been able to check/);
     }
   });
