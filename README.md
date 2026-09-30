@@ -19,6 +19,7 @@ Email-first ticket concierge for US live events. A customer emails **my@ticketgu
 | [docs/DECISION_LOG.md](docs/DECISION_LOG.md) | Deviations and judgment calls |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operator runbook (DNS, webhooks, recovery, replay, deletion, kill switches…) |
 | [docs/READINESS_CHECKLIST.md](docs/READINESS_CHECKLIST.md) | Production readiness with evidence and unresolved gates |
+| [docs/TEST_MODE.md](docs/TEST_MODE.md) | Test mode: run everything as live without sending email; how a testing agent writes in and reads replies |
 | [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | 10-minute demo: request → clarification → comparison → approval → (blocked) send → watch → alert → unsubscribe → deletion |
 
 ## Stack

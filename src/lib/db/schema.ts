@@ -173,7 +173,7 @@ export const messages = pgTable(
       .notNull()
       .references(() => conversations.id),
     direction: text('direction').notNull(), // inbound | outbound
-    provider: text('provider').notNull(), // resend | simulator
+    provider: text('provider').notNull(), // resend | simulator | test (test mode: injected inbound, captured outbound)
     providerEmailId: text('provider_email_id'),
     rfcMessageId: text('rfc_message_id'),
     inReplyTo: text('in_reply_to'),
@@ -1009,8 +1009,8 @@ export const productEvents = pgTable(
 );
 
 export const killSwitches = pgTable('kill_switches', {
-  key: text('key').primaryKey(), // all_outbound | recommendations | marketing | watches | adapter:<id> | escalation_model
-  enabled: boolean('enabled').notNull().default(true), // enabled=true means the capability is ALLOWED
+  key: text('key').primaryKey(), // all_outbound | recommendations | marketing | watches | adapter:<id> | escalation_model | test_mode
+  enabled: boolean('enabled').notNull().default(true), // enabled=true means the capability is ALLOWED; for test_mode, that test mode is ON
   reason: text('reason'),
   changedBy: text('changed_by'),
   changedAt: ts('changed_at').notNull().defaultNow(),

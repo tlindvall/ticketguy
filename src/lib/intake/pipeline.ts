@@ -46,6 +46,7 @@ import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
+import { capturedIds, isTestConversation, testConversationIds, testModeFrom, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
@@ -953,6 +954,8 @@ export class Concierge {
     if (!this.deps.emailProvider) return skip('sending_disabled');
     const switches = await loadSwitches(this.db);
     if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
+    // Test mode sends nothing; the request shows as needing a person on the board, which is where testing watches.
+    if (testModeFrom(switches)) return skip('test_mode');
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, args.requestId));
     if (!req) return skip('request_not_found');
     if (req.state !== 'manual_attention') return skip('no_longer_waiting');
@@ -1940,7 +1943,10 @@ export class Concierge {
     });
   }
 
-  /** Dispatcher: claim → gate (current state) → provider → record. Never sends fixture content; never resends blindly. */
+  /**
+   * Dispatcher: claim → gate (current state) → provider → record. Never sends fixture content; never resends blindly.
+   * In test mode the provider step is replaced by a recorded capture and everything else runs unchanged.
+   */
   async dispatchSend(sendIntentId: string): Promise<{ outcome: 'sent' | 'blocked' | 'suppressed' | 'uncertain' | 'already_handled' | 'manual_reconciliation'; reasons?: string[] }> {
     const now = this.now();
     const [intent] = await this.db.select().from(t.sendIntents).where(eq(t.sendIntents.id, sendIntentId));
@@ -1985,21 +1991,28 @@ export class Concierge {
       const [rev] = await this.db.select().from(t.marketingPermissions).where(and(eq(t.marketingPermissions.contactId, intent.contactId), eq(t.marketingPermissions.status, 'revoked'))).orderBy(desc(t.marketingPermissions.createdAt)).limit(1);
       marketingPermission = !!perm && (!rev || rev.createdAt < perm.createdAt);
     }
-    const gate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission });
+    const capture = testModeFrom(switches) || (await isTestConversation(this.db, intent.conversationId));
+    const gate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
       await audit(this.db, { actor: 'system', action: 'send.blocked', entityKind: 'send_intent', entityId: intent.id, diff: { reasons: gate.reasons, messageClass: intent.messageClass } });
       return { outcome: suppressedOnly ? 'suppressed' : 'blocked', reasons: gate.reasons };
     }
-    if (!this.deps.emailProvider) {
+    const provider = this.deps.emailProvider;
+    if (!capture && !provider) {
       await releaseClaim(this.db, claim, 'blocked', 'no_email_provider_configured');
       return { outcome: 'blocked', reasons: ['no_email_provider_configured'] };
     }
     try {
-      const r = await this.deps.emailProvider.send({ idempotencyKey: intent.dedupeKey, from: intent.fromAddress, to: intent.recipient, subject: intent.subject, text: intent.bodyText, html: intent.bodyHtml, headers: intent.headers });
+      const captured = capture ? capturedIds() : null;
+      const r = captured ?? (await provider!.send({ idempotencyKey: intent.dedupeKey, from: intent.fromAddress, to: intent.recipient, subject: intent.subject, text: intent.bodyText, html: intent.bodyHtml, headers: intent.headers }));
       await recordProviderAccepted(this.db, claim, r.providerMessageId, now);
-      await this.db.insert(t.messages).values({ conversationId: intent.conversationId!, direction: 'outbound', provider: 'resend', providerEmailId: r.providerMessageId, rfcMessageId: null, inReplyTo: intent.headers['In-Reply-To'] ?? null, referencesHeader: intent.headers['References'] ?? null, fromAddress: intent.fromAddress, toAddresses: [intent.recipient], subject: intent.subject, sanitizedText: intent.bodyText, receivedAt: now }).onConflictDoNothing();
+      if (captured) {
+        await this.db.update(t.sendIntents).set({ providerRfcMessageId: captured.rfcMessageId }).where(eq(t.sendIntents.id, intent.id));
+        await audit(this.db, { actor: 'system', action: 'send.captured_test_mode', entityKind: 'send_intent', entityId: intent.id, diff: { messageClass: intent.messageClass } });
+      }
+      await this.db.insert(t.messages).values({ conversationId: intent.conversationId!, direction: 'outbound', provider: captured ? TEST_PROVIDER : 'resend', providerEmailId: r.providerMessageId, rfcMessageId: captured?.rfcMessageId ?? null, inReplyTo: intent.headers['In-Reply-To'] ?? null, referencesHeader: intent.headers['References'] ?? null, fromAddress: intent.fromAddress, toAddresses: [intent.recipient], subject: intent.subject, sanitizedText: intent.bodyText, receivedAt: now }).onConflictDoNothing();
       if (intent.approvalId) {
         await this.db.update(t.recommendations).set({ reviewStatus: 'sent' }).where(eq(t.recommendations.id, intent.approvalId));
         if (intent.requestId) await this.transition(intent.requestId, 'recommendation_sent', 'approved_recommendation_sent');
@@ -2053,20 +2066,23 @@ export class Concierge {
 
   /**
    * A place in the staffed comparison pilot, if there is one: an owner who is staff, the request not already
-   * taken, and fewer than the limit taken for customers (staff's own tests are served but not counted). Taking it
-   * records the promise as an outcome, so the pilot can be measured against it.
+   * taken, and fewer than the limit taken for customers (staff's own tests and test-mode customers are served but
+   * not counted). Taking it records the promise as an outcome, so the pilot can be measured against it.
    */
   private async takeForStaffComparison(a: { requestId: string; contactEmail: string; requirements: string[] }): Promise<{ hours: string } | null> {
     const owner = this.env.STAFF_COMPARISON_OWNER;
     const staff = new Set(this.env.STAFF_EMAIL_ALLOWLIST.map((x) => x.toLowerCase()));
     if (!owner || !staff.has(owner)) return null;
     const hours = staffedHoursLabel(this.env);
-    const taken = await this.db.select({ requestId: t.requestOutcomes.requestId, email: t.contacts.emailLookup }).from(t.requestOutcomes).innerJoin(t.requests, eq(t.requests.id, t.requestOutcomes.requestId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(eq(t.requestOutcomes.kind, 'staff_comparison_offered'));
+    const taken = await this.db.select({ requestId: t.requestOutcomes.requestId, email: t.contacts.emailLookup, conversationId: t.requests.conversationId }).from(t.requestOutcomes).innerJoin(t.requests, eq(t.requests.id, t.requestOutcomes.requestId)).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).where(eq(t.requestOutcomes.kind, 'staff_comparison_offered'));
     if (taken.some((x) => x.requestId === a.requestId)) return { hours };
-    const isStaff = staff.has(a.contactEmail.toLowerCase());
-    if (!isStaff && taken.filter((x) => !staff.has(x.email.toLowerCase())).length >= this.env.STAFF_COMPARISON_LIMIT) return null;
-    await this.db.insert(t.requestOutcomes).values({ requestId: a.requestId, kind: 'staff_comparison_offered', source: 'system', details: { owner, requirements: a.requirements, counted: !isStaff }, actor: 'system', at: this.now() });
-    await audit(this.db, { actor: 'system', action: 'pilot.staff_comparison_offered', entityKind: 'request', entityId: a.requestId, diff: { owner, counted: !isStaff } });
+    const [req] = await this.db.select({ conversationId: t.requests.conversationId }).from(t.requests).where(eq(t.requests.id, a.requestId));
+    const isTest = await isTestConversation(this.db, req?.conversationId ?? null);
+    const counted = !staff.has(a.contactEmail.toLowerCase()) && !isTest;
+    const tests = await testConversationIds(this.db, [...new Set(taken.map((x) => x.conversationId))]);
+    if (counted && taken.filter((x) => !staff.has(x.email.toLowerCase()) && !tests.has(x.conversationId)).length >= this.env.STAFF_COMPARISON_LIMIT) return null;
+    await this.db.insert(t.requestOutcomes).values({ requestId: a.requestId, kind: 'staff_comparison_offered', source: 'system', details: { owner, requirements: a.requirements, counted }, actor: 'system', at: this.now() });
+    await audit(this.db, { actor: 'system', action: 'pilot.staff_comparison_offered', entityKind: 'request', entityId: a.requestId, diff: { owner, counted } });
     return { hours };
   }
 

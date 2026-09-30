@@ -6,6 +6,7 @@ import { guardPage } from '@/lib/admin/guard';
 import { env } from '@/lib/config/env';
 import { PROBLEM_TYPES } from '@/lib/domain/problem-types';
 import { whenStaff } from '@/lib/admin/labels';
+import { isCapturedSendId, testConversationIds } from '@/lib/email/test-mode';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,7 @@ const PILOT_TARGET = 10;
 /**
  * Whether Ticket Guy helped, request by request: what each buyer needed, whether we answered, and what
  * happened after, each kept as the evidence it is (their word, an affiliate confirmation, a click). Staff
- * addresses and fixture data never count; tests are not customer validation.
+ * addresses, fixture data and test-mode customers never count; tests are not customer validation.
  */
 export default async function Pilot() {
   await guardPage();
@@ -25,11 +26,12 @@ export default async function Pilot() {
   const rows = await db.select({ r: t.requests, email: t.contacts.emailLookup }).from(t.requests).innerJoin(t.contacts, eq(t.contacts.id, t.requests.contactId)).orderBy(desc(t.requests.createdAt)).limit(300);
   const ids = rows.map((x) => x.r.id);
   const outs = ids.length ? await db.select().from(t.requestOutcomes).where(inArray(t.requestOutcomes.requestId, ids)) : [];
-  const sends = ids.length ? await db.select({ requestId: t.sendIntents.requestId, cls: t.sendIntents.messageClass, state: t.sendIntents.state }).from(t.sendIntents).where(inArray(t.sendIntents.requestId, ids)) : [];
+  const sends = ids.length ? await db.select({ requestId: t.sendIntents.requestId, cls: t.sendIntents.messageClass, state: t.sendIntents.state, providerId: t.sendIntents.providerMessageId }).from(t.sendIntents).where(inArray(t.sendIntents.requestId, ids)) : [];
+  const tests = await testConversationIds(db, [...new Set(rows.map((x) => x.r.conversationId))]);
   const evs = [...new Set(rows.map((x) => x.r.eventId).filter((x): x is string => !!x))];
   const fixtureEvents = new Set(evs.length ? (await db.select({ id: t.events.id, f: t.events.isFixture }).from(t.events).where(inArray(t.events.id, evs))).filter((x) => x.f).map((x) => x.id) : []);
-  const real = rows.filter(({ r, email }) => !staff.has(email) && !(r.eventId && fixtureEvents.has(r.eventId)) && e.APP_MODE !== 'fixture' && (r.problemTypes ?? []).length > 0);
-  const answered = (id: string) => sends.some((s) => s.requestId === id && ['recommendation', 'no_result', 'acknowledgment'].includes(s.cls) && ['provider_accepted', 'delivered'].includes(s.state));
+  const real = rows.filter(({ r, email }) => !staff.has(email) && !tests.has(r.conversationId) && !(r.eventId && fixtureEvents.has(r.eventId)) && e.APP_MODE !== 'fixture' && (r.problemTypes ?? []).length > 0);
+  const answered = (id: string) => sends.some((s) => s.requestId === id && ['recommendation', 'no_result', 'acknowledgment'].includes(s.cls) && ['provider_accepted', 'delivered'].includes(s.state) && !isCapturedSendId(s.providerId));
   const of = (id: string, kind: string) => outs.filter((o) => o.requestId === id && o.kind === kind);
   const table = real.map(({ r }) => {
     const reply = of(r.id, 'follow_up_reply')[0]?.details as { changedWhat?: boolean | null; changedWhen?: boolean | null } | undefined;
@@ -57,7 +59,7 @@ export default async function Pilot() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Pilot</h1>
-        <p className="mt-1 text-sm text-gray-600">Real requests only: staff addresses and fixture data are left out. {e.FOLLOW_UP_ENABLED ? 'Follow-ups are on.' : 'Follow-ups are off (FOLLOW_UP_ENABLED); they are recorded but not sent.'}</p>
+        <p className="mt-1 text-sm text-gray-600">Real requests only: staff addresses, fixture data and test-mode customers are left out. {e.FOLLOW_UP_ENABLED ? 'Follow-ups are on.' : 'Follow-ups are off (FOLLOW_UP_ENABLED); they are recorded but not sent.'}</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border border-gray-200 p-3"><p className="text-sm text-gray-500">Answered</p><p className="text-2xl font-semibold">{answeredCount} / {PILOT_TARGET}</p></div>
