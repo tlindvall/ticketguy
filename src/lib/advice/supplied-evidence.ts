@@ -50,20 +50,24 @@ function ordered<T>(s: string, a: T, b: T): [T, T] {
   const earlier = EARLIER.exec(s)?.index;
   return later !== undefined && earlier !== undefined && later < earlier ? [b, a] : [a, b];
 }
-const when = (s: string): 'earlier' | 'later' | null => {
-  const e = EARLIER.exec(s)?.index;
-  const l = LATER.exec(s)?.index;
-  if (e === undefined && l === undefined) return null;
-  if (e === undefined) return 'later';
-  if (l === undefined) return 'earlier';
-  return e < l ? 'earlier' : 'later';
+
+/**
+ * When the figure at `at` was seen: the time word nearest before it in the clause, else the first after it.
+ * "Now add … yesterday $450" is yesterday's $450, whatever the sentence opens with.
+ */
+const timeAt = (c: string, at: number): 'earlier' | 'later' | null => {
+  const hits = [...[...c.matchAll(new RegExp(EARLIER.source, 'gi'))].map((m) => ({ i: m.index!, t: 'earlier' as const })), ...[...c.matchAll(new RegExp(LATER.source, 'gi'))].map((m) => ({ i: m.index!, t: 'later' as const }))];
+  const before = hits.filter((h) => h.i < at).sort((x, y) => y.i - x.i)[0];
+  const after = hits.filter((h) => h.i > at).sort((x, y) => x.i - y.i)[0];
+  return (before ?? after)?.t ?? null;
 };
 
 const SINGLES = /\bsingles?\b|\bsingle tickets?\b|\bindividual tickets?\b|\bone[- ]ticket (?:listings?|prices?)\b/i;
-const GROUP = new RegExp(`\\b${COUNT}\\s+((?:(?:adjacent|connected|consecutive|side[- ]by[- ]side|upper[- ](?:tier|level|deck)|lower[- ](?:tier|level|bowl)|floor|balcony|mezzanine|orchestra)[\\s,]+(?:and\\s+)?)*)(?:seats|tickets)(\\s+together)?`, 'i');
+const GROUP = new RegExp(`\\b${COUNT}\\s+((?:(?:adjacent|connected|consecutive|side[- ]by[- ]side|reserved|comparable|upper[- ](?:tier|level|deck)|lower[- ](?:tier|level|bowl)|floor|balcony|mezzanine|orchestra)[\\s,]+(?:and\\s+)?)*)(?:seats|tickets)(\\s+together)?`, 'i');
 const GROUP_WORD = /\b(?:group|block|together|adjacent|connected|side[- ]by[- ]side|in a row)\b/i;
 const LISTINGS = /\b(?:active\s+)?listings?\b/i;
-const ORDERS = /\b(\d{1,6})\s+orders?\b/i;
+// "12 orders", "12 completed orders": a qualifier between the count and the unit is still the count.
+const ORDERS = /\b(\d{1,6})\s+(?:(?:completed|confirmed|paid|recorded|fulfilled|separate|total|individual)\s+){0,2}orders?\b/i;
 const SOLD_TICKETS = /\b(\d{1,6})\s+tickets?\b/i;
 const FEE_AMOUNT = /\bfees?\b[^$.]{0,40}?\$\s?(\d[\d,]*(?:\.\d{1,2})?)|\$\s?(\d[\d,]*(?:\.\d{1,2})?)\s+(?:in|of|worth of)\s+(?:\w+\s+)?fees?\b/i;
 
@@ -71,7 +75,7 @@ type Quote = { cents: number; unit: 'ticket' | 'total' | null; basis: 'before_fe
 
 export type EvidenceFacts = {
   singles: { fromCents: number; toCents: number } | null;
-  group: { quantity: number | null; descriptor: string | null; totals: Array<{ quantity: number | null; cents: number }>; mismatched: boolean } | null;
+  group: { quantity: number | null; descriptor: string | null; totals: Array<{ quantity: number | null; cents: number }>; mismatched: boolean; basis?: 'before_fees' | 'all_in' | null } | null;
   fees: { quantity: number | null; old: Quote | null; next: Quote | null; oldFeesCents: number | null } | null;
   listings: { from: number; to: number } | null;
   sales: { orders: number | null; tickets: number | null; reported: boolean } | null;
@@ -91,7 +95,8 @@ function partyQuantity(text: string): number | null {
 export function evidenceFacts(messages: string[]): EvidenceFacts {
   const f: EvidenceFacts = { singles: null, group: null, fees: null, listings: null, sales: null, observationDate: false, partyQuantity: null };
   for (const raw of messages) {
-    const q = partyQuantity(flat(raw));
+    // "12 orders for 24 tickets" is a sales report, not how many they need (R2-FACT-ROLES-01).
+    const q = partyQuantity(sentences(raw).filter((x) => !/\b(?:sold|sales?|orders?)\b/i.test(x)).join(' '));
     if (q) f.partyQuantity = q;
     for (const s of sentences(raw)) {
       const m = money(s);
@@ -113,19 +118,25 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
         const descriptor = [g[2]?.replace(/[\s,]+(?:and\s+)?/g, ' ').trim(), g[3] ? 'together' : ''].filter(Boolean).join(' ') || null;
         f.group = { quantity: toCount(g[1]!), descriptor: descriptor ?? f.group?.descriptor ?? null, totals: f.group?.totals ?? [], mismatched: f.group?.mismatched ?? false };
       }
-      if (!SINGLES.test(s) && /\bgroup\b|\bblock\b|\btogether\b|\badjacent\b/i.test(s) && m.length >= 2 && !BEFORE_FEES.test(s) && !ALL_IN.test(s) && change) {
-        // Totals for the group, each tagged with its own seat count when the clause says one.
-        const parts = clauses(s).flatMap((c) => money(c).map((x) => ({ c, cents: x.cents })));
-        const tagged = parts.map((p) => {
-          const n = new RegExp(`\\b${COUNT}\\s+(?:\\w+[- ]?\\w*\\s+){0,2}(?:seats|tickets)\\b`, 'i').exec(p.c)?.[1];
-          return { quantity: n ? toCount(n) : null, cents: p.cents, perTicket: PER_TICKET.test(p.c) };
-        });
-        const [a, b] = ordered(s, tagged[0]!, tagged[1]!);
+      // Totals for the group, each tagged with its own seat count and fee basis when the clause says them. Two
+      // all-in totals (or two before fees) are one basket at two times (R2-EVIDENCE-GROUP-FOLLOWUP-01); one
+      // before fees against one with fees is the fee comparison below.
+      const parts = clauses(s).flatMap((c) => money(c).map((x) => ({ c, cents: x.cents, at: timeAt(c, x.index) })));
+      const tagged = parts.map((p) => {
+        const n = new RegExp(`\\b${COUNT}\\s+(?:\\w+[- ]?\\w*\\s+){0,2}(?:seats|tickets)\\b`, 'i').exec(p.c)?.[1];
+        return { quantity: n ? toCount(n) : null, cents: p.cents, at: p.at, perTicket: PER_TICKET.test(p.c), basis: BEFORE_FEES.test(p.c) ? 'before_fees' as const : ALL_IN.test(p.c) ? 'all_in' as const : null };
+      });
+      const [ba, bb] = [tagged[0]?.basis ?? null, tagged[1]?.basis ?? null];
+      const mixedBasis = (ba !== null && bb !== null && ba !== bb) || (BEFORE_FEES.test(s) && ALL_IN.test(s));
+      if (!SINGLES.test(s) && /\bgroup\b|\bblock\b|\btogether\b|\badjacent\b/i.test(s) && m.length >= 2 && !mixedBasis && change) {
+        const [x, y] = [tagged[0]!, tagged[1]!];
+        // Each total's own time word decides the order when both have one; otherwise the sentence's.
+        const [a, b] = x.at && y.at && x.at !== y.at ? (x.at === 'earlier' ? [x, y] : [y, x]) : ordered(s, x, y);
         const base = f.group?.quantity ?? f.partyQuantity;
         const total = (t: typeof a) => (t.perTicket && (t.quantity ?? base) ? t.cents * (t.quantity ?? base)! : t.cents);
         const qa = a.quantity ?? base;
         const qb = b.quantity ?? base;
-        f.group = { quantity: f.group?.quantity ?? qb ?? null, descriptor: f.group?.descriptor ?? null, totals: [{ quantity: qa, cents: total(a) }, { quantity: qb, cents: total(b) }], mismatched: qa !== null && qb !== null && qa !== qb };
+        f.group = { quantity: f.group?.quantity ?? qb ?? null, descriptor: f.group?.descriptor ?? null, totals: [{ quantity: qa, cents: total(a) }, { quantity: qb, cents: total(b) }], mismatched: qa !== null && qb !== null && qa !== qb, basis: a.basis === b.basis ? a.basis : null };
       }
       // Fee basis: each clause is one quote, with its own time, basis and unit.
       for (const c of clauses(s)) {
@@ -140,7 +151,7 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
         }
         if (!cm.length) continue;
         const basis = BEFORE_FEES.test(c) ? 'before_fees' : ALL_IN.test(c) ? 'all_in' : null;
-        const t = when(c);
+        const t = timeAt(c, cm[0]!.index);
         if (!basis || !t) continue;
         const unit = PER_TICKET.test(c) ? 'ticket' : TOTAL.test(c) ? 'total' : null;
         const n = new RegExp(`\\b${COUNT}\\s+(?:[a-z-]+\\s+){0,3}(?:seats|tickets)\\b`, 'i').exec(c)?.[1];
@@ -152,7 +163,11 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
       }
       // Listing counts: "active listings fell from 100 to 70".
       // A change needs a change: "from 100 to 70", "100 → 70", or an earlier and a later count.
-      if (LISTINGS.test(s) && !m.length && change) {
+      // A question ("can we say those 30 fewer listings were 30 sales?") reports nothing unless it gives the
+      // change itself ("from 100 to 70"); its "were" and "now" are not two times (R2-EVIDENCE-SALES-FOLLOWUP-01).
+      const question = /\?\s*$/.test(s);
+      const explicit = /\bfrom\s+\$?\d[\d,]*\s+(?:\w+\s+){0,2}to\s+\$?\d|\d\s*(?:→|->)\s*\$?\d/i.test(s);
+      if (LISTINGS.test(s) && !m.length && (question ? explicit : change)) {
         const n = ints(s);
         if (n.length >= 2) {
           const [a, b] = ordered(s, n[0]!, n[1]!);
@@ -161,7 +176,7 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
       }
       // A sales report: orders and tickets, the customer's figures. Their question ("does that mean 30 tickets
       // sold?") is not a report.
-      if (/\?\s*$/.test(s)) continue;
+      if (question) continue;
       const o = ORDERS.exec(s);
       const tk = /\b(?:sold|sales?|orders?)\b/i.test(s) ? SOLD_TICKETS.exec(s.replace(ORDERS, '')) : null;
       if (o || (tk && /\bsold\b/i.test(s))) f.sales = { orders: o ? Number(o[1]) : f.sales?.orders ?? null, tickets: tk ? Number(tk[1]) : f.sales?.tickets ?? null, reported: /\b(?:report|data|says|shows|according|saw|heard|told)\b/i.test(s) || !!f.sales?.reported };
@@ -173,7 +188,6 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
 
 const usd = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: c % 100 ? 2 : 0, minimumFractionDigits: c % 100 ? 2 : 0 }).format(c / 100);
 const pct = (part: number, of: number) => `${Number(((Math.abs(part) / of) * 100).toPrecision(3))}%`;
-const cap = (s: string) => s.replace(/^./, (c) => c.toUpperCase());
 
 export type EvidenceAnswer = { lead: string; items: string[]; nextStep: string | null; kinds: string[] };
 
@@ -199,11 +213,14 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
     const b = g.totals[1]!;
     const d = b.cents - a.cents;
     const n = g.quantity;
-    const who = n ? `your ${word(n)}-seat group` : 'your group';
-    const lead = d === 0 ? `For ${who}, the supplied total didn’t change: ${usd(a.cents)} both times.` : `For ${who}, the supplied total went ${d > 0 ? 'up' : 'down'} ${usd(Math.abs(d))}: ${usd(a.cents)} to ${usd(b.cents)}.`;
+    // In their terms (USEFULNESS_REVIEW): their seats, the fee basis and the size of the move, said first.
+    const who = n ? `your ${word(n)} seats` : 'your group';
+    const basis = g.basis === 'all_in' ? ' with fees included' : g.basis === 'before_fees' ? ' before fees' : '';
+    const lead = d === 0 ? `For ${who}, the total didn’t change: ${usd(a.cents)}${basis} both times.` : `For ${who}, the total ${d > 0 ? 'rose' : 'fell'} ${usd(Math.abs(d))}: ${usd(a.cents)} to ${usd(b.cents)}${basis} (${pct(d, a.cents)} ${d > 0 ? 'more' : 'less'}).`;
     const items: string[] = [];
-    if (d !== 0) items.push(`That’s ${pct(d, a.cents)} ${d > 0 ? 'above' : 'below'} the earlier quote${all.singles ? `, even though singles ${all.singles.toCents < all.singles.fromCents ? 'got cheaper' : 'went up'} over the same time (${usd(all.singles.fromCents)} to ${usd(all.singles.toCents)})` : ''}.${all.singles ? ` Singles and ${n ? `blocks of ${word(n)}` : 'group blocks'} are different baskets, so they can move in different directions.` : ''}`);
-    items.push('It tells us what changed between these two quotes; it doesn’t tell us what happens next or whether those seats are still there.');
+    if (all.singles) items.push(`Singles ${all.singles.toCents < all.singles.fromCents ? 'got cheaper' : all.singles.toCents > all.singles.fromCents ? 'went up' : 'didn’t move'} over the same time (${usd(all.singles.fromCents)} to ${usd(all.singles.toCents)}), but they aren’t the tickets ${n ? `the ${word(n)} of you need` : 'your group needs'}: ${n ? `a block of ${word(n)}` : 'a group block'} is a different basket and can move the other way.`);
+    if (g.basis === 'before_fees') items.push('Both are before fees, so the checkout totals could differ.');
+    items.push(`Two quotes don’t prove a continuing ${d < 0 ? 'fall' : 'rise'}, or that those seats are still there.`);
     return { lead, items, nextStep: null, kinds: ['group_change'] };
   }
   if (all.singles) {
@@ -276,9 +293,10 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
       const s = all.sales;
       const what = [s.orders !== null ? `${s.orders} order${s.orders === 1 ? '' : 's'}` : null, s.tickets !== null ? `${s.tickets} ticket${s.tickets === 1 ? '' : 's'}` : null].filter(Boolean).join(' covering ');
       return {
-        lead: d < 0 ? `${cap(spell(n))} fewer ${unitWord(n)} doesn’t mean ${spell(n)} sales.` : 'More listings doesn’t tell us anything about sales.',
+        // The report first, in its own units; the listing change stays as it was observed beside it.
+        lead: `${s.reported ? 'Your report records' : 'Your figures record'} ${what}; ${d < 0 ? `that doesn’t show ${spell(n)} fewer ${unitWord(n)} were ${spell(n)} sales` : 'the listing count doesn’t tell us anything more about sales'}.`,
         items: [
-          `${s.reported ? 'Your separate report records' : 'The figures you sent record'} ${what}. If ${s.reported ? 'it’s' : 'they’re'} right, that’s what sold; it doesn’t account for all ${n} ${unitWord(n)} that came down, which held an unknown number of tickets, so we don’t know why the rest went.`,
+          `${d < 0 ? `The listing count still fell from ${l.from} to ${l.to}` : d === 0 ? `The listing count stayed at ${l.from}` : `The listing count rose from ${l.from} to ${l.to}`}. Those are separate measures: a listing can hold several tickets, and listings come down or go up for reasons other than a sale, so we don’t know why the rest went.`,
           'Neither figure shows demand is rising: that needs sales over time from the same source, counted the same way.',
           s.reported ? 'The report is yours; I haven’t checked where it comes from or how it counts.' : 'Those figures are yours; I haven’t checked where they come from or how they count.',
         ],

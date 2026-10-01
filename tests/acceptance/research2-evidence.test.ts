@@ -84,9 +84,9 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
       answered(first!, 'Singles fell $30, from $90 to $60 (33.3% lower).');
       expect(first!.text).toContain('It doesn’t tell us what five adjacent upper-tier seats cost');
       expect(first!.text).toContain('If you have the total for the five adjacent upper-tier seats at both times, send it');
-      answered(second!, 'For your five-seat group, the supplied total went up $50: $450 to $500.');
-      expect(second!.text).toContain('That’s 11.1% above the earlier quote, even though singles got cheaper over the same time ($90 to $60).');
-      expect(second!.text).toContain('it doesn’t tell us what happens next or whether those seats are still there');
+      answered(second!, 'For your five seats, the total rose $50: $450 to $500 (11.1% more).');
+      expect(second!.text).toContain('Singles got cheaper over the same time ($90 to $60), but they aren’t the tickets the five of you need');
+      expect(second!.text).toContain('Two quotes don’t prove a continuing rise, or that those seats are still there.');
       // Observation days are not event dates; the five-seat basket is their quantity.
       const [ver] = await h.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, second!.requestId), eq(t.requestVersions.revision, 2)));
       expect(ver!.brief).toMatchObject({ dateExpression: null, resolvedLocalDate: null, quantity: 5 });
@@ -113,14 +113,67 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
       ]);
       answered(first!, 'Listings fell by 30, from 100 to 70 (30% fewer). That’s a count of listings, not of tickets, orders or sales.');
       expect(first!.text).toContain('the drop doesn’t say how many tickets sold, or whether demand is rising');
-      answered(second!, 'Thirty fewer listings doesn’t mean thirty sales.');
-      expect(second!.text).toContain('Your separate report records 12 orders covering 24 tickets.');
+      answered(second!, 'Your report records 12 orders covering 24 tickets; that doesn’t show thirty fewer listings were thirty sales.');
+      expect(second!.text).toContain('The listing count still fell from 100 to 70.');
       expect(second!.text).toContain('we don’t know why the rest went');
       expect(second!.text).toContain('Neither figure shows demand is rising');
       expect(second!.text).toContain('The report is yours; I haven’t checked where it comes from or how it counts.');
       // Tickets in a sales report are not how many they need.
       const [ver] = await h.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, second!.requestId), eq(t.requestVersions.revision, 2)));
       expect((ver!.brief as { quantity: number | null }).quantity).not.toBe(24);
+    });
+  });
+
+  // Research2 post-deploy (Oct 1 2026, commit 1d4b2a4): the exact live texts, where both follow-ups failed. The
+  // group follow-up said "five adjacent reserved seats … $450 TOTAL including fees", which wasn't read as group
+  // totals, so the singles answer came back; the sales follow-up's question ("those 30 fewer listings were 30
+  // sales … now") overwrote 100 → 70 with 30 → 30, and "12 completed orders" wasn't read as a sales report.
+  describe('post-deploy live wave, exact texts', () => {
+    const brief = async (requestId: string) => (await h.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, requestId), eq(t.requestVersions.revision, 2))))[0]!.brief as { quantity: number | null; budgetCents: number | null; dateExpression: string | null };
+
+    it('R2-01: five-seat all-in totals rose $50 (11.1%) while singles fell', async () => {
+      const [first, second] = await converse([
+        'These are supplied hypothetical snapshots for the same US concert, not independently verified inventory. Yesterday the cheapest single ticket was $90 including fees; today it\'s $60 including fees. We need FIVE reserved seats together in the same upper-tier zone. Can you say our tickets are trending down, and should we wait? No five-seat offers or comparable group history have been supplied yet.',
+        'Now add two comparable supplied observations for five adjacent reserved seats in our upper-tier zone: yesterday $450 TOTAL including fees; today $500 TOTAL including fees, with the same admission and fee basis. This is still hypothetical supplied data, not a verified source or forecast. What changed for our group, and does it prove prices will keep rising?',
+      ]);
+      answered(first!, 'Singles fell $30, from $90 to $60 (33.3% lower).');
+      answered(second!, 'For your five seats, the total rose $50: $450 to $500 with fees included (11.1% more).');
+      expect(second!.text).toContain('Singles got cheaper over the same time ($90 to $60), but they aren’t the tickets the five of you need');
+      expect(second!.text).toContain('Two quotes don’t prove a continuing rise');
+      expect(second!.text).not.toContain('That’s single tickets only');
+      expect(await brief(second!.requestId)).toMatchObject({ quantity: 5, budgetCents: null, dateExpression: null });
+    });
+
+    it('R2-02: 100 → 70 listings kept; the report’s 12 orders / 24 tickets beside it; no quantity taken from it', async () => {
+      const [first, second] = await converse([
+        'For a hypothetical US concert, a listing feed showed 100 active listings yesterday and 70 today. We have no completed-sales records, listing-level removal reasons or inventory reconciliation. Can you say 30 tickets sold or that demand is up? Tell me what we can actually conclude from these supplied counts.',
+        'I now have a separate supplied report recording 12 completed orders for 24 tickets during that period. Nothing else about the listing feed changed. Can we say those 30 fewer listings were 30 sales, and what can we now report about sales?',
+      ]);
+      answered(first!, 'Listings fell by 30, from 100 to 70 (30% fewer). That’s a count of listings, not of tickets, orders or sales.');
+      answered(second!, 'Your report records 12 orders covering 24 tickets; that doesn’t show thirty fewer listings were thirty sales.');
+      expect(second!.text).toContain('The listing count still fell from 100 to 70.');
+      expect(second!.text).toContain('Neither figure shows demand is rising');
+      expect(second!.text).not.toMatch(/30 both times|didn’t change/);
+      expect(await brief(second!.requestId)).toMatchObject({ quantity: null, budgetCents: null });
+    });
+
+    it('R2-03: the fee fact completes the old quote and is not a budget', async () => {
+      const [first, second] = await converse([
+        'For the same hypothetical US concert and equivalent pair of adjacent reserved seats, yesterday\'s supplied quote was $100 per ticket BEFORE fees. Today\'s quote is $125 per ticket INCLUDING all fees. We need two tickets. Is that a 25% price increase, and which is cheaper? Yesterday\'s fees are unknown. Please calculate the party totals and separate known facts from missing ones; don\'t search for real inventory.',
+        'Change only the missing fee fact: yesterday\'s fees were $60 TOTAL for the pair. All other supplied facts are unchanged. Which complete quote is cheaper, by how much, and what percentage changed?',
+      ]);
+      answered(first!, 'It depends on yesterday’s fees: today’s $250 is cheaper only if they came to more than $50.');
+      answered(second!, 'Today’s pair is $10 cheaper, with fees included in both totals.');
+      expect(second!.text).toContain('Yesterday was $200 plus $60 in fees: $260. Today is $250, 3.85% below yesterday’s complete price.');
+      expect(await brief(second!.requestId)).toMatchObject({ quantity: 2, budgetCents: null });
+    });
+
+    it('a budget they do state in a figures thread is kept', async () => {
+      const [, second] = await converse([
+        'Yesterday single tickets were $90 each and today they are $60. We need five adjacent upper-tier seats. Does that mean our seats got cheaper too?',
+        'Our budget is $500 total. Here are comparable group totals for the five seats: $450 yesterday and $500 today. What does that tell us?',
+      ]);
+      expect((await brief(second!.requestId)).budgetCents).toBe(50000);
     });
   });
 

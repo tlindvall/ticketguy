@@ -178,3 +178,37 @@ describe('R2-EVIDENCE-01: what the analysis route answers and what it leaves alo
     expect(r.items.join(' ')).not.toContain('Your separate report');
   });
 });
+
+// Research2 post-deploy (Oct 1 2026) acceptance: equivalent wording and negatives beside the exact live replays
+// in tests/acceptance/research2-evidence.test.ts.
+describe('R2-EVIDENCE-*-FOLLOWUP-01: follow-up figures are read in their own units', () => {
+  const opening = 'Yesterday the cheapest single ticket was $90 including fees; today it\'s $60 including fees. We need FIVE reserved seats together in the same upper-tier zone. Should we wait?';
+  it('"all-in" is the same basis as "including fees" for a group', () => {
+    const r = suppliedEvidenceAnswer([opening, 'For five adjacent reserved seats: yesterday $450 all-in; today $500 all-in. What changed for our group?']);
+    expect(r?.kinds).toEqual(['group_change']);
+    expect(r?.lead).toBe('For your five seats, the total rose $50: $450 to $500 with fees included (11.1% more).');
+  });
+  it('a group quoted before fees and then with fees is not a price change', () => {
+    const r = suppliedEvidenceAnswer([opening, 'For five adjacent reserved seats: yesterday $450 before fees; today $500 including fees. What changed?']);
+    expect(r?.kinds).not.toEqual(['group_change']);
+    expect(r?.lead).not.toMatch(/rose \$50/);
+  });
+  it('the time word nearest each total decides its order, not the sentence’s first', () => {
+    const r = suppliedEvidenceAnswer([opening, 'Now here are five adjacent seats: yesterday $500 including fees; today $450 including fees.']);
+    expect(r?.lead).toBe('For your five seats, the total fell $50: $500 to $450 with fees included (10% less).');
+  });
+  const listings = 'A listing feed showed 100 active listings yesterday and 70 today. Can you say 30 tickets sold?';
+  it.each([
+    ['12 completed orders for 24 tickets', 'I have a separate report recording 12 completed orders for 24 tickets.'],
+    ['12 orders for 24 tickets', 'A separate report records 12 orders for 24 tickets.'],
+  ])('%s is a sales report beside the listing change', (_label, report) => {
+    const r = suppliedEvidenceAnswer([listings, `${report} Can we say those 30 fewer listings were 30 sales?`]);
+    expect(r?.kinds).toEqual(['listings_vs_sales']);
+    expect(r?.lead).toBe('Your report records 12 orders covering 24 tickets; that doesn’t show thirty fewer listings were thirty sales.');
+    expect(r?.items[0]).toMatch(/^The listing count still fell from 100 to 70\./);
+  });
+  it('a question’s numbers never replace the observed counts', () => {
+    const r = suppliedEvidenceAnswer([listings, 'Were those 30 fewer listings now 30 sales?']);
+    expect(r?.lead ?? '').not.toMatch(/30 both times|didn’t change/);
+  });
+});
