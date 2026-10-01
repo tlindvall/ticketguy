@@ -605,6 +605,7 @@ export class Concierge {
       });
       const { lead } = comparison;
       const items = [...comparison.items];
+      if (/\bbuyer guarantee\b/i.test(latestText)) items.push('A buyer guarantee does not guarantee you can attend if the tickets arrive too late. A refund, if the seller offers one, cannot replace entry to a missed performance.');
       if (/\bRed Rocks\b/i.test(threadFlat) && /\bMorrison\b/i.test(threadFlat)) items.push('The location you supplied is Red Rocks in Morrison, rather than Denver.');
       const links = musicSourceLinks(threadTexts);
       const text = ['Hey,', lead, items.map((i) => `- ${i}`).join('\n'), ...links.map(({ url, label }) => `${label}: ${url}`)].join('\n\n');
@@ -3059,6 +3060,13 @@ function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
     },
     unitsAvailable,
     admissionsPerUnit,
+    availability: next.availability ?? old.availability,
+    validDays: next.validDays ?? old.validDays,
+    invalidDays: next.invalidDays ?? (next.validDays ? old.invalidDays?.filter((d) => !next.validDays!.includes(d)) ?? null : old.invalidDays),
+    collectionRestriction: next.collectionStated ? next.collectionRestriction : old.collectionRestriction,
+    collectionStated: next.collectionStated || old.collectionStated,
+    transferRestriction: next.transferStated ? next.transferRestriction : old.transferRestriction,
+    transferStated: next.transferStated || old.transferStated,
     totalCents: retainPrice ? old.totalCents : next.totalCents,
     perTicketCents: retainPrice ? old.perTicketCents : next.perTicketCents,
     feeBasis: next.feeBasis !== 'unknown' ? next.feeBasis : old.feeBasis,
@@ -3093,7 +3101,14 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
     const year = Number(partyTerms(history).night?.eventDate?.slice(0, 4) ?? 0);
     for (const message of history) {
       if (/\b(?:forget|discard|ignore|set aside) (?:all |both |those |these )(?:the )?(?:offers|quotes)|\b(?:new request|new search|start over)\b/i.test(message)) { retained = []; offersSetAside = []; reset = true; }
-      const updates = offersInText(message, tz, 1, { calendarYear: year });
+      let corrected = message;
+      // Resolve a descriptive correction only when one retained product uniquely matches it.
+      // Never guess which seller 'the cheap one' refers to when prices tie.
+      if (/\bthe cheap bundle\b/i.test(corrected)) {
+        const packages = retained.filter((o) => o.productKind === 'package');
+        if (packages.length === 1) corrected = corrected.replace(/\bthe cheap bundle\b/i, `${packages[0]!.name} bundle`);
+      }
+      const updates = offersInText(corrected, tz, 1, { calendarYear: year });
       if (!updates.length) continue;
       const only = /\b(?:only|just) (?:offer |option )?([A-E])\b/i.exec(message)?.[1]?.toUpperCase();
       if (only && updates.some((o) => o.label === only) && /\b(?:ignore|set aside|on its own|only|just)\b/i.test(message)) {
@@ -3108,7 +3123,7 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
       }
     }
     const latestNames = offersInText(said, tz, 1).length > 0;
-    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these|unchanged|arrival|arriving|prices and budget)\b|\b[A-E]'s\b|\b[A-E] and [A-E]\b/i.test(said);
+    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these|unchanged|arrival|arriving|prices and budget|correction|bundle|regular pair|all the other facts|earlier than planned)\b|\b[A-E]'s\b|\b[A-E] and [A-E]\b/i.test(said);
     // A new discovery goal leaves the comparison. A room-access question with a new source
     // and no offer update is answered directly, rather than repeating stale price quotes.
     if (similarMusicGoal(said) || /\b(?:room-access|exact official)\b/i.test(said) && !latestNames) return { textOffers: [], offersSetAside: [] };
