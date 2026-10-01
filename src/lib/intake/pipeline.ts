@@ -1,4 +1,4 @@
-import { concertBudget, concertQuestion, concertContext, similarMusicGoal } from '@/lib/advice/concert-terms';
+import { concertBudget, concertQuestion, concertContext, entryTerm, similarMusicGoal } from '@/lib/advice/concert-terms';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
@@ -41,7 +41,7 @@ import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOU
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
-import { cleanSeatField, flat, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
+import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, eventConstraints, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
 import { joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
@@ -744,7 +744,23 @@ export class Concierge {
     }
     // A game already settled stays settled unless this message moves it: "let's do 6 tickets" or a pasted link
     // to the same game must never reopen "which game?".
-    const resolution = !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found;
+    // "Did you check Saturday too?" asks about another date; it doesn't move the request there (Research 1,
+    // Brooklyn). The settled event stays, and the other date is answered for the same performer.
+    const altAsk = !picked && req.eventId && ALT_DATE_ASK.test(flat(latestText)) ? await this.settledRow(req.eventId) : null;
+    let altDateNote: string | null = null;
+    if (altAsk && (merged.resolvedLocalDate || merged.dateExpression)) {
+      const tzA = altAsk.v.timezone;
+      const day = merged.resolvedLocalDate ?? readDate(latestText, msg.receivedAt, tzA).resolvedLocalDate;
+      if (day && day !== eventLocalDate(altAsk.e.localStartAt, tzA)) {
+        const same = altAsk.e.primaryEntityId ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, altAsk.e.primaryEntityId), eq(t.events.status, 'scheduled'))) : [];
+        const hit = same.find(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === day);
+        const dayLabel = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${day}T12:00:00Z`));
+        const who = altAsk.ent?.name ?? altAsk.e.name;
+        altDateNote = hit ? `${dayLabel}: there’s also ${who} at ${hit.v.name} that night.` : `I checked ${dayLabel} too: I don’t have a ${who} show on file that night, so ${shortWhen(altAsk.e.localStartAt, tzA, false)} is the one I have.`;
+      }
+    }
+    const resolution = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found;
+    if (altAsk) merged = { ...merged, resolvedLocalDate: eventLocalDate(altAsk.e.localStartAt, altAsk.v.timezone), dateExpression: null };
     const eventResolved = resolution.kind === 'resolved';
     if (resolution.kind === 'resolved' && resolution.assumed) assumptions.unshift(resolution.assumed);
     const missing = missingMandatoryFields(merged, { eventResolved });
@@ -782,6 +798,48 @@ export class Concierge {
     }
 
     if (supplied.textOffers.length && resolution.kind !== 'resolved') return answerSupplied(false);
+
+    // They arrive after the listed start ("we won't get there until midnight"): whether they can still get in is the
+    // question, and a start time isn't a last-entry time. That answer comes first, before any seller (Research 1,
+    // NW-01). The event is a candidate until its late-entry terms are confirmed.
+    if (resolution.kind === 'resolved' && !supplied.textOffers.length && !listing.fields) {
+      const arrival = arrivalMinutes(threadTexts);
+      const startMin = minutesOfDay(resolution.event.localStartAt, resolution.venue.timezone);
+      const lateBy = arrival !== null ? arrival - (startMin < 6 * 60 ? startMin + 1440 : startMin) : null;
+      if (lateBy !== null && lateBy > 0) {
+        const arrive = arrival! >= 1440 ? (arrival === 1440 ? 'midnight' : `${timeLabel(arrival! - 1440)}`) : timeLabel(arrival!);
+        const Arrive = arrive.replace(/^./, (c) => c.toUpperCase());
+        const startLabel = timeLabel(startMin);
+        const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
+        const page = m?.url ?? null;
+        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, 'Event listing', false) : page;
+        const who = resolution.event.name;
+        // A last-entry time they quote decides it, independently of the start: "the page says last entry is 1am".
+        // It's their quote, so it's said as such, never as something checked here.
+        const quoted = [...threadTexts].reverse().map((x) => entryTerm(x) ?? lastEntryQuoted(x)).find((x) => x && x.kind !== 'unknown') ?? null;
+        const cutoff = quoted?.kind === 'before' ? (quoted.minutes < 12 * 60 ? quoted.minutes + 1440 : quoted.minutes) : null;
+        const cutoffLabel = cutoff === null ? null : cutoff === 1440 ? 'midnight' : timeLabel(cutoff % 1440);
+        const allows = quoted?.kind === 'anytime' || (cutoff !== null && (quoted?.kind === 'before' && quoted.boundary === 'strict' ? arrival! < cutoff : arrival! <= cutoff));
+        const lead = quoted ? (allows ? `${Arrive} entry fits the terms you quoted.` : `${Arrive} entry doesn’t fit the terms you quoted.`) : `${Arrive} entry is unverified.`;
+        const why = quoted
+          ? allows
+            ? `${quoted.kind === 'anytime' ? 'You quoted anytime entry' : `You quoted last entry ${quoted.kind === 'before' && quoted.boundary === 'strict' ? 'before' : 'by'} ${cutoffLabel}`}, so arriving at ${arrive} works on that basis. I haven’t checked those terms myself, so keep the page that states them.`
+            : `You quoted entry ${quoted.kind === 'before' && quoted.boundary === 'strict' ? 'before' : 'by'} ${cutoffLabel}, and you’d arrive at ${arrive}, so I wouldn’t buy this ticket for that arrival.`
+          : `The ${startLabel} start on the listing doesn’t tell us the latest entry time, so I wouldn’t buy on that basis yet.`;
+        const candidate = quoted ? '' : ' Treat it as a candidate until its late-entry policy is confirmed.';
+        const link = url ? `Here’s the ${who} event listing: ${url}.${candidate}` : `Treat ${who} as a candidate until its late-entry policy is confirmed.`;
+        const step = quoted && allows ? 'If the listing you buy from shows the same entry terms, it’s a fit for your arrival.' : quoted ? `Look for a ticket type that allows entry at ${arrive}, or plan to arrive before ${cutoffLabel}.` : `Before buying, confirm that this event admits people arriving at ${arrive}.`;
+        const where = quoted ? '' : `${resolution.venue.name}’s own page or box office is where a last-entry time would be stated.`;
+        const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        // Told we skipped it ("you didn't answer"): said once, then answered (Research 1, rule 9).
+        const owned = /\b(?:you didn'?t answer|didn'?t answer (?:my|the)|you ignored|not what I asked|you skipped)\b/i.test(flat(latestText)) ? ' You’re right that my last reply should have said that first.' : '';
+        const text = ['Hey,', `${lead} ${why}${owned}`, link, ...(altDateNote ? [altDateNote] : []), `${step} ${where}`.trim()].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the <a href="${esc(url)}">${esc(who)} event listing</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`].join('\n');
+        await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Late entry'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `entry:${req.id}:${revision}` });
+        await this.transition(req.id, 'referred', 'late_entry_unverified');
+        return { state: 'referred', revision, extraction: merged };
+      }
+    }
 
     // A Guide event (an orchestra, a club night, a minor-league game) with nothing of theirs to check yet: the
     // official route and the checks that matter, answered now. No quantity or budget is asked (they don't change
@@ -860,7 +918,8 @@ export class Concierge {
       const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
-      const countryCheck = !contact!.countryConfirmed && count === 1;
+      // Asked once, on the first reply in the thread, not on every follow-up (Research 1).
+      const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
       const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows are a trip away.'}` : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
@@ -903,7 +962,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -926,7 +985,7 @@ export class Concierge {
     const answeredUnreviewed = autoApproveActive(this.env) || merged.quotedPriceCents != null;
     // What we assumed or picked for them is said in it, so it still goes then.
     if ((revision === 1 || picked || cameFromReferral) && !selfContained && (!answeredUnreviewed || assumptions.length || picked)) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1351,7 +1410,8 @@ export class Concierge {
    * pick one; their reply names it, and the ordinary resolution takes over from there.
    */
   private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string }> {
-    const { req, msg, contact, merged, revision } = a;
+    const { req, msg, contact, revision } = a;
+    let merged = a.merged;
     const more = a.more === true;
     const now = this.now();
     // Paging through a list is the customer steering, not a question we failed to settle: it does not count
@@ -1375,6 +1435,17 @@ export class Concierge {
       await this.queueSend({ messageClass: 'no_result', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, 'Not covered yet'), template: 'unsupported', vars: { reason }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'unsupported', revision, extraction: merged };
     };
+    // A venue they name places the search when no city is given: "a concert at Constellation Room" is Santa Ana,
+    // not the default market. A venue they rule out ("not Constellation Room") never does (Research 1, LA control).
+    if (!merged.city && !merged.state) {
+      const said = flat(msg.sanitizedText ?? '');
+      const venues = await this.db.select({ name: t.venues.name, city: t.venues.city, state: t.venues.state }).from(t.venues).where(eq(t.venues.country, 'US')).limit(5000);
+      const named = venues.filter((v) => v.name.length >= 6 && v.city).find((v) => {
+        const i = said.toLowerCase().indexOf(v.name.toLowerCase());
+        return i >= 0 && !/\b(?:not|no|except|excluding|rather than|instead of|anywhere but|other than)\s+(?:at\s+|the\s+)?$/i.test(said.slice(Math.max(0, i - 25), i));
+      });
+      if (named) merged = { ...merged, city: named.city, state: named.state };
+    }
     // Any US market: the one they named, else where they looked last time, else the default, said as such.
     const placed_ = await this.marketForRequest(merged, contact.id);
     if (!placed_) return unsupported('For now I only cover events in the US.', 'browse_outside_us');
@@ -1419,6 +1490,9 @@ export class Concierge {
     const threadText = threadMsgs.join('\n');
     const ruledOut = exclusionsIn(threadText);
     const startsAt = { after: rules.after?.minutes ?? null, before: rules.before?.minutes ?? null };
+    const broadenOk = BROADEN_OK.test(flat(threadText));
+    const cityCore = market.lat !== null && market.lng !== null && market.radiusMiles > CITY_CORE_MILES && !!merged.city && merged.city.toLowerCase() === market.label.toLowerCase() && !METRO_WIDE.test(flat(threadText));
+    const strictCore = cityCore && new RegExp(`\\bnot (?:in )?(?:${market.label}|LA|L\\.A\\.)\\b|\\b(?:${market.label}|LA) (?:itself|proper|only|city only)\\b|\\bonly (?:in )?(?:${market.label}|LA)\\b`, 'i').test(flat(threadText));
     const dayRule = { ...rules, window: null };
     const lookIn = async (w: { from: string; to: string }) => {
       let providerChecked = false;
@@ -1444,6 +1518,7 @@ export class Concierge {
       const seen = new Set<string>();
       const inWindow = rows.filter(({ e, v }) => {
         if (!inMarket(v, market)) return false;
+
         if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
         if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
         const d = eventLocalDate(e.localStartAt, v.timezone);
@@ -1462,14 +1537,21 @@ export class Concierge {
       const inParent = area?.parent && !inArea.length ? all.filter(({ v }) => venueInArea(area.parent!, v)) : [];
       const areaUsed = !area ? null : inArea.length ? area : inParent.length ? area.parent! : null;
       const areaKept = !area || areaUsed === area;
-      const placed = !area ? all : inArea.length ? inArea : inParent.length ? inParent : all;
+      const placedAll = !area ? all : inArea.length ? inArea : inParent.length ? inParent : all;
+      // The named city before the rest of its metro (Research 1, LA): with two or more shows in the city itself, a
+      // venue 30 miles out (Santa Ana for "Los Angeles") isn't offered; with fewer, it's shown with its own city
+      // named. After "that's Santa Ana, not LA", only the city itself.
+      const core = cityCore ? placedAll.filter(({ v }) => inCityCore(v, market)) : placedAll;
+      const placed = strictCore || core.length >= 2 ? core : placedAll;
       // What they ruled out ("no pop concerts, tribute acts or kids' events") goes before any ranking, so an
       // excluded show is never one of the picks (post-#54 QA, R3-B07).
       const allowed = ruledOut.length ? placed.filter(({ e }) => !ruledOut.some((k) => excludedBy(k, e))) : placed;
       const ofGenre = genre ? allowed.filter(({ e }) => genreMatches(genre, e.genre)) : allowed;
       const genreKept = !genre || ofGenre.length > 0;
       // Bounded by venue or dates, a kind of music with nothing on is "none found", not everything else instead (TGQA-R6 19).
-      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : bounded ? [] : allowed };
+      // No match for the kind of music they asked for is an answer, not a reason to send other genres (Research 1,
+      // Austin: rock and pop came back after "country or Americana"). Only their own "anything else is fine" widens it.
+      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : bounded || !broadenOk ? [] : allowed };
     };
     // Nothing in the window is not a dead end: a team that plays at home every other week, or a quiet week,
     // gets the next few after it (six weeks on), said as such.
@@ -1502,13 +1584,47 @@ export class Concierge {
       return { pick: only, note: ageNeed(threadText) ? `This is one ${evening}option: ${found}. ${startsAt.after !== null || startsAt.before !== null ? 'The time fits; ' : ''}I haven't confirmed it works for your group yet, so the checks it still needs are below.` : `It's ${found}, so I've gone ahead with it. Tell me if you had something else in mind.` };
     }
     await recordVersion();
+    // What the customer asked, answered before the list (Research 1): a correction acknowledged once, the genre
+    // they asked for kept even when nothing matches, their budget carried, and what isn't checked said plainly.
+    const shownBefore = !more && req.browseShown.length ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(inArray(t.events.id, req.browseShown)) : [];
+    const familyOf = (g: string | null) => (g ?? '').split('/')[0]!.trim().toLowerCase().replace(/^dance$/, 'electronic');
+    const offGenre = genre ? [...new Set(shownBefore.filter(({ e }) => !genreMatches(genre, e.genre)).map(({ e }) => familyOf(e.genre)).filter(Boolean))] : [];
+    const excludedShown = shownBefore.filter(({ v }) => rules.excludedVenues.some((x) => x.toLowerCase() === v.name.toLowerCase()));
+    const corrections = [
+      offGenre.length ? `The ${joinRequirements(offGenre)} suggestions I sent didn’t answer what you asked for.` : null,
+      ...excludedShown.map(({ v }) => `You’re right to rule out ${v.name}${v.city && merged.city && v.city.toLowerCase() !== merged.city.toLowerCase() ? `: it’s in ${v.city}, not ${merged.city}` : ''}.`),
+    ].filter((x): x is string => !!x);
+    const total = wholePartyBudgetCents(merged.budgetCents, merged.budgetBasis, merged.quantity);
+    const keptBudget = revision > 1 && total !== null && merged.quantity && !(events.length && merged.quantity) ? `Your limit is still ${formatUsd(total)} total for ${countWordLower(merged.quantity)}, including fees.` : null;
+    const toCheck = events.length && merged.quantity ? unverifiedRequirements(merged, threadText) : [];
+    // A named genre with nothing on these dates: a match on another date they already gave is the one next step.
+    let otherDate: string | null = null;
+    if (genre && !events.length) {
+      const earlier = eventConstraints(threadMsgs.slice(0, -1), { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames }).window;
+      const span2 = earlier && (earlier.from !== win.from || earlier.to !== win.to) ? await lookIn({ from: earlier.from < today ? today : earlier.from, to: earlier.to }) : null;
+      const alt = span2?.genreKept ? span2.events.find(({ e, v }) => { const d = eventLocalDate(e.localStartAt, v.timezone); return d < win.from || d > win.to; }) : undefined;
+      if (alt) otherDate = `The one ${genre.words} show I have on the other date you mentioned is ${alt.e.name} at ${alt.v.name} on ${new Intl.DateTimeFormat('en-US', { timeZone: alt.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(alt.e.localStartAt)}. Want that one instead?`;
+    }
+    // Named as they named it: "country or Americana", not the catalog's family label.
+    const subNamed = genre ? (GENRE_SUBS[genre.key] ?? []).filter((w) => new RegExp(`\\b${w}\\b`, 'i').test(threadText) && !new RegExp(`\\b${w}\\b`, 'i').test(genre.words)) : [];
+    const genreAsked = genre ? [genre.words, ...subNamed.map((w) => w.replace(/^./, (c) => c.toUpperCase()))].join(' or ') : '';
+    const broadened = !!genre && !genreKept && events.length > 0 && broadenOk;
+    // The fence they set (a venue, a start time) is part of what wasn't found: "at MSG or Barclays", "after 7pm".
+    const fenceText = `${rules.venueTerms ? ` at ${rules.venueTerms.map((n) => (n.length <= 4 ? n.toUpperCase() : n.replace(/\b\w/g, (c) => c.toUpperCase()))).join(' or ')}` : ''}${rules.after ? ` starting ${rules.after.strict ? 'after' : 'at or after'} ${timeLabel(rules.after.minutes)}` : ''}`;
+    const answer = genre && !events.length
+      ? `I don’t have a verified ${genreAsked} option to recommend in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}${fenceText}.`
+      : broadened
+        ? `I don’t have a ${genreAsked} show in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so since you said anything else is fine, here’s what is on.`
+      : toCheck.length
+        ? `I haven’t checked seats or prices for these yet, so none is established against what you need: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.`
+        : null;
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
     const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
     const shown = choosePicks(events, 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint) }));
     // With a start-time rule, the start time is what proves the fit, so it is shown (TGQA-R8 S04, writing review 6).
     const timed = !!(rules.after || rules.before || rules.exactTime !== null || rules.partOfDay);
     const startLabel = (e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect) => new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(e.localStartAt).replace(':00', '').replace(/\s?([AP])M/, (_m, x: string) => `${x.toLowerCase()}m`);
-    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${e.name} at ${v.name}`);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${e.name} at ${v.name}${cityCore && v.city && !inCityCore(v, market) ? ` (${v.city})` : ''}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && (genreKept || bounded) ? genre.label : browseLabel(merged.categoryHint);
     const place = areaUsed?.label ?? market.label;
@@ -1517,7 +1633,10 @@ export class Concierge {
       ? (options.length ? `More ${label.toLowerCase()} in ${place}, ${span}:` : `That's everything I have for ${label.toLowerCase()} in ${place}, ${span}.`)
       : after?.events.length
       ? `${label} in ${place}: nothing on ${span}, but here are the next ones after that:`
-      : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? (options.length === 1 ? '. Here’s the one I found:' : `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:`) : '.'}`;
+      : toCheck.length && options.length && !single
+        // Candidates, not picks: nothing about their seats or totals is known yet (Research 1, rule 4).
+        ? `${label} in ${place}, ${span}: ${options.length === 1 ? 'the one' : options.length === 2 ? 'two' : 'three'} I can check for you.`
+        : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? (options.length === 1 ? '. Here’s the one I found:' : `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:`) : '.'}`;
     // Most small venues sell outside the listings we read; saying so beats implying there is nothing on.
     const sceneNote = area?.independentScene && events.length < 3 ? `A lot of the smaller venues around ${area.label} sell through DICE, Eventbrite or Resident Advisor, which I can't see yet.` : null;
     const ra = genre?.key === 'electronic' ? raPointer(market.id) : sceneNote ? raPointer(market.id, `${sceneNote} Resident Advisor lists many of them.`) : null;
@@ -1528,17 +1647,20 @@ export class Concierge {
       area && !areaKept && all.length ? `Nothing in ${area.label} fits, so here's the rest of ${areaUsed?.label ?? market.label}.` : null,
       // Said here only when there is no Resident Advisor link to say it with.
       sceneNote && !ra ? sceneNote : null,
-      genre && !genreKept && placed.length && !bounded ? `I couldn't find any ${genre.words} listed for those dates, so here's everything that's on.` : null,
+      genre && !genreKept && placed.length && !bounded && broadenOk && !events.length ? `I couldn't find any ${genre.words} listed for those dates, so here's everything that's on.` : null,
+      keptBudget,
     ].filter(Boolean);
     const assumption = notes.length ? notes.join(' ') : null;
     // A place we don't know is searched as a town of that name; finding nothing there says more about the name.
     const unknownPlace = market.id.startsWith('city:') && !all.length;
     const startsAfter = `${rules.venueTerms ? ` at ${rules.venueTerms.map((n) => (n.length <= 4 ? n.toUpperCase() : n.replace(/\b\w/g, (c) => c.toUpperCase()))).join(' or ')}` : ''}${rules.weekdays?.length === 2 && rules.weekdays.includes(6) && rules.weekdays.includes(0) ? ' on a Saturday or Sunday' : ''}${rules.after ? ` starting ${rules.after.strict ? 'after' : 'at or after'} ${timeLabel(rules.after.minutes)}` : startsAt.before !== null ? ` starting before ${timeLabel(startsAt.before)}` : ''}`;
+    // A genre with nothing on: said as what I can see, never as "nothing is on" (Research 1, rule 5).
+    const kindOf = genre && !genreKept ? `${genre.words} shows` : label.toLowerCase();
     const emptyNote = unknownPlace
       ? `I couldn't find ${market.label} as a place in the official listings. Which city is it in or near? I'll look there.`
       : providerChecked
-      ? `I checked the official listings and couldn't find any ${label.toLowerCase()} in ${place} for ${span}${startsAfter}.`
-      : `I don't have any ${label.toLowerCase()} in ${place} on file for ${span}${startsAfter}.`;
+      ? `${answer ? '' : `I checked the official listings and couldn't find any ${kindOf} in ${place} for ${span}${startsAfter}. `}${genre && !genreKept ? 'I checked the official listings; that’s what they show, not proof that nothing suitable is on.' : ''}`.trim()
+      : `${answer ? '' : `I don't have any ${kindOf} in ${place} on file for ${span}${startsAfter}. `}${genre && !genreKept ? 'That’s a gap in what I can see, not proof that nothing suitable is on.' : ''}`.trim();
     // What this reply lists is remembered, so "the other 7" continues from here; a new question starts over.
     const listed = shown.map(({ e }) => e.id);
     await this.db.update(t.requests).set({ clarificationCount: count, browseShown: more ? [...req.browseShown, ...listed] : listed }).where(eq(t.requests.id, req.id));
@@ -1546,7 +1668,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, countryCheck: !contact.countryConfirmed && count === 1, ra },
+      vars: { answer, corrections, pickNext: toCheck.length && options.length && !single ? (broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : 'Tell me which one appeals, and I’ll check it against those.') : null, headline: answer && !events.length ? '' : headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate, countryCheck: !contact.countryConfirmed && count === 1 && revision === 1, ra },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };
@@ -1852,6 +1974,12 @@ export class Concierge {
    * team, show or date, or what it names still fits that event (it is one of the candidates). A settled event
    * that has since been cancelled or played is not kept.
    */
+  /** The request's settled event with its venue and performer, for answering about it without re-resolving. */
+  private async settledRow(eventId: string): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null } | null> {
+    const [row] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
+    return row && row.e.status === 'scheduled' ? row : null;
+  }
+
   private async keepSettledEvent(eventId: string, resolution: Awaited<ReturnType<Concierge['resolveEvent']>>, said: RequestExtraction, rules?: ResolveRules | null): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
     if (resolution.kind === 'resolved' || resolution.kind === 'non_us') return null;
     // A settled event that breaks a rule they have since given ("I only want a HOME game") is not kept.
@@ -1971,7 +2099,7 @@ export class Concierge {
       .returning({ id: t.eventAlerts.id });
     await audit(this.db, { actor: 'system', action: 'event_alert.created', entityKind: 'event_alert', entityId: row!.id, diff: { kind, consentMessageId: msg.id } });
     await this.transition(req.id, 'monitoring', kind === 'on_sale' ? 'event_alert_on_sale' : 'event_alert_new_date');
-    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, kind === 'on_sale' ? 'I’ll tell you when it’s on sale' : 'I’ll tell you when there’s a date'), template: 'event_alert_set', vars: { ...vars, countryUnconfirmed: !contact.countryConfirmed }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `event_alert_set:${row!.id}:${revision}` });
+    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, kind === 'on_sale' ? 'I’ll tell you when it’s on sale' : 'I’ll tell you when there’s a date'), template: 'event_alert_set', vars: { ...vars, countryUnconfirmed: !contact.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `event_alert_set:${row!.id}:${revision}` });
     return { state: 'monitoring', revision, extraction: merged };
   }
 
@@ -2781,6 +2909,8 @@ export function unverifiedRequirements(x: RequestExtraction, text = ''): string[
   if (total !== null) out.push(`${formatUsd(total)} in total${q && q > 1 ? (q === 2 ? ' for both' : ` for all ${q}`) : ''}, once fees are added`);
   if (x.accessibilityNeeds?.trim()) out.push(x.accessibilityNeeds.trim().replace(/^./, (c) => c.toUpperCase()));
   if (x.seatingPreference?.trim()) out.push(x.seatingPreference.trim().replace(/^./, (c) => c.toUpperCase()));
+  // A seated ticket is a requirement of its own: general admission doesn't meet it (Research 1, LA).
+  else if (/\b(?:reserved|assigned|allocated)\s+seat(?:s|ing)?\b|\bseated (?:tickets?|admission|seats?)\b|\bnot (?:general admission|GA|standing)\b/i.test(flat(text))) out.unshift('Reserved seats, not general admission');
   if (age) out.push(age);
   // One admission check, not the same age rule said three ways (G02).
   return age ? out.filter((r) => r === age || !/\b(?:21|18)\s*\+|\bage\b|year[- ]old|\bteen/i.test(r)) : out;
@@ -3303,7 +3433,8 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
       retained = withFinalFeeStatement(retained, message, true);
     }
     const latestNames = offersInText(said, tz, 1).length > 0;
-    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these|unchanged|arrival|arriving|prices and budget|correction|bundle|regular pair|all the other facts|earlier than planned)\b|\b[A-E]'s\b|\b[A-E] and [A-E]\b/i.test(said);
+    // A changed budget is about the same offers: "we could stretch to $350 if that's what it takes" (Research 1, R1-05).
+    const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these|unchanged|arrival|arriving|prices and budget|correction|bundle|regular pair|all the other facts|earlier than planned)\b|\b[A-E]'s\b|\b[A-E] and [A-E]\b/i.test(said) || BUDGET_CHANGE.test(flat(said));
     // A new discovery goal leaves the comparison. A room-access question with a new source
     // and no offer update is answered directly, rather than repeating stale price quotes.
     if (similarMusicGoal(said) || /\b(?:room-access|exact official)\b/i.test(said) && !latestNames) return { textOffers: [], offersSetAside: [] };
@@ -3335,15 +3466,27 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
       textOffers = [kept];
       offersSetAside = all.filter((o) => o !== kept).map((o) => o.name);
     } else if (kept) textOffers = all;
-  } else if (!latest.length && all.length >= 2 && ASKS_ABOUT_OFFERS.test(said)) textOffers = all;
+  } else if (!latest.length && all.length >= 2 && (ASKS_ABOUT_OFFERS.test(said) || BUDGET_CHANGE.test(flat(said)))) textOffers = all;
   if (textOffers.length === 1 && !offersSetAside.length) textOffers = [];
   return { textOffers, offersSetAside };
 }
+
+/** Sub-genres a customer names alongside the family, said back as they said them. */
+const GENRE_SUBS: Record<string, string[]> = { country: ['americana', 'bluegrass'], electronic: ['house', 'techno'], hiphop: ['rap'], rock: ['indie'] };
+/** The customer said other kinds of music are fine: a named genre with nothing on may widen to everything else. */
+const BROADEN_OK = /\b(?:or anything(?: else)?|anything (?:else )?(?:is |would be )?(?:fine|good|ok|okay)|open to (?:other|anything)|other (?:genres|kinds of music|styles) (?:are |would be )?(?:fine|ok|okay)|doesn'?t have to be|not fussy|any genre)\b/i;
+/** They asked for the wider area, not the named city: "LA area", "around LA", "Orange County", "Southern California". */
+const METRO_WIDE = /\b(?:area|metro|greater|around|near(?:by)?|county|socal|southern california|anywhere in|within \d+ miles)\b/i;
+/** How far from a metro's centre the named city itself reaches, for a big metro (Los Angeles, not Orange County). */
+const CITY_CORE_MILES = 20;
 
 /** "Stop watching the prices", "cancel the price watch": price watches only. */
 const PRICE_WATCH_ONLY = /\b(?:price watch(?:es)?|watching (?:the )?prices?|price alerts?|tracking (?:the )?prices?|monitoring (?:the )?prices?)\b/i;
 /** "Stop all the alerts", "stop everything", "the on-sale alert": every alert, not only price watches. */
 const ALL_ALERTS = /\b(?:all|everything|every alert|event alerts?|on-?sale alerts?|announcement|any (?:more )?alerts?|the alerts)\b/i;
+
+/** "We could stretch to $350", "I can go up to $400", "budget is now $500": a new cap, nothing else new. */
+const BUDGET_CHANGE = /\b(?:stretch|raise|increase|go up|bump(?: it)?(?: up)?|extend|up (?:it|the budget))\b[^.?!]{0,25}\$\s?\d|\b(?:could|can|would) (?:do|pay|spend|go to)\s+(?:up to\s+)?\$\s?\d|\b(?:budget|cap|limit)\s+(?:is\s+)?now\b[^.?!]{0,15}\$\s?\d/i;
 
 /** A follow-up about the offers already sent: the same ones, maybe with a requirement changed. */
 const REFERS_BACK = /\b(?:same|still|again|(?:not|haven'?t|hasn'?t|have not|has not) changed|unchanged|remains?|those|these|earlier|original|as before|you (?:correctly )?said|restor\w*|correct(?:ion|ed)?|the prices|my pick|your pick)\b/i;
@@ -3671,4 +3814,50 @@ export function guideChecks(category: string): string {
     case 'food_drink': return 'what entry includes (tastings, drink tokens or admission only) and the age rule';
     default: return 'whether it’s general admission or a reserved seat, and how the tickets are delivered';
   }
+}
+
+/** "Did you check Saturday too?", "what about Saturday Oct 3?": a question about another date, not a move to it. */
+const ALT_DATE_ASK = /\b(?:did|have) you (?:also |even )?(?:check|look(?:ed)? at|search(?:ed)?|try|tried)\b[^?]*\b(?:too|also|as well|either)?\b[^?]*\?|\bwhat about\b[^?]{0,40}\?|\bis there (?:one|anything|a show) on\b[^?]*\?/i;
+
+/**
+ * When they say they'll arrive, in minutes after the event day's midnight (an early-morning time counts as the next
+ * day, +1440): "we won't get there until midnight" is 1440, "we arrive around 11:30pm" is 1410. Null when unsaid.
+ * The latest message that says it wins.
+ */
+export function arrivalMinutes(messages: string[]): number | null {
+  let out: number | null = null;
+  const T = '(midnight|\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\.?)';
+  const re = new RegExp(`\\b(?:(?:won'?t|will not|can'?t|cannot|don'?t|do not)\\s+(?:get|be|arrive|make it)(?:\\s+(?:there|in|to the venue))?\\s+(?:until|till|before|by)|(?:arriv\\w*|get(?:ting)? there|be there|show up|turn up|getting in)\\s+(?:at|around|about|by|after|close to|near)|is ${'(?:midnight|late)'}\\s+entry|${'midnight'}\\s+entry)\\s*${T}?`, 'i');
+  for (const raw of messages) {
+    const t = flat(raw);
+    const m = re.exec(t);
+    if (!m) continue;
+    const word = m[1] ?? (/\bmidnight\s+entry\b/i.test(m[0]) ? 'midnight' : null);
+    if (!word) continue;
+    if (/midnight/i.test(word)) { out = 1440; continue; }
+    const mins = minutesOf(word);
+    if (mins === null) continue;
+    out = mins < 6 * 60 ? mins + 1440 : mins;
+  }
+  return out;
+}
+
+/** Minutes after local midnight at which an instant falls, in a timezone. */
+function minutesOfDay(at: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(at);
+  return Number(parts.find((p) => p.type === 'hour')!.value) * 60 + Number(parts.find((p) => p.type === 'minute')!.value);
+}
+
+/** "Last entry is 1am", "no entry after 11:30pm", "doors close at midnight": a quoted cutoff, by that time. */
+function lastEntryQuoted(text: string): { kind: 'before'; minutes: number; boundary: 'inclusive' } | null {
+  const m = /\b(?:last entry|latest entry|no (?:re-?)?entry after|doors close)\s*(?:is|at|:|time is|time:)?\s*(midnight|\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(flat(text));
+  if (!m) return null;
+  const minutes = /midnight/i.test(m[1]!) ? 0 : minutesOf(m[1]!);
+  return minutes === null ? null : { kind: 'before', minutes, boundary: 'inclusive' };
+}
+
+/** Whether a venue is in the named city itself rather than elsewhere in its metro (within 20 miles, or a city the market lists close in). */
+function inCityCore(v: { city: string | null; latitude: number | null; longitude: number | null }, market: Market): boolean {
+  if (v.latitude != null && v.longitude != null && market.lat !== null && market.lng !== null) return milesBetween(market.lat, market.lng, v.latitude, v.longitude) <= CITY_CORE_MILES;
+  return !!v.city && (v.city.toLowerCase() === market.label.toLowerCase() || market.cities.slice(0, 6).includes(v.city.toLowerCase()));
 }

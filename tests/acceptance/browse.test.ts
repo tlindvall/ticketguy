@@ -273,12 +273,19 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     expect(body).not.toContain("kind of music and I'll narrow"); // the kind of music is already known
   });
 
-  it('says so, and shows what is on, when nothing on file is the music asked for', async () => {
+  // Research 1 (NW-03): no match for the music asked for is the answer; other genres only with their say-so.
+  it('says so, without sending other music, when nothing on file is the music asked for', async () => {
     const c = makeConcierge(h);
     const requestId = await ask(c, 'Any reggaeton gigs in Brooklyn the first week of October?', 'latin@customer.example');
     const body = (await lastSend(requestId)).bodyText;
-    expect(body).toContain('Live music in Brooklyn, Oct 1 to 7. Here are my three picks:');
-    expect(body).toContain("I couldn't find any Latin music listed for those dates, so here's everything that's on.");
+    expect(body).toContain('I don’t have a verified Latin music option to recommend in Brooklyn for Oct 1 to 7.');
+    expect(body).toContain('not proof that nothing suitable is on');
+    expect(body).not.toMatch(/Here are my|Big Thief|The Walkmen|Jazz Trio/);
+    // Their own "anything else is fine" widens it, said as such.
+    const wide = await ask(c, 'Any reggaeton gigs in Brooklyn the first week of October? Anything else is fine too.', 'latin-wide@customer.example');
+    const widened = (await lastSend(wide)).bodyText;
+    expect(widened).toContain('since you said anything else is fine, here’s what is on');
+    expect(widened).toMatch(/Big Thief|The Walkmen|Jazz Trio/);
   });
 
   it('"more" pages through the rest, three at a time, and then says that is everything', async () => {

@@ -90,7 +90,8 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
 
   it('19: MSG or Barclays in November only; no other venue offered', () => {
     for (const n of [1, 2, 3]) {
-      expect(turn('19', n)).toContain("I don't have any rock and indie in New York on file for Nov 1 to 30 at Madison Square Garden or Barclays Center.");
+      // Research 1: the no-match answer leads, with the venues they fenced, and is labelled as coverage, not absence.
+      expect(turn('19', n)).toContain('I don’t have a verified rock or indie option to recommend in New York for Nov 1 to 30 at Madison Square Garden or Barclays Center.');
       expect(turn('19', n)).not.toMatch(/Bowery|Irving|Brooklyn Steel|September|Sep \d/);
     }
   });
