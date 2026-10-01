@@ -40,7 +40,11 @@ describe('resale market tracking', () => {
     { active: false, listing_id: 5, price: 60, quantity: 8, quantity_start: 8, row: '1', section: '220', zone: 'Upper' },
   ] }), { status: 200 });
   let liveStats: () => unknown[] = () => statsFor(new Date(now.getTime() - 96 * H), 96, 150, 110, 170, 130);
-  const past = [1, 2, 3, 4, 5, 6].map((i) => ({ event_id: 900 + i, event_name: `Metro Testers vs. Team ${i}`, event_date: `2026-0${i < 4 ? 3 : 4}-${String(10 + i).padStart(2, '0')}`, event_time: '19:00:00', venue_name: 'Test Garden', venue_city: 'New York', venue_state: 'NY' }));
+  const past = [1, 2, 3, 4, 5, 6].map((i) => ({ event_id: 900 + i, event_name: `Metro Testers vs. Team ${i}`, event_date: `2026-0${i < 4 ? 3 : 4}-${String(10 + i).padStart(2, '0')}`, event_time: '19:00:00', venue_name: 'Test Garden', venue_city: 'New York', venue_state: 'NY' })).concat([
+    // R2-TIME-FOLD-01: 1:30 AM on Nov 2, 2025 happened twice in New York; with no offset its lead times can't be
+    // measured, so this game is left out of history (and its stats never fetched).
+    { event_id: 907, event_name: 'Metro Testers vs. Team 7', event_date: '2025-11-02', event_time: '01:30:00', venue_name: 'Test Garden', venue_city: 'New York', venue_state: 'NY' },
+  ]);
   const fetchImpl = (async (input: string) => {
     const url = new URL(input);
     calls.push(url.pathname + (url.search ? `?${[...url.searchParams.keys()].join(',')}` : ''));
@@ -117,6 +121,8 @@ describe('resale market tracking', () => {
     expect(pair[0]).toMatchObject({ feeBasis: 'listed_price', quantity: 2, sourceIds: ['seatdata'], datasetId: SEATDATA_DATASET_ID });
     const hist = await h.db.select().from(t.marketHistory);
     expect(new Set(hist.map((r) => r.providerEventId)).size).toBe(6);
+    expect(hist.some((r) => r.providerEventId === '907')).toBe(false);
+    expect(calls.some((x) => x.startsWith('/api/v1/events/907/stats'))).toBe(false);
     // Staff-only until customer display is licensed: the claim exists, the email does not carry it.
     const [adv] = await h.db.select().from(t.adviceRuns).where(eq(t.adviceRuns.requestId, requestId));
     const claims = (adv!.packet as { claimRecords: Array<{ id: string; customerVisible: boolean; text: string }> }).claimRecords;

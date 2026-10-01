@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } fr
 import type { DbOrTx } from '@/lib/db';
 import type { Env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
-import { eventLocalDate, localToInstant } from '@/lib/domain/dates';
+import { eventLocalDate, localTimeInstants } from '@/lib/domain/dates';
 import { audit } from '@/lib/util/audit';
 import { gate as policyGate, policyForEvent } from '@/lib/intake/service-policy';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
@@ -481,9 +481,13 @@ export class MarketTracker {
     for (const p of past) {
       const exists = await this.db.select({ id: t.marketHistory.id }).from(t.marketHistory).where(eq(t.marketHistory.providerEventId, String(p.event_id))).limit(1);
       if (exists.length) continue;
+      // Lead times are measured from the start: a start the zone repeats or skips can't be placed, so that
+      // event's history is left out rather than shifted an hour (R2-TIME-FOLD-01), before any call is spent on it.
+      const starts = localTimeInstants(p.event_date.slice(0, 10), (p.event_time ?? '19:00').slice(0, 5), ev.v.timezone);
+      if (starts.length !== 1) continue;
+      const start = starts[0]!;
       const b2 = api.calls;
       const { snapshots } = await api.eventStats(p.event_id, { maxPages: 3 });
-      const start = localToInstant(p.event_date.slice(0, 10), (p.event_time ?? '19:00').slice(0, 5), ev.v.timezone);
       const sampled = downsample(snapshots.flatMap(pointsFromSnapshot), HISTORY_SAMPLE_HOURS);
       const rows = sampled.map((pt) => ({ datasetId: SEATDATA_DATASET_ID, providerEventId: String(p.event_id), entityId: ev.ent!.id, venueId: ev.v.id, eventName: p.event_name, eventStartAt: start, basketKey: marketBasketKey(`provider:${p.event_id}`, pt.basis, pt.zone), quantity: pt.basis === 'single' ? 1 : 2, seatZone: pt.zone, observedAt: pt.observedAt, leadTimeMinutes: Math.round((start.getTime() - pt.observedAt.getTime()) / 60_000), priceCents: pt.priceCents, medianCents: pt.medianCents, activeListings: pt.activeListings }));
       for (let i = 0; i < rows.length; i += 200) await this.db.insert(t.marketHistory).values(rows.slice(i, i + 200)).onConflictDoNothing();
