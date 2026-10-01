@@ -76,8 +76,9 @@ describe('Research 1 QA: goal changes and follow-up memory', () => {
       expect(first!.text).toContain('It leaves $10 of your $200 budget.');
       expect(first!.text).toContain('Over your $200 budget by $40.');
       expect(first!.text).not.toMatch(/Offer C (?:wins|is the one)|C \(two, concert admission\)/);
-      // The follow-up, stopped in the live run: B for the lower tier, $50 over A, $10 left; C still out.
-      expect(second!.text).toContain('I’d take B for you: $240 for both, fees included. It costs $50 more than Offer A, and since the lower tier is what matters most to you, that’s the difference worth paying. It leaves $10 of your $250 budget.');
+      // The follow-up, stopped in the live run: B for the lower tier, $50 over A, $10 left; C still out. The new cap is
+      // said as the reason the pick changed (post-deploy R1 writing review).
+      expect(second!.text).toContain('With your budget now $250, the lower tier fits, so I’d choose B: $240 for both, fees included. That’s $50 more than Offer A, the other usable option, and the lower tier is what you said you’d prefer. It leaves $10 of your $250 budget.');
       expect(second!.text).toMatch(/Offer C \(two, upgrade\): \$100 in total including fees\. It includes no concert admission/);
     });
 
@@ -124,7 +125,7 @@ describe('Research 1 QA: goal changes and follow-up memory', () => {
       expect(first!.text).toContain('Offer A is the one that meets what you asked for: $180 for the two new tickets, fees included. Your own ticket is already covered.');
       expect(first!.text).toContain('It leaves $70 of your $250 budget.');
       expect(first!.text).not.toMatch(/all three|all four/);
-      expect(second!.text).toContain('Offer B is the one that meets what you asked for: $240 for the three new tickets, fees included. Your own ticket is already covered.');
+      expect(second!.text).toContain('With one more new ticket to buy, B is the one: $240 for the three new tickets, fees included. Your own ticket is already covered.');
       expect(second!.text).toContain('Skip A: it has only two admissions, and you need three new ones, so it would leave one person out.');
       expect(second!.text).toContain('It leaves $10 of your $250 budget.');
       expect(second!.text).not.toMatch(/all four|Offer A (?:wins|is the one)|\$360|\$540|\$720/);
