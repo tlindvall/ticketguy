@@ -125,8 +125,9 @@ describe('Research 1 QA: goal changes and follow-up memory', () => {
       expect(first!.text).toContain('Offer A is the one that meets what you asked for: $180 for the two new tickets, fees included. Your own ticket is already covered.');
       expect(first!.text).toContain('It leaves $70 of your $250 budget.');
       expect(first!.text).not.toMatch(/all three|all four/);
-      expect(second!.text).toContain('With one more new ticket to buy, B is the one: $240 for the three new tickets, fees included. Your own ticket is already covered.');
-      expect(second!.text).toContain('Skip A: it has only two admissions, and you need three new ones, so it would leave one person out.');
+      // The short bundle is named once in brief in the lead and in full in its own line (post-deploy R1 writing review).
+      expect(second!.text).toContain('With three new tickets to buy now, I’d take B: $240 in total, fees included. Your own ticket is already covered. A only covers two of the three new tickets you need.');
+      expect(second!.text).toContain('It has only two admissions, and you need three new ones, so it would leave one person out.');
       expect(second!.text).toContain('It leaves $10 of your $250 budget.');
       expect(second!.text).not.toMatch(/all four|Offer A (?:wins|is the one)|\$360|\$540|\$720/);
       // The brief records the purchase (2 → 3), not the party (3 → 4).
@@ -141,7 +142,8 @@ describe('Research 1 QA: goal changes and follow-up memory', () => {
       expect(r.terms).toMatchObject({ attendees: 3, owned: null, toBuy: null });
       expect(r.offers.map((o) => [o.label, o.unitsAvailable, o.admissionsPerUnit, o.quantity, o.mustBuyAll])).toEqual([['A', 1, 2, 2, true], ['B', 1, 3, 3, true]]);
       expect(r.lead).toMatch(/^Offer B is the one that meets what you asked for: \$240 for all three/);
-      expect(r.text).toContain('Skip A: it has only two admissions, and you need three, so it would leave one person out.');
+      expect(r.lead).toContain('A only covers two of the three you need.');
+      expect(r.text).toContain('It has only two admissions, and you need three, so it would leave one person out.');
     });
 
     it('owned-count isolation: ordinary two- and three-ticket quotes, one ticket already held → two to buy', () => {

@@ -21,7 +21,7 @@ Every failure reproduced on `main` before any change.
 ## Writing (`USEFUL_REPLY_STANDARD.md`)
 
 - **Changed picks explain the change.** A follow-up compares the customer's terms before and after their latest message.
-  - **Party change:** "With one more new ticket to buy, B is the one: $240 for the three new tickets."
+  - **Party change:** "With three new tickets to buy now, I'd take B: $240 in total, fees included." (reworded in the second wave below.)
   - **Preference change:** "Since you'd now pay more for the lower tier, I'd choose B: $285 for both … $45 more than Offer A. It leaves $15 of your $300 budget."
   - **Cap change:** "With your budget now $250, the lower tier fits, so I'd choose B: … $50 more than Offer A, the other usable option."
   - **Cap too small:** when the cap still doesn't fit the preferred tier, no change is claimed.
@@ -64,3 +64,53 @@ Every failure reproduced on `main` before any change.
 - **New attachment rule.** A supplied rule now includes the sentences after its source sentence. Such a sentence is excluded when it has a first-person word. A rule paragraph that mixes in the customer's facts without "I / we / our" could still be read as rule text.
 - **No policy checks.** A supplied rule is never independently checked, and nothing here is live stock or a fetched policy.
 - **Rendering.** Gmail and mobile rendering weren't checked.
+
+## Second wave (build `1d4b2a4`): R1-M02-OWNERSHIP-REVERSAL-01 (P1)
+
+All six exact deployed replies passed. A wider local test then found a P1: a customer who takes back a held ticket was still treated as holding it. The inputs are the package's `VARIATION_PLAN.json` cases, copied verbatim into the fixture under `ownership`.
+
+**What failed.**
+- The opening said one ticket was held and two new ones were needed, and correctly picked A.
+- The correction said "Correction: I no longer have my ticket. All THREE of us now need new tickets."
+- The reply still said "Offer A wins this one: $180 for the two new tickets … Your own ticket is already covered", leaving one person without admission.
+- The stored quantity stayed at 2.
+
+**Causes.**
+- **"No longer have" missed.** "I no longer have my ticket" didn't match the reader for nothing held, so the earlier held ticket stood.
+- **"Of us" missed.** "All THREE of us now need new tickets" didn't match the new-ticket reader, which knew "friends / people / guests" but not "of us".
+- **Stale count.** With one ticket still held and three going, the purchase was worked out as 3 − 1 = 2.
+- **Stored quantity.** The brief stored the purchase count only when a held count was above zero, so a held count of zero kept the stale quantity.
+
+**Fixes.**
+- **Corrections that take a held ticket back** now set the held count to zero:
+  - "I no longer have / own my ticket";
+  - "I don't have my ticket anymore / now";
+  - "I sold / lost / returned / cancelled my ticket".
+
+  "I don't have my ticket yet" is a delivery question and changes nothing.
+- **The whole party buying.** "All N of us need new tickets", "everyone needs a new ticket" and "we all need tickets" mean nobody holds one, and the new-ticket count becomes the party. This applies only when a held ticket was on record. Otherwise "three of us need tickets" is just the party, as before.
+- **Counts stay separate.** Party, held tickets, new tickets and bundle stock are still separate facts, and the latest statement of each wins.
+- **Stored quantity.** The brief stores the purchase count whenever a held count or a new-ticket count is known, including zero.
+- **Conflicting counts get one question.** When one message gives a party, a held count and a new-ticket count that don't add up ("four of us, I still have my own ticket, two friends need new tickets"), the reply is one question and no pick:
+  - **Question:** "Does the other person already have a ticket, or do you need three new ones?"
+  - **Stored:** quantity `null`, with `quantity_conflict`.
+  - **Next message:** the answer stays on the same offers even if it doesn't mention them.
+- **The reply names the change.** "Now that you don't have your own ticket, that's three to buy, so I'd take B: $240 in total, fees included. A only covers two of the three you need. It leaves $10 of your $250 budget."
+
+**Writing.** A short bundle is now named once briefly in the lead ("A only covers two of the three new tickets you need"). Its own line still gives the full reason, so the reason is no longer stated twice in the lead and again in the list.
+
+**Tests.** `research1-postdeploy.test.ts` has 5 new tests, 23 in total. All 6 Research 1 targets fail on `main`:
+- **Correction pair:** the exact reversal pair gives B at $240 with $10 left, nothing held, and quantity 2 → 3. It fails on `main` on the bug itself.
+- **Control pair:** the exact control pair gives the same answer. On `main` it fails only on the new wording; its logic passed there.
+- **Live 02:** fails on `main` only on the new wording.
+- **Corrections:** the paraphrases above clear the held ticket. "I don't have my ticket yet" and "I still have mine" keep it.
+- **Conflict:** the conflict question gets no pick, and answering it ("The fourth person already has a ticket. We need two new tickets.") gets A at $180 on the same offers.
+- **Consistent counts never ask:** both live 02 turns run without a question.
+
+All six earlier live regressions are kept. Live 01 and 03 are unchanged; live 02's follow-up lead is reworded per the writing notes.
+
+**Not proven here.**
+- **Rules path only.** The production model's reading needs the capture-only live check of both corrections after deploy.
+- **Unlisted wordings.** Other ways of taking a ticket back ("my ticket fell through", "I gave mine to my sister") aren't read.
+- **Conflicts across messages.** The conflict check looks at one message. Counts that conflict across messages take the latest statement.
+- **Comedy research.** The comedy reply still asks for menu prices: live policy and menu retrieval isn't built. Family replies still use generic wording rather than the show name.

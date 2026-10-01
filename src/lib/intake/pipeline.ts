@@ -621,12 +621,37 @@ export class Concierge {
     // Concert quote decisions run before discovery: entry and product terms need no catalog match.
     // Other unresolved offer questions retain the same comparison path (TGQA-R6 1006: "you don't need the event date to add these up").
     const threadTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
-    const supplied = suppliedOffers(latestText, threadTexts, venueTz ?? 'America/New_York');
+    // Their answer to our "how many new tickets?" question is about the same offers, whatever it refers back to.
+    const [asked] = req.state === 'needs_clarification' ? await this.db.select({ id: t.requestTransitions.id }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.revision, req.currentRevision), eq(t.requestTransitions.reason, 'quantity_conflict'))).limit(1) : [];
+    const supplied = suppliedOffers(latestText, threadTexts, venueTz ?? 'America/New_York', { continuing: !!asked });
     const answerSupplied = async (recordVersion: boolean) => {
       const tz = venueTz ?? 'America/New_York';
       const terms = partyTerms(threadTexts, tz);
       const quantity = terms.toBuy ?? terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
       const threadFlat = flat(threadTexts.join('\n'));
+      // Party, held and new counts in their latest message that don't add up: the one question that settles how
+      // many to buy, not a pick that could leave someone without admission (R1-M02-OWNERSHIP-REVERSAL-01).
+      if (terms.conflict) {
+        const { attendees, owned, toBuy } = terms.conflict;
+        const w = (n: number) => countWordLower(n);
+        const held = owned === 0 ? 'nobody has a ticket yet' : owned === 1 ? 'you already have your own ticket' : `${w(owned)} of you already have tickets`;
+        const rest = attendees - owned - toBuy;
+        const question = rest > 0
+          ? `Does ${rest === 1 ? 'the other person' : `the other ${w(rest)}`} already have a ticket, or do you need ${w(attendees - owned)} new ones?`
+          : `How many new tickets do you need: ${w(toBuy)} or ${w(Math.max(attendees - owned, 0))}?`;
+        const lead = `Quick check before I pick: you said ${w(attendees)} of you are going and ${held}, which leaves ${w(Math.max(attendees - owned, 0))} to buy, but you mentioned ${w(toBuy)} new ${toBuy === 1 ? 'ticket' : 'tickets'}. ${question}`;
+        const text = ['Hey,', lead, 'Once I know, I’ll compare the offers against that number.'].join('\n\n');
+        const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;">${esc(lead)}</p>`, `<p style="margin:0 0 18px;">Once I know, I’ll compare the offers against that number.</p>`].join('\n');
+        if (recordVersion) {
+          await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: { ...merged, quantity: null }, sourceMessageIds: [msg.id], unresolvedFields: ['quantity'], createdBy: 'system' });
+          await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+          if (revision > 1) await this.invalidateForRevision(req.id, revision);
+        }
+        await this.transition(req.id, 'needs_clarification', 'quantity_conflict');
+        await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'One quick question'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `quantity_conflict:${msg.id}` });
+        return { state: 'needs_clarification', revision, extraction: merged };
+      }
       const concertCapIn = (texts: string[]) => (concertContext(texts) ? [...texts].reverse().map(concertBudget).find((b) => b !== null) ?? null : null);
       const concertCap = concertCapIn(threadTexts);
       // What they changed since the last turn, so a new pick is explained by the change, not restated (post-deploy R1).
@@ -641,7 +666,7 @@ export class Concierge {
         // A concert quote binds the cap to its own words (concert R9).
         budgetTotalCents: concertCap ? wholePartyBudgetCents(concertCap.cents, concertCap.basis ?? (concertCap.cents === merged.budgetCents ? merged.budgetBasis : null), quantity) : customerBudget(merged, threadTexts, quantity, tz),
         needs: { noObstructed: NO_OBSTRUCTED.test(`${threadFlat}\n${merged.seatingPreference ?? ''}`), togetherRequired: !!merged.togetherRequired, baseline: comparedAgainst(latestText, supplied.textOffers.map((o) => o.label)), terms },
-        before: before ? { quantity: before.toBuy ?? before.attendees, priority: before.priority ?? null, budgetTotalCents: concertCap && capBefore ? wholePartyBudgetCents(capBefore.cents, capBefore.basis ?? concertCap.basis ?? (capBefore.cents === merged.budgetCents ? merged.budgetBasis : null), before.toBuy ?? before.attendees ?? quantity) : null } : null,
+        before: before ? { quantity: before.toBuy ?? before.attendees, owned: before.owned ?? null, priority: before.priority ?? null, budgetTotalCents: concertCap && capBefore ? wholePartyBudgetCents(capBefore.cents, capBefore.basis ?? concertCap.basis ?? (capBefore.cents === merged.budgetCents ? merged.budgetBasis : null), before.toBuy ?? before.attendees ?? quantity) : null } : null,
       });
       const { lead } = comparison;
       const items = [...comparison.items];
@@ -654,7 +679,7 @@ export class Concierge {
       const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(lead.slice(first.length))}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i).replace(/^(Offer [A-E])/, '<strong>$1</strong>').replace(/(\$[\d,.]+)/g, '<strong>$1</strong>')}</li>`).join('')}</ul>`, ...links.map(({ url, label }) => `<p><a href="${esc(url)}">${esc(label)}</a></p>`)].join('\n');
       if (recordVersion) {
         // With a ticket already held, the brief's quantity is what they're buying, not the party (R1-M02).
-        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: terms.owned ? { ...merged, quantity } : merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: terms.owned !== null || terms.toBuy !== null ? { ...merged, quantity } : merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
         await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
         if (revision > 1) await this.invalidateForRevision(req.id, revision);
       }
@@ -3535,7 +3560,7 @@ function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
  * ("which of the same offers?", "just compare the three offers I pasted"), the ones laid out earlier in the thread;
  * else the one it keeps from an earlier comparison ("ignore Offer A, only B"), with the others set aside.
  */
-export function suppliedOffers(said: string, threadMessages: string[], tz: string): { textOffers: TextOffer[]; offersSetAside: string[] } {
+export function suppliedOffers(said: string, threadMessages: string[], tz: string, opts: { continuing?: boolean } = {}): { textOffers: TextOffer[]; offersSetAside: string[] } {
   // Fold each concert correction into the product records. A one-product correction must not erase the other
   // product, nor lose an exclusion after several price-only turns. An explicit "only B" still sets A aside.
   if (partyTerms(threadMessages).concertAdmission) {
@@ -3573,7 +3598,7 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
     // A new discovery goal leaves the comparison. A room-access question with a new source
     // and no offer update is answered directly, rather than repeating stale price quotes.
     if (similarMusicGoal(said) || /\b(?:room-access|exact official)\b/i.test(said) && !latestNames) return { textOffers: [], offersSetAside: [] };
-    if ((latestNames || referringBack) && (retained.length >= 2 || offersSetAside.length)) return { textOffers: retained, offersSetAside };
+    if ((latestNames || referringBack || opts.continuing) && (retained.length >= 2 || offersSetAside.length)) return { textOffers: retained, offersSetAside };
     if (reset) return { textOffers: [], offersSetAside: [] };
   }
   // Every offer in the thread, one record each, later mentions folded in: a restatement that leaves something out
