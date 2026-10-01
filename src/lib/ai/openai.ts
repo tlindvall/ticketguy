@@ -30,6 +30,9 @@ export class OpenAiClient implements StructuredClient {
         max_output_tokens: args.maxOutputTokens,
         reasoning: { effort: args.effort },
         text: { format: zodTextFormat(args.schema, args.schemaName) },
+        // Each call is one self-contained extraction or draft: nothing reads a stored response back
+        // (no previous_response_id), so customer emails and screenshots aren't kept on OpenAI's side.
+        store: false,
       });
     } catch (e) {
       if (e instanceof OpenAI.APIError) throw providerError(e.status, (e as { code?: string | null }).code ?? null, e.message);

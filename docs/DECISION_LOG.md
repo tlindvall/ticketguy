@@ -1031,3 +1031,17 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - The watch-constraint and event-specific coverage fixes, and the removed empty-plan fallback, apply in every mode.
 
 **Why.** Equal effort everywhere either spends money on categories we can't serve well, or promises history and alerts we can't deliver. Depth by category with capability by evidence keeps the deep work where it pays, and the honest answer everywhere else.
+
+## GPT-6.1 Sol replaces gpt-5.5 for extraction, listing reads and drafts (owner-directed, Oct 1 2026)
+
+- **Model.** `OPENAI_BASE_MODEL` defaults to `gpt-6.1-sol`, and the Render blueprint now pins it, so production runs the model this repository names. The SDK moves to `openai@7.25.0`, the first release that lists `gpt-6.1-sol`.
+- **Effort.** It stays at `low`, following the GPT-6 migration guide's advice to keep the current effective effort. The model's own default is `medium`. It rejects `none` and `minimal`, and the env schema never offered either.
+- **Request shape.** The rest of each request already matches the guide:
+  - the Responses API, with a strict Structured Outputs schema;
+  - no tools;
+  - no `temperature`, `top_p`, `top_logprobs` or logprobs `include`;
+  - no `prompt_cache_retention` to migrate.
+- **`store: false` is now set.** Every call is self-contained and nothing reads a stored response back. Leaving the default meant each customer email and screenshot stayed on OpenAI's side for at least 30 days.
+- **Still open: pricing.** The model page with pricing was not readable from this environment. Until `MODEL_PRICES_USD_PER_MTOKEN` is set, spend is counted at the conservative fallback rate.
+- **Still open: token caps.** The output-token caps (4,000 and 8,000, which include reasoning) are unchanged and should be checked against the model page.
+- **Still open: `safety_identifier`.** The GPT-5.6 guide recommends it for apps that serve end users, and we don't send it yet.

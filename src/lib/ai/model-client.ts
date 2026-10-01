@@ -44,7 +44,10 @@ export function providerError(status: number | undefined, code: string | null | 
 }
 
 export type Usage = { inputTokens: number; outputTokens: number };
-/** Shared by both providers; every value here is accepted by each SDK's effort parameter. */
+/**
+ * Shared by both providers; every value here is accepted by each SDK's effort parameter. GPT-6.1 Sol
+ * rejects `none` and `minimal`, so neither is offered.
+ */
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type StructuredRequest<T extends z.ZodType> = {
