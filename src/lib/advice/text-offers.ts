@@ -447,11 +447,23 @@ export type PartyTerms = {
    * friends now need new tickets"), else the party less what's owned. Null when nobody holds one.
    */
   toBuy?: number | null;
+  /**
+   * Their latest message gives a party, a held count and a new-ticket count that don't add up ("four of us, I have
+   * my ticket, two friends need tickets"): one focused question, not a guess (R1-M02-OWNERSHIP-REVERSAL-01).
+   */
+  conflict?: { attendees: number; owned: number; toBuy: number } | null;
 };
 
-const OWNED_ONE = /\b(?:I|my (?:partner|wife|husband|friend|son|daughter))\s+(?:already\s+|still\s+)?(?:has|have|own|owns|hold|holds|bought|got)\s+(?:my|his|her|their)\s+own\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bI\s+(?:already\s+(?:have|own|hold|bought|got)|own)\s+(?:a|one|my)\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bmy\s+already[- ](?:owned|purchased|bought)\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bI\s+(?:already|still)\s+have\s+mine\b/i;
+const OWNED_ONE = /\b(?:I|my (?:partner|wife|husband|friend|son|daughter))\s+(?:already\s+|still\s+)?(?:has|have|own|owns|hold|holds|bought|got)\s+(?:my|his|her|their)\s+own\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bI\s+(?:already\s+(?:have|own|hold|bought|got)|still\s+(?:have|own|hold)|own)\s+(?:a|one|my)\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bmy\s+already[- ](?:owned|purchased|bought)\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bI\s+(?:already|still)\s+have\s+mine\b/i;
 const OWNED_N = new RegExp(`\\b(?:I|we)\\s+(?:already\\s+(?:have|own|hold|bought|got)|own)\\s+${NUMBER}\\s+(?:tickets?|seats?|admissions?)\\b`, 'i');
-const OWNED_NONE = /\b(?:I|we)\s+(?:don'?t|do not)\s+(?:own|have)\s+any\s+tickets\b|\b(?:I|we)\s+(?:own|have)\s+no\s+tickets\b/i;
+/**
+ * Nothing held, including a correction that takes a held ticket back (post-deploy R1, R1-M02-OWNERSHIP-REVERSAL-01):
+ * "I no longer have my ticket", "I don't have my ticket anymore", "I sold my ticket". "I don't have my ticket yet"
+ * is a delivery question, not this.
+ */
+const OWNED_NONE = /\b(?:I|we)\s+(?:don'?t|do not)\s+(?:own|have)\s+any\s+tickets\b|\b(?:I|we)\s+(?:own|have)\s+no\s+tickets\b|\b(?:I|we)\s+no\s+longer\s+(?:have|own|hold)\s+(?:my|our|a|any|the)\s+(?:[a-z-]+\s+)?tickets?\b|\b(?:I|we)\s+(?:don'?t|do not)\s+(?:have|own|hold)\s+(?:my|our|a|the)\s+(?:[a-z-]+\s+)?tickets?\s+(?:any ?more|now)\b|\b(?:I|we)\s+(?:sold|gave away|lost|returned|refunded|cancel(?:l)?ed)\s+(?:my|our)\s+(?:[a-z-]+\s+)?tickets?\b/i;
+/** The whole party buys: "All THREE of us now need new tickets", "everyone needs a new ticket". Nobody holds one. */
+const ALL_BUY = new RegExp(`\\b(?:all\\s+)?${NUMBER}\\s+of\\s+us\\s+(?:now\\s+|still\\s+|will\\s+)?(?:all\\s+)?needs?\\s+(?:new\\s+|our own\\s+)?(?:tickets?|admissions?|seats?)\\b|\\b(?:everyone|everybody|all of us|each of us|we all)\\s+(?:now\\s+|still\\s+)?needs?\\s+(?:a\\s+)?(?:new\\s+)?(?:tickets?|admissions?|seats?)\\b`, 'i');
 const TO_BUY = new RegExp(`\\b${NUMBER}\\s+(?:(?:more|other)\\s+)?(?:friends?|people|guests?|others|of them|of my friends)\\s+(?:now\\s+|still\\s+|will\\s+)?needs?\\s+(?:new\\s+|their own\\s+)?(?:tickets?|admissions?|seats?)\\b|\\bneed\\s+${NUMBER}\\s+(?:more|new|additional|extra)\\s+(?:tickets?|admissions?|seats?)\\b|\\b${NUMBER}\\s+(?:more\\s+|other\\s+)?friends?\\s+(?:who|that)\\s+(?:each\\s+|all\\s+|still\\s+)?needs?\\s+(?:a\\s+|their\\s+own\\s+)?(?:new\\s+)?(?:tickets?|admissions?|seats?)\\b`, 'i');
 
 const PRIORITY_TAIL = '[^.!?]{0,40}\\b(?:matters? (?:the )?most|most important|is (?:the |our |my )?(?:top |main )?priority|comes first|(?:is )?worth (?:paying (?:for|the extra)|the extra)|enough to pay (?:the|that|a|for the) (?:difference|extra|premium)|(?:willing|happy|okay|ok|fine) to pay (?:the|that) (?:difference|extra|premium))';
@@ -472,7 +484,7 @@ const NOT_TOGETHER = /\b(?:don'?t|do not) (?:need|have) to sit together\b|\b(?:d
 const ALL_TOGETHER = /\b(?:must|need to|have to|want to) (?:all )?sit together\b|\ball (?:\w+ )?(?:of us )?together\b|\bseats? (?:all )?together\b/i;
 
 export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New_York'): PartyTerms {
-  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null, priority: null, owned: null, toBuy: null };
+  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null, priority: null, owned: null, toBuy: null, conflict: null };
   for (const raw of messagesOldestFirst) {
     const t = flat(raw);
     const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
@@ -488,12 +500,24 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
     }
     // Tickets someone already has, and how many new ones that leaves to buy (R1-M02). A message that restates the
     // party without a new count makes the count derived again, so a stale "two friends" never outlives "four of us".
+    // A correction replaces what was held before, and the whole party buying means nobody holds one: either way the
+    // derived count is worked out again, so a stale "two new tickets" never outlives "all three of us need tickets".
     const ownedN = OWNED_N.exec(t);
-    const owned = ownedN ? num(ownedN[1]!) : OWNED_ONE.test(t) ? 1 : OWNED_NONE.test(t) ? 0 : null;
+    const allBuy = ALL_BUY.exec(t);
+    const said = ownedN ? num(ownedN[1]!) : OWNED_ONE.test(t) ? 1 : OWNED_NONE.test(t) ? 0 : null;
+    // "Three of us need tickets" is only a correction when a held ticket was on record; otherwise it's the party.
+    const retracts = !!allBuy && (!!out.owned || said !== null);
+    const owned = said ?? (retracts ? 0 : null);
     if (owned !== null) out.owned = owned;
     const toBuy = TO_BUY.exec(t);
+    const allN = retracts ? (allBuy![1] ? num(allBuy![1]) : out.attendees) : null;
     if (toBuy) out.toBuy = num((toBuy[1] ?? toBuy[2] ?? toBuy[3])!);
+    else if (allN) out.toBuy = allN;
     else if (going || owned !== null) out.toBuy = null;
+    // Facts in one message that don't add up are asked about, once; the next message that settles them clears it.
+    const stated = going ? out.attendees : null;
+    const buying = toBuy ? out.toBuy : retracts && said !== null ? allN : null;
+    out.conflict = stated && said !== null && buying != null && said + buying !== stated ? { attendees: stated, owned: said, toBuy: buying } : null;
     // Pairs are enough when each adult sits with a child: "we can split into 2 and 2 only if one adult sits with each
     // child", "each child must sit directly beside an adult; two adjacent adult-child pairs are fine" (TGQA-R6 18,
     // R8 S01). A later "we no longer require that" lifts it; the latest message wins.

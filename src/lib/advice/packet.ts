@@ -676,7 +676,7 @@ export function suppliedOffersAnswer(a: { offers: TextOffer[]; quantity: number;
 }
 
 /** What their terms were before this message: a changed count, budget or priority explains a changed pick. */
-type OffersBefore = { quantity: number | null; priority: PartyTerms['priority'] | null; budgetTotalCents: number | null };
+type OffersBefore = { quantity: number | null; owned?: number | null; priority: PartyTerms['priority'] | null; budgetTotalCents: number | null };
 
 function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefore | null = null): ClaimRecord {
   const need = a.offerNeeds ?? { noObstructed: false, togetherRequired: false, baseline: null, terms: null };
@@ -824,6 +824,8 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefo
       // A cheaper add-on is said for what it is, not as a bargain beside the tickets (R1-M01).
       const addOn = unusable?.kind === 'admission' && r.o.admission === 'excluded' && ['upgrade', 'parking', 'shuttle'].includes(r.o.productKind);
       if (addOn) bits.push(`Skip ${short(r.o)}: it’s ${r.o.productKind === 'upgrade' ? 'an upgrade' : `a ${r.o.productKind} pass`} with no concert admission, so its ${r.tot ? formatUsd(r.tot.cents) : 'price'} doesn’t get ${q === 1 ? 'you' : q === 2 ? 'either of you' : 'anyone'} into the show.`);
+      // A basket too small is said once in brief here; its line below gives the reason in full (post-deploy R1 writing).
+      else if (unusable?.kind === 'short' && r.o.quantity !== null) bits.push(`${short(r.o)} only covers ${countWord(r.o.quantity)} of the ${countWord(q)}${owned ? ' new tickets' : ''} you need.`);
       else if (unusable) bits.push(`Skip ${short(r.o)}: ${unusable.text}.`);
     }
     // Three or more that fit: the saving against each, not just the runner-up (TGQA-R6 14: "saves $10 or $5").
@@ -859,8 +861,10 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefo
     const left = budget !== null && best.tot!.cents <= budget ? ` It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.` : '';
     const premium = wanted === best && cheapest && cheapest !== best ? best.tot!.cents - cheapest.tot!.cents : null;
     const countDelta = before?.quantity != null && before.quantity !== q ? q - before.quantity : 0;
+    // A ticket they no longer hold is named as the change: it's why the count went up (R1-M02-OWNERSHIP-REVERSAL-01).
+    const lostOwn = !!before?.owned && !owned;
     const changedHead = countDelta
-      ? `With ${countWord(Math.abs(countDelta))} ${countDelta > 0 ? 'more' : 'fewer'} ${owned ? 'new ' : ''}${Math.abs(countDelta) === 1 ? 'ticket' : 'tickets'} to buy, ${short(best.o)} is the one: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`
+      ? `${lostOwn ? `Now that you don’t have your own ticket, that’s ${countWord(q)} to buy, so I’d take` : `With ${countWord(q)} ${owned ? 'new ' : ''}${q === 1 ? 'ticket' : 'tickets'} to buy now, I’d take`} ${short(best.o)}: ${formatUsd(best.tot!.cents)} in total, fees included.`
       : null;
     const words = priority?.kind === 'feature' ? priority.words : null;
     const changedPick = countDelta || premium === null || !words || !before

@@ -107,5 +107,15 @@
       "field": "alternativeUsed",
       "expected": true
     }
+  },
+  "ownership": {
+    "R1-OWNERSHIP-REVERSAL-01": [
+      "Help me compare hypothetical quotes for the same Denver country concert. There are THREE of us going, but I already own my concert ticket. Only my TWO friends need new tickets; I am not buying mine again. We don't need to sit with my existing seat, but the friends need to sit together. My budget is $250 TOTAL including fees for the NEW tickets only. Offer A: a fixed bundle of TWO actual concert admissions, two adjacent reserved seats, $180 TOTAL all-in, exactly TWO admissions available. Offer B: a fixed bundle of THREE actual concert admissions, three adjacent reserved seats, $240 TOTAL all-in, exactly THREE admissions available. No partial-bundle purchase is offered. I want to spend as little as possible while covering the friends. Which bundle do I need, how many new tickets, and what remains of my budget? Use these supplied facts only; these are not verified live inventory.",
+      "Correction: I no longer have my ticket. All THREE of us now need new tickets. Keep the same $250 all-in cap and the same fixed bundles. Which bundle covers everyone now?"
+    ],
+    "R1-OWNERSHIP-REVERSAL-CONTROL": [
+      "Help me compare hypothetical quotes for the same Denver country concert. There are THREE of us going, but I already own my concert ticket. Only my TWO friends need new tickets; I am not buying mine again. We don't need to sit with my existing seat, but the friends need to sit together. My budget is $250 TOTAL including fees for the NEW tickets only. Offer A: a fixed bundle of TWO actual concert admissions, two adjacent reserved seats, $180 TOTAL all-in, exactly TWO admissions available. Offer B: a fixed bundle of THREE actual concert admissions, three adjacent reserved seats, $240 TOTAL all-in, exactly THREE admissions available. No partial-bundle purchase is offered. I want to spend as little as possible while covering the friends. Which bundle do I need, how many new tickets, and what remains of my budget? Use these supplied facts only; these are not verified live inventory.",
+      "Correction: I do not own any tickets now. We need THREE new tickets. Keep the same $250 all-in cap and the same fixed bundles. Which bundle covers everyone now?"
+    ]
   }
 }

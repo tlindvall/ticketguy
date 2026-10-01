@@ -18,7 +18,7 @@ import { decisionAnswer } from '@/lib/advice/decision-questions';
  */
 type Local = { opening: string; followup: string; control: string };
 type Wording = { messages: string[]; field: string; expected: unknown };
-const F = JSON.parse(readFileSync('tests/fixtures/r1-deployed-regression-2026-10-01.json', 'utf8')) as { live: Record<'01' | '02' | '03', [string, string]>; local: Record<string, Local>; wording: Record<string, Wording> };
+const F = JSON.parse(readFileSync('tests/fixtures/r1-deployed-regression-2026-10-01.json', 'utf8')) as { live: Record<'01' | '02' | '03', [string, string]>; local: Record<string, Local>; wording: Record<string, Wording>; ownership: Record<'R1-OWNERSHIP-REVERSAL-01' | 'R1-OWNERSHIP-REVERSAL-CONTROL', [string, string]> };
 const NOW = FIXTURE_NOW;
 const COMEDY = F.local['R1-09-COMEDY-MINIMUM']!;
 const LOTTERY = F.local['R1-08-BROADWAY-LOTTERY']!;
@@ -33,7 +33,7 @@ const lead = (x: string) => BODY(x).split('\n')[0]!;
 describe('Research 1 post-deploy retest: exact inputs', () => {
   let h: DbHandle;
   let n = 0;
-  type Turn = { text: string; quantity: number | null; transition: string | null };
+  type Turn = { text: string; quantity: number | null; transition: string | null; state: string | null };
   const converse = async (turns: string[]): Promise<Turn[]> => {
     const c = makeConcierge(h, { now: () => NOW, env: testEnv({ SERVICE_POLICY_MODE: 'enforce' }) });
     n += 1;
@@ -60,7 +60,7 @@ describe('Research 1 post-deploy retest: exact inputs', () => {
       const transitions = (await h.db.select().from(t.requestTransitions).where(eq(t.requestTransitions.requestId, r.requestId))).sort((a, b) => a.revision - b.revision);
       const body = sends.at(-1)!.bodyText.split('\nTicket Guy\n')[0]!.trim();
       expect(body).not.toMatch(NEVER);
-      out.push({ text: body, quantity: (versions.at(-1)!.brief as { quantity: number | null }).quantity, transition: transitions.at(-1)?.reason ?? null });
+      out.push({ text: body, quantity: (versions.at(-1)!.brief as { quantity: number | null }).quantity, transition: transitions.at(-1)?.reason ?? null, state: transitions.at(-1)?.toState ?? null });
     }
     return out;
   };
@@ -86,7 +86,7 @@ describe('Research 1 post-deploy retest: exact inputs', () => {
       const [first, second] = await converse(F.live['02']);
       expect(lead(first!.text)).toBe('Offer A wins this one: $180 for the two new tickets, fees included. Your own ticket is already covered. That’s $60 less than Offer B. It leaves $70 of your $250 budget. Based on the details you sent; I haven’t verified availability.');
       expect(first!.quantity).toBe(2);
-      expect(lead(second!.text)).toBe('With one more new ticket to buy, B is the one: $240 for the three new tickets, fees included. Your own ticket is already covered. Skip A: it has only two admissions, and you need three new ones, so it would leave one person out. It leaves $10 of your $250 budget. Based on the details you sent; I haven’t verified availability.');
+      expect(lead(second!.text)).toBe('With three new tickets to buy now, I’d take B: $240 in total, fees included. Your own ticket is already covered. A only covers two of the three new tickets you need. It leaves $10 of your $250 budget. Based on the details you sent; I haven’t verified availability.');
       expect(second!.text).not.toMatch(/\bfour\b|None of the two/i);
       expect(second!.quantity).toBe(3);
     });
@@ -134,6 +134,55 @@ describe('Research 1 post-deploy retest: exact inputs', () => {
       expect(lead(second!.text)).toMatch(/^None of the two meets all your requirements\./);
       expect(second!.text).toContain('It has only three admissions, and you need four new ones, so it would leave one person out.');
       expect(second!.quantity).toBe(4);
+    });
+  });
+
+  describe('R1-M02-OWNERSHIP-REVERSAL-01: a held ticket taken back (second post-deploy wave, exact messages)', () => {
+    const B_NOW = 'Now that you don’t have your own ticket, that’s three to buy, so I’d take B: $240 in total, fees included. A only covers two of the three you need. It leaves $10 of your $250 budget. Based on the details you sent; I haven’t verified availability.';
+    const A_SHORT = 'Offer A (a fixed bundle of two admissions, together): $180 for the bundle including fees. It has only two admissions, and you need three, so it would leave one person out.';
+
+    it('"I no longer have my ticket. All THREE of us now need new tickets": B for three, $10 left, held 0, quantity 2 → 3', async () => {
+      const [first, second] = await converse(F.ownership['R1-OWNERSHIP-REVERSAL-01']);
+      expect(lead(first!.text)).toMatch(/^Offer A wins this one: \$180 for the two new tickets, fees included\. Your own ticket is already covered\./);
+      expect(first!.quantity).toBe(2);
+      expect(lead(second!.text)).toBe(B_NOW);
+      expect(second!.text).toContain(A_SHORT);
+      expect(second!.text).not.toContain('already covered');
+      expect(second!.quantity).toBe(3);
+      expect(partyTerms(F.ownership['R1-OWNERSHIP-REVERSAL-01'])).toMatchObject({ attendees: 3, owned: 0, toBuy: 3, conflict: null });
+    });
+
+    it('positive control, "I do not own any tickets now. We need THREE new tickets": the same answer', async () => {
+      const [, second] = await converse(F.ownership['R1-OWNERSHIP-REVERSAL-CONTROL']);
+      expect(lead(second!.text)).toBe(B_NOW);
+      expect(second!.quantity).toBe(3);
+      expect(partyTerms(F.ownership['R1-OWNERSHIP-REVERSAL-CONTROL'])).toMatchObject({ attendees: 3, owned: 0, toBuy: 3 });
+    });
+
+    it('corrections replace the held count; a delivery question or a restated held ticket does not', () => {
+      const opening = F.ownership['R1-OWNERSHIP-REVERSAL-01'][0];
+      // What they'd buy: the new-ticket count, else the whole party once nothing is held.
+      const after = (s: string) => { const r = partyTerms([opening, s]); return { owned: r.owned, buy: r.toBuy ?? r.attendees }; };
+      for (const s of ['I don’t have my ticket anymore, so three of us need tickets.', 'I sold my ticket. Three of us are going.', 'Everyone needs a new ticket now.', 'We no longer have any tickets; there are three of us.']) expect(after(s)).toEqual({ owned: 0, buy: 3 });
+      for (const s of ['I don’t have my ticket yet; when does it arrive?', 'I still have mine. Same offers.']) expect(after(s)).toEqual({ owned: 1, buy: 2 });
+      // With no held ticket on record, "three of us need tickets" is just the party, not a correction.
+      expect(partyTerms(['Three of us need tickets for a Denver country concert.'])).toMatchObject({ attendees: 3, owned: null, toBuy: null });
+    });
+
+    it('facts that don’t add up get one question and no pick; the answer to it gets the comparison', async () => {
+      const conflicting = 'Update: four of us are going now. I still have my own ticket, and two friends need new tickets. Same offers and budget.';
+      const [, asked, settled] = await converse([F.live['02'][0], conflicting, 'The fourth person already has a ticket. We need two new tickets.']);
+      expect(lead(asked!.text)).toBe('Quick check before I pick: you said four of you are going and you already have your own ticket, which leaves three to buy, but you mentioned two new tickets. Does the other person already have a ticket, or do you need three new ones?');
+      expect(asked!.text).not.toMatch(/I’d take|wins this one|is the one/);
+      expect(asked!).toMatchObject({ quantity: null, state: 'needs_clarification', transition: 'quantity_conflict' });
+      expect(lead(settled!.text)).toMatch(/A wins this one|I’d take A|A is the one/);
+      expect(settled!.text).toContain('$180');
+      expect(settled!.quantity).toBe(2);
+    });
+
+    it('consistent counts never ask: three of us, my ticket held, two friends', () => {
+      expect(partyTerms([F.live['02'][0]]).conflict).toBeNull();
+      expect(partyTerms(F.live['02']).conflict).toBeNull();
     });
   });
 
