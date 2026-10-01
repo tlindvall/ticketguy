@@ -84,7 +84,7 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
       answered(first!, 'Singles fell $30, from $90 to $60 (33.3% lower).');
       expect(first!.text).toContain('It doesn’t tell us what five adjacent upper-tier seats cost');
       expect(first!.text).toContain('If you have the total for the five adjacent upper-tier seats at both times, send it');
-      answered(second!, 'For your five seats, the total rose $50: $450 to $500 (11.1% more).');
+      answered(second!, 'For the five of you, the latest total is $500: $50 more than the earlier $450 (11.1%).');
       expect(second!.text).toContain('Singles got cheaper over the same time ($90 to $60), but they aren’t the tickets the five of you need');
       expect(second!.text).toContain('Two quotes don’t prove a continuing rise, or that those seats are still there.');
       // Observation days are not event dates; the five-seat basket is their quantity.
@@ -99,9 +99,9 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
       ]);
       answered(first!, 'It depends on yesterday’s fees: today’s $250 is cheaper only if they came to more than $50.');
       expect(first!.text).toContain('Yesterday: $100 a ticket, so $200 for two before fees, plus fees I don’t know. Today: $125 a ticket, so $250 for two with fees included.');
-      expect(first!.text).toContain('at exactly $50 they tie');
-      answered(second!, 'Today’s pair is $10 cheaper, with fees included in both totals.');
-      expect(second!.text).toContain('Yesterday was $200 plus $60 in fees: $260. Today is $250, 3.85% below yesterday’s complete price.');
+      expect(first!.text).not.toContain('at exactly $50 they tie'); // said once, in the lead
+      answered(second!, 'Today’s pair is $250 with fees included: $10 cheaper than yesterday’s $260 (3.85%).');
+      expect(second!.text).toContain('Yesterday was $200 plus $60 in fees, so $260 complete.');
       const [ver] = await h.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, second!.requestId), eq(t.requestVersions.revision, 2)));
       expect(ver!.brief).toMatchObject({ dateExpression: null, quantity: 2 });
     });
@@ -115,7 +115,7 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
       expect(first!.text).toContain('the drop doesn’t say how many tickets sold, or whether demand is rising');
       answered(second!, 'Your report records 12 orders covering 24 tickets; that doesn’t show thirty fewer listings were thirty sales.');
       expect(second!.text).toContain('The listing count still fell from 100 to 70.');
-      expect(second!.text).toContain('we don’t know why the rest went');
+      expect(second!.text).toContain('we can’t attribute that net change to those orders without listing-level reconciliation');
       expect(second!.text).toContain('Neither figure shows demand is rising');
       expect(second!.text).toContain('The report is yours; I haven’t checked where it comes from or how it counts.');
       // Tickets in a sales report are not how many they need.
@@ -137,7 +137,9 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
         'Now add two comparable supplied observations for five adjacent reserved seats in our upper-tier zone: yesterday $450 TOTAL including fees; today $500 TOTAL including fees, with the same admission and fee basis. This is still hypothetical supplied data, not a verified source or forecast. What changed for our group, and does it prove prices will keep rising?',
       ]);
       answered(first!, 'Singles fell $30, from $90 to $60 (33.3% lower).');
-      answered(second!, 'For your five seats, the total rose $50: $450 to $500 with fees included (11.1% more).');
+      // Their seats as they said them: "five reserved seats together in the upper tier", not "five reserved together seats".
+      expect(first!.text).toContain('It doesn’t tell us what five reserved seats together in the upper tier cost');
+      answered(second!, 'For the five of you, the latest total is $500 with fees included: $50 more than the earlier $450 (11.1%).');
       expect(second!.text).toContain('Singles got cheaper over the same time ($90 to $60), but they aren’t the tickets the five of you need');
       expect(second!.text).toContain('Two quotes don’t prove a continuing rise');
       expect(second!.text).not.toContain('That’s single tickets only');
@@ -163,8 +165,8 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
         'Change only the missing fee fact: yesterday\'s fees were $60 TOTAL for the pair. All other supplied facts are unchanged. Which complete quote is cheaper, by how much, and what percentage changed?',
       ]);
       answered(first!, 'It depends on yesterday’s fees: today’s $250 is cheaper only if they came to more than $50.');
-      answered(second!, 'Today’s pair is $10 cheaper, with fees included in both totals.');
-      expect(second!.text).toContain('Yesterday was $200 plus $60 in fees: $260. Today is $250, 3.85% below yesterday’s complete price.');
+      answered(second!, 'Today’s pair is $250 with fees included: $10 cheaper than yesterday’s $260 (3.85%).');
+      expect(second!.text).toContain('Yesterday was $200 plus $60 in fees, so $260 complete.');
       expect(await brief(second!.requestId)).toMatchObject({ quantity: 2, budgetCents: null });
     });
 

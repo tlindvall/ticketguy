@@ -295,9 +295,12 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
 /** The reason not to buy a listing as it stands, when there is one: the wrong event, count, seats or budget. */
 function hardProblem(a: BuildPacketArgs, sub: SubjectListing): string | null {
   const q = a.quantity;
-  const artist = identityMismatch(a, sub).artist;
-  if (artist) return `it’s for ${sub.eventName}, not ${artist}`;
+  const wrong = identityMismatch(a, sub);
+  if (wrong.artist) return `it’s for ${sub.eventName}, not ${wrong.artist}`;
   if (sub.eventDate && a.eventLocalDate && sub.eventDate !== a.eventLocalDate) return `the date on it (${shortDate(sub.eventDate)}) isn’t the event you asked about (${shortDate(a.eventLocalDate)})`;
+  // A listing in another city or room is for another occurrence, not a price question (R2-IDENTITY-LEAD-02).
+  if (wrong.venue) return `it says ${sub.venue}, but this ${a.eventNoun ?? 'event'} is at ${wrong.venue}`;
+  if (wrong.city) return `it says ${sub.city}, but this ${a.eventNoun ?? 'event'} is in ${wrong.city}`;
   if (sub.quantity && sub.quantity < q) return `it’s for ${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}, and you need ${q}`;
   if (sub.restrictionCodes.includes('accessible_seating') && !a.accessibilityRequired) return 'these are accessible seats, meant for people who need them';
   if (sub.seatsTogether === false && a.priorities.togetherRequired) return 'it says the seats may not be together';
@@ -343,7 +346,10 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
     const budget = a.priorities.budgetTotalCents;
     const fits = a.best && a.best.comparableTotalCents !== null && (budget == null || a.best.comparableTotalCents <= budget);
     const lessBy = fits && sub.wholePartyCents !== null && sub.feeBasis === 'all_in' && a.best!.comparableTotalCents! < sub.wholePartyCents ? ` and ${formatUsd(sub.wholePartyCents - a.best!.comparableTotalCents!)} less than this one` : '';
-    text = `I wouldn’t buy this one as it stands: ${problem}.${fits ? ` The verified option below meets what you asked for${budget != null ? `: ${formatUsd(a.best!.comparableTotalCents!)} for ${q === 1 ? 'one' : `all ${QTY_WORDS_LOWER[q] ?? q}`}, within your ${formatUsd(budget)}` : ''}${lessBy}.` : ''}`;
+    // When it's another event, the useful next step is ours to offer: say so and we'll look at that one.
+    const wrong = identityMismatch(a, sub);
+    const elsewhere = wrong.artist || wrong.venue || wrong.city ? ` If that’s the ${a.eventNoun ?? 'event'} you want, tell me and I’ll look at that one instead.` : '';
+    text = `I wouldn’t buy this one as it stands: ${problem}.${elsewhere}${fits ? ` The verified option below meets what you asked for${budget != null ? `: ${formatUsd(a.best!.comparableTotalCents!)} for ${q === 1 ? 'one' : `all ${QTY_WORDS_LOWER[q] ?? q}`}, within your ${formatUsd(budget)}` : ''}${lessBy}.` : ''}`;
     code = fits ? 'hard_problem_verified_fits' : 'hard_problem';
   } else if (verifiedCheaper) {
     text = `I’d look at the verified option below first: it’s ${formatUsd(verifiedCheaper)} less for ${q === 1 ? 'one ticket' : q === 2 ? 'both' : `all ${QTY_WORDS_LOWER[q] ?? q}`}.`;

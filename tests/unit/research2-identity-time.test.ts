@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildPacket, listingCatches, type BuildPacketArgs, type SubjectListing } from '@/lib/advice/packet';
 import { renderEvidenceOnly } from '@/lib/advice/renderer';
-import { localTimeInstants, localToInstant } from '@/lib/domain/dates';
+import { deadlineInstant, localTimeInstants } from '@/lib/domain/dates';
 import { teamNickname } from '@/lib/intake/pipeline';
 
 /**
@@ -48,6 +48,19 @@ describe('R2-IDENTITY-01: a listing for another performer, city or venue is call
   it('I04: a wrong venue', () => {
     expect(catches({ venue: 'Test Room B' })).toContain('The listing says Test Room B, but this show is at Test Room A. Make sure it’s the right show.');
   });
+  // R2-IDENTITY-LEAD-02: a wrong city or room leads the reply, as a wrong date or artist does, never "can't compare its price".
+  it.each([
+    ['artist', { eventName: 'Another Artist' }, 'I wouldn’t buy this one as it stands: it’s for Another Artist, not QA Example Artist. If that’s the show you want, tell me and I’ll look at that one instead.'],
+    ['city', { city: 'Denver' }, 'I wouldn’t buy this one as it stands: it says Denver, but this show is in New York. If that’s the show you want, tell me and I’ll look at that one instead.'],
+    ['venue', { venue: 'Test Room B' }, 'I wouldn’t buy this one as it stands: it says Test Room B, but this show is at Test Room A. If that’s the show you want, tell me and I’ll look at that one instead.'],
+  ])('the wrong %s is the verdict', (_label, over, verdict) => {
+    expect(reply(over)).toContain(verdict);
+    expect(reply(over)).not.toContain('I can’t compare its price');
+  });
+  it('the exact listing keeps its ordinary verdict, and a wrong date says no more than before', () => {
+    expect(reply({})).not.toMatch(/I wouldn’t buy this one|look at that one instead/);
+    expect(reply({ eventDate: '2026-10-18' })).not.toContain('look at that one instead');
+  });
 
   // The other side: a right listing written differently is not a wrong one.
   const rangers = { names: ['New York Rangers', 'NYR', 'Boston Bruins', 'New York Rangers vs. Boston Bruins'], nicknames: ['Rangers', 'Bruins'], venueNames: ['Madison Square Garden', 'MSG'], city: 'New York' };
@@ -89,11 +102,11 @@ describe('R2-TIME-FOLD-01: a local time keeps both instants when the clock repea
   ])('%s %s %s', (zone, date, time, expected) => {
     expect(localTimeInstants(date, time, zone).map((d) => d.toISOString())).toEqual(expected);
   });
-  it('a skipped time has no instant; the single-instant reading moves it past the jump', () => {
+  it('a skipped time has no instant; a deadline in it moves past the jump', () => {
     expect(localTimeInstants('2027-03-14', '02:30', 'America/Los_Angeles')).toEqual([]);
-    expect(localToInstant('2027-03-14', '02:30', 'America/Los_Angeles').toISOString()).toBe('2027-03-14T10:30:00.000Z');
+    expect(deadlineInstant('2027-03-14', '02:30', 'America/Los_Angeles').toISOString()).toBe('2027-03-14T10:30:00.000Z');
   });
-  it('the single-instant reading takes the first of a repeated time, so a deadline is never later than meant', () => {
-    expect(localToInstant('2026-11-01', '01:30', 'America/Los_Angeles').toISOString()).toBe('2026-11-01T08:30:00.000Z');
+  it('a deadline at a repeated time is its first occurrence, so it is never later than meant', () => {
+    expect(deadlineInstant('2026-11-01', '01:30', 'America/Los_Angeles').toISOString()).toBe('2026-11-01T08:30:00.000Z');
   });
 });

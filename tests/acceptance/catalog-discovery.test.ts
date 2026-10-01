@@ -12,7 +12,7 @@ import { TicketmasterDiscoveryAdapter, parseDiscoveryEvent } from '@/lib/sources
 import { categoryFor, subtypeFor, statusFor, parseMatchup, teamAliases, syncFromDiscovery, callsToday, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { prewarmCatalog } from '@/lib/catalog/prewarm';
 import { researchLinksFor } from '@/lib/catalog/research-links';
-import { localToInstant } from '@/lib/domain/dates';
+import { localTimeInstants } from '@/lib/domain/dates';
 
 /**
  * The catalog is what event resolution resolves against, and in live mode nothing used to fill it. These
@@ -109,9 +109,9 @@ describe('reading a Discovery event', () => {
 
   it('turns a TBA local date into a comparable instant in the venue zone', () => {
     // 19:00 in New York in October is 23:00Z (EDT).
-    expect(localToInstant('2026-10-20', '19:00', 'America/New_York').toISOString()).toBe('2026-10-20T23:00:00.000Z');
+    expect(localTimeInstants('2026-10-20', '19:00', 'America/New_York').map((d) => d.toISOString())).toEqual(['2026-10-20T23:00:00.000Z']);
     // ...and in January it is 00:00Z the next day (EST).
-    expect(localToInstant('2027-01-20', '19:00', 'America/New_York').toISOString()).toBe('2027-01-21T00:00:00.000Z');
+    expect(localTimeInstants('2027-01-20', '19:00', 'America/New_York').map((d) => d.toISOString())).toEqual(['2027-01-21T00:00:00.000Z']);
   });
 });
 
@@ -337,5 +337,34 @@ describe('manual research links', () => {
     expect(links[1]!.kind).toBe('search');
     expect(links[1]!.url).toContain('seatgeek.com/search?search=New%20York%20Rangers');
     expect(links[1]!.url).toContain('2026-10-20');
+  });
+});
+
+// R2-TIME-FOLD-01: a start with no offset in the hour Los Angeles repeats (Nov 1, 2026, 1:30 AM is 08:30Z or
+// 09:30Z) is not guessed into the catalog; the provider's own instant, or an unrepeated local time, is.
+describe('catalog starts at a clock change', () => {
+  let h: DbHandle;
+  beforeAll(async () => {
+    h = await openTestDb();
+  });
+  afterAll(async () => {
+    await h.close();
+  });
+  const LA = { id: 'KovZlaroom', name: 'Fold Test Room', city: 'Los Angeles', state: 'CA', tz: 'America/Los_Angeles' };
+  const start = async (id: string, over: Omit<Parameters<typeof tmEvent>[0], 'name'>) => {
+    const adapter = new TicketmasterDiscoveryAdapter('k', true, fakeFetch({ [id]: [tmEvent({ segment: 'Music', genre: 'Rock', subGenre: 'Indie', attractions: [{ id: `K8${id}`, name: `Fold Band ${id}`, genre: 'Rock', subGenre: 'Indie' }], venue: LA, ...over, name: `Fold Band ${id}` })] }));
+    await syncFromDiscovery(h.db, adapter, { keyword: id, trigger: 'manual', now: FIXTURE_NOW });
+    const [m] = await h.db.select({ eventId: t.eventSourceMappings.eventId }).from(t.eventSourceMappings).where(eq(t.eventSourceMappings.sourceEventId, over.id));
+    return m ? (await h.db.select().from(t.events).where(eq(t.events.id, m.eventId)))[0]!.localStartAt.toISOString() : null;
+  };
+  it('leaves a repeated local time without an offset unresolved', async () => {
+    expect(await start('foldrepeat', { id: 'tm-fold-repeat', dateTime: null, localDate: '2026-11-01', localTime: '01:30:00' })).toBeNull();
+  });
+  it('places the provider’s explicit instant, either side of the fold', async () => {
+    expect(await start('foldpdt', { id: 'tm-fold-pdt', dateTime: '2026-11-01T08:30:00Z', localDate: '2026-11-01', localTime: '01:30:00' })).toBe('2026-11-01T08:30:00.000Z');
+    expect(await start('foldpst', { id: 'tm-fold-pst', dateTime: '2026-11-01T09:30:00Z', localDate: '2026-11-01', localTime: '01:30:00' })).toBe('2026-11-01T09:30:00.000Z');
+  });
+  it('places an unrepeated local time without an offset', async () => {
+    expect(await start('foldplain', { id: 'tm-fold-plain', dateTime: null, localDate: '2026-10-17', localTime: '23:30:00' })).toBe('2026-10-18T06:30:00.000Z');
   });
 });

@@ -3,7 +3,7 @@ import type { DbOrTx } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import type { DiscoveredAttraction, DiscoveredEvent, DiscoveredVenue, DiscoveryQuery, TicketmasterDiscoveryAdapter } from '@/lib/sources/adapters';
 import type { SourceStatus } from '@/lib/domain/types';
-import { localToInstant } from '@/lib/domain/dates';
+import { localTimeInstants } from '@/lib/domain/dates';
 import { inMarket, teamHomeMarket } from '@/lib/domain/markets';
 
 /**
@@ -234,8 +234,13 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
 
   let startAt: Date;
   if (e.startAt) startAt = new Date(e.startAt);
-  else if (e.localDate) startAt = localToInstant(e.localDate, e.localTime ?? '12:00', tz);
-  else return null;
+  else if (e.localDate) {
+    // A start with no offset is placed only when the zone gives it one instant: a time in the hour repeated or
+    // skipped at a clock change waits for the provider's own instant rather than being guessed (R2-TIME-FOLD-01).
+    const at = localTimeInstants(e.localDate, e.localTime ?? '12:00', tz);
+    if (at.length !== 1) return null;
+    startAt = at[0]!;
+  } else return null;
   if (Number.isNaN(startAt.getTime())) return null;
 
   const entityIds: string[] = [];

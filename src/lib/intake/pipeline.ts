@@ -26,7 +26,7 @@ import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrow
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { dateWindowFor, eventLocalDate, localToInstant, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { dateWindowFor, deadlineInstant, eventLocalDate, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
@@ -2871,7 +2871,7 @@ export class Concierge {
     const row = await loadEventRows(this.db, eventId);
     const tz = row?.v.timezone ?? 'America/New_York';
     const terms = partyTerms(texts, tz);
-    const deliveryBy = terms.deadlineMinutes != null ? localToInstant(eventLocalDate(eventStartAt, tz), `${String(Math.floor(terms.deadlineMinutes / 60)).padStart(2, '0')}:${String(terms.deadlineMinutes % 60).padStart(2, '0')}`, tz) : null;
+    const deliveryBy = terms.deadlineMinutes != null ? deadlineInstant(eventLocalDate(eventStartAt, tz), `${String(Math.floor(terms.deadlineMinutes / 60)).padStart(2, '0')}:${String(terms.deadlineMinutes % 60).padStart(2, '0')}`, tz) : null;
     const age = ageNeed(texts.join('\n'));
     return constraintBasket(brief, brief.quantity ?? 1, eventStartAt, { pairsOk: terms.seating === 'pairs', deliveryBy, unverifiable: age ? [age] : [], revision });
   }

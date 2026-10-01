@@ -75,7 +75,7 @@ type Quote = { cents: number; unit: 'ticket' | 'total' | null; basis: 'before_fe
 
 export type EvidenceFacts = {
   singles: { fromCents: number; toCents: number } | null;
-  group: { quantity: number | null; descriptor: string | null; totals: Array<{ quantity: number | null; cents: number }>; mismatched: boolean; basis?: 'before_fees' | 'all_in' | null } | null;
+  group: { quantity: number | null; descriptor: string | null; together?: boolean; zone?: string | null; totals: Array<{ quantity: number | null; cents: number }>; mismatched: boolean; basis?: 'before_fees' | 'all_in' | null } | null;
   fees: { quantity: number | null; old: Quote | null; next: Quote | null; oldFeesCents: number | null } | null;
   listings: { from: number; to: number } | null;
   sales: { orders: number | null; tickets: number | null; reported: boolean } | null;
@@ -115,8 +115,12 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
       // A group basket: "five adjacent upper-tier seats", with or without its own prices.
       const g = GROUP.exec(s);
       if (g && toCount(g[1]!) >= 2 && (GROUP_WORD.test(s) || g[2]?.trim())) {
-        const descriptor = [g[2]?.replace(/[\s,]+(?:and\s+)?/g, ' ').trim(), g[3] ? 'together' : ''].filter(Boolean).join(' ') || null;
-        f.group = { quantity: toCount(g[1]!), descriptor: descriptor ?? f.group?.descriptor ?? null, totals: f.group?.totals ?? [], mismatched: f.group?.mismatched ?? false };
+        // "five reserved seats together in the same upper-tier zone": the words before "seats", whether they're
+        // together, and the zone, kept apart so they read back in order (R2 usefulness review).
+        const descriptor = g[2]?.replace(/[\s,]+(?:and\s+)?/g, ' ').trim() || null;
+        const together = !!g[3] || /\bseats\s+together\b/i.test(s);
+        const zone = /\b(upper|lower)[- ](?:tier|level|deck|bowl)\b/i.exec(s)?.[1]?.toLowerCase() ?? null;
+        f.group = { quantity: toCount(g[1]!), descriptor: descriptor ?? f.group?.descriptor ?? null, together: together || !!f.group?.together, zone: zone ?? f.group?.zone ?? null, totals: f.group?.totals ?? [], mismatched: f.group?.mismatched ?? false };
       }
       // Totals for the group, each tagged with its own seat count and fee basis when the clause says them. Two
       // all-in totals (or two before fees) are one basket at two times (R2-EVIDENCE-GROUP-FOLLOWUP-01); one
@@ -136,7 +140,7 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
         const total = (t: typeof a) => (t.perTicket && (t.quantity ?? base) ? t.cents * (t.quantity ?? base)! : t.cents);
         const qa = a.quantity ?? base;
         const qb = b.quantity ?? base;
-        f.group = { quantity: f.group?.quantity ?? qb ?? null, descriptor: f.group?.descriptor ?? null, totals: [{ quantity: qa, cents: total(a) }, { quantity: qb, cents: total(b) }], mismatched: qa !== null && qb !== null && qa !== qb, basis: a.basis === b.basis ? a.basis : null };
+        f.group = { ...f.group, quantity: f.group?.quantity ?? qb ?? null, descriptor: f.group?.descriptor ?? null, totals: [{ quantity: qa, cents: total(a) }, { quantity: qb, cents: total(b) }], mismatched: qa !== null && qb !== null && qa !== qb, basis: a.basis === b.basis ? a.basis : null };
       }
       // Fee basis: each clause is one quote, with its own time, basis and unit.
       for (const c of clauses(s)) {
@@ -214,9 +218,10 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
     const d = b.cents - a.cents;
     const n = g.quantity;
     // In their terms (USEFULNESS_REVIEW): their seats, the fee basis and the size of the move, said first.
-    const who = n ? `your ${word(n)} seats` : 'your group';
+    const who = n ? `the ${word(n)} of you` : 'your group';
     const basis = g.basis === 'all_in' ? ' with fees included' : g.basis === 'before_fees' ? ' before fees' : '';
-    const lead = d === 0 ? `For ${who}, the total didn’t change: ${usd(a.cents)}${basis} both times.` : `For ${who}, the total ${d > 0 ? 'rose' : 'fell'} ${usd(Math.abs(d))}: ${usd(a.cents)} to ${usd(b.cents)}${basis} (${pct(d, a.cents)} ${d > 0 ? 'more' : 'less'}).`;
+    // The current whole-party total leads, then the change (R2 usefulness review: bold what they'd pay now).
+    const lead = d === 0 ? `For ${who}, the total is still ${usd(b.cents)}${basis}, the same both times.` : `For ${who}, the latest total is ${usd(b.cents)}${basis}: ${usd(Math.abs(d))} ${d > 0 ? 'more' : 'less'} than the earlier ${usd(a.cents)} (${pct(d, a.cents)}).`;
     const items: string[] = [];
     if (all.singles) items.push(`Singles ${all.singles.toCents < all.singles.fromCents ? 'got cheaper' : all.singles.toCents > all.singles.fromCents ? 'went up' : 'didn’t move'} over the same time (${usd(all.singles.fromCents)} to ${usd(all.singles.toCents)}), but they aren’t the tickets ${n ? `the ${word(n)} of you need` : 'your group needs'}: ${n ? `a block of ${word(n)}` : 'a group block'} is a different basket and can move the other way.`);
     if (g.basis === 'before_fees') items.push('Both are before fees, so the checkout totals could differ.');
@@ -228,7 +233,7 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
     const d = s.toCents - s.fromCents;
     const lead = d === 0 ? `Singles didn’t move: ${usd(s.fromCents)} both times.` : `Singles ${d < 0 ? 'fell' : 'rose'} ${usd(Math.abs(d))}, from ${usd(s.fromCents)} to ${usd(s.toCents)} (${pct(d, s.fromCents)} ${d < 0 ? 'lower' : 'higher'}).`;
     const g = all.group;
-    const groupName = g?.quantity ? `${word(g.quantity)}${g.descriptor ? ` ${g.descriptor}` : ''} seats` : null;
+    const groupName = g?.quantity ? groupLabel(g) : null;
     const items = [
       groupName
         ? `That’s single tickets only. It doesn’t tell us what ${groupName} cost: a block of ${word(g!.quantity!)} together is a different basket, and I have no prices for it at either time.`
@@ -259,8 +264,9 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
       if (f.oldFeesCents !== null) {
         const oldTotal = oldBase + f.oldFeesCents;
         const d = nextTotal - oldTotal;
-        const lead = d === 0 ? 'The two quotes come to the same, with fees included in both totals.' : `Today’s ${q === 2 ? 'pair' : 'quote'} is ${usd(Math.abs(d))} ${d < 0 ? 'cheaper' : 'more expensive'}, with fees included in both totals.`;
-        return { lead, items: [`Yesterday was ${usd(oldBase)} plus ${usd(f.oldFeesCents)} in fees: ${usd(oldTotal)}. Today is ${usd(nextTotal)}${d === 0 ? '' : `, ${pct(d, oldTotal)} ${d < 0 ? 'below' : 'above'} yesterday’s complete price`}.`, 'I’m comparing your figures here; availability hasn’t been checked.'], nextStep: null, kinds: ['fee_total_compared'] };
+        const what = q === 2 ? 'pair' : 'quote';
+        const lead = d === 0 ? `Today’s ${what} is ${usd(nextTotal)} with fees included, the same as yesterday’s complete price.` : `Today’s ${what} is ${usd(nextTotal)} with fees included: ${usd(Math.abs(d))} ${d < 0 ? 'cheaper' : 'more'} than yesterday’s ${usd(oldTotal)} (${pct(d, oldTotal)}).`;
+        return { lead, items: [`Yesterday was ${usd(oldBase)} plus ${usd(f.oldFeesCents)} in fees, so ${usd(oldTotal)} complete.`, 'I’m comparing your figures here; availability hasn’t been checked.'], nextStep: null, kinds: ['fee_total_compared'] };
       }
       const breakEven = nextTotal - oldBase;
       if (breakEven <= 0) return { lead: `Yesterday’s quote was cheaper whatever its fees: ${usd(oldBase)} before fees against ${usd(nextTotal)} with fees included.`, items: ['I’m comparing your figures here; availability hasn’t been checked.'], nextStep: null, kinds: ['fee_unknown'] };
@@ -268,7 +274,6 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
         lead: `It depends on yesterday’s fees: today’s ${usd(nextTotal)} is cheaper only if they came to more than ${usd(breakEven)}.`,
         items: [
           `Yesterday: ${describe(f.old!, oldBase, f.next!)} before fees, plus fees I don’t know. Today: ${describe(f.next!, nextTotal, f.old!)} with fees included.`,
-          `If yesterday’s fees for the order were more than ${usd(breakEven)}, today’s quote is cheaper; at exactly ${usd(breakEven)} they tie; under that, yesterday’s was cheaper.`,
           'This is arithmetic on the figures you sent; I haven’t checked either price or what’s available now.',
         ],
         nextStep: 'If you have yesterday’s fee total, send it and I’ll give you the exact difference.',
@@ -296,7 +301,7 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
         // The report first, in its own units; the listing change stays as it was observed beside it.
         lead: `${s.reported ? 'Your report records' : 'Your figures record'} ${what}; ${d < 0 ? `that doesn’t show ${spell(n)} fewer ${unitWord(n)} were ${spell(n)} sales` : 'the listing count doesn’t tell us anything more about sales'}.`,
         items: [
-          `${d < 0 ? `The listing count still fell from ${l.from} to ${l.to}` : d === 0 ? `The listing count stayed at ${l.from}` : `The listing count rose from ${l.from} to ${l.to}`}. Those are separate measures: a listing can hold several tickets, and listings come down or go up for reasons other than a sale, so we don’t know why the rest went.`,
+          `${d < 0 ? `The listing count still fell from ${l.from} to ${l.to}` : d === 0 ? `The listing count stayed at ${l.from}` : `The listing count rose from ${l.from} to ${l.to}`}. Those are separate measures: a listing can hold several tickets, and listings come down or go up for reasons other than a sale, so we can’t attribute that net change to those orders without listing-level reconciliation.`,
           'Neither figure shows demand is rising: that needs sales over time from the same source, counted the same way.',
           s.reported ? 'The report is yours; I haven’t checked where it comes from or how it counts.' : 'Those figures are yours; I haven’t checked where they come from or how they count.',
         ],
@@ -322,6 +327,12 @@ export function suppliedEvidenceAnswer(messages: string[]): EvidenceAnswer | nul
     return { lead: `${s.reported ? 'Your figures record' : 'Taking your figures as given, that’s'} ${[s.orders !== null ? `${s.orders} order${s.orders === 1 ? '' : 's'}` : null, s.tickets !== null ? `${s.tickets} ticket${s.tickets === 1 ? '' : 's'}` : null].filter(Boolean).join(' covering ')} sold.`, items: ['On its own that doesn’t show demand is rising or falling: that needs sales over time from the same source.', 'I haven’t checked where those figures come from or how they count sales.'], nextStep: null, kinds: ['sales_only'] };
   }
   return null;
+}
+
+/** "five reserved seats together in the upper tier", "five adjacent upper-tier seats". */
+function groupLabel(g: NonNullable<EvidenceFacts['group']>): string {
+  const zoneSaid = g.zone && g.descriptor && new RegExp(`\\b${g.zone}\\b`, 'i').test(g.descriptor);
+  return `${word(g.quantity!)}${g.descriptor ? ` ${g.descriptor}` : ''} seats${g.together ? ' together' : ''}${g.zone && !zoneSaid ? ` in the ${g.zone} tier` : ''}`;
 }
 
 function hasFamily(f: EvidenceFacts): boolean {

@@ -186,7 +186,7 @@ describe('R2-EVIDENCE-*-FOLLOWUP-01: follow-up figures are read in their own uni
   it('"all-in" is the same basis as "including fees" for a group', () => {
     const r = suppliedEvidenceAnswer([opening, 'For five adjacent reserved seats: yesterday $450 all-in; today $500 all-in. What changed for our group?']);
     expect(r?.kinds).toEqual(['group_change']);
-    expect(r?.lead).toBe('For your five seats, the total rose $50: $450 to $500 with fees included (11.1% more).');
+    expect(r?.lead).toBe('For the five of you, the latest total is $500 with fees included: $50 more than the earlier $450 (11.1%).');
   });
   it('a group quoted before fees and then with fees is not a price change', () => {
     const r = suppliedEvidenceAnswer([opening, 'For five adjacent reserved seats: yesterday $450 before fees; today $500 including fees. What changed?']);
@@ -195,7 +195,7 @@ describe('R2-EVIDENCE-*-FOLLOWUP-01: follow-up figures are read in their own uni
   });
   it('the time word nearest each total decides its order, not the sentence’s first', () => {
     const r = suppliedEvidenceAnswer([opening, 'Now here are five adjacent seats: yesterday $500 including fees; today $450 including fees.']);
-    expect(r?.lead).toBe('For your five seats, the total fell $50: $500 to $450 with fees included (10% less).');
+    expect(r?.lead).toBe('For the five of you, the latest total is $450 with fees included: $50 less than the earlier $500 (10%).');
   });
   const listings = 'A listing feed showed 100 active listings yesterday and 70 today. Can you say 30 tickets sold?';
   it.each([

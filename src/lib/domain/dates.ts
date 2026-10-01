@@ -113,13 +113,13 @@ export function localTimeInstants(localDate: string, localTime: string, timeZone
 }
 
 /**
- * One instant for a venue's local wall-clock time. Discovery gives most events a start instant, but a
- * time-to-be-announced event has only a local date; this turns that into a comparable instant without a
- * timezone library. It is only ever used for ordering, windowing and deadlines, never shown as the event time.
- * In the repeated hour it is the first occurrence, so a deadline is never later than meant; in a skipped hour
- * it is that clock time after the jump (2:30 AM reads as 3:30 AM), as a clock would show it.
+ * The instant a local deadline ("delivered by 4pm") falls at. This is a policy, not a disambiguation
+ * (R2-TIME-FOLD-01): in the hour that repeats when clocks go back it is the first occurrence, so the deadline
+ * is never later than they meant; in the hour skipped when they go forward it is that clock time after the
+ * jump (2:30 AM reads as 3:30 AM), as a clock would show it. Anything that must not guess, such as an event's
+ * start or a past event's lead times, uses `localTimeInstants` and requires exactly one.
  */
-export function localToInstant(localDate: string, localTime: string, timeZone: string): Date {
+export function deadlineInstant(localDate: string, localTime: string, timeZone: string): Date {
   const all = localTimeInstants(localDate, localTime, timeZone);
   if (all.length) return all[0]!;
   const want = wallMs(localDate, localTime);
