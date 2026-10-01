@@ -1073,7 +1073,7 @@ It is stored with its zone and compared with each offer's promised transfer, and
 
 **Still needed before customers get these.**
 - SeatData's written OK for alerts that show their listing prices to customers. The standard licence restricts redistribution.
-- `WATCH_SEND_ENABLED=true`, the watch scheduler (Inngest, or the cron fallback), and staff approval of each alert.
+- `WATCH_SEND_ENABLED=true`, the watch scheduler (Inngest, or `POST /api/internal/watches` from a cron, added here because no fallback existed), and staff approval of each alert.
 
 **Not proven.**
 - **Fee allowance.** The 30% is an assumption, said as one. Actual StubHub and Vivid Seats fees vary, so an alert can still be over budget at checkout.
