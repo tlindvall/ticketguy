@@ -330,7 +330,7 @@ export function outsideIntent(text: string, named: { performerOrTeam: string | n
   return null;
 }
 
-const FOOD_DRINK = /\b(?:food|wine|beer|craft beer|whiskey|whisky|bourbon|tequila|mezcal|cocktail|spirits|taco|bbq|barbecue|chocolate|cheese|oyster|seafood|burger|pizza|ramen|dumpling|lobster|chili|coffee)\s+(?:festival|fest|tasting|crawl|expo|walk|week)\b|\btasting (?:event|tickets?|pass|session)\b|\b(?:wine|beer|whiskey|bourbon) tastings?\b|\bfood (?:and|&) (?:wine|drink)\b/i;
+const FOOD_DRINK = /\b(?:food|wine|beer|craft beer|whiskey|whisky|bourbon|tequila|mezcal|cocktail|spirits|taco|bbq|barbecue|chocolate|cheese|oyster|seafood|burger|pizza|ramen|dumpling|lobster|chili|coffee)\s+(?:festival|fest|tasting|crawl|expo|walk|week)\b|\btasting (?:event|tickets?|pass|session)\b|\b(?:wine|beer|whiskey|bourbon) tastings?\b|\bfood (?:and|&) (?:wine|drinks?) (?:festival|fest|classic|expo|weekend|event)\b/i;
 
 /** A ticketed food or drink event (Guide depth), from the customer's words when the catalog doesn't have it. */
 export function isFoodDrink(text: string): boolean {

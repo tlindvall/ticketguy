@@ -274,8 +274,9 @@ export const LEXICON: LexiconEntry[] = [
     field: 'genreHint',
     value: 'rock',
     meaning: 'Rock, indie, alternative and punk — one family, because the provider files indie bands under either Rock or Alternative.',
-    phrases: ['indie', 'indie rock', 'rock and roll', 'alternative', 'punk'],
-    pattern: /\b(indie|rock(?:\s*(?:and|&|'?n'?)\s*roll)?|alt(?:ernative|[- ]rock)|punk|grunge|garage rock|emo)\b/i,
+    phrases: ['indie', 'indie rock', 'rock and roll', 'alternative rock', 'punk'],
+    // Bare "alternative" is too often an option ("a guaranteed $100 alternative"): only as music (R1-A05).
+    pattern: /\b(indie|rock(?:\s*(?:and|&|'?n'?)\s*roll)?|alternative(?=\s+(?:rock|music|bands?|shows?|concerts?|gigs?|acts?|scene|night))|alt[- ]rock|punk|grunge|garage rock|emo)\b/i,
     categories: ['concert'],
     requestTypes: ['browse', 'find'],
     teachModel: true,

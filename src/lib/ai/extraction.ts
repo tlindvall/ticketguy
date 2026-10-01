@@ -53,7 +53,14 @@ function parseQuantity(t: string): { value: number | null; quote: string | null 
   return parsePartyQuantity(t);
 }
 
+/** "Do we buy two tickets or three?": a choice they haven't made, never a declared quantity (R1-A04). */
+const COUNT_CHOICE = /\b(?:one|two|three|four|five|six|\d{1,2})\s+(?:tickets?|seats?|admissions?)\s+or\s+(?:one|two|three|four|five|six|\d{1,2})\b|\b(?:one|two|three|four|five|six|\d{1,2})\s+or\s+(?:one|two|three|four|five|six|\d{1,2})\s+(?:tickets?|seats?|admissions?)\b/i;
+export function quantityIsOpenChoice(t: string): boolean {
+  return COUNT_CHOICE.test(t);
+}
+
 function parsePartyQuantity(t: string): { value: number | null; quote: string | null } {
+  if (COUNT_CHOICE.test(t)) return { value: null, quote: null };
   // "One wheelchair space and one companion seat", "my partner is coming with me": two, said without a number.
   const pairOf = COUPLE.exec(t);
   // A number of tickets beats a head count when both are said: "Four Hamilton tickets … two adults and kids aged
@@ -106,6 +113,13 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
   // TOTAL" is a $230 budget (TGQA-R8 17). Otherwise the first amount, as before.
   const worded = /\b(?:budget|cap|spend(?: up to)?|max(?:imum)?|no more than|at most|up to|under)\b(?:\s+(?:is|of|to|stays|now|still|remains|was))*\s*(?:\$|\bat\s+\$)/i.exec(t);
   const inWorded = worded ? AMOUNT.exec(t.slice(worded.index)) : null;
+  // "$100 total cap", "$300 all-in budget": the amount said before the word that makes it the cap, which a
+  // smaller line item earlier in the message ("two $9 items") must not displace (R1-A03).
+  const before = inWorded ? null : /\$\s?(\d{1,5}(?:[.,]\d{2})?)\s+(?:(total|all[- ]in|whole[- ]night|overall|combined)\s+)?(?:budget|cap|limit|max(?:imum)?)\b/i.exec(t);
+  if (before) {
+    const cents = Math.round(Number(before[1]!.replace(',', '.')) * 100);
+    return { cents, basis: before[2] ? 'whole_party' : null, quote: before[0] };
+  }
   const m = inWorded ?? AMOUNT.exec(t);
   const at = inWorded ? worded!.index + inWorded.index : m?.index ?? 0;
   if (!m) return { cents: null, basis: null, quote: null };
@@ -237,7 +251,7 @@ export class FixtureExtractor implements Extractor {
     ev('budgetCents', budget.quote);
     if (budget.cents !== null && budget.basis === null) ambiguities.push('budget_basis_unknown');
     // "A few" or "some" tickets is a real doubt about the number, so it is asked rather than assumed to be two.
-    if (lexiconVagueQuantity(t)) ambiguities.push('quantity_unclear');
+    if (lexiconVagueQuantity(t) || quantityIsOpenChoice(t)) ambiguities.push('quantity_unclear');
 
     // Negations first so "anything except X, Y please" resolves to Y (A29).
     const negated: string[] = [];

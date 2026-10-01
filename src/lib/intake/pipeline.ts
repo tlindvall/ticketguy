@@ -19,7 +19,7 @@ import { inspectImage, selectProcessableImages } from '@/lib/media/image-validat
 import { createMediaStore } from '@/lib/media/storage';
 import { fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate } from '@/lib/ai/extraction';
+import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
@@ -48,6 +48,7 @@ import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type Eve
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { trendRights } from '@/lib/advice/trend-rights';
 import { evidenceFacts, suppliedEvidenceAnswer } from '@/lib/advice/supplied-evidence';
+import { decisionAnswer } from '@/lib/advice/decision-questions';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
 import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
@@ -656,6 +657,29 @@ export class Concierge {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
       return { state: 'recommendation_sent', revision, extraction: merged };
     };
+    // A decision they can make without an event match (Research 1, R1-A02): what a cover and a minimum come to, whether
+    // a lottery can be the plan, whether a small child needs admission. Answered from their facts and any rule they
+    // supplied, said as theirs; never a catalog search, an intake form or a claim we checked the policy.
+    const decision = decisionAnswer(threadTexts);
+    if (decision) {
+      const brief: RequestExtraction = {
+        ...merged,
+        quantity: decision.facts.quantity ?? (quantityIsOpenChoice(flat(threadTexts.join(' '))) ? null : merged.quantity),
+        eventName: merged.eventName ?? decision.facts.showName,
+      };
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+      if (revision > 1) await this.invalidateForRevision(req.id, revision);
+      const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      // A link they sent sits beside the rule it supports, as a link.
+      const linked = (x: string) => esc(x).replace(/\bhttps?:\/\/[^\s<>"]+[^\s<>".,;:!?]/g, (u) => `<a href="${u}">${u}</a>`);
+      const paras = [...decision.items, ...(decision.nextStep ? [decision.nextStep] : [])];
+      const text = [decision.lead, ...paras].join('\n\n');
+      const html = [`<p style="margin:0 0 18px;"><strong>${esc(decision.lead)}</strong></p>`, ...paras.map((x) => `<p style="margin:0 0 18px;">${linked(x)}</p>`)].join('\n');
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your question'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `decision:${msg.id}` });
+      await this.transition(req.id, 'recommendation_sent', `decision:${decision.kind}`);
+      return { state: 'recommendation_sent', revision, extraction: brief };
+    }
     // Their own figures, and a question about what they mean (Research 2, R2-EVIDENCE-01): the arithmetic and the
     // distinction first, before any event search or "which event?" intake. A quote's "today" is when it was seen,
     // not the day they want to go, and tickets in a sales report aren't how many they need.
@@ -695,9 +719,10 @@ export class Concierge {
 
 
     // A ticketed food or drink event with nothing to compare yet (Guide depth): what to check and what to send,
+    // unless the event is another kind (comedy, a concert): there food and drink are extras, not the event (R1-A01).
     // rather than a catalog search and a "which event?" loop. Their offers, when they send them, are added up
     // by the supplied-offer path, with no resale sweep, tracking or watch (SD05).
-    if (this.env.SERVICE_POLICY_MODE === 'enforce' && !priorVersion && !merged.performerOrTeam && !supplied.textOffers.length && isFoodDrink(flat(latestText))) {
+    if (this.env.SERVICE_POLICY_MODE === 'enforce' && !priorVersion && !merged.performerOrTeam && !supplied.textOffers.length && isFoodDrink(flat(latestText)) && !NOT_FOOD_PRIMARY.has(merged.categoryHint ?? '')) {
       const decision = resolveServicePolicy({ category: 'food_drink', blockedCategories: this.env.blockedCategories, now });
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], servicePolicy: { mode: 'enforce', ...decision }, createdBy: 'system' });
       await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
@@ -3541,6 +3566,11 @@ const PRICE_WATCH_ONLY = /\b(?:price watch(?:es)?|watching (?:the )?prices?|pric
 const ALL_ALERTS = /\b(?:all|everything|every alert|event alerts?|on-?sale alerts?|announcement|any (?:more )?alerts?|the alerts)\b/i;
 
 /** "We could stretch to $350", "I can go up to $400", "budget is now $500": a new cap, nothing else new. */
+/**
+ * An event of another kind, where food and drink are extras: comedy, theatre, sports (R1-A01). Concerts aren't
+ * listed: "festival" reads as a concert hint, and "Brooklyn Wine Festival" is still a food and drink festival.
+ */
+const NOT_FOOD_PRIMARY = new Set(['comedy', 'theater', 'sports', 'nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer']);
 const BUDGET_CHANGE = /\b(?:stretch|raise|increase|go up|bump(?: it)?(?: up)?|extend|up (?:it|the budget))\b[^.?!]{0,25}\$\s?\d|\b(?:could|can|would) (?:do|pay|spend|go to)\s+(?:up to\s+)?\$\s?\d|\b(?:budget|cap|limit)\s+(?:is\s+)?now\b[^.?!]{0,15}\$\s?\d/i;
 
 /** A follow-up about the offers already sent: the same ones, maybe with a requirement changed. */

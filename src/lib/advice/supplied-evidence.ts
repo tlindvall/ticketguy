@@ -17,7 +17,7 @@ import { suppliedTrendQuestion } from './supplied-trend';
 
 const NUMBERS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
-const COUNT = '(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\\d{1,2})';
+const COUNT = '(?<!\\$\\s?)(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\\d{1,2})';
 const toCount = (w: string) => NUMBERS[w.toLowerCase()] ?? Number(w);
 const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
 const TEENS: Record<number, string> = { 13: 'thirteen', 14: 'fourteen', 15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen', 19: 'nineteen' };
@@ -98,9 +98,12 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
       // "Today" beside a price or a count is when it was seen, not when they want to go.
       if (/\b(?:today|yesterday)\b/i.test(s) && (m.length > 0 || (LISTINGS.test(s) && ints(s).length > 0))) f.observationDate = true;
       // Singles: two prices for single tickets.
+      // A price change needs a change: "from $90 to $60", "$90 → $60", or an earlier and a later price. A list of
+      // options side by side ("lottery for $50, or a pair for $220") is not one basket at two times (R1-A02).
+      const change = /\bfrom\s+\$?\d[\d,]*\s+(?:\w+\s+){0,2}to\s+\$?\d|\d\s*(?:→|->)\s*\$?\d/i.test(s) || (EARLIER.test(s) && LATER.test(s));
       const multi = [...s.matchAll(new RegExp(`\\b${COUNT}\\s+(?:[a-z-]+\\s+){0,3}(?:seats|tickets)\\b`, 'gi'))].some((x) => toCount(x[1]!) >= 2);
       const mixedFees = BEFORE_FEES.test(s) && ALL_IN.test(s);
-      if (SINGLES.test(s) && m.length >= 2 && !multi && !mixedFees) {
+      if (SINGLES.test(s) && m.length >= 2 && !multi && !mixedFees && change) {
         const [a, b] = ordered(s, m[0]!.cents, m[1]!.cents);
         f.singles = { fromCents: a, toCents: b };
       }
@@ -110,7 +113,7 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
         const descriptor = [g[2]?.replace(/[\s,]+(?:and\s+)?/g, ' ').trim(), g[3] ? 'together' : ''].filter(Boolean).join(' ') || null;
         f.group = { quantity: toCount(g[1]!), descriptor: descriptor ?? f.group?.descriptor ?? null, totals: f.group?.totals ?? [], mismatched: f.group?.mismatched ?? false };
       }
-      if (!SINGLES.test(s) && /\bgroup\b|\bblock\b|\btogether\b|\badjacent\b/i.test(s) && m.length >= 2 && !BEFORE_FEES.test(s) && !ALL_IN.test(s)) {
+      if (!SINGLES.test(s) && /\bgroup\b|\bblock\b|\btogether\b|\badjacent\b/i.test(s) && m.length >= 2 && !BEFORE_FEES.test(s) && !ALL_IN.test(s) && change) {
         // Totals for the group, each tagged with its own seat count when the clause says one.
         const parts = clauses(s).flatMap((c) => money(c).map((x) => ({ c, cents: x.cents })));
         const tagged = parts.map((p) => {
@@ -149,7 +152,6 @@ export function evidenceFacts(messages: string[]): EvidenceFacts {
       }
       // Listing counts: "active listings fell from 100 to 70".
       // A change needs a change: "from 100 to 70", "100 → 70", or an earlier and a later count.
-      const change = /\bfrom\s+\d[\d,]*\s+(?:\w+\s+){0,2}to\s+\d|\d\s*(?:→|->)\s*\d/i.test(s) || (EARLIER.test(s) && LATER.test(s));
       if (LISTINGS.test(s) && !m.length && change) {
         const n = ints(s);
         if (n.length >= 2) {
