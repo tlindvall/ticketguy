@@ -63,7 +63,7 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |
 |---|---|---|---|---|---|
-| Rock, indie, alternative and punk — one family, because the provider files indie bands under either Rock or Alternative. **model** | “indie”, “indie rock”, “rock and roll”, “alternative”, “punk” | `genreHint="rock"` | concert | browse, find | “I like indie rock and roll. We are staying in brooklyn.” |
+| Rock, indie, alternative and punk — one family, because the provider files indie bands under either Rock or Alternative. **model** | “indie”, “indie rock”, “rock and roll”, “alternative rock”, “punk” | `genreHint="rock"` | concert | browse, find | “I like indie rock and roll. We are staying in brooklyn.” |
 | Jazz. **model** | “jazz”, “a jazz club”, “swing” | `genreHint="jazz"` | concert | browse, find | “Any jazz in the city this weekend?” |
 | Hip-hop and rap. **model** | “hip-hop”, “hip hop”, “rap” | `genreHint="hip-hop"` | concert | browse, find | “Looking for a hip hop show next week” |
 | Electronic and dance music. **model** | “electronic”, “EDM”, “techno”, “house music”, “a DJ”, “DJ set”, “rave”, “club night”, “drum and bass”, “deep house” | `genreHint="electronic"` | concert | browse, find | “Any techno parties in Brooklyn next weekend?” |
