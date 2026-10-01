@@ -1,3 +1,4 @@
+import { suppliedTrendQuestion } from './supplied-trend';
 import { flat, minutesOf } from './text-offers';
 
 export type Admission = 'included' | 'excluded' | 'unknown';
@@ -7,10 +8,10 @@ export type ProductKind = 'admission' | 'parking' | 'shuttle' | 'upgrade' | 'pac
 export function admissionTerms(text: string): { admission: Admission; admissionStated: boolean; productKind: ProductKind } {
   const t = flat(text);
   const productKind: ProductKind = /\b(?:packages?|bundles?)\b/i.test(t) ? 'package' : /\bparking\b/i.test(t) ? 'parking' : /\bshuttle\b/i.test(t) ? 'shuttle' : /\b(?:upgrade|merchandise)\b/i.test(t) ? 'upgrade' : /\b(?:admissions?|concert tickets?|festival pass|entry)\b/i.test(t) ? 'admission' : 'unknown';
-  const excluded = /\b(?:concert tickets?|event tickets?|admission)\b[^.;?]{0,25}\b(?:sold|purchased|bought) separately\b|\b(?:no|zero|0|without)\s+(?:(?:concert|event|festival)\s+)?admissions?\b|\b(?:concert|event|festival|admission) tickets? (?:is |are )?not included\b|\b(?:does not|doesn't|do not|don't) include (?:a |an |any )?(?:(?:concert|event|festival) )?(?:tickets?|admission)\b|\b(?:parking|shuttle|merchandise)[- ]only\b|\b(?:separate|additional) (?:concert |event )?(?:admission|ticket) (?:is )?required\b|\b(?:must|need to) already (?:hold|have) a separate (?:show|concert|event) ticket\b|\b(?:does not|doesn't) get you (?:through the door|into the (?:show|concert))\b/i.test(t);
+  const excluded = /\b(?:concert tickets?|event tickets?|admission)\b[^.;?]{0,25}\b(?:sold|purchased|bought) separately\b|\b(?:no|zero|0|without)\s+(?:(?:concert|event|festival)\s+)?(?:admissions?|entry tickets?)\b|\b(?:concert|event|festival|admission) tickets? (?:is |are )?not included\b|\b(?:does not|doesn't|do not|don't) include (?:a |an |any )?(?:(?:concert|event|festival) )?(?:tickets?|admission)\b|\b(?:parking|shuttle|merchandise)[- ]only\b|\b(?:separate|additional) (?:concert |event )?(?:admission|ticket) (?:is )?required\b|\b(?:must|need to) already (?:hold|have) a separate (?:show|concert|event) ticket\b|\b(?:does not|doesn't) get you (?:through the door|into the (?:show|concert))\b/i.test(t);
   const uncertain = /\b(?:is|whether|unsure)\b[^.;?]{0,35}\badmission\b[^.;]{0,25}\?|\badmission (?:is )?included\?|\b(?:admission|ticket)\b[^.;]{0,30}\b(?:unknown|unclear|not stated|not specified|may|might)\b|\b(?:may|might) include\b/i.test(t);
-  const included = /\b(?:concert|event|festival|general)[- ]admissions?\b|\b(?:concert|admission) (?:tickets?|seats?)\b|\bconcert where\b|\b(?:DJ|dance) (?:dance )?party\b|\bfestival pass\b|\bany[- ]?time entry\b|\bentry before (?:midnight|\d{1,2})\b|\badmission valid (?:until|through)\b|\b(?:includes?|including|with)\s+(?:(?:two|2|a|an)\s+)?(?:(?:GA|concert|event|festival)\s+)?admissions?\b/i.test(t);
-  const explicitAdmission = /\b(?:concert|event|festival|general)[- ]admissions?\b|\bconcert tickets?\b/i.test(t);
+  const included = /\b(?:concert|event|festival|general|GA)[- ]admissions?\b|\b(?:concert|admission) (?:tickets?|seats?)\b|\bconcert where\b|\b(?:DJ|dance) (?:dance )?(?:party|night)\b|\bfestival pass\b|\bany[- ]?time entry\b|\bentry before (?:midnight|\d{1,2})\b|\badmission valid (?:until|through)\b|\b(?:includes?|including|with)\s+(?:(?:two|2|a|an)\s+)?(?:(?:GA|concert|event|festival)\s+)?admissions?\b/i.test(t);
+  const explicitAdmission = /\b(?:concert|event|festival|general|GA)[- ]admissions?\b|\bconcert tickets?\b/i.test(t);
   const ancillary = ['parking', 'shuttle', 'upgrade'].includes(productKind);
   const admission: Admission = excluded ? 'excluded' : uncertain ? 'unknown' : included && (!ancillary || explicitAdmission) ? 'included' : ['parking', 'shuttle'].includes(productKind) ? 'excluded' : 'unknown';
   return { productKind: productKind === 'unknown' && admission === 'included' ? 'admission' : productKind, admission, admissionStated: excluded || uncertain || included || ancillary };
@@ -33,7 +34,7 @@ export function entryTerm(text: string, year = 0): EntryTerm | null {
   const t = flat(text);
   if (/\bany[- ]?time entry\b|\bentry (?:at )?any time\b/i.test(t)) return { kind: 'anytime' };
   // A replacement often quotes the old condition negatively ("until 2am, not before midnight").
-  const m = new RegExp(`\\b(?:entry|enter|admission(?: valid)?|last entry)\\s+(?:only\\s+)?(before|until|by|through)\\s+${TIME}([^.;]*)`, 'i').exec(t);
+  const m = new RegExp(`\\b(?:entry|enter|admission(?: valid)?|last entry)\\s+(?:(?:only|strictly)\\s+)?(before|until|by|through)\\s+${TIME}([^.;]*)`, 'i').exec(t);
   if (m && minutesOf(m[2]!) === null) return { kind: 'unknown' };
   if (m) return { kind: 'before', minutes: minutesOf(m[2]!)!, boundary: /before/i.test(m[1]!) ? 'strict' : /by/i.test(m[1]!) ? 'inclusive' : 'unspecified', date: dateIn(m[3]!, Number(/\b(20\d{2})\b/.exec(t)?.[1] ?? year)) };
   return /\bentry (?:cutoff|deadline|restriction)\b/i.test(t) ? { kind: 'unknown' } : null;
@@ -51,12 +52,14 @@ export function nightTiming(messages: string[]): NightTiming | null {
       out.eventDate = dateIn(`${start[1]} ${start[2]}`, year) ?? out.eventDate;
       out.start = minutesOf(start[3]!);
     }
+    if (!out.eventDate && /\b(?:night|event|show|doors)\b/i.test(t)) out.eventDate = dateIn(t.split(/\b(?:Offer|Option) [A-Z]\b/)[0]!, year);
     // A date can precede the time or follow it. A price-only or cutoff correction isn't an arrival change.
     const arrival = /\b(?:we (?:will |will be |are back to |are |will be back to )?(?:arriv\w*|mean)|we'll arrive|arrival(?: is| changes)?|our arrival changes)\b([^.;!?]+)/i.exec(t)?.[1];
     if (arrival) {
       const tm = new RegExp(TIME, 'i').exec(arrival);
       const date = dateIn(arrival, year);
       if (date) out.arrivalDate = date;
+      else if (out.eventDate && /\bthat (?:Friday|Saturday|Sunday|Monday|Tuesday|Wednesday|Thursday)\b/i.test(arrival)) out.arrivalDate = out.eventDate;
       else if (/not specified|unspecified|which calendar date/i.test(t)) out.arrivalDate = null;
       if (tm) out.arrival = minutesOf(tm[1]!);
     }
@@ -70,12 +73,12 @@ export function entryFailure(term: EntryTerm | null, timing: NightTiming | null)
   if (!timing) return null;
   if (term?.kind === 'anytime') return null;
   if (!term || term.kind === 'unknown') return 'the entry cutoff is unknown; confirm that the ticket allows your arrival time';
-  if (!timing.eventDate || !timing.arrivalDate || timing.start === null) return 'the entry cutoff needs the event and arrival calendar dates before I can confirm it works';
+  if (!timing.eventDate || !timing.arrivalDate || timing.start === null && term.minutes < 720 && !term.date) return 'the entry cutoff needs the event and arrival calendar dates before I can confirm it works';
   const days = (Date.parse(timing.arrivalDate) - Date.parse(timing.eventDate)) / 86_400_000;
-  const cutoffDays = term.date ? (Date.parse(term.date) - Date.parse(timing.eventDate)) / 86_400_000 : term.minutes < 720 && timing.start >= 720 ? 1 : 0;
+  const cutoffDays = term.date ? (Date.parse(term.date) - Date.parse(timing.eventDate)) / 86_400_000 : term.minutes < 720 && (timing.start ?? 0) >= 720 ? 1 : 0;
   const cutoff = term.minutes + cutoffDays * 1440;
   const arrival = days * 1440 + timing.arrival!;
-  if (arrival < timing.start) return 'your arrival precedes the event start; confirm when this ticket permits entry';
+  if (timing.start !== null && arrival < timing.start) return 'your arrival precedes the event start; confirm when this ticket permits entry';
   if (arrival === cutoff && term.boundary === 'unspecified') return 'arrival exactly at the cutoff is not confirmed by “until”; check whether the organizer includes that instant';
   return (term.boundary === 'inclusive' ? arrival > cutoff : arrival >= cutoff) ? `entry ${term.boundary === 'inclusive' ? 'by the stated time' : term.minutes === 0 ? 'before midnight' : 'before the stated time'} does not allow your arrival ${term.boundary === 'inclusive' ? 'after' : 'at or after'} the cutoff` : null;
 }
@@ -94,7 +97,7 @@ export function musicExperience(messages: string[]): MusicExperience {
     if (/\b(?:(?:now|just|only) )?want (?:a |the |to dance at the )?(?:DJ|dance|party|recordings|tribute)\b/i.test(t)) out.kind = 'party';
     else if (/\b(?:we|us|I)\b[^.!?]{0,35}\bwant\b[^.!?]{0,80}\b(?:herself|himself|themselves|actual artist|original artist|performing|perform)\b/i.test(t)) out.kind = 'artist';
     const named = /\b(?:want(?: to see)?|see)\s+([A-Z][a-z]+(?: [A-Z][a-z]+){0,3})\s+(?:at|herself|himself|themselves|performing|live)\b/.exec(t);
-    if (named) out.artist = named[1]!;
+    if (named && !(out.artist && out.artist.toLowerCase().startsWith(named[1]!.toLowerCase() + ' '))) out.artist = named[1]!;
   }
   return out;
 }
@@ -103,7 +106,7 @@ export type PerformanceTerms = { appearance: 'live' | 'absent' | 'unknown' | nul
 export function performanceTerms(text: string): PerformanceTerms {
   const t = flat(text);
   const absent = /\b(?:will not|won't|does not|doesn't|NOT)\s+(?:appear|perform|appearing)\b|\bnot on (?:its|the) lineup\b|\brecordings only\b/i.test(t);
-  const live = /\b(?:will|does)\s+(?:appear|perform)\b|\b(?:herself|himself|themselves) (?:performs?|performing)\b|\bperforming live\b/i.test(t);
+  const live = /\b(?:will|does)\s+(?:appear|perform)\b|\b(?:herself|himself|themselves) (?:performs?|performing)\b|\bperforming live\b|\blive concert admission\b/i.test(t);
   const unknown = /\b(?:appearance|performer)\b[^.;]{0,25}\b(?:unknown|unconfirmed|unclear)\b/i.test(t);
   return { sameEventStated: /\b(?:replacement|now|corrected)\b[^.;]{0,50}\b(?:same|requested) (?:event|performance|show)\b/i.test(t), appearance: unknown ? 'unknown' : absent ? 'absent' : live ? 'live' : null, differentEvent: /\b(?:different|separate) (?:DJ[- ]?)?(?:event|performance)\b|\bnot on (?:its|the) lineup\b/i.test(t), description: t };
 }
@@ -112,7 +115,7 @@ function confirmsRequestedArtist(text: string, artist: string | null): boolean {
   if (/\b(?:original artist|actual artist|artist herself|artist himself) (?:will|does) (?:appear|perform)\b/i.test(text)) return true;
   if (!artist) return false;
   const name = artist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b${name}\\s+(?:(?:herself|himself|themselves)\\s+)?(?:(?:will|does)\\s+(?:appear|perform)|performs?\\b|performing\\b)`, 'i').test(text);
+  return new RegExp(`\\b${name}\\s+(?:(?:herself|himself|themselves)\\s+)?(?:(?:will|does)\\s+(?:appear|perform)|performs?\\b|performing\\b|live concert admission\\b)`, 'i').test(text);
 }
 
 export function performanceFailure(performance: PerformanceTerms | undefined, goal: MusicExperience | undefined): string | null {
@@ -138,6 +141,8 @@ export type CopiedAdmissionPolicy = {
   guardianUnderAge?: number | null;
   unaccompaniedFromAge?: number | null;
   acceptedId: string | null;
+  acceptedIdKinds?: Array<'government' | 'school' | 'photo'>;
+  idCombination?: 'any' | 'all';
   sourceUrl: string | null;
   provenance: 'customer_supplied';
 };
@@ -149,21 +154,32 @@ export function copiedAdmissionPolicy(text: string): CopiedAdmissionPolicy | nul
   const start = /\b(?:says|states|reads)\s*:?\s*|:\s*/i.exec(full);
   // The customer's plan ("will go without an adult") is not the organizer's permission.
   const t = (start ? full.slice(start.index + start[0].length) : full).split(/\b(?:Both (?:have|\d{1,2}[- ]year)|They (?:only )?have|Do (?:these|both)|Can they|Is being)\b/i)[0]!;
+  const permittedAge = /\b(?:ages?|aged?|attendees aged) (\d{1,2}) and (?:above|older)\b[^.;]{0,40}\b(?:may|can) enter unaccompanied/i.exec(t);
   const from = /\b(?:aged?\s+|minimum(?: age)?\s+)(\d{1,2})(?: and (?:above|older)| or older|\s*[,;])/i.exec(t);
   const minimum = /\b(?:ages? |aged? )?(1[0-9]|2[01])\s*\+|\bminimum age (?:is )?(\d{1,2})\b/i.exec(t);
   const threshold = /\b(?:anyone |guests? |attendees? )?under[- ](\d{1,2})(?:s|[- ]year[- ]olds?)?\b[^.;]{0,55}\b(?:parent|guardian|adult)\b/i.exec(t);
-  const prohibited = /\b(?:may not|cannot|can't|not allowed to) (?:enter|attend) (?:unaccompanied|without (?:an? )?(?:adult|parent|guardian))\b|\bunaccompanied (?:is )?not permitted\b/i.test(t);
-  const unaccompanied = !prohibited && /\b(?:guests?|attendees?|minors?|1[0-7][- ]year[- ]olds?)\b[^.;]{0,65}\b(?:may|can|are allowed to) (?:enter|attend) (?:unaccompanied|without (?:an? )?(?:adult|guardian|parent))\b|\bunaccompanied (?:is )?permitted\b/i.test(t);
+  const scopedProhibition = /\bunder[- ](\d{1,2})(?:s)?\b[^.;]{0,40}\b(?:may not|cannot|can't) (?:enter|attend) unaccompanied/i.exec(t);
+  const permissionText = scopedProhibition ? t.replace(scopedProhibition[0], '') : t;
+  const prohibited = /\b(?:may not|cannot|can't|not allowed to) (?:enter|attend) (?:unaccompanied|without (?:an? )?(?:adult|parent|guardian))\b|\bunaccompanied (?:is )?not permitted\b/i.test(permissionText);
+  const unaccompanied = !prohibited && /\b(?:guests?|attendees?|minors?|ages? \d{1,2}|1[0-7][- ]year[- ]olds?)\b[^.;]{0,65}\b(?:may|can|are allowed to) (?:enter|attend) (?:unaccompanied|without (?:an? )?(?:adult|guardian|parent))\b|\bunaccompanied (?:is )?permitted\b/i.test(t);
   const noGuardian = !prohibited && (/\bno (?:adult|guardian|parent) (?:is )?required\b/i.test(t) || unaccompanied);
   const guardian = prohibited || /\b(?:must|have to) (?:be accompanied by|attend with) (?:an? )?(?:adult|guardian|parent)\b|\b(?:adult|guardian|parent) (?:is )?required\b/i.test(t);
+  const ids = [...t.matchAll(/\b((?:government[- ]issued(?: photo)?|school[- ]issued(?: photo)?|school photo|photo|student) ID)\b/gi)];
+  const betweenIds = ids.length > 1 ? t.slice(ids[0]!.index! + ids[0]![0].length, ids[1]!.index) : '';
+  const alternatives = ids.length > 1 && /\bor\b/i.test(betweenIds);
+  const conjunctive = ids.length > 1 && /\band\b/i.test(betweenIds);
+  const positiveIds = ids.filter((m) => !/^(?: is| are)? (?:not accepted|not valid|not allowed)/i.test(t.slice(m.index! + m[0].length)));
+  const accepted = alternatives || conjunctive ? positiveIds : positiveIds.slice(0, 1);
   const id = /\b((?:government[- ]issued(?: photo)?|school[- ]issued(?: photo)?|school photo|photo|student) ID)\b/i.exec(t);
   if (!minimum && !from && !threshold && !noGuardian && !guardian && !id) return null;
   return {
     minimumAge: minimum ? Number(minimum[1] ?? minimum[2]) : /\ball ages\b/i.test(t) ? 0 : from ? Number(from[1]) : null,
     guardianRequired: noGuardian ? false : threshold ? null : guardian ? true : null,
-    guardianUnderAge: threshold ? Number(threshold[1]) : null,
-    unaccompaniedFromAge: unaccompanied && from ? Number(from[1]) : null,
-    acceptedId: id?.[1] ?? null,
+    guardianUnderAge: threshold || scopedProhibition ? Number((threshold ?? scopedProhibition)![1]) : null,
+    unaccompaniedFromAge: unaccompanied && (permittedAge || from) ? Number((permittedAge ?? from)![1]) : null,
+    acceptedId: accepted.length ? accepted.map((m) => m[1]).join(conjunctive ? ' and ' : ' or ') : null,
+    idCombination: conjunctive ? 'all' : 'any',
+    acceptedIdKinds: accepted.map((m) => /government/i.test(m[1]!) ? 'government' : /school|student/i.test(m[1]!) ? 'school' : 'photo'),
     sourceUrl: /https:\/\/[^\s<>"']+/i.exec(t)?.[0]?.replace(/[.,);]+$/, '') ?? null,
     provenance: 'customer_supplied',
   };
@@ -184,18 +200,21 @@ function policyAnswer(messages: string[], youngest: number | null): { lead: stri
         guardianUnderAge: next.guardianRequired === false ? null : next.guardianUnderAge ?? policy.guardianUnderAge,
         unaccompaniedFromAge: next.unaccompaniedFromAge ?? policy.unaccompaniedFromAge,
         acceptedId: next.acceptedId ?? policy.acceptedId,
+        acceptedIdKinds: next.acceptedId ? next.acceptedIdKinds : policy.acceptedIdKinds,
+        idCombination: next.acceptedId ? next.idCombination : policy.idCombination,
         sourceUrl: next.sourceUrl ?? policy.sourceUrl,
       } : next;
     }
-    if (/\b(?:they|both|each|we) (?:only )?have (?:a |their )?school(?:[- ]issued)? photo IDs?\b/i.test(t)) heldId = 'school';
+    if (/\b(?:they|both|each|we) (?:only )?have (?:a |their )?school(?:[- ]issued)?(?: photo)? IDs?\b/i.test(t)) heldId = 'school';
     else if (/\b(?:they|both|each|we) (?:now )?have (?:a |their )?government[- ]issued (?:photo )?IDs?\b/i.test(t)) heldId = 'government';
   }
   if (!policy) return { lead: 'I haven’t verified any event-specific policy admitting them without an adult, so I can’t confirm that either can enter unaccompanied.', items: ['An age label such as “16+” or “all ages” alone does not verify the guardian or ID requirements. This does not mean the venue refuses minors.', 'Before buying, confirm unaccompanied admission for their ages and accepted ID with the event organizer. If you paste the policy, I can work through it with you.'] };
   const ageFails = youngest !== null && policy.minimumAge !== null && youngest < policy.minimumAge;
   const guardianFails = policy.guardianRequired === true || youngest !== null && policy.guardianUnderAge != null && youngest < policy.guardianUnderAge;
   const guardianPasses = policy.guardianRequired === false && (policy.unaccompaniedFromAge == null || youngest !== null && youngest >= policy.unaccompaniedFromAge) || policy.guardianUnderAge != null && youngest !== null && youngest >= policy.guardianUnderAge;
-  const idFails = /government/i.test(policy.acceptedId ?? '') && heldId === 'school';
-  const idPasses = heldId !== null && policy.acceptedId !== null && (/school|student/i.test(policy.acceptedId) ? heldId === 'school' : /government/i.test(policy.acceptedId) ? heldId === 'government' : /photo ID/i.test(policy.acceptedId));
+  const acceptedKinds = policy.acceptedIdKinds ?? [];
+  const idPasses = heldId !== null && acceptedKinds.length > 0 && (policy.idCombination === 'all' ? acceptedKinds.every((k) => k === heldId || k === 'photo') : acceptedKinds.includes(heldId) || acceptedKinds.includes('photo'));
+  const idFails = heldId !== null && acceptedKinds.length > 0 && !idPasses;
   const agePasses = youngest !== null && policy.minimumAge !== null && youngest >= policy.minimumAge;
   const lead = guardianFails || ageFails
     ? 'Based on the policy you pasted, they cannot attend unaccompanied under those terms.'
@@ -210,25 +229,37 @@ function policyAnswer(messages: string[], youngest: number | null): { lead: stri
 }
 
 /** Attendee ages come from the customer's plan, never age thresholds inside the copied policy. */
-function youngestAttendee(messages: string[]): number | null {
-  let youngest: number | null = null;
+export function youngestAttendee(messages: string[]): number | null {
+  let ages: number[] = [];
   for (const raw of messages) {
-    for (const sentence of flat(raw).split(/(?<=[.!?])\s+/)) {
-      const both = /\bboth (?:are |aged? )?(\d{1,2})\b/i.exec(sentence);
-      if (both) { youngest = Number(both[1]); continue; }
-      if (!/^(?:My|Our|We|They|Two|Three|Four|\d+)\b/i.test(sentence)) continue;
+    const t = flat(raw);
+    // An explicitly corrected younger/older person updates only that person.
+    const correction = /\b(?:the )?(younger|older) attendee is (\d{1,2})\b/i.exec(t);
+    if (correction && ages.length) {
+      const value = correction[1]!.toLowerCase() === 'younger' ? Math.min(...ages) : Math.max(...ages);
+      ages[ages.indexOf(value)] = Number(correction[2]);
+      continue;
+    }
+    for (const sentence of t.split(/(?<=[.!?])\s+/)) {
       const own = sentence.split(/\b(?:policy|terms|(?:event|ticket)[- ](?:specific[- ])?page|I copied)\b/i)[0]!;
-      const ages = [...own.matchAll(/\b(\d{1,2})[- ]year[- ]olds?\b|\baged? (\d{1,2})(?: and (\d{1,2}))?\b/gi)].flatMap((m) => [m[1] ?? m[2], m[3]].filter((a) => a !== undefined).map(Number));
-      if (ages.length) youngest = Math.min(...ages);
+      const both = /\bboth (?:of us )?(?:are |aged? )?(\d{1,2})\b/i.exec(own);
+      if (both) { ages = [Number(both[1]), Number(both[1])]; continue; }
+      const list = /\b(?:our|the|two) attendees (?:are|aged?) (\d{1,2}) and (\d{1,2})\b/i.exec(own);
+      if (list) { ages = [Number(list[1]), Number(list[2])]; continue; }
+      if (!/^(?:My|Our|We|They|Two|Three|Four|\d+)\b/i.test(own)) continue;
+      const found = [...own.matchAll(/\b(\d{1,2})[- ]year[- ]olds?\b|\baged? (\d{1,2})(?: and (\d{1,2}))?\b/gi)].flatMap((m) => [m[1] ?? m[2], m[3]].filter((a) => a !== undefined).map(Number));
+      if (found.length) ages = found;
     }
   }
-  return youngest;
+  return ages.length ? Math.min(...ages) : null;
 }
 
 export function concertQuestion(messages: string[]): { lead: string; items: string[] } | null {
   const latest = flat(messages.at(-1) ?? '');
   const all = flat(messages.join(' '));
-  const minor = /\b(?:1[0-7][- ]year[- ]olds?|minors?|both 1[0-7]|aged? 1[0-7])\b/i.test(all);
+  const suppliedTrend = concertContext(messages) ? suppliedTrendQuestion(messages) : null;
+  if (suppliedTrend) return suppliedTrend;
+  const minor = youngestAttendee(messages) !== null && youngestAttendee(messages)! < 18 || /\b(?:1[0-7][- ]year[- ]olds?|minors?|both 1[0-7]|aged? 1[0-7])\b/i.test(all);
   const alone = /\bunaccompanied\b|\bwithout (?:any |an? )?(?:adults?|guardians?|parents?)\b/i.test(all);
   if (minor && alone && concertContext(messages) && /\b(?:enter|entry|admi\w*|policy|policies|terms|guardian|adult|unaccompanied)\b/i.test(latest)) {
     return policyAnswer(messages, youngestAttendee(messages));

@@ -1,0 +1,123 @@
+[
+  {
+    "id": "24",
+    "scenario": "Nashville package units and stock",
+    "messages": [
+      "Two adults need concert admission in Nashville. Copied offers for the same country show, not live availability: Offer A: $90 per package all-in, TWO concert admissions per package; ONE package available. Offer B: two ordinary concert admissions for $120 TOTAL all-in. Budget $150 TOTAL. Which admits us for less?",
+      "Our third friend is joining. Three adults now, same $150 TOTAL budget. A still has only ONE package available with TWO admissions. B is still only TWO admissions. Do either of these cover all three? Please don't invent extra stock."
+    ]
+  },
+  {
+    "id": "25",
+    "scenario": "Austin youngest attendee and age correction",
+    "messages": [
+      "For an Austin country concert, our two attendees are 17 and 15, going without adults. Copied event terms: minimum age 16; attendees aged 16 and above may enter UNACCOMPANIED; school-issued photo ID accepted. Both have school IDs. Can both get in? These are supplied terms, not verified policy.",
+      "Correction: the younger attendee is 16, not 15. Older attendee is still 17. Same school IDs and event terms. Does that change your answer?"
+    ]
+  },
+  {
+    "id": "26",
+    "scenario": "Seattle explicit negative guardian rule",
+    "messages": [
+      "Two 16-year-olds want a Seattle pop concert. Here are the copied event terms: minimum age 16; under-18s may NOT enter unaccompanied; parent or legal guardian must remain at the event. Neither attendee has an adult coming. Both hold accepted government photo ID. Are they eligible on this plan? Don't confuse having ID with permission to enter alone."
+    ]
+  },
+  {
+    "id": "27",
+    "scenario": "Portland guardian threshold and ID alternative",
+    "messages": [
+      "Both of us are 16 and want a Portland indie concert. Copied event policy: minimum age 16. Only attendees UNDER 16 require a guardian. Ages 16 and above may enter unaccompanied. Bring either a government-issued photo ID OR a school-issued photo ID. We only have school photo IDs. Can we enter alone on these supplied terms?"
+    ]
+  },
+  {
+    "id": "28",
+    "scenario": "Los Angeles DJ appearance is not original artist",
+    "messages": [
+      "We want to see Sabrina Carpenter herself perform live in Los Angeles. Two adults, $250 TOTAL budget. Copied quotes including fees: Offer A: Sabrina-themed DJ night, $30 EACH, Sabrina Carpenter will NOT appear. Offer B: Sabrina Carpenter live concert admission, $100 EACH. Which matches our goal?",
+      "A's promoter corrected the wording: the DJ WILL appear in person, but Sabrina Carpenter still will NOT appear. A and B's prices stay the same. Does that make A a way to see Sabrina herself?"
+    ]
+  },
+  {
+    "id": "29",
+    "scenario": "Boston party goal becomes original live artist",
+    "messages": [
+      "For a Boston music night, two adults want a DJ dance party playing Dua Lipa recordings, not a concert by Dua herself. Budget $80 TOTAL. Copied quotes all-in: Offer A: Dua Lipa DJ dance party, $30 EACH, Dua Lipa will NOT appear. Offer B: Dua Lipa herself performs live, $90 EACH. Which suits our current plan?",
+      "Changed our minds: now we only want Dua Lipa herself performing live. New budget $200 TOTAL, still two adults. Offers A and B unchanged. Please compare for the new plan."
+    ]
+  },
+  {
+    "id": "30",
+    "scenario": "Phoenix before-fees exception to global fees",
+    "messages": [
+      "Two adults need actual concert admission to the same Phoenix pop show. These quotes include fees unless stated otherwise: Offer A: two GA admissions at $50 EACH BEFORE FEES, final fees unknown. Offer B: two GA admissions at $65 EACH INCLUDING ALL FEES. Budget $135 TOTAL. Can you actually say A is cheaper, and which has a known price within our budget?",
+      "A's checkout now shows a $20 fee per ticket on top of its $50 each base price. Everything else unchanged. Which is cheaper for both of us, and by how much?"
+    ]
+  },
+  {
+    "id": "31",
+    "scenario": "Atlanta sold-out quote must not win",
+    "messages": [
+      "Two adults, same Atlanta electronic concert. Copied quotes: Offer A: two actual GA concert admissions, $80 TOTAL all-in, marked SOLD OUT and not purchasable. Offer B: two actual GA concert admissions, $110 TOTAL all-in, marked AVAILABLE. Budget $120 TOTAL. Which can we actually buy? Don't choose sold-out inventory just because it is cheaper.",
+      "B is now marked sold out too. Prices unchanged. Are either of these still an actionable option?"
+    ]
+  },
+  {
+    "id": "32",
+    "scenario": "Chicago adjacency is a hard constraint",
+    "messages": [
+      "Two of us want to sit TOGETHER at a Chicago pop concert. Same show and balcony section. Copied offers, all fees included: Offer A: two concert admission seats, row B seats 1 and 19, NOT together, $140 TOTAL. Offer B: two concert admission seats, row B seats 7 and 8, confirmed adjacent in the quoted listing, $190 TOTAL. Budget $200 TOTAL. Which fits our non-negotiable requirement to sit together?"
+    ]
+  },
+  {
+    "id": "33",
+    "scenario": "San Francisco delivery after doors and performance",
+    "messages": [
+      "Two adults need San Francisco concert tickets for October 9, 2026. Performance starts 8pm and ends 10pm. Copied offers for actual admission, both fees included: Offer A: $120 TOTAL, delivery by 11pm on October 9, after the performance ends. Offer B: $170 TOTAL, instant mobile transfer now. Budget $180 TOTAL. Which fits our need to have tickets in time? Does a buyer guarantee make A safe for attending the show?"
+    ]
+  },
+  {
+    "id": "34",
+    "scenario": "Dallas restricted view versus full view",
+    "messages": [
+      "We need two Dallas country concert seats with a full unobstructed view. Copied quotes all-in: Offer A: two concert admissions, $150 TOTAL, restricted view with pillar blocking the stage. Offer B: two concert admissions, $200 TOTAL, full unobstructed stage view per the listing. Budget $220 TOTAL. Full view is mandatory. Which offer fits?"
+    ]
+  },
+  {
+    "id": "35",
+    "scenario": "Las Vegas day pass versus wrong-day cheaper pass",
+    "messages": [
+      "Two adults only want SATURDAY festival admission in Las Vegas. Copied quotes including fees: Offer A: FRIDAY-ONLY festival admission, $60 EACH, explicitly not valid Saturday. Offer B: SATURDAY-ONLY festival admission, $80 EACH. Budget $200 TOTAL. We cannot attend Friday. Which admits us on the day we want?"
+    ]
+  },
+  {
+    "id": "36",
+    "scenario": "Denver understated entitlements after short correction",
+    "messages": [
+      "Two adults want admission to the same Denver country concert, budget $150 TOTAL. Copied offers all-in: Offer A: one VIP package for $90 TOTAL including TWO concert admissions and merchandise. Offer B: two ordinary concert admissions for $120 TOTAL. Which gets us in for less?",
+      "Tiny correction: the cheap bundle is merch only after all. Zero entry tickets. Keep the regular pair and all the other facts from above. Which should we take now?"
+    ]
+  },
+  {
+    "id": "37",
+    "scenario": "Tampa unnamed cheap entry tier and new arrival",
+    "messages": [
+      "Two adults for the same electronic night in Tampa Friday October 2, 2026, doors 9pm. We arrive at 11:30pm that Friday. Copied quotes all-in: Offer A: two concert admissions for $40 TOTAL, entry strictly before 11pm; Offer B: two concert admissions for $70 TOTAL, anytime entry. Budget $80 TOTAL. Which works for our arrival?",
+      "We'll arrive an hour earlier than planned, at 10:30pm Friday October 2. Prices and entry terms unchanged. Does the cheaper tier work now?"
+    ]
+  },
+  {
+    "id": "38",
+    "scenario": "New York comparison with incompatible trend snapshots",
+    "messages": [
+      "Can you tell me whether to buy or wait for a New York pop concert? I need FIVE seats together, budget $600 TOTAL all-in. Yesterday I saw a SINGLE upper-level seat for $80 before fees. Today I found FIVE lower-level seats together for $110 each including fees. Does that prove prices went up? Please do not make a trend from different seats, quantity or fee basis.",
+      "If today's pair of data points cannot tell a trend, just say so. What comparable history would you need for my group? Please don't invent a normal price range or guarantee prices will fall."
+    ]
+  },
+  {
+    "id": "41",
+    "scenario": "Minneapolis festival wristband nontransferability",
+    "messages": [
+      "Two adults want a Minneapolis music festival, budget $260 TOTAL. Copied resale offers including fees: Offer A: two festival admissions for $180 TOTAL, wristbands only collectible with original purchaser government ID, NONTRANSFERABLE; seller is not attending and we are not the original purchasers. Offer B: two festival admissions for $240 TOTAL, official transferable tickets. Which is usable under the quoted terms? Please don't treat A as a bargain if we cannot collect or use it."
+    ]
+  }
+]
