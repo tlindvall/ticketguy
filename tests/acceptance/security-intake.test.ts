@@ -164,7 +164,12 @@ describe('A25 watch alert dedupe and cadence', () => {
   it('oscillation inside a band does not re-alert; unverified/stale never meet the threshold; daily cap holds', () => {
     const k1 = alertDedupeKey({ watchId: 'w', generation: 1, offerIdentity: 'src:list1', totalCents: 24000 });
     const k2 = alertDedupeKey({ watchId: 'w', generation: 1, offerIdentity: 'src:list1', totalCents: 24300 });
-    expect(k1).toBe(k2);
+    // Keys are per exact price now (PW-REPEAT-KEY-01); oscillation is held by the re-alert rule against the lowest
+    // total already alerted: a rise, or a dip of less than the larger of $10 and 5%, never re-alerts.
+    expect(k1).not.toBe(k2);
+    expect(alertDedupeKey({ watchId: 'w', generation: 1, offerIdentity: 'src:list1', totalCents: 24000 })).toBe(k1);
+    expect(shouldAlert({ targetTotalCents: 25000, candidateTotalCents: 24300, candidateVerified: true, candidateFresh: true, lastAlertedTotalCents: 24000, alertsInLast24h: 0, dedupeKeyExists: false })).toMatchObject({ alert: false, reason: 'improvement_below_realert_threshold' });
+    expect(shouldAlert({ targetTotalCents: 25000, candidateTotalCents: 23900, candidateVerified: true, candidateFresh: true, lastAlertedTotalCents: 24000, alertsInLast24h: 0, dedupeKeyExists: false })).toMatchObject({ alert: false, reason: 'improvement_below_realert_threshold' });
     expect(shouldAlert({ targetTotalCents: 25000, candidateTotalCents: 24000, candidateVerified: true, candidateFresh: true, lastAlertedTotalCents: null, alertsInLast24h: 0, dedupeKeyExists: false })).toMatchObject({ alert: true });
     expect(shouldAlert({ targetTotalCents: 25000, candidateTotalCents: 24000, candidateVerified: false, candidateFresh: true, lastAlertedTotalCents: null, alertsInLast24h: 0, dedupeKeyExists: false })).toMatchObject({ alert: false, reason: 'unverified_total_cannot_meet_threshold' });
     expect(shouldAlert({ targetTotalCents: 25000, candidateTotalCents: 24000, candidateVerified: true, candidateFresh: false, lastAlertedTotalCents: null, alertsInLast24h: 0, dedupeKeyExists: false })).toMatchObject({ alert: false, reason: 'stale_observation' });

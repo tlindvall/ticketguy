@@ -20,7 +20,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const { db } = await getDb();
     const [r] = await db.select().from(t.requests).where(eq(t.requests.id, id));
     if (!r) return Response.json({ error: 'not_found' }, { status: 404 });
-    const [msg] = await db.select({ id: t.messages.id }).from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+    const [msg] = await db.select({ id: t.messages.id }).from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
     if (!msg) return Response.json({ error: 'no_inbound_message' }, { status: 422 });
     const res = await db.transaction((tx) => enqueueOutbox(tx, { eventType: 'request.interpret', eventKey: `interpret:${msg.id}:reread:${body.idempotencyKey}`, entityId: id, payload: { messageId: msg.id, requestId: id } }));
     await audit(db, { actor: staff.userId, action: 'request.reread_requested', entityKind: 'request', entityId: id, revision: r.currentRevision, diff: { messageId: msg.id, enqueued: res.inserted } });

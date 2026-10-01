@@ -111,8 +111,10 @@ describe('a price watch on SeatData resale listings', () => {
     expect(tr).toMatchObject({ state: 'active', providerEventId: '555' });
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
-    expect(rec!.bodyText).toContain('I’m watching resale listings for this: if listings with 4 or more tickets show up at a price that, with fees of up to 30%, fits your $400 in total, I’ll email you a heads-up.');
-    expect(rec!.bodyText).toContain('I won’t have a link to the seats and can’t promise they’re together or sold in exactly 4');
+    // Monitoring vs seats checked, said once; the allowance as an assumption (reworded for PW QA wave 1).
+    expect(rec!.bodyText).toContain('Your market-price watch is on. I haven’t verified a set of 4 seats together you can buy. I’ll email you a heads-up if resale listings with 4 or more tickets come to $400 or less in total, using an assumed 30% for fees (checkout fees can be higher).');
+    expect(rec!.bodyText).toContain('it won’t have a link to the seats or a promise that they’re together or sold as exactly 4');
+    expect(rec!.bodyText).not.toMatch(/I can’t see live resale listings|I haven’t been able to check these against any seats|fees of up to/);
     expect(rec!.bodyText).not.toContain('I’m watching this for you');
   });
 
@@ -154,9 +156,12 @@ describe('a price watch on SeatData resale listings', () => {
     const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.id, approval.sendIntentId!));
     // In the customer's own thread, so it keeps their subject.
     expect(intent!.subject).toBe('Re: Watchers');
-    expect(intent!.bodyText).toContain('Heads-up: resale listings with 4 or more tickets for Metro Watchers vs. Boston at Watch Garden, New York');
-    expect(intent!.bodyText).toContain('now start at $75 a ticket before fees, $300 for four.');
-    expect(intent!.bodyText).toContain('With fees of up to 30%, that’s about $390 all in, inside your $400.');
+    // The decision number leads and is the only bold; the allowance is an assumption (PW QA wave 1).
+    expect(intent!.bodyText).toContain('Heads-up: resale listings now come to about $390 for four with fees, inside your $400.');
+    expect(intent!.bodyText).toContain('That’s for Metro Watchers vs. Boston at Watch Garden, New York');
+    expect(intent!.bodyText).toContain('listings with 4 or more tickets start at $75 a ticket before fees, $300 for four, plus an assumed 30% for fees. Checkout fees can be higher.');
+    expect(intent!.bodyHtml).toContain('Heads-up: resale listings now come to <strong>about $390 for four</strong> with fees, inside your $400.');
+    expect(intent!.bodyText).not.toMatch(/fees of up to|link you to the seller/);
     expect(intent!.bodyText).toContain('not a ticket I’ve checked: I don’t have a link to it, it may be gone when you look, and a listing of 4 or more may not sell exactly four or be seats together.');
     expect(intent!.bodyText).not.toMatch(/SeatData|found them|verified|guarantee/i);
     expect(intent!.bodyText).toContain('human-reviewed');

@@ -946,6 +946,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const obs = a.observedAt.toISOString();
   const q = a.quantity;
   const noMarket = a.sourcesChecked.length === 0;
+  const marketWatching = !!(a.watchStatus?.running && a.watchStatus.market);
 
   // The customer's own question first: the price they saw, against what the provider publishes.
   if (a.quote) {
@@ -1207,7 +1208,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       evidenceIds: [],
       methodVersion: null,
       limitations: ['requirements_unverified'],
-      customerVisible: true,
+      // A running market watch already says nothing is verified; twice is a contradiction in tone (PW QA wave 1).
+      customerVisible: !marketWatching,
     });
   }
   if (a.staffFollowUp) {
@@ -1296,7 +1298,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       id: 'C_WATCH',
       kind: 'coverage',
       text: w.running && w.market
-        ? `I’m watching resale listings for this: if listings with ${w.quantity} or more tickets show up at a price that, with fees of up to ${w.market.feeAllowancePct}%, fits your ${formatUsd(w.targetTotalCents)} in total, I’ll email you a heads-up. It comes from market data, so I won’t have a link to the seats and can’t promise they’re together or sold in exactly ${w.quantity}; you’d check the listing yourself. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
+        // Market monitoring, not seats checked: said once, here (PW QA wave 1). The allowance is an assumption, so
+        // it's named as one, and higher checkout fees are allowed for.
+        ? `Your market-price watch is on. I haven’t verified a set of ${w.quantity} seats together you can buy. I’ll email you a heads-up if resale listings with ${w.quantity} or more tickets come to ${formatUsd(w.targetTotalCents)} or less in total, using an assumed ${w.market.feeAllowancePct}% for fees (checkout fees can be higher). The heads-up comes from listing prices, so it won’t have a link to the seats or a promise that they’re together or sold as exactly ${w.quantity}. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
         : w.running
         ? `I’m watching this for you: ${w.quantity} tickets${w.togetherRequired ? ' together' : ''}, and I’ll email you if I find them for ${formatUsd(w.targetTotalCents)} or less in total, including fees. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
         : 'I can’t watch prices for you yet, so nothing is being monitored for this request and no alert will come. Reply any time and I’ll check again.',
@@ -1338,7 +1342,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     methodVersion: null,
     limitations: [],
     // With a listing we read and no market to set it against, its verdict already says so; once is enough.
-    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote)),
+    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching)),
   });
   if (a.policy.nextCheckpointAt) {
     claims.push({

@@ -29,7 +29,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const [req] = await db.select().from(t.requests).where(eq(t.requests.id, id));
   if (!req) notFound();
   const [contact] = await db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
-  const messages = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(asc(t.messages.receivedAt));
+  const messages = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt));
   const versions = await db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, id)).orderBy(desc(t.requestVersions.revision));
   const transitions = await db.select().from(t.requestTransitions).where(eq(t.requestTransitions.requestId, id)).orderBy(asc(t.requestTransitions.createdAt));
   const event = req.eventId ? (await db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, req.eventId)))[0] : null;
