@@ -7,7 +7,7 @@ import { PixelCursor } from './PixelCursor';
 /**
  * The hero: the one real "New message" window, playing its own demonstration once. A second-opinion request
  * types itself (a SeatGeek link, a screenshot attached, the group), a pixel cursor presses the button, and the
- * reply judges that listing: whether it meets the request, the group total with fees, the market, the call
+ * illustrative reply works from what the listing says, with the market trend labelled as context. It judges that listing: whether it meets the request, the group total with fees, the market, the call
  * and when not to follow it, and the seller link. Everything
  * stays real: the fields are editable and the button opens the visitor's email app with exactly that text
  * (nothing reaches us until they press send there). Touching the composer stops the demonstration and
@@ -18,7 +18,7 @@ const LINK = 'seatgeek.com/new-york-knicks-tickets/11-4-2026…';
 const ASK = '\nFive of us, want to sit together.';
 const BODY = LINK + ASK;
 
-// Price per ticket for five together in the upper level over 30 days: up to a peak, then trending down.
+// Illustrative: upper-level asking prices over 30 days, up to a peak and then down (aggregate, not a group basket).
 const SERIES = [146, 145, 147, 144, 146, 145, 147, 146, 148, 147, 150, 149, 152, 155, 158, 161, 165, 168, 170, 169, 166, 162, 158, 153, 149, 145, 141, 137, 134, 130];
 
 type Phase = 'idle' | 'subject' | 'body' | 'attach' | 'ask' | 'cursor' | 'press' | 'checking' | 'reply' | 'done';
@@ -144,24 +144,25 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
         </div>
       </form>
 
-      <article className={`hero-reply${showReply ? ' is-shown' : ''}${replied ? ' is-replied' : ''}`} aria-label="Ticket Guy’s reply" aria-hidden={!showReply}>
-        <div className="reply-titlebar"><span>Re: Is this a good deal?</span><span className="reply-flag">Replied in 2 min</span></div>
+      <article className={`hero-reply${showReply ? ' is-shown' : ''}${replied ? ' is-replied' : ''}`} aria-label="Illustrative example of a reply, not a live offer" aria-hidden={!showReply}>
+        <div className="reply-titlebar"><span>Re: Is this a good deal?</span><span className="reply-flag">Illustrative example — not a live offer</span></div>
         {replied ? (
           <div className="hero-reply-body">
             <p className="hr-line hr-1 hr-event">Bulls at Knicks · Wed, Nov 4 · Madison Square Garden</p>
+            <p className="hr-line hr-1 hr-says">The listing says:</p>
             <ul className="hr-line hr-1 hr-facts">
-              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>5 together</strong>, Section 414, Row 3</span><span className="hr-tag">Same row</span></li>
-              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>$1,605 total</strong>, fees included</span><span className="hr-tag">$321 each</span></li>
-              <li><span className="hr-ok" aria-hidden="true">✓</span><span><strong>Mobile tickets</strong>, delivered by Nov 2</span><span className="hr-tag">2 days before</span></li>
+              <li><span className="hr-ok" aria-hidden="true">·</span><span><strong>5 tickets</strong>, Section 414, Row 3</span><span className="hr-tag">Seat numbers not shown</span></li>
+              <li><span className="hr-ok" aria-hidden="true">·</span><span><strong>$1,605 for five</strong>, fees included</span><span className="hr-tag">$321 each</span></li>
+              <li><span className="hr-ok" aria-hidden="true">·</span><span><strong>Mobile tickets</strong>, delivered by Nov 2</span><span className="hr-tag">2 days before</span></li>
             </ul>
             <div className="hr-line hr-2 hr-found">
-              <p>Upper level, five together <span className="hr-trend">▼ 12% this week · 5 weeks out</span></p>
-              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Price for five together in the upper level over the last 30 days: up to a peak, now falling">
+              <p>Asking prices in the upper level <span className="hr-trend">▼ 12% this week</span></p>
+              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Asking prices in the upper level over the last 30 days: up to a peak, now falling">
                 <polyline points={line} className="hr-path" pathLength={1} />
                 <circle cx={lx} cy={ly} r="5" className="hr-dot" />
               </svg>
             </div>
-            <p className="hr-line hr-punch">Prices are trending down. I’d hold off. <span>Groups of five in the 400s are easy to find this far out. Want these exact seats? $321 is fair: buy now.</span></p>
+            <p className="hr-line hr-punch">Asking prices are trending down. <span>That’s market context, not proof five together will get cheaper. I’d compare group listings before a buy-or-wait call.</span></p>
             <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
           </div>
         ) : (
