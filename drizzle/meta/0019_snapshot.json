@@ -1,6 +1,6 @@
 {
-  "id": "4fa65ccc-04fe-4b5f-8114-46fb63b9b57b",
-  "prevId": "9848ddd6-dcbe-4581-b5da-3a36ec27ed26",
+  "id": "eeee04a1-ddd3-49ed-bc96-69688caaa429",
+  "prevId": "4fa65ccc-04fe-4b5f-8114-46fb63b9b57b",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -6701,6 +6701,25 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'reference'"
+        },
+        "advice_run_id": {
+          "name": "advice_run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",

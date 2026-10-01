@@ -253,6 +253,11 @@ export function allows(d: ServicePolicyDecision, op: Operation): boolean {
 // Capability: business policy AND current rights, configuration and coverage
 // -------------------------------------------------------------------------------------------------
 
+/** The source id a SeatData-backed price watch carries (DECISION_LOG #62). */
+export const MARKET_WATCH_SOURCE = 'seatdata';
+/** A price watch whose only source is SeatData's listings: a heads-up on listed prices, not a seller watch. */
+export const isMarketWatch = (sourceIds: readonly string[]): boolean => sourceIds.length === 1 && sourceIds[0] === MARKET_WATCH_SOURCE;
+
 export type AdapterFacts = { sourceId: string; implementation: string; enabled: boolean; capabilities: string[]; monitoringAllowed: boolean; accessApproved: boolean };
 
 export type CapabilityContext = {
@@ -264,6 +269,11 @@ export type CapabilityContext = {
   /** SeatData key present (a licence without a key polls nothing). */
   marketKey: boolean;
   watchSendEnabled: boolean;
+  /**
+   * SeatData as a price-watch source (DECISION_LOG #62): `alerts` when the licence allows alerts to customers (or
+   * tracking while email is limited to the owner's testers), `covered` when SeatData follows this event.
+   */
+  market?: { alerts: boolean; covered: boolean };
   now: Date;
 };
 
@@ -296,9 +306,13 @@ export function evaluateOperationCapability(ctx: CapabilityContext, operation: O
     case 'price_watch': {
       if (!ctx.watchSendEnabled) return out('unavailable', ['delivery_disabled']);
       const monitors = usable('monitoring', (a) => a.monitoringAllowed);
-      if (!monitors.length) return out('unavailable', ['monitoring_unavailable']);
       const covered = monitors.filter((a) => ctx.coveredSourceIds.includes(a.sourceId));
-      return covered.length ? out('available', [], covered.map((a) => a.sourceId)) : out('unavailable', ['event_not_covered']);
+      if (covered.length) return out('available', [], covered.map((a) => a.sourceId));
+      // SeatData's resale listings, when no seller can be monitored: a heads-up on listed prices, never a verified
+      // offer. It needs the key, the alerts licence and the event followed on SeatData.
+      if (ctx.marketKey && ctx.market?.alerts) return ctx.market.covered ? out('available', [], [MARKET_WATCH_SOURCE]) : out('unavailable', ['event_not_covered']);
+      if (!monitors.length) return out('unavailable', ['monitoring_unavailable']);
+      return out('unavailable', ['event_not_covered']);
     }
     case 'event_alert':
       return out('available', []);

@@ -164,7 +164,8 @@ export type BuildPacketArgs = {
   trendAsked?: { noAlerts: boolean; riskOk: boolean } | null;
   /** Offers from earlier in the thread they've told us to ignore: the one left is judged alone (R05-F1). */
   offersSetAside?: string[];
-  watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date } | { running: false } | null;
+  /** `market`: a SeatData watch, on listed resale prices with a fee allowance, not a seller's verified totals (DECISION_LOG #62). */
+  watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
   /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
@@ -1294,11 +1295,13 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_WATCH',
       kind: 'coverage',
-      text: w.running
+      text: w.running && w.market
+        ? `I’m watching resale listings for this: if listings with ${w.quantity} or more tickets show up at a price that, with fees of up to ${w.market.feeAllowancePct}%, fits your ${formatUsd(w.targetTotalCents)} in total, I’ll email you a heads-up. It comes from market data, so I won’t have a link to the seats and can’t promise they’re together or sold in exactly ${w.quantity}; you’d check the listing yourself. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
+        : w.running
         ? `I’m watching this for you: ${w.quantity} tickets${w.togetherRequired ? ' together' : ''}, and I’ll email you if I find them for ${formatUsd(w.targetTotalCents)} or less in total, including fees. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
         : 'I can’t watch prices for you yet, so nothing is being monitored for this request and no alert will come. Reply any time and I’ll check again.',
       values: w.running ? { running: 1, quantity: w.quantity, targetTotalCents: w.targetTotalCents, expiresAt: w.expiresAt.toISOString() } : { running: 0 },
-      scope: { quantity: w.running ? w.quantity : q, seatZone: null, feeBasis: w.running ? 'verified_total' : null, observedAt: obs },
+      scope: { quantity: w.running ? w.quantity : q, seatZone: null, feeBasis: w.running ? (w.market ? 'listed_price' : 'verified_total') : null, observedAt: obs },
       evidenceIds: [],
       methodVersion: null,
       limitations: w.running ? [] : ['no_monitoring'],

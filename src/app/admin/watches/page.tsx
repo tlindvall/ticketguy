@@ -8,6 +8,7 @@ import { formatUsd } from '@/lib/domain/money';
 import { nowMs } from '@/lib/util/clock';
 import { env } from '@/lib/config/env';
 import { marketById } from '@/lib/domain/markets';
+import { marketLicence } from '@/lib/market/tracker';
 import { ago, whenLocal, whenStaff } from '@/lib/admin/labels';
 
 export const dynamic = 'force-dynamic';
@@ -41,6 +42,9 @@ export default async function Watches() {
   const pendingPriceAlerts = await db.select().from(t.watchAlerts).where(eq(t.watchAlerts.approvalState, 'pending')).orderBy(desc(t.watchAlerts.createdAt)).limit(100);
   const configs = await db.select().from(t.adapterConfigs);
   const monitoring = configs.filter((c) => c.enabled && c.monitoringAllowed).map((c) => c.sourceId);
+  // SeatData's resale listings watch when the licence allows alerts (DECISION_LOG #62): listed prices, not offers.
+  const lic = await marketLicence(db);
+  const marketWatching = !!e.SEATDATA_API_KEY && lic.allows('tracking') && (lic.allows('alerts') || e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0);
 
   const what = (a: typeof t.eventAlerts.$inferSelect) => {
     if (a.kind === 'on_sale') {
@@ -100,8 +104,11 @@ export default async function Watches() {
 
       <section>
         <h2 className="text-lg font-semibold">Price watches <span className="tg-badge tg-badge-muted">{watches.filter(({ w }) => w.state === 'active').length} active</span></h2>
-        {monitoring.length ? (
-          <p className="mt-1 text-sm text-gray-600">Checked automatically on: {monitoring.join(', ')}. When a price fits, an alert waits below for your approval.</p>
+        {monitoring.length || marketWatching ? (
+          <p className="mt-1 text-sm text-gray-600">
+            Checked automatically on: {[...monitoring, ...(marketWatching ? ['SeatData resale listings (listed prices before fees, with a fee allowance; no link)'] : [])].join(', ')}. When a price fits, an alert waits below for your approval.
+            {marketWatching && !lic.allows('alerts') ? ' SeatData alerts run only because email is limited to the test allowlist; customer alerts need the licence’s alerts use.' : ''}
+          </p>
         ) : (
           <p className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700">
             <strong>Not running.</strong> A price watch needs a resale seller we are allowed to check on a schedule, and none is connected yet (see <Link className="underline" href="/admin/sources">Sellers</Link>). Customers who ask are told we aren&rsquo;t monitoring automatically, and no watch is created.
@@ -128,7 +135,7 @@ export default async function Watches() {
         {pendingPriceAlerts.length ? (
           <table className="tg-table mt-2">
             <thead><tr><th>Total</th><th>Found</th><th></th></tr></thead>
-            <tbody>{pendingPriceAlerts.map((a) => <tr key={a.id}><td>{formatUsd(a.payableTotalCents)}</td><td>{whenStaff(a.createdAt)}</td><td><ActionButton url={`/api/admin/watch-alerts/${a.id}/approve`} label="Approve and send" variant="primary" /></td></tr>)}</tbody>
+            <tbody>{pendingPriceAlerts.map((a) => <tr key={a.id}><td>{a.market ? <>about {formatUsd(a.market.estimatedTotalCents)} <span className="text-xs text-gray-500">SeatData: {formatUsd(a.market.listedPerTicketCents)} a ticket listed before fees, +{a.market.feeAllowancePct}% allowance; {a.market.listings} listing{a.market.listings === 1 ? '' : 's'}; heads-up, no link</span></> : formatUsd(a.payableTotalCents)}</td><td>{whenStaff(a.createdAt)}</td><td><ActionButton url={`/api/admin/watch-alerts/${a.id}/approve`} label="Approve and send" variant="primary" /></td></tr>)}</tbody>
           </table>
         ) : <p className="mt-1 text-sm text-gray-500">None.</p>}
       </section>
