@@ -28,7 +28,7 @@ class ThrowingExtractor implements Extractor {
 const conciergeWith = (h: DbHandle, error: Error) =>
   new Concierge({
     db: h.db,
-    env: testEnv({ EXTRACTION_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test', MODEL_PRICES_USD_PER_MTOKEN: 'gpt-5.5=5:30' }),
+    env: testEnv({ EXTRACTION_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test', MODEL_PRICES_USD_PER_MTOKEN: 'gpt-6.1-sol=5:30' }),
     extractor: new ThrowingExtractor(error),
     drafter: new FixtureDrafter(),
     clock: () => FIXTURE_NOW,
@@ -110,6 +110,6 @@ describe('extraction failures', () => {
     await c.interpret({ messageId: (res as { messageId: string }).messageId, requestId });
 
     const [row] = await h.db.select({ model: t.usageLedger.model }).from(t.usageLedger).where(eq(t.usageLedger.requestId, requestId));
-    expect(row?.model).toBe('gpt-5.5');
+    expect(row?.model).toBe('gpt-6.1-sol');
   });
 });

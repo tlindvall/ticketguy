@@ -149,7 +149,7 @@ const rawSchema = z.object({
   ANTHROPIC_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   ANTHROPIC_ESCALATION_ENABLED: explicitBoolean,
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_BASE_MODEL: z.string().default('gpt-5.5'),
+  OPENAI_BASE_MODEL: z.string().default('gpt-6.1-sol'),
   OPENAI_BASE_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('low'),
   OPENAI_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   /**
