@@ -627,7 +627,13 @@ export class Concierge {
       const terms = partyTerms(threadTexts, tz);
       const quantity = terms.toBuy ?? terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
       const threadFlat = flat(threadTexts.join('\n'));
-      const concertCap = concertContext(threadTexts) ? [...threadTexts].reverse().map(concertBudget).find((b) => b !== null) : null;
+      const concertCapIn = (texts: string[]) => (concertContext(texts) ? [...texts].reverse().map(concertBudget).find((b) => b !== null) ?? null : null);
+      const concertCap = concertCapIn(threadTexts);
+      // What they changed since the last turn, so a new pick is explained by the change, not restated (post-deploy R1).
+      // A budget is compared only when their own concert words carry it on both turns.
+      const earlier = threadTexts.slice(0, -1);
+      const before = earlier.length && suppliedOffers(earlier[earlier.length - 1]!, earlier, tz).textOffers.length ? partyTerms(earlier, tz) : null;
+      const capBefore = before ? concertCapIn(earlier) : null;
       const comparison = suppliedOffersAnswer({
         offers: supplied.textOffers, quantity, offersSetAside: supplied.offersSetAside, accessibilityRequired: !!merged.accessibilityNeeds, timeZone: tz, observedAt: now,
         // Their budget, whatever words carried it ("$500 TOTAL including fees"), but never one of their offers' own
@@ -635,6 +641,7 @@ export class Concierge {
         // A concert quote binds the cap to its own words (concert R9).
         budgetTotalCents: concertCap ? wholePartyBudgetCents(concertCap.cents, concertCap.basis ?? (concertCap.cents === merged.budgetCents ? merged.budgetBasis : null), quantity) : customerBudget(merged, threadTexts, quantity, tz),
         needs: { noObstructed: NO_OBSTRUCTED.test(`${threadFlat}\n${merged.seatingPreference ?? ''}`), togetherRequired: !!merged.togetherRequired, baseline: comparedAgainst(latestText, supplied.textOffers.map((o) => o.label)), terms },
+        before: before ? { quantity: before.toBuy ?? before.attendees, priority: before.priority ?? null, budgetTotalCents: concertCap && capBefore ? wholePartyBudgetCents(capBefore.cents, capBefore.basis ?? concertCap.basis ?? (capBefore.cents === merged.budgetCents ? merged.budgetBasis : null), before.toBuy ?? before.attendees ?? quantity) : null } : null,
       });
       const { lead } = comparison;
       const items = [...comparison.items];
