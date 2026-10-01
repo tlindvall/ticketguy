@@ -1,3 +1,5 @@
+import type { HardConstraints, Offer, RequestExtraction } from './types';
+import { wholePartyBudgetCents } from './money';
 /**
  * Watch cadence, alert dedupe and re-alert rules (ENGINEERING_SPEC §8, A25).
  */
@@ -54,4 +56,56 @@ export function shouldAlert(args: {
     if (reduction < needed) return { alert: false, reason: 'improvement_below_realert_threshold' };
   }
   return { alert: true, reason: 'qualified' };
+}
+
+/**
+ * Every hard requirement of a request revision, normalized once (service-depth F04). The watch stores it and
+ * each evaluation uses it exactly as the first comparison did: accessible seating stays required, seats stay
+ * together, a delivery deadline stays a deadline. What a listing can't show (an age policy, an entry rule) is
+ * listed as unverifiable, and an unverifiable requirement means no actionable alert: unknown is never "meets it".
+ */
+export type ConstraintBasket = HardConstraints & {
+  /** Adjacent pairs are enough (each child beside an adult), when they said so. */
+  pairsOk: boolean;
+  /** Tickets must be delivered by this instant; an offer with no stated delivery time can't show it. */
+  deliveryBy: string | null;
+  /** Hard requirements no listing field can confirm; any one stops an actionable alert. */
+  unverifiable: string[];
+  /** The request revision it was read from. */
+  revision: number | null;
+};
+
+export function constraintBasket(
+  brief: Pick<RequestExtraction, 'togetherRequired' | 'budgetCents' | 'budgetBasis' | 'accessibilityNeeds'>,
+  quantity: number,
+  eventStartAt: Date,
+  extra: { acceptableSections?: string[] | null; pairsOk?: boolean; deliveryBy?: Date | null; unverifiable?: string[]; revision?: number | null } = {},
+): ConstraintBasket {
+  return {
+    quantity,
+    togetherRequired: brief.togetherRequired ?? null,
+    budgetTotalCents: wholePartyBudgetCents(brief.budgetCents, brief.budgetBasis, quantity),
+    excludeObstructedView: true,
+    requireAccessible: !!brief.accessibilityNeeds?.trim(),
+    acceptableSections: extra.acceptableSections ?? null,
+    eventStartAt: eventStartAt.toISOString(),
+    pairsOk: !!extra.pairsOk,
+    deliveryBy: extra.deliveryBy ? extra.deliveryBy.toISOString() : null,
+    unverifiable: extra.unverifiable ?? [],
+    revision: extra.revision ?? null,
+  };
+}
+
+/** A stored basket, or null when the row predates baskets (the caller then rebuilds it from the revision). */
+export function readBasket(raw: unknown): ConstraintBasket | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const b = raw as Partial<ConstraintBasket>;
+  if (typeof b.quantity !== 'number' || typeof b.requireAccessible !== 'boolean' || typeof b.eventStartAt !== 'string') return null;
+  return { togetherRequired: null, budgetTotalCents: null, excludeObstructedView: true, acceptableSections: null, pairsOk: false, deliveryBy: null, unverifiable: [], revision: null, ...b } as ConstraintBasket;
+}
+
+/** Offers that can show they meet the basket's delivery deadline; one with no stated delivery time can't. */
+export function meetsDelivery(o: Pick<Offer, 'expectedDeliveryAt'>, b: Pick<ConstraintBasket, 'deliveryBy'>): boolean {
+  if (!b.deliveryBy) return true;
+  return !!o.expectedDeliveryAt && new Date(o.expectedDeliveryAt).getTime() <= new Date(b.deliveryBy).getTime();
 }

@@ -1305,7 +1305,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
 }
 
 /** "a and b", or "a; and b" when an item already has its own "and"; of two, one with a trailing clause goes last. */
-function joinRequirements(items: string[]): string {
+export function joinRequirements(items: string[]): string {
   if (items.length === 1) return items[0]!;
   const xs = items.length > 2 ? items : [...items.filter((x) => !x.includes(',')), ...items.filter((x) => x.includes(','))];
   const semi = xs.length > 2 || xs.slice(0, -1).some((x) => /\band\b|,/.test(x));

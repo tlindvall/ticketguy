@@ -35,7 +35,7 @@ export class RecordingProvider implements EmailProvider {
 }
 
 export function testEnv(over: Record<string, string> = {}): Env {
-  return parseEnv({ NODE_ENV: 'test', APP_MODE: 'fixture', ...over });
+  return parseEnv({ NODE_ENV: 'test', APP_MODE: 'fixture', ...(process.env.SD_MODE ? { SERVICE_POLICY_MODE: process.env.SD_MODE } : {}), ...over });
 }
 
 export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor; listingReader?: ListingReader } = {}) {
