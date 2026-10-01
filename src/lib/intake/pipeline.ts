@@ -2661,6 +2661,12 @@ export class Concierge {
         const [alert] = await this.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.id, intent.approvalId));
         const [w] = alert ? await this.db.select().from(t.watches).where(eq(t.watches.id, alert.watchId)) : [];
         approved = alert?.approvalState === 'approved' && w?.state === 'active' && w.generation === alert.generation;
+        // The alert says "now $X": the observation behind it must still be fresh at send time, not just at approval.
+        // A missing observation or event withholds it rather than being taken as fresh.
+        const [obs] = alert ? await this.db.select().from(t.offerObservations).where(eq(t.offerObservations.id, alert.observationId)) : [];
+        const [event] = w ? await this.db.select().from(t.events).where(eq(t.events.id, w.eventId)) : [];
+        evidenceFresh = !!obs && !!event && obs.eventId === event.id && checkFreshness({ fetchedAt: obs.fetchedAt, sourceAsOf: obs.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh;
+        containsFixture = containsFixture || obs?.verificationMethod === 'fixture';
         // The policy and rights at send time, not at approval time, decide (SD16/SD17).
         if (approved && w) {
           const snap = await policyForEvent(this.db, this.env, w.eventId, now);
@@ -2694,7 +2700,7 @@ export class Concierge {
     const capture = testModeFrom(switches) || (await isTestConversation(this.db, intent.conversationId));
     const sendGate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
     const gate: { allowed: boolean; reasons: string[] } = policyOk ? (sendGate.allowed ? { allowed: true, reasons: [] } : sendGate) : { allowed: false, reasons: [...(sendGate.allowed ? [] : sendGate.reasons), 'policy_changed'] };
-    if (!policyOk && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
+    if ((!policyOk || !evidenceFresh) && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
@@ -2863,7 +2869,7 @@ export class Concierge {
         const d = shouldAlert({ targetTotalCents: w.targetTotalCents, candidateTotalCents: best.comparableTotalCents, candidateVerified: best.offer.priceCompleteness === 'verified_total', candidateFresh: fresh, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
         if (d.alert) {
           const [offerRow] = await this.db.insert(t.offers).values({ sourceId: best.offer.sourceId, providerListingId: best.offer.providerListingId, eventId: w.eventId, directPurchaseUrl: best.offer.directPurchaseUrl }).returning({ id: t.offers.id });
-          const [obs] = await this.db.insert(t.offerObservations).values({ offerId: offerRow!.id, eventId: w.eventId, quantity: best.offer.quantity, section: best.offer.section, rowLabel: best.offer.row, seatsTogether: best.offer.seatsTogether, admissionType: best.offer.admissionType, payableTotalCents: best.comparableTotalCents, baseTotalCents: best.offer.baseTotalCents, mandatoryFeeTotalCents: best.offer.mandatoryFeeTotalCents, taxTotalCents: best.offer.taxTotalCents, deliveryTotalCents: best.offer.deliveryTotalCents, priceCompleteness: best.offer.priceCompleteness, restrictions: best.offer.restrictions, deliveryMethod: best.offer.deliveryMethod, availability: best.offer.availability, verificationMethod: best.offer.collectionMode, fetchedAt: new Date(best.offer.observedAt), retentionUntil: new Date(now.getTime() + OBSERVATION_RETENTION_DAYS * 86_400_000), evidence: { evidenceId: best.offer.evidenceId } }).returning({ id: t.offerObservations.id });
+          const [obs] = await this.db.insert(t.offerObservations).values({ offerId: offerRow!.id, eventId: w.eventId, quantity: best.offer.quantity, section: best.offer.section, rowLabel: best.offer.row, seatsTogether: best.offer.seatsTogether, admissionType: best.offer.admissionType, payableTotalCents: best.comparableTotalCents, baseTotalCents: best.offer.baseTotalCents, mandatoryFeeTotalCents: best.offer.mandatoryFeeTotalCents, taxTotalCents: best.offer.taxTotalCents, deliveryTotalCents: best.offer.deliveryTotalCents, priceCompleteness: best.offer.priceCompleteness, restrictions: best.offer.restrictions, deliveryMethod: best.offer.deliveryMethod, availability: best.offer.availability, verificationMethod: best.offer.collectionMode, sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, fetchedAt: new Date(best.offer.observedAt), retentionUntil: new Date(now.getTime() + OBSERVATION_RETENTION_DAYS * 86_400_000), evidence: { evidenceId: best.offer.evidenceId } }).returning({ id: t.offerObservations.id });
           await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: obs!.id, dedupeKey: key, payableTotalCents: best.comparableTotalCents, approvalState: 'pending' }).onConflictDoNothing();
           alerts += 1;
         }
