@@ -311,6 +311,16 @@ export const trackedLinks = pgTable(
     url: text('url').notNull(),
     label: text('label'),
     affiliate: boolean('affiliate').notNull().default(false),
+    /**
+     * What the link is for (R2-LINK-STALE-01): 'buy' is a verified offer we advised on, checked again at click
+     * time against its advice, the event and the evidence's age; 'reference' (an event page, an artist, the
+     * official sale) redirects as it is; 'legacy' is a link stored before purposes were recorded.
+     */
+    purpose: text('purpose').notNull().default('reference'),
+    /** The advice a buy link belongs to; set once the advice run is stored. */
+    adviceRunId: uuid('advice_run_id'),
+    /** The occurrence the link was made for (R2-LINK-CONTEXT-01). */
+    eventId: uuid('event_id'),
     createdAt: createdAt(),
   },
   (t) => [index('tracked_links_request_idx').on(t.requestId)],

@@ -43,6 +43,8 @@ import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, te
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, displayVenue, eventConstraints, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
+import { eventChangedSince } from '@/lib/domain/event-lifecycle';
+export { eventChangedSince };
 import { joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
@@ -909,7 +911,7 @@ export class Concierge {
         const startLabel = timeLabel(startMin);
         const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
         const page = m?.url ?? null;
-        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, 'Event listing', false) : page;
+        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, 'Event listing', false, { eventId: resolution.event.id }) : page;
         const who = resolution.event.name;
         // A last-entry time they quote decides it, independently of the start: "the page says last entry is 1am".
         // It's their quote, so it's said as such, never as something checked here.
@@ -957,7 +959,7 @@ export class Concierge {
       else if (snap && guideDepth) {
         const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
         const page = official?.buyUrl ?? m?.url ?? null;
-        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Buy on ${official.seller}` : 'Event page', official?.affiliate ?? false) : page;
+        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Buy on ${official.seller}` : 'Event page', official?.affiliate ?? false, { eventId: resolution.event.id }) : page;
         const lead = official ? `${resolution.label} is on sale at ${official.seller}, the official seller.` : `For ${resolution.label}, the official seller is the venue’s own box office or ticket page.`;
         const venueNote = categoryBuyingNote(resolution.event.category, resolution.venue.name);
         const checks = `Before you pay, check ${guideChecks(resolution.event.category)}.${venueNote ? ` ${venueNote}` : ''}`;
@@ -1062,7 +1064,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -1363,8 +1365,12 @@ export class Concierge {
   }
 
   /** A link for a customer email, behind /go/<id> so a click can be counted; the id carries nothing personal. */
-  private async trackLink(requestId: string, url: string, label: string | null, affiliate: boolean): Promise<string> {
-    const [row] = await this.db.insert(t.trackedLinks).values({ requestId, url, label, affiliate }).returning({ id: t.trackedLinks.id });
+  /**
+   * A link in our email, counted on click. A 'buy' link (a verified offer we advised on) records the occurrence
+   * it was made for and, once stored, its advice run, so a click is checked against both (R2-LINK-STALE-01).
+   */
+  private async trackLink(requestId: string, url: string, label: string | null, affiliate: boolean, opts: { purpose?: 'buy' | 'reference'; eventId?: string | null } = {}): Promise<string> {
+    const [row] = await this.db.insert(t.trackedLinks).values({ requestId, url, label, affiliate, purpose: opts.purpose ?? 'reference', eventId: opts.eventId ?? null }).returning({ id: t.trackedLinks.id });
     return `${this.env.APP_URL.replace(/\/$/, '')}/go/${row!.id}`;
   }
 
@@ -2514,9 +2520,17 @@ export class Concierge {
     const eventIdentity = shown ? { names: [...performers.flatMap((x) => [x.name, ...x.aliases]), event.name], nicknames: performers.filter((x) => x.kind === 'team').map((x) => teamNickname(x.name)), venueNames: [venue.name, ...venue.aliases], city: venue.city } : null;
     const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
-    for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
+    // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
+    const buyLinks: string[] = [];
+    for (const c of packet.claimRecords) {
+      if (!c.url || isFixtureRun) continue;
+      const purpose = c.kind === 'current_offer' || c.kind === 'alternative_offer' ? 'buy' : 'reference';
+      c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false, { purpose, eventId: event.id });
+      if (purpose === 'buy') buyLinks.push(c.url.slice(c.url.lastIndexOf('/') + 1));
+    }
     const hash = packetHash(packet);
     const [adviceRun] = await this.db.insert(t.adviceRuns).values({ requestId: req.id, revision: args.revision, benchmarkRunId, trendRunId, verifiedOfferObservationIds: packet.verifiedOfferObservationIds, customerPriorities: packet.customerPriorities, policyVersion: policy.policyVersion, decision: policy.decision, reasonCodes: policy.reasonCodes, abstentions: policy.abstentions, nextCheckpointAt: policy.nextCheckpointAt, stopConditions: policy.stopConditions, packet: packet as unknown as Record<string, unknown>, packetHash: hash, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.adviceRuns.id });
+    if (buyLinks.length) await this.db.update(t.trackedLinks).set({ adviceRunId: adviceRun!.id }).where(inArray(t.trackedLinks.id, buyLinks));
 
     // A price check with no listings of ours goes out without review (owner's decision, DECISION_LOG #42):
     // it compares the customer's own number with the provider's published face value and names the official
@@ -3077,19 +3091,6 @@ export function sha(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
 
-/**
- * Why something prepared for an event no longer fits the event as it stands (R2-LIFECYCLE-01), or null when it
- * still does: the event must exist, still be scheduled and not have started. With `draftedForStartAt` (advice,
- * which records the occurrence it was written for) the start must also be unchanged; a missing record can't be
- * shown to match. Without it (a watch alert, whose observation is minutes old) the start isn't compared.
- */
-export function eventChangedSince(event: { status: string; localStartAt: Date } | undefined, now: Date, draftedForStartAt?: string | null): string | null {
-  if (!event) return 'event_missing';
-  if (event.status !== 'scheduled') return `event_${event.status}`;
-  if (draftedForStartAt !== undefined && (!draftedForStartAt || new Date(draftedForStartAt).getTime() !== event.localStartAt.getTime())) return draftedForStartAt ? 'event_rescheduled' : 'event_occurrence_unrecorded';
-  if (event.localStartAt <= now) return 'event_started';
-  return null;
-}
 
 /** What a team is called on its own: "Rangers" for the New York Rangers, "Red Sox" (not "Sox") for Boston's. */
 export function teamNickname(name: string): string {
