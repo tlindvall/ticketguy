@@ -72,9 +72,9 @@ describe('a changed requirement changes the winner', () => {
 
 describe('fees: known, unknown, per ticket, per order, and the crossing', () => {
   const two = (a: string) => `Offer A: ${a}. Offer B: $105 each including all fees, $210 total.`;
-  it('A before fees at $170: break-even $40; at $210 before fees: B wins whatever A’s fees', () => {
+  it('A before fees at $170: break-even $40; at $210 before fees: ties if fees are zero', () => {
     expect(answer([two('$85 each before fees; the order fee is not shown yet')], 2, 25000)).toContain('Offer A only beats it if its fees come to less than $40 in total');
-    expect(answer([two('$105 each before fees')], 2, 25000)).toContain('Offer A already costs the same before its fees, so B costs less whatever they are.');
+    expect(answer([two('$105 each before fees')], 2, 25000)).toContain('Offer A already costs the same before its fees: they tie if there are no fees, and B costs less if any are added.');
     expect(answer([two('$110 each before fees')], 2, 25000)).toContain('Offer A already costs $10 more before its fees');
   });
   it('a per-order fee known on both sides: equal totals are a tie, not a win', () => {

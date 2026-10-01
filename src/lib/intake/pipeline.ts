@@ -41,7 +41,7 @@ import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOU
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
-import { cleanSeatField, flat, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, type TextOffer } from '@/lib/advice/text-offers';
+import { cleanSeatField, flat, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, eventConstraints, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
 import { joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
@@ -3289,7 +3289,6 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
         if (packages.length === 1) corrected = corrected.replace(/\bthe cheap bundle\b/i, `${packages[0]!.name} bundle`);
       }
       const updates = offersInText(corrected, tz, 1, { calendarYear: year });
-      if (!updates.length) continue;
       const only = /\b(?:only|just) (?:offer |option )?([A-E])\b/i.exec(message)?.[1]?.toUpperCase();
       if (only && updates.some((o) => o.label === only) && /\b(?:ignore|set aside|on its own|only|just)\b/i.test(message)) {
         offersSetAside = retained.filter((o) => o.label !== only).map((o) => o.name);
@@ -3301,6 +3300,7 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
         if (i < 0) retained.push(update);
         else retained[i] = mergeConcertOffer(retained[i]!, update);
       }
+      retained = withFinalFeeStatement(retained, message, true);
     }
     const latestNames = offersInText(said, tz, 1).length > 0;
     const referringBack = /\b(?:offers?|options?|quotes?|listings?|same|those|these|unchanged|arrival|arriving|prices and budget|correction|bundle|regular pair|all the other facts|earlier than planned)\b|\b[A-E]'s\b|\b[A-E] and [A-E]\b/i.test(said);

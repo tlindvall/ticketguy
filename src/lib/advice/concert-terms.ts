@@ -187,7 +187,7 @@ export function copiedAdmissionPolicy(text: string): CopiedAdmissionPolicy | nul
 
 function policyAnswer(messages: string[], youngest: number | null): { lead: string; items: string[] } {
   let policy: CopiedAdmissionPolicy | null = null;
-  let heldId: 'school' | 'government' | null = null;
+  let heldIds: Set<'school' | 'government'> | null = null;
   for (const raw of messages) {
     const t = flat(raw);
     const next = copiedAdmissionPolicy(t);
@@ -205,27 +205,49 @@ function policyAnswer(messages: string[], youngest: number | null): { lead: stri
         sourceUrl: next.sourceUrl ?? policy.sourceUrl,
       } : next;
     }
-    if (/\b(?:they|both|each|we) (?:only )?have (?:a |their )?school(?:[- ]issued)?(?: photo)? IDs?\b/i.test(t)) heldId = 'school';
-    else if (/\b(?:they|both|each|we) (?:now )?have (?:a |their )?government[- ]issued (?:photo )?IDs?\b/i.test(t)) heldId = 'government';
+    // Only the attendees' own possession statements establish held ID, not the organizer's list.
+    // "Only have" replaces an earlier claim; "have ... too" adds to it.
+    for (const claim of t.matchAll(/\b(?:they|both(?: of us)?|each(?: of us)?|we(?: both)?) (?:now )?(?:only )?(?:have|hold|carry) ([^.!?;]+)/gi)) {
+      const possessions = claim[1]!.split(/\b(?:but|and) (?:the )?(?:venue|organizer|policy)\b/i)[0]!;
+      const kinds = new Set<'school' | 'government'>();
+      const denied = new Set<'school' | 'government'>();
+      const named = [...possessions.matchAll(/\b(school|government)(?:[- ]issued)?(?: photo)? IDs?\b/gi)];
+      if (!named.length) continue;
+      for (const id of named) {
+        const before = possessions.slice(0, id.index);
+        const kind = id[1]!.toLowerCase() as 'school' | 'government';
+        if (/\b(?:no|not|without)\s+(?:(?:any|a|their|our)\s+)?$/i.test(before)) denied.add(kind);
+        else kinds.add(kind);
+      }
+      const additive = /\b(?:too|also|as well)\b/i.test(possessions) && !/\bonly\b/i.test(claim[0]);
+      heldIds = additive ? new Set([...(heldIds ?? []), ...kinds]) : kinds;
+      for (const kind of denied) heldIds.delete(kind);
+    }
   }
   if (!policy) return { lead: 'I haven’t verified any event-specific policy admitting them without an adult, so I can’t confirm that either can enter unaccompanied.', items: ['An age label such as “16+” or “all ages” alone does not verify the guardian or ID requirements. This does not mean the venue refuses minors.', 'Before buying, confirm unaccompanied admission for their ages and accepted ID with the event organizer. If you paste the policy, I can work through it with you.'] };
   const ageFails = youngest !== null && policy.minimumAge !== null && youngest < policy.minimumAge;
   const guardianFails = policy.guardianRequired === true || youngest !== null && policy.guardianUnderAge != null && youngest < policy.guardianUnderAge;
   const guardianPasses = policy.guardianRequired === false && (policy.unaccompaniedFromAge == null || youngest !== null && youngest >= policy.unaccompaniedFromAge) || policy.guardianUnderAge != null && youngest !== null && youngest >= policy.guardianUnderAge;
   const acceptedKinds = policy.acceptedIdKinds ?? [];
-  const idPasses = heldId !== null && acceptedKinds.length > 0 && (policy.idCombination === 'all' ? acceptedKinds.every((k) => k === heldId || k === 'photo') : acceptedKinds.includes(heldId) || acceptedKinds.includes('photo'));
-  const idFails = heldId !== null && acceptedKinds.length > 0 && !idPasses;
+  const hasId = (kind: typeof acceptedKinds[number]) => kind === 'photo' ? !!heldIds?.size : heldIds?.has(kind) === true;
+  const idPasses = heldIds !== null && acceptedKinds.length > 0 && (policy.idCombination === 'all' ? acceptedKinds.every(hasId) : acceptedKinds.some(hasId));
+  const idFails = heldIds !== null && acceptedKinds.length > 0 && !idPasses;
+  const idName = (kind: typeof acceptedKinds[number]) => kind === 'government' ? 'government-issued photo ID' : kind === 'school' ? 'school-issued photo ID' : 'photo ID';
+  const missingId = acceptedKinds.filter((k) => !hasId(k)).map(idName).join(policy.idCombination === 'all' ? ' and ' : ' or ');
   const agePasses = youngest !== null && policy.minimumAge !== null && youngest >= policy.minimumAge;
   const lead = guardianFails || ageFails
     ? 'Based on the policy you pasted, they cannot attend unaccompanied under those terms.'
     : idFails
-      ? 'Their school photo ID does not meet the supplied government-issued ID requirement. The age-rule change alone doesn’t make this plan work.'
+      ? `Their ID does not meet all the supplied entry requirements: ${missingId} is still missing.`
       : agePasses && guardianPasses && idPasses
         ? 'Based on the policy you pasted, both meet the supplied entry requirements: age, unaccompanied admission and accepted ID.'
         : agePasses && guardianPasses
           ? 'Based on the policy you pasted, their ages meet the minimum and no guardian is required. Their accepted ID still needs confirming.'
           : 'The policy you pasted does not establish all the age and guardian conditions needed to confirm unaccompanied admission.';
-  return { lead, items: [policy.acceptedId ? `The supplied policy names ${policy.acceptedId}${idPasses ? ', which matches the ID you say they have.' : idFails ? '; school photo ID isn’t that form of ID.' : '; confirm they each have an accepted form.'}` : 'Accepted ID is not established by the supplied policy.', 'I haven’t independently verified that this policy is current or applies to the exact event. Check the actual event page before buying.'] };
+  const idDetail = policy.acceptedId
+    ? `The supplied policy ${policy.idCombination === 'all' ? 'requires both' : 'accepts'} ${policy.acceptedId}${idPasses ? ', which matches the ID you say they have.' : idFails ? `${policy.idCombination === 'all' && acceptedKinds.some(hasId) ? `. Their ${[...heldIds!].map((k) => k === 'school' ? 'school photo ID' : idName(k)).join(' and ')} covers one requirement, but they need both forms` : `; they need ${missingId}`}.` : '; confirm they each have an accepted form.'}`
+    : 'Accepted ID is not established by the supplied policy.';
+  return { lead, items: [idDetail, 'I haven’t independently verified that this policy is current or applies to the exact event. Check the actual event page before buying.'] };
 }
 
 /** Attendee ages come from the customer's plan, never age thresholds inside the copied policy. */
