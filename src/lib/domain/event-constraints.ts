@@ -140,6 +140,14 @@ function windowIn(t: string, receivedAt: Date, timeZone: string): EventConstrain
     const w = dateWindowFor(range[0].replace(/,?\s+\d{4}/g, ''), receivedAt, timeZone);
     if (w) return { ...w, source: 'range' };
   }
+  // Two dates offered as alternatives: "Friday Oct 9 or Saturday Oct 10", "Oct 2 or 3", "Oct 9 and 10" (Research 1,
+  // Austin): both are in the window, not only the first one named.
+  const pair = new RegExp(`\\b(?<m1>${MONTHS})\\s+(?<d1>\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?\\s*,?\\s+(?:or|and|&|\\/)\\s+(?:${DAY_RE}\\s+)?(?:(?<m2>${MONTHS})\\s+)?(?<d2>\\d{1,2})(?:st|nd|rd|th)?\\b`, 'i').exec(t);
+  if (pair?.groups) {
+    const g = pair.groups;
+    const w = dateWindowFor(g.m2 && g.m2.slice(0, 3).toLowerCase() !== g.m1!.slice(0, 3).toLowerCase() ? `${g.m1} ${g.d1} - ${g.m2} ${g.d2}` : `${g.m1} ${g.d1}-${g.d2}`, receivedAt, timeZone);
+    if (w && Date.parse(w.to) - Date.parse(w.from) <= 7 * 86_400_000) return { ...w, source: 'range' };
+  }
   // Part of a month: "mid-November", "early October", "the end of November".
   const part = new RegExp(`\\b(?:early|beginning of|start of|mid|middle of|late|end of)\\s*-?\\s*${MONTHS}`, 'i').exec(t);
   if (part) {

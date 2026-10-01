@@ -10,11 +10,14 @@ export function admissionTerms(text: string): { admission: Admission; admissionS
   const productKind: ProductKind = /\b(?:packages?|bundles?)\b/i.test(t) ? 'package' : /\bparking\b/i.test(t) ? 'parking' : /\bshuttle\b/i.test(t) ? 'shuttle' : /\b(?:upgrade|merchandise)\b/i.test(t) ? 'upgrade' : /\b(?:admissions?|concert tickets?|festival pass|entry)\b/i.test(t) ? 'admission' : 'unknown';
   const excluded = /\b(?:concert tickets?|event tickets?|admission)\b[^.;?]{0,25}\b(?:sold|purchased|bought) separately\b|\b(?:no|zero|0|without)\s+(?:(?:concert|event|festival)\s+)?(?:admissions?|entry tickets?)\b|\b(?:concert|event|festival|admission) tickets? (?:is |are )?not included\b|\b(?:does not|doesn't|do not|don't) include (?:a |an |any )?(?:(?:concert|event|festival) )?(?:tickets?|admission)\b|\b(?:parking|shuttle|merchandise)[- ]only\b|\b(?:separate|additional) (?:concert |event )?(?:admission|ticket) (?:is )?required\b|\b(?:must|need to) already (?:hold|have) a separate (?:show|concert|event) ticket\b|\b(?:does not|doesn't) get you (?:through the door|into the (?:show|concert))\b/i.test(t);
   const uncertain = /\b(?:is|whether|unsure)\b[^.;?]{0,35}\badmission\b[^.;]{0,25}\?|\badmission (?:is )?included\?|\b(?:admission|ticket)\b[^.;]{0,30}\b(?:unknown|unclear|not stated|not specified|may|might)\b|\b(?:may|might) include\b/i.test(t);
+  // A seat is admission: "two adjacent reserved seats", "upper tier", "seats in different rows" (Research 1, R1-04).
+  // It settles entitlement without making the offer a named product, so other offers aren't held to a product label.
+  const seat = /\b(?:reserved|assigned|adjacent|allocated)\s+seats?\b|\b(?:upper|lower|middle|club|field|loge|main)\s+(?:tier|level|bowl|deck|balcony)\b|\b(?:mezzanine|balcony|orchestra) seats?\b|\bseats? in (?:section|row|different rows)\b/i.test(t);
   const included = /\b(?:concert|event|festival|general|GA)[- ]admissions?\b|\b(?:concert|admission) (?:tickets?|seats?)\b|\bconcert where\b|\b(?:DJ|dance) (?:dance )?(?:party|night)\b|\bfestival pass\b|\bany[- ]?time entry\b|\bentry before (?:midnight|\d{1,2})\b|\badmission valid (?:until|through)\b|\b(?:includes?|including|with)\s+(?:(?:two|2|a|an)\s+)?(?:(?:GA|concert|event|festival)\s+)?admissions?\b/i.test(t);
   const explicitAdmission = /\b(?:concert|event|festival|general|GA)[- ]admissions?\b|\bconcert tickets?\b/i.test(t);
   const ancillary = ['parking', 'shuttle', 'upgrade'].includes(productKind);
-  const admission: Admission = excluded ? 'excluded' : uncertain ? 'unknown' : included && (!ancillary || explicitAdmission) ? 'included' : ['parking', 'shuttle'].includes(productKind) ? 'excluded' : 'unknown';
-  return { productKind: productKind === 'unknown' && admission === 'included' ? 'admission' : productKind, admission, admissionStated: excluded || uncertain || included || ancillary };
+  const admission: Admission = excluded ? 'excluded' : uncertain ? 'unknown' : included && (!ancillary || explicitAdmission) ? 'included' : seat && productKind === 'unknown' ? 'included' : ['parking', 'shuttle'].includes(productKind) ? 'excluded' : 'unknown';
+  return { productKind: productKind === 'unknown' && admission === 'included' && included ? 'admission' : productKind, admission, admissionStated: excluded || uncertain || included || ancillary };
 }
 
 export type EntryTerm = { kind: 'anytime' } | { kind: 'before'; minutes: number; boundary?: 'strict' | 'inclusive' | 'unspecified'; date?: string | null } | { kind: 'unknown' };
@@ -308,9 +311,20 @@ export function concertBudget(text: string): { cents: number; basis: 'whole_part
   const t = flat(text);
   const m = /\b(?:budget|cap|limit|up to|max(?:imum)?|no more than|at most|under|can spend|can afford|willing to pay)\s*(?:is|of|to|stayed)?\s*\$([\d,]+(?:\.\d{2})?)([^.!?;]{0,35})/i.exec(t)
     ?? /\$([\d,]+(?:\.\d{2})?)\s*((?:(?:TOTAL|all-in|each|per ticket)\s+)?(?:admission )?(?:budget|max|cap))\b/i.exec(t);
-  const own = m ?? /(?:^|[.!?]\s+)\$([\d,]+(?:\.\d{2})?)\s*(TOTAL)(?:\s+for (?:both|the pair|all[^.!?]{0,20}))?\s*[.!?]/i.exec(t)
+  // A raised cap: "we could stretch to $350 total", "I can go up to $400" (Research 1, R1-05).
+  const raised = /\b(?:stretch|raise(?: it)?|increase(?: it)?|go up|bump(?: it)?(?: up)?|could do|can do|could pay|can pay|could go|can go)\b[^.!?$]{0,15}?(?:to\s+|up to\s+)?\$([\d,]+(?:\.\d{2})?)\s*((?:total|in total|all-in|each|per ticket)?[^.!?;]{0,25})/i.exec(t);
+  const own = m ?? raised ?? /(?:^|[.!?]\s+)\$([\d,]+(?:\.\d{2})?)\s*(TOTAL)(?:\s+for (?:both|the pair|all[^.!?]{0,20}))?\s*[.!?]/i.exec(t)
     ?? /\b(?:we have|our budget is|(?:one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2}) (?:people|adults),)\s*\$([\d,]+(?:\.\d{2})?)\s*(TOTAL|each|per ticket)?/i.exec(t);
-  if (!own) return null;
-  const basis = /each|per ticket/i.test(own[2]!) ? 'per_ticket' : /total|pair|both|all-in/i.test(own[2]!) ? 'whole_party' : null;
-  return { cents: Math.round(Number(own[1]!.replace(/,/g, '')) * 100), basis };
+  // "Two reserved seats together, $300 total for both including fees": a cap said as a total for the party, in a
+  // sentence that names no offer, listing or seat of one (Research 1, LA). A quoted price is never this shape's job.
+  const party = own ? null : [...t.matchAll(/\$([\d,]+(?:\.\d{2})?)\s*(total|all-in|in total)\s+for\s+(?:both|the two of us|the pair|all\s+(?:of us|\w+)|us|two|2|three|four)\b/gi)].find((x) => {
+    const start = Math.max(t.lastIndexOf('.', x.index!), t.lastIndexOf('?', x.index!), t.lastIndexOf('!', x.index!)) + 1;
+    const end = t.slice(x.index!).search(/[.!?](?:\s|$)/);
+    const sentence = t.slice(start, end < 0 ? undefined : x.index! + end);
+    return !/\b(?:offer|option|listing|seller|section|row|quote|package|parking|VIP)\b/i.test(sentence);
+  });
+  const found = own ?? party ?? null;
+  if (!found) return null;
+  const basis = /each|per ticket/i.test(found[2]!) ? 'per_ticket' : /total|pair|both|all-in/i.test(found[2]!) ? 'whole_party' : null;
+  return { cents: Math.round(Number(found[1]!.replace(/,/g, '')) * 100), basis };
 }

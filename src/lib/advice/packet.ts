@@ -660,7 +660,7 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     return tot.tickets > 1 ? `${each}, ${formatUsd(tot.cents)} for ${ticketsWord(tot.tickets)}${o.feeBasis === 'before_fees' ? ' plus fees' : ''}` : each;
   };
   const describe = (o: TextOffer) =>
-    [o.productKind === 'package' && o.admissionsPerUnit != null ? `${o.unitsAvailable != null ? `${countWord(o.unitsAvailable)} ${o.unitsAvailable === 1 ? 'package' : 'packages'} available, ` : ''}${countWord(o.admissionsPerUnit)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'} per package` : o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.productKind && o.productKind !== 'unknown' ? (o.productKind === 'admission' ? 'concert admission' : o.productKind) : o.accessible ? 'wheelchair-accessible spaces' : terms.concertAdmission ? 'admission unverified' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
+    [o.productKind === 'package' && o.admissionsPerUnit != null ? `${o.unitsAvailable != null ? `${countWord(o.unitsAvailable)} ${o.unitsAvailable === 1 ? 'package' : 'packages'} available, ` : ''}${countWord(o.admissionsPerUnit)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'} per package` : o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.productKind && o.productKind !== 'unknown' ? (o.productKind === 'admission' ? 'concert admission' : o.productKind) : o.accessible ? 'wheelchair-accessible spaces' : terms.concertAdmission && o.admission !== 'included' ? 'admission unverified' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.tier ? o.tier : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
   const rows: OfferVerdict[] = offers.map((o) => {
     const tot = offerTotal(o, q);
     const why: OfferVerdict['why'] = [];
@@ -710,13 +710,18 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const fits = rows.filter((r) => !r.why.length && r.tot && !r.feesUnknown);
   const open = rows.filter((r) => !r.why.length && (!r.tot || r.feesUnknown));
   const byTotal = (x: OfferVerdict, y: OfferVerdict) => x.tot!.cents - y.tot!.cents;
-  const best = [...fits].sort(byTotal)[0] ?? null;
+  const cheapest = [...fits].sort(byTotal)[0] ?? null;
+  // What matters most to them decides between offers that both fit (Research 1, R1-04): "being in the lower tier
+  // matters most" takes the lower-tier one and names what it costs; "keeping the spend down" keeps the cheaper.
+  const priority = terms.priority ?? null;
+  const wanted = priority?.kind === 'feature' ? fits.find((r) => r.o.tier && sameFeature(r.o.tier, priority.words)) ?? null : null;
+  const best = wanted ?? cheapest;
   const lines = rows.map((r) => {
     const d = describe(r.o);
     const room = r.feesUnknown && budget !== null && r.tot && r.tot.cents <= budget ? ` It fits your ${formatUsd(budget)} only if its ${unknownFees(r.o)} come to ${formatUsd(budget - r.tot.cents)} or less.` : '';
     // The reason itself, not a status label in front of it: "Over your $600 budget by $50." (writing review).
     const reasons = r.why.map((w, i) => (i === 0 ? w.text.charAt(0).toUpperCase() + w.text.slice(1) : w.kind === 'budget' ? `it’s also ${w.text}` : w.text));
-    const verdict = r.why.length ? ` ${reasons.join('; ')}.` : r === best ? '' : fits.includes(r) && best ? ` Also fits${r.tot!.cents > best.tot!.cents ? `, ${formatUsd(r.tot!.cents - best.tot!.cents)} more` : ', at the same total'}.` : room;
+    const verdict = r.why.length ? ` ${reasons.join('; ')}.` : r === best ? '' : fits.includes(r) && best ? ` Also fits${r.tot!.cents > best.tot!.cents ? `, ${formatUsd(r.tot!.cents - best.tot!.cents)} more` : r.tot!.cents < best.tot!.cents ? `, ${formatUsd(best.tot!.cents - r.tot!.cents)} less` : ', at the same total'}.` : room;
     return `${Name(r.o)}${d ? ` (${d})` : ''}: ${price(r.o, r.tot)}.${verdict}`;
   });
   // A promised transfer time is the seller's word, not a transfer that has happened (TGQA-R8 S02).
@@ -760,7 +765,18 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
             : `${Name(c.o)} already costs ${formatUsd(-gap)} more before its fees, so ${short(best.o)} costs less whatever they are.`);
     }
     const check = best.o.deliveryStated ? '' : ' Before you buy, check its delivery time on the listing.';
-    choice = `${head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
+    // Their priority, said back as the reason: the pick is for them, not the cheapest by default.
+    const dearer = priority?.kind === 'price' && best === cheapest ? [...fits].sort(byTotal).filter((r) => r !== best && r.tot!.cents > best.tot!.cents && r.o.tier)[0] : undefined;
+    const personal = wanted && wanted !== cheapest && cheapest
+      ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `It costs ${formatUsd(best.tot!.cents - cheapest.tot!.cents)} more than ${cheapest.o.name}, and since ${priority?.kind === 'feature' ? `the ${priority.words}` : 'that'} is what matters most to you, that’s the difference worth paying.` }
+      : dearer
+        ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `${budget !== null ? `It leaves ${formatUsd(budget - best.tot!.cents)} under your ${formatUsd(budget)} cap. ` : ''}${dearer.o.name} costs ${formatUsd(dearer.tot!.cents - best.tot!.cents)} more for the ${dearer.o.tier}; since keeping the spend down matters most to you, I wouldn’t pay that difference on the facts you’ve supplied.` }
+        : null;
+    // A seat's place in the venue is their word, not a view anyone has checked.
+    const basis = offers.some((o) => o.tier) && deadline === null ? 'That’s based on your quotes; I haven’t verified availability or the view.' : provenance;
+    choice = personal
+      ? `${personal.head} ${personal.why} ${basis}${check}`.replace(/\s+/g, ' ').trim()
+      : `${head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
   } else if (open.length >= 2 && open.every((r) => r.tot)) {
     choice = `${open.map((r) => Name(r.o)).join(' and ')} meet what you asked for so far, but their fees aren’t known yet, so I can’t say which costs less until you see the checkout totals. ${provenance}`;
   } else if (open.length === 1) {
@@ -1322,6 +1338,12 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
 }
 
 /** "a and b", or "a; and b" when an item already has its own "and"; of two, one with a trailing clause goes last. */
+/** "lower tier" against "lower tier seats", "the floor" against "floor seats": the same part of the venue. */
+function sameFeature(tier: string, words: string): boolean {
+  const norm = (x: string) => x.toLowerCase().replace(/\b(?:the|seats?|a)\b/g, '').replace(/\blevel\b/, 'tier').replace(/\s+/g, ' ').trim();
+  return norm(tier) === norm(words) || norm(tier).includes(norm(words)) || norm(words).includes(norm(tier));
+}
+
 export function joinRequirements(items: string[]): string {
   if (items.length === 1) return items[0]!;
   const xs = items.length > 2 ? items : [...items.filter((x) => !x.includes(',')), ...items.filter((x) => x.includes(','))];

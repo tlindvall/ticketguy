@@ -52,7 +52,12 @@ export type TextOffer = OfferEligibility & {
   deliveryAsWritten: string | null;
   /** Another name they gave the same offer ("Offer A (Gold)"): matched to it across the thread. */
   alias?: string | null;
+  /** Where the seats are, as they described it ("upper tier", "lower level", "floor"): what a preference compares. */
+  tier?: string | null;
 };
+
+/** "Upper tier", "lower level", "mezzanine", "the floor": the part of the venue an offer is in. */
+const TIER = /\b(?:upper|lower|middle|top|bottom|first|second|club|field|loge|terrace|plaza|main)\s+(?:tier|level|bowl|deck|balcony)\b|\b(?:mezzanine|balcony|orchestra|floor seats?|the floor|pit|courtside|loge|front rows?)\b/i;
 
 const money = (s: string) => Math.round(Number(s.replace(/,/g, '')) * 100);
 const WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, pair: 2 };
@@ -286,7 +291,8 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       accessible: says(seg, /\b(wheelchair|accessible|companion|ada)\b/i),
       obstructed: obstructedView(seg),
       // "Two adjacent pairs" is two pairs, not four together; "separate singles scattered around" is neither.
-      together: /\bnot together\b|\bsplit (?:up|across)\b|\b(?:separate|scattered|single)\s+(?:singles|seats)\b|\bsingles\b|\bscattered\b|\b(?:two|2|adjacent)\s+(?:adjacent\s+)?pairs\b/i.test(seg) ? false : /\b(?:together|adjacent)\b/i.test(seg) ? true : null,
+      tier: TIER.exec(seg)?.[0]?.toLowerCase().replace(/^the /, '') ?? null,
+      together: /\bnot together\b|\bnot (?:adjacent|next to each other|side by side)\b|\bdifferent rows\b|\bsplit (?:up|across)\b|\b(?:separate|scattered|single)\s+(?:singles|seats)\b|\bsingles\b|\bscattered\b|\b(?:two|2|adjacent)\s+(?:adjacent\s+)?pairs\b/i.test(seg) ? false : /\b(?:together|adjacent)\b/i.test(seg) ? true : null,
       pairs: /\b(?:two|2)\s+(?:adjacent\s+)?pairs\b|\bin (?:adjacent )?pairs\b/i.test(seg),
       section: /\bsection\s+([A-Za-z0-9]+)\b/i.exec(seg)?.[1] ?? null,
       row: /\brow\s+([A-Za-z0-9]+)\b/i.exec(seg)?.[1] ?? null,
@@ -369,6 +375,7 @@ export function mergeOffer(old: TextOffer, u: TextOffer): TextOffer {
     pairs: u.together !== null ? u.pairs : old.pairs || u.pairs,
     section: u.section ?? old.section,
     row: u.row ?? old.row,
+    tier: u.tier ?? old.tier ?? null,
   };
 }
 
@@ -421,7 +428,18 @@ export type PartyTerms = {
   requiredDay?: string | null;
   view?: 'unobstructed' | 'any' | null;
   performanceStartMinutes?: number | null;
+  /**
+   * What matters most to them when more than one offer fits: spending less, or a part of the venue ("being in the
+   * lower tier matters most"). The latest message that says so wins; null when they didn't say (Research 1, R1-04).
+   */
+  priority?: { kind: 'price' } | { kind: 'feature'; words: string } | null;
 };
+
+const PRIORITY_TAIL = '[^.!?]{0,40}\\b(?:matters? (?:the )?most|most important|is (?:the |our |my )?(?:top |main )?priority|comes first|(?:is )?worth (?:paying (?:for|the extra)|the extra))';
+/** "Keeping the spend down matters most", "the price is our priority". */
+const PRICE_FIRST = new RegExp(`\\b(?:keep(?:ing)? (?:the )?(?:spend|spending|cost|price|total)s? (?:down|low)|spend(?:ing)? (?:less|as little)|saving money|(?:the )?(?:lowest )?price|(?:the )?cost|the total)${PRIORITY_TAIL}|\\b(?:cheapest|lowest price) (?:is what we want|wins)\\b`, 'i');
+/** "Being in the lower tier matters most", "the view is worth paying for". */
+const FEATURE_FIRST = new RegExp(`\\b(?:being (?:in|on|at) |sitting (?:in|on) |seats? (?:in|on) |a |the )?((?:upper|lower|middle|club|field|loge|main) (?:tier|level|bowl|deck|balcony)|mezzanine|balcony|orchestra|(?:the )?floor|front rows?|(?:a )?better view|the view|closer seats|being closer)${PRIORITY_TAIL}`, 'i');
 
 /** "Each child must sit directly beside an adult; two adjacent adult-child pairs are fine." */
 const PAIRS_OK = /\bone adult (?:must |can |will |has to )?sits? (?:with|beside|next to) each (?:child|kid)\b|\bsplit into (?:2|two) and (?:2|two)\b|\bin pairs\b|\beach adult (?:can |must )?sits? (?:beside|with|next to) (?:a|one) (?:child|kid)\b|\beach (?:child|kid) (?:must |has to |needs to |should )?(?:sits? )?(?:directly )?(?:beside|next to|with) an? (?:adult|parent)\b|\b(?:adjacent |two |2 )*(?:adult[- ](?:child|kid) )?pairs (?:are|is) (?:fine|ok|okay|acceptable|allowed)\b|\b(?:two|2) adjacent (?:adult[- ](?:child|kid) )?pairs\b[^.;]{0,30}\b(?:fine|ok|okay|acceptable|allowed)\b/i;
@@ -433,7 +451,7 @@ const NOT_TOGETHER = /\b(?:don'?t|do not) (?:need|have) to sit together\b|\b(?:d
 const ALL_TOGETHER = /\b(?:must|need to|have to|want to) (?:all )?sit together\b|\ball (?:\w+ )?(?:of us )?together\b|\bseats? (?:all )?together\b/i;
 
 export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New_York'): PartyTerms {
-  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null };
+  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null, priority: null };
   for (const raw of messagesOldestFirst) {
     const t = flat(raw);
     const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
@@ -450,6 +468,9 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
     // Pairs are enough when each adult sits with a child: "we can split into 2 and 2 only if one adult sits with each
     // child", "each child must sit directly beside an adult; two adjacent adult-child pairs are fine" (TGQA-R6 18,
     // R8 S01). A later "we no longer require that" lifts it; the latest message wins.
+    const feature = FEATURE_FIRST.exec(t);
+    if (feature) out.priority = { kind: 'feature', words: feature[1]!.toLowerCase().replace(/^(?:a|the) /, '') };
+    else if (PRICE_FIRST.test(t)) out.priority = { kind: 'price' };
     if (ANY_SEATS.test(t)) out.seating = 'any';
     else if (PAIRS_OK.test(t)) out.seating = 'pairs';
     else if (NOT_TOGETHER.test(t)) out.seating = 'any';
