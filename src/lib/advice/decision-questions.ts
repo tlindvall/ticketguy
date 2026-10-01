@@ -25,13 +25,22 @@ const usd = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency', c
 const sentencesOf = (t: string) => t.split(/(?<=[.!?])\s+(?=[A-Z"(])/).map((x) => x.trim()).filter(Boolean);
 const URL_RE = /\bhttps?:\/\/[^\s)<>"']+[^\s)<>"'.,;:!?]/i;
 
-/** A rule they supplied: the sentence that cites a source ("The FAQ (https://…) says …"), and its link. */
+/**
+ * A rule they supplied: the sentence that cites a source ("The FAQ (https://…) says …"), and its link, with the
+ * sentences after it in the same paragraph that carry on its terms ("It does not require two alcoholic drinks.",
+ * "Even winning does not guarantee adjacent seats."). Their own facts ("we", "our") end it (post-deploy R1).
+ */
 type SuppliedRule = { text: string; url: string | null };
 function suppliedRules(messages: string[]): SuppliedRule[] {
   const out: SuppliedRule[] = [];
-  for (const m of messages) for (const s of sentencesOf(flat(m))) {
-    const url = URL_RE.exec(s)?.[0] ?? null;
-    if (url || /\b(?:policy|rules?|terms|FAQ|website|site)\b[^.]{0,40}\b(?:says?|states?|lists?)\b/i.test(s)) out.push({ text: s, url });
+  for (const m of messages) for (const para of m.split(/\n\s*\n/)) {
+    let open: SuppliedRule | null = null;
+    for (const s of sentencesOf(flat(para))) {
+      const url = URL_RE.exec(s)?.[0] ?? null;
+      if (url || /\b(?:policy|rules?|terms|FAQ|website|site)\b[^.]{0,40}\b(?:says?|states?|lists?)\b/i.test(s)) out.push((open = { text: s, url }));
+      else if (open && !/\b(?:I|we|our|us|my|me)\b/i.test(s)) open.text += ` ${s}`;
+      else open = null;
+    }
   }
   return out;
 }
@@ -81,9 +90,9 @@ function minimumSpend(messages: string[]): DecisionAnswer | null {
   const coverTotal = perPersonCover ? cover * party : cover;
   const cap = capCents(messages);
   const rules = suppliedRules(messages);
-  const minRule = ruleWith(rules, new RegExp(`\\b${N}[- ](?:item|drink)\\s+minimum\\b|\\b${N}\\s+(?:qualifying\\s+)?(?:items?|drinks?)\\s+(?:per person|each|minimum)\\b`, 'i'));
+  const minRule = ruleWith(rules, new RegExp(`\\b${N}[- ](?:item|drink)\\s+minimum\\b|\\b${N}\\s+(?:qualifying\\s+)?(?:items?|drinks?)\\s+(?:per (?:person|attendee|guest|head|customer|patron)|each|minimum)\\b`, 'i'));
   const minN = minRule ? toN(new RegExp(`\\b${N}[- ]?(?:\\s+qualifying)?\\s*(?:item|drink)`, 'i').exec(minRule.text)?.[1] ?? '0') : null;
-  const softOk = minRule ? /\b(?:food|non-alcoholic|soft drinks?|mocktails?)\b[^.]{0,50}\b(?:counts?|allowed|qualif\w*|okay|ok|fine)\b|\b(?:counts?|allowed)\b[^.]{0,30}\b(?:food|non-alcoholic)\b/i.test(minRule.text) : false;
+  const softOk = minRule ? /\b(?:food|non-alcoholic|soft drinks?|mocktails?)\b[^.]{0,50}\b(?:counts?|allowed|qualif\w*|okay|ok|fine)\b|\b(?:counts?|allowed)\b[^.]{0,30}\b(?:food|non-alcoholic)\b|\bdoes(?:n't| not) require\b[^.]{0,30}\balcohol/i.test(minRule.text) : false;
   const who = party === 2 ? 'the two of you' : party === 1 ? 'you' : `the ${word(party)} of you`;
 
   if (items) {
@@ -105,13 +114,16 @@ function minimumSpend(messages: string[]): DecisionAnswer | null {
     };
   }
   const ruleLine = minRule && minN
-    ? `The rule you supplied says ${word(minN)} qualifying ${minN === 1 ? 'item' : 'items'} per person${softOk ? ', and food or non-alcoholic drinks count, so it isn’t a requirement to drink alcohol' : ''}.`
+    ? `The rule you supplied says ${word(minN)} qualifying ${minN === 1 ? 'item' : 'items'} per person${party > 1 ? ` (${word(minN * party)} for ${who})` : ''}${softOk ? ', and food or non-alcoholic drinks count, so you don’t have to buy alcohol' : ''}.`
     : 'Food and drink are extra, and clubs like this often have a per-person minimum. Whether there is one, and whether it has to be alcohol, is the venue’s rule, usually on its reservation or policy page.';
+  const against = `I’ll check the night against your ${cap !== null ? `${usd(cap)} cap` : 'budget'}`;
   return {
     kind: 'minimum_spend',
     lead: `${usd(coverTotal)} covers entry for ${who}, not the whole night.`,
     items: [ruleLine, ...(minRule ? [source(minRule, 'policy')!] : [])],
-    nextStep: `Send me the prices of what you’d order, with any charges and tip, and I’ll check the night against your ${cap !== null ? `${usd(cap)} cap` : 'budget'}.`,
+    nextStep: minRule && minN
+      ? `What’s missing is the price of those ${word(minN * party)} items: send me what you’d order, with any charges and tip, and ${against}.`
+      : `Send me the prices of what you’d order, with any charges and tip, and ${against}.`,
     facts: { quantity: party, showName: null },
   };
 }
@@ -130,47 +142,58 @@ function lottery(messages: string[]): DecisionAnswer | null {
   for (const m of messages) {
     const t = flat(m);
     if (/\b(?:we|I)\s+(?:didn'?t|did not|have not|haven'?t)\s+(?:win|won|been selected)\b|\b(?:we|I)\s+lost\b/i.test(t)) won = false;
-    else if (/\b(?:we|I)\s+(?:won|were selected|was selected|got (?:picked|selected))\b/i.test(t)) won = true;
+    else if (/\b(?:we|I)(?:\s+have|'ve)?\s+(?:now\s+|just\s+|actually\s+)?(?:won|were selected|was selected|been selected|got (?:picked|selected))\b/i.test(t)) won = true;
   }
-  const together = /\b(?:must|need to|have to)\s+sit\s+together\b|\bseats?\s+together\b[^.]{0,20}\b(?:must|required|need)\b|\bmust be (?:together|adjacent)\b/i.test(all);
+  const together = /\b(?:must|need to|have to)\s+sit\s+together\b|\bseats?\s+together\b[^.]{0,20}\b(?:must|required|need)\b|\bmust be (?:together|adjacent)\b|\b(?:need|want|require)\s+(?:\w+\s+)?seats?\s+(?:together|adjacent)\b|\bcan(?:not|'t)\s+accept\s+separated?\s+seats\b/i.test(all);
+  const noAssignment = /\bno seat (?:assignment|numbers?|locations?)\b/i.test(latest);
   const cap = capCents(messages);
   const lotteryPrice = /\blottery\b[^.$]{0,30}\$\s?(\d[\d,]*(?:\.\d{2})?)/i.exec(all);
   // The options they named beside the lottery, each with its own words: a pair "adjacent", "for $220 total".
-  const options = [...all.matchAll(/\b((?:a|an|the)\s+(?:guaranteed\s+)?(?:[a-z-]+\s+){0,3}?(?:pair|seats|tickets|alternative|option|block))\b[^.,;$]{0,30}?\$\s?(\d[\d,]*(?:\.\d{2})?)(\s*(?:total|for both|for the pair|each|per (?:ticket|seat)))?/gi)]
+  // "Two actual adjacent seats for the same performance for $220 TOTAL" counts too (post-deploy R1).
+  const options = [...all.matchAll(/\b((?:a|an|the|two|three|four|\d)\s+(?:guaranteed\s+)?(?:[a-z-]+\s+){0,3}?(?:pair|seats|tickets|alternative|option|block))\b[^.,;$]{0,45}?\$\s?(\d[\d,]*(?:\.\d{2})?)(\s*(?:total|for both|for the pair|each|per (?:ticket|seat)))?/gi)]
     .filter((x) => !/\blottery\b/i.test(x[1]!))
-    .map((x) => ({ name: x[1]!.replace(/^(?:a|an|the)\s+/i, ''), cents: cents(x[2]!), each: /each|per/i.test(x[3] ?? ''), adjacent: /\b(?:adjacent|together|pair)\b/i.test(x[1]!) }));
+    .map((x) => ({ name: x[1]!.replace(/^(?:a|an|the)\s+/i, '').replace(/\bactual\s+/i, ''), cents: cents(x[2]!), each: /each|per/i.test(x[3] ?? ''), adjacent: /\b(?:adjacent|together|pair)\b/i.test(x[1]!) }));
   const rules = suppliedRules(messages);
   const terms = ruleWith(rules, /\blotter(?:y|ies)\b|\bterms\b/i);
-  const notTogether = !!terms && /\b(?:adjacent|together|side[- ]by[- ]side)\b[^.]{0,30}\bnot guaranteed\b|\bnot guaranteed\b[^.]{0,30}\b(?:adjacent|together)\b/i.test(terms.text);
+  const notTogether = !!terms && /\b(?:adjacent|together|side[- ]by[- ]side)\b[^.]{0,30}\bnot guaranteed\b|\bnot guaranteed\b[^.]{0,30}\b(?:adjacent|together)\b|\bdoes(?:n't| not) guarantee\b[^.]{0,30}\b(?:adjacent|together|side[- ]by[- ]side)\b/i.test(terms.text);
   const fitting = options.filter((o) => (!together || o.adjacent) && (cap === null || (o.each ? o.cents * 2 : o.cents) <= cap)).sort((a, b) => a.cents - b.cents)[0] ?? null;
   const unfit = options.filter((o) => o !== fitting && together && !o.adjacent);
   const fitLine = fitting
-    ? `The ${fitting.name} you quoted ${together ? 'meets your sit-together requirement' : 'is a sure way in'} at ${usd(fitting.each ? fitting.cents * 2 : fitting.cents)} total${cap !== null ? `, leaving ${usd(cap - (fitting.each ? fitting.cents * 2 : fitting.cents))} of your ${usd(cap)}` : ''}.`
+    ? `The ${fitting.name} you quoted ${/s$/.test(fitting.name) ? (together ? 'meet your sit-together requirement' : 'are a sure way in') : together ? 'meets your sit-together requirement' : 'is a sure way in'} at ${usd(fitting.each ? fitting.cents * 2 : fitting.cents)} total${cap !== null ? `, leaving ${usd(cap - (fitting.each ? fitting.cents * 2 : fitting.cents))} of your ${usd(cap)}` : ''}.`
     : null;
-  const unfitLine = unfit.length ? `The ${unfit.map((o) => o.name).join(' and the ')} ${unfit.length === 1 ? 'isn’t' : 'aren’t'} described as seats together, so ${unfit.length === 1 ? 'it doesn’t' : 'they don’t'} meet your must-sit-together requirement.` : null;
-  const basis = 'Based only on the facts you supplied; I haven’t checked availability.';
+  const unfitLine = unfit.length ? `The ${unfit.map((o) => o.name).join(' and the ')} ${unfit.length === 1 && !/s$/.test(unfit[0]!.name) ? 'isn’t' : 'aren’t'} described as seats together, so ${unfit.length === 1 && !/s$/.test(unfit[0]!.name) ? 'it doesn’t' : 'they don’t'} meet your must-sit-together requirement.` : null;
+  // What isn't checked, said once: the terms they sent and live availability together (post-deploy R1 writing review).
+  const status = terms?.url
+    ? `Here are the lottery terms you sent: ${terms.url}. This rests on them and your quotes; I haven’t checked the terms or availability myself.`
+    : terms
+      ? 'This rests on the lottery terms you described and your quotes; I haven’t checked the terms or availability myself.'
+      : 'Based only on the facts you supplied; I haven’t checked availability.';
+  const lotteryPair = lotteryPrice ? ` (${usd(cents(lotteryPrice[1]!))} each, ${usd(cents(lotteryPrice[1]!) * 2)} for both)` : '';
   if (won) {
     return {
       kind: 'lottery',
-      lead: notTogether ? 'Winning lets you buy, but the terms you supplied still don’t guarantee seats together.' : 'Winning lets you buy, but I can’t tell from what you’ve sent whether those seats would be together.',
+      lead: notTogether
+        ? 'Winning lets you buy, but under the terms you supplied it doesn’t confirm seats together.'
+        : noAssignment
+          ? 'Winning lets you buy, but it doesn’t confirm seats together: no seat assignment has come with it.'
+          : 'Winning lets you buy, but I can’t tell from what you’ve sent whether those seats would be together.',
       items: [
-        ...(terms ? [source(terms, 'lottery terms')!] : []),
-        together ? `Since sitting together is a must, ${lotteryPrice ? `the lottery seats (${usd(cents(lotteryPrice[1]!))} each) are only the plan if the seller confirms they’re together.` : 'the lottery seats are only the plan if the seller confirms they’re together.'}${fitLine ? ` Otherwise: ${fitLine.charAt(0).toLowerCase()}${fitLine.slice(1)}` : ''}` : fitLine ?? 'Check the seats offered before you pay.',
-        basis,
+        together ? `Since sitting together is a must, the lottery seats${lotteryPair} are the plan only once the seats offered are shown together.${fitLine ? ` Otherwise: ${fitLine.charAt(0).toLowerCase()}${fitLine.slice(1)}` : ''}` : fitLine ?? 'Check the seats offered before you pay.',
+        status,
       ],
       nextStep: null,
       facts: { quantity: together ? 2 : null, showName: null },
     };
   }
+  const oneNight = /\b(?:one|single)[- ]night\b|\bjust one night\b|\bcan'?t risk\b/i.test(all);
   return {
     kind: 'lottery',
     lead: 'I wouldn’t count the lottery as your guaranteed plan.',
     items: [
-      `Before the draw, a lottery is a chance to buy, not a ticket.${notTogether ? ' The terms you supplied also say adjacent seats aren’t guaranteed even if you win.' : ''}`,
-      ...(terms ? [source(terms, 'lottery terms')!] : []),
-      ...(fitLine ? [`${fitLine}${won === null ? ' For a one-night visit, that’s the safer plan.' : ''}`] : []),
+      `Before the draw, a lottery is a chance to buy, not a ticket.${notTogether ? ' The terms you supplied also say even winning doesn’t guarantee adjacent seats.' : ''}`,
+      ...(fitLine ? [`${fitLine}${oneNight ? ' For a one-night visit, that’s the safer plan.' : ''}`] : []),
       ...(unfitLine ? [unfitLine] : []),
-      basis,
+      status,
     ],
     nextStep: null,
     facts: { quantity: together ? 2 : null, showName: null },

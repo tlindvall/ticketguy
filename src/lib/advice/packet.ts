@@ -56,6 +56,8 @@ export type AdvicePacket = {
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
   headline?: string;
   evidenceExpiresAt: string | null;
+  /** The occurrence this advice was written for; approval and send check the event still has it (R2-LIFECYCLE-01). */
+  eventStartAt?: string | null;
   nextCheckpointAt: string | null;
   stopConditions: string[];
   watchConsentReference: string | null;
@@ -627,12 +629,15 @@ type OfferVerdict = { o: TextOffer; tot: ReturnType<typeof offerTotal>; why: Arr
  * Their offers compared without an event on file (TGQA-R6 1006): the arithmetic and the hard rules need only what
  * they sent, so "which date?" never stands between them and the answer. Same engine as the full reply.
  */
-export function suppliedOffersAnswer(a: { offers: TextOffer[]; quantity: number; budgetTotalCents: number | null; needs: NonNullable<BuildPacketArgs['offerNeeds']>; accessibilityRequired: boolean; timeZone: string; offersSetAside?: string[]; observedAt: Date }): { lead: string; items: string[] } {
-  const c = offersClaim({ quantity: a.quantity, priorities: { budgetTotalCents: a.budgetTotalCents }, offerNeeds: a.needs, accessibilityRequired: a.accessibilityRequired, timeZone: a.timeZone, offersSetAside: a.offersSetAside, observedAt: a.observedAt } as unknown as BuildPacketArgs, a.offers);
+export function suppliedOffersAnswer(a: { offers: TextOffer[]; quantity: number; budgetTotalCents: number | null; needs: NonNullable<BuildPacketArgs['offerNeeds']>; accessibilityRequired: boolean; timeZone: string; offersSetAside?: string[]; observedAt: Date; before?: OffersBefore | null }): { lead: string; items: string[] } {
+  const c = offersClaim({ quantity: a.quantity, priorities: { budgetTotalCents: a.budgetTotalCents }, offerNeeds: a.needs, accessibilityRequired: a.accessibilityRequired, timeZone: a.timeZone, offersSetAside: a.offersSetAside, observedAt: a.observedAt } as unknown as BuildPacketArgs, a.offers, a.before ?? null);
   return { lead: c.text.split('\n')[0]!, items: c.items ?? [] };
 }
 
-function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
+/** What their terms were before this message: a changed count, budget or priority explains a changed pick. */
+type OffersBefore = { quantity: number | null; priority: PartyTerms['priority'] | null; budgetTotalCents: number | null };
+
+function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefore | null = null): ClaimRecord {
   const need = a.offerNeeds ?? { noObstructed: false, togetherRequired: false, baseline: null, terms: null };
   const terms = need.terms ?? { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, seating: null };
   // How many are going, which is not always how many they'd buy ("happy to buy six; only five of us"), and less
@@ -798,19 +803,39 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
             : `${Name(c.o)} already costs ${formatUsd(-gap)} more before its fees, so ${short(best.o)} costs less whatever they are.`);
     }
     if (owned) bits.unshift(owned === 1 ? 'Your own ticket is already covered.' : `The ${countWord(owned)} tickets you already have are covered.`);
-    const check = best.o.deliveryStated ? '' : ' Before you buy, check its delivery time on the listing.';
+    // No generic "check delivery" task: a deadline they gave is already checked against each offer, and without one it's
+    // research the comparison doesn't need (post-deploy R1, useful reply standard).
+    const check = '';
     // Their priority, said back as the reason: the pick is for them, not the cheapest by default.
     const dearer = priority?.kind === 'price' && best === cheapest ? [...fits].sort(byTotal).filter((r) => r !== best && r.tot!.cents > best.tot!.cents && r.o.tier)[0] : undefined;
     const personal = wanted && wanted !== cheapest && cheapest
       ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `It costs ${formatUsd(best.tot!.cents - cheapest.tot!.cents)} more than ${cheapest.o.name}, and since ${priority?.kind === 'feature' ? `the ${priority.words}` : 'that'} is what matters most to you, that’s the difference worth paying.${budget !== null && best.tot!.cents <= budget ? ` It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.` : ''}` }
       : dearer
-        ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `${budget !== null ? `It leaves ${formatUsd(budget - best.tot!.cents)} under your ${formatUsd(budget)} cap. ` : ''}${dearer.o.name} costs ${formatUsd(dearer.tot!.cents - best.tot!.cents)} more for the ${dearer.o.tier}; since keeping the spend down matters most to you, I wouldn’t pay that difference on the facts you’ve supplied.` }
+        ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `${budget !== null ? `It leaves ${formatUsd(budget - best.tot!.cents)} under your ${formatUsd(budget)} cap. ` : ''}${dearer.o.name} costs ${formatUsd(dearer.tot!.cents - best.tot!.cents)} more for the ${dearer.o.tier!.replace(/-/g, ' ')}; since keeping the spend down matters most to you, I wouldn’t pay that difference on the facts you’ve supplied.` }
         : null;
+    // What they changed since the last turn is the reason the pick is what it is now, said first: not the old
+    // reason restated, not a generic "wins this one" (post-deploy R1 writing review).
+    const left = budget !== null && best.tot!.cents <= budget ? ` It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.` : '';
+    const premium = wanted === best && cheapest && cheapest !== best ? best.tot!.cents - cheapest.tot!.cents : null;
+    const countDelta = before?.quantity != null && before.quantity !== q ? q - before.quantity : 0;
+    const changedHead = countDelta
+      ? `With ${countWord(Math.abs(countDelta))} ${countDelta > 0 ? 'more' : 'fewer'} ${owned ? 'new ' : ''}${Math.abs(countDelta) === 1 ? 'ticket' : 'tickets'} to buy, ${short(best.o)} is the one: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`
+      : null;
+    const words = priority?.kind === 'feature' ? priority.words : null;
+    const changedPick = countDelta || premium === null || !words || !before
+      ? null
+      : before.priority?.kind === 'price'
+        ? `Since you’d now pay more for the ${words}, I’d choose ${short(best.o)}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included. That’s ${formatUsd(premium)} more than ${cheapest!.o.name}.${left}`
+        : before.budgetTotalCents !== null && budget !== null && before.budgetTotalCents < best.tot!.cents && before.budgetTotalCents !== budget
+          ? `With your budget now ${formatUsd(budget)}, the ${words} fits, so I’d choose ${short(best.o)}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included. That’s ${formatUsd(premium)} more than ${cheapest!.o.name}, the other usable option, and the ${words} is what you said you’d prefer.${left}`
+          : null;
     // A seat's place in the venue is their word, not a view anyone has checked.
     const basis = offers.some((o) => o.tier) && deadline === null ? 'That’s based on your quotes; I haven’t verified availability or the view.' : provenance;
-    choice = personal
+    choice = changedPick
+      ? `${changedPick} ${basis}`.replace(/\s+/g, ' ').trim()
+      : personal && !changedHead
       ? `${personal.head} ${personal.why} ${basis}${check}`.replace(/\s+/g, ' ').trim()
-      : `${head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
+      : `${changedHead ?? head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
   } else if (open.length >= 2 && open.every((r) => r.tot)) {
     choice = `${open.map((r) => Name(r.o)).join(' and ')} meet what you asked for so far, but their fees aren’t known yet, so I can’t say which costs less until you see the checkout totals. ${provenance}`;
   } else if (open.length === 1) {
@@ -1376,6 +1401,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     headline: `${a.eventLabel} · ${a.quantity === 1 ? '1 ticket' : `${a.quantity} tickets`}${a.priorities.budgetTotalCents != null && a.priorities.budgetTotalCents !== (a.quote ? a.quote.perTicketCents * a.quantity : null) && a.priorities.budgetTotalCents !== (a.subject?.wholePartyCents ?? null) && !(a.textOffers ?? []).some((o) => (o.totalCents ?? (o.perTicketCents ?? -1) * a.quantity) === a.priorities.budgetTotalCents) ? ` · up to ${formatUsd(a.priorities.budgetTotalCents)} in total` : ''}${a.link ? ` · from the ${a.link.marketplace} link you sent` : ''}`,
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
+    eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,
     stopConditions: a.policy.stopConditions,
     watchConsentReference: a.watchConsentReference,

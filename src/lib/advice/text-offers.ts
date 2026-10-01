@@ -449,15 +449,17 @@ export type PartyTerms = {
   toBuy?: number | null;
 };
 
-const OWNED_ONE = /\b(?:I|my (?:partner|wife|husband|friend|son|daughter))\s+(?:already\s+|still\s+)?(?:has|have|own|owns|hold|holds|bought|got)\s+(?:my|his|her|their)\s+own\s+(?:ticket|seat|admission)\b|\bI\s+(?:already\s+(?:have|own|hold|bought|got)|own)\s+(?:a|one|my)\s+(?:ticket|seat|admission)\b/i;
+const OWNED_ONE = /\b(?:I|my (?:partner|wife|husband|friend|son|daughter))\s+(?:already\s+|still\s+)?(?:has|have|own|owns|hold|holds|bought|got)\s+(?:my|his|her|their)\s+own\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bI\s+(?:already\s+(?:have|own|hold|bought|got)|own)\s+(?:a|one|my)\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bmy\s+already[- ](?:owned|purchased|bought)\s+(?:[a-z-]+\s+)?(?:ticket|seat|admission)\b|\bI\s+(?:already|still)\s+have\s+mine\b/i;
 const OWNED_N = new RegExp(`\\b(?:I|we)\\s+(?:already\\s+(?:have|own|hold|bought|got)|own)\\s+${NUMBER}\\s+(?:tickets?|seats?|admissions?)\\b`, 'i');
 const OWNED_NONE = /\b(?:I|we)\s+(?:don'?t|do not)\s+(?:own|have)\s+any\s+tickets\b|\b(?:I|we)\s+(?:own|have)\s+no\s+tickets\b/i;
-const TO_BUY = new RegExp(`\\b${NUMBER}\\s+(?:(?:more|other)\\s+)?(?:friends?|people|guests?|others|of them|of my friends)\\s+(?:now\\s+|still\\s+|will\\s+)?needs?\\s+(?:new\\s+|their own\\s+)?(?:tickets?|admissions?|seats?)\\b|\\bneed\\s+${NUMBER}\\s+(?:more|new|additional|extra)\\s+(?:tickets?|admissions?|seats?)\\b`, 'i');
+const TO_BUY = new RegExp(`\\b${NUMBER}\\s+(?:(?:more|other)\\s+)?(?:friends?|people|guests?|others|of them|of my friends)\\s+(?:now\\s+|still\\s+|will\\s+)?needs?\\s+(?:new\\s+|their own\\s+)?(?:tickets?|admissions?|seats?)\\b|\\bneed\\s+${NUMBER}\\s+(?:more|new|additional|extra)\\s+(?:tickets?|admissions?|seats?)\\b|\\b${NUMBER}\\s+(?:more\\s+|other\\s+)?friends?\\s+(?:who|that)\\s+(?:each\\s+|all\\s+|still\\s+)?needs?\\s+(?:a\\s+|their\\s+own\\s+)?(?:new\\s+)?(?:tickets?|admissions?|seats?)\\b`, 'i');
 
-const PRIORITY_TAIL = '[^.!?]{0,40}\\b(?:matters? (?:the )?most|most important|is (?:the |our |my )?(?:top |main )?priority|comes first|(?:is )?worth (?:paying (?:for|the extra)|the extra))';
+const PRIORITY_TAIL = '[^.!?]{0,40}\\b(?:matters? (?:the )?most|most important|is (?:the |our |my )?(?:top |main )?priority|comes first|(?:is )?worth (?:paying (?:for|the extra)|the extra)|enough to pay (?:the|that|a|for the) (?:difference|extra|premium)|(?:willing|happy|okay|ok|fine) to pay (?:the|that) (?:difference|extra|premium))';
 /** "Keeping the spend down matters most", "the price is our priority". */
 const PRICE_FIRST = new RegExp(`\\b(?:keep(?:ing)? (?:the )?(?:spend|spending|cost|price|total)s? (?:down|low)|spend(?:ing)? (?:less|as little)|saving money|(?:the )?(?:lowest )?price|(?:the )?cost|the total)${PRIORITY_TAIL}|\\b(?:cheapest|lowest price) (?:is what we want|wins)\\b`, 'i');
 /** "Being in the lower tier matters most", "the view is worth paying for". */
+const TIER_WORDS = '(?:upper|lower|middle|club|field|loge|main)[ -](?:tier|level|bowl|deck|balcony)';
+const FEATURE_PREFERRED = new RegExp(`\\b(?:I|we)\\s+(?:now\\s+|still\\s+)?(?:prefer|would prefer|'d prefer|would rather have)\\s+(?:being\\s+in\\s+|to be in\\s+|sitting in\\s+)?(?:the\\s+|a\\s+)?(${TIER_WORDS})|\\b(${TIER_WORDS})\\s+preference\\b`, 'i');
 const FEATURE_FIRST = new RegExp(`\\b(?:being (?:in|on|at) |sitting (?:in|on) |seats? (?:in|on) |a |the )?((?:upper|lower|middle|club|field|loge|main)[ -](?:tier|level|bowl|deck|balcony)(?: seats?)?|mezzanine|balcony|orchestra|(?:the )?floor|front rows?|(?:a )?better view|the view|closer seats|being closer)${PRIORITY_TAIL}`, 'i');
 
 /** "Each child must sit directly beside an adult; two adjacent adult-child pairs are fine." */
@@ -490,13 +492,15 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
     const owned = ownedN ? num(ownedN[1]!) : OWNED_ONE.test(t) ? 1 : OWNED_NONE.test(t) ? 0 : null;
     if (owned !== null) out.owned = owned;
     const toBuy = TO_BUY.exec(t);
-    if (toBuy) out.toBuy = num((toBuy[1] ?? toBuy[2])!);
+    if (toBuy) out.toBuy = num((toBuy[1] ?? toBuy[2] ?? toBuy[3])!);
     else if (going || owned !== null) out.toBuy = null;
     // Pairs are enough when each adult sits with a child: "we can split into 2 and 2 only if one adult sits with each
     // child", "each child must sit directly beside an adult; two adjacent adult-child pairs are fine" (TGQA-R6 18,
     // R8 S01). A later "we no longer require that" lifts it; the latest message wins.
-    const feature = FEATURE_FIRST.exec(t);
-    if (feature) out.priority = { kind: 'feature', words: feature[1]!.toLowerCase().replace(/^(?:a|the) /, '').replace(/[- ]seats?$/, '').replace(/-/g, ' ') };
+    // "I prefer the lower tier when it fits my budget", "lower-tier preference": a preference the cap decides,
+    // as much a priority as "matters most" (post-deploy R1, R1-PREF-01). The latest message that says one wins.
+    const feature = FEATURE_FIRST.exec(t) ?? FEATURE_PREFERRED.exec(t);
+    if (feature) out.priority = { kind: 'feature', words: (feature[1] ?? feature[2])!.toLowerCase().replace(/^(?:a|the) /, '').replace(/[- ]seats?$/, '').replace(/-/g, ' ') };
     else if (PRICE_FIRST.test(t)) out.priority = { kind: 'price' };
     if (ANY_SEATS.test(t)) out.seating = 'any';
     else if (PAIRS_OK.test(t)) out.seating = 'pairs';

@@ -627,7 +627,13 @@ export class Concierge {
       const terms = partyTerms(threadTexts, tz);
       const quantity = terms.toBuy ?? terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
       const threadFlat = flat(threadTexts.join('\n'));
-      const concertCap = concertContext(threadTexts) ? [...threadTexts].reverse().map(concertBudget).find((b) => b !== null) : null;
+      const concertCapIn = (texts: string[]) => (concertContext(texts) ? [...texts].reverse().map(concertBudget).find((b) => b !== null) ?? null : null);
+      const concertCap = concertCapIn(threadTexts);
+      // What they changed since the last turn, so a new pick is explained by the change, not restated (post-deploy R1).
+      // A budget is compared only when their own concert words carry it on both turns.
+      const earlier = threadTexts.slice(0, -1);
+      const before = earlier.length && suppliedOffers(earlier[earlier.length - 1]!, earlier, tz).textOffers.length ? partyTerms(earlier, tz) : null;
+      const capBefore = before ? concertCapIn(earlier) : null;
       const comparison = suppliedOffersAnswer({
         offers: supplied.textOffers, quantity, offersSetAside: supplied.offersSetAside, accessibilityRequired: !!merged.accessibilityNeeds, timeZone: tz, observedAt: now,
         // Their budget, whatever words carried it ("$500 TOTAL including fees"), but never one of their offers' own
@@ -635,6 +641,7 @@ export class Concierge {
         // A concert quote binds the cap to its own words (concert R9).
         budgetTotalCents: concertCap ? wholePartyBudgetCents(concertCap.cents, concertCap.basis ?? (concertCap.cents === merged.budgetCents ? merged.budgetBasis : null), quantity) : customerBudget(merged, threadTexts, quantity, tz),
         needs: { noObstructed: NO_OBSTRUCTED.test(`${threadFlat}\n${merged.seatingPreference ?? ''}`), togetherRequired: !!merged.togetherRequired, baseline: comparedAgainst(latestText, supplied.textOffers.map((o) => o.label)), terms },
+        before: before ? { quantity: before.toBuy ?? before.attendees, priority: before.priority ?? null, budgetTotalCents: concertCap && capBefore ? wholePartyBudgetCents(capBefore.cents, capBefore.basis ?? concertCap.basis ?? (capBefore.cents === merged.budgetCents ? merged.budgetBasis : null), before.toBuy ?? before.attendees ?? quantity) : null } : null,
       });
       const { lead } = comparison;
       const items = [...comparison.items];
@@ -2515,6 +2522,13 @@ export class Concierge {
     return { benchmark, benchmarkRunId: run!.id };
   }
 
+  /** The event start the advice was written for, from its packet; null when it wasn't recorded. */
+  private async adviceStartAt(adviceRunId: string | null): Promise<string | null> {
+    if (!adviceRunId) return null;
+    const [run] = await this.db.select({ packet: t.adviceRuns.packet }).from(t.adviceRuns).where(eq(t.adviceRuns.id, adviceRunId));
+    return (run?.packet as { eventStartAt?: string | null } | undefined)?.eventStartAt ?? null;
+  }
+
   /**
    * The group-basket trend, from snapshots this use is permitted for (R2-TREND-RIGHTS-01). Each contributing
    * dataset must be approved, inside its retention, and approved for advice (a trend steers buy or wait);
@@ -2566,8 +2580,16 @@ export class Concierge {
     if (!req || req.currentRevision !== args.expectedRevision || rec.revision !== req.currentRevision) return { ok: false, status: 409, reason: 'revision_stale' };
     if (rec.draftHash !== args.draftHash) return { ok: false, status: 409, reason: 'draft_hash_mismatch' };
     if (rec.reviewStatus !== 'pending') return { ok: false, status: 409, reason: `review_status_${rec.reviewStatus}` };
-    // A27: chosen observations must be fresh at approval; otherwise revalidation is required.
     const [event] = await this.db.select().from(t.events).where(eq(t.events.id, req.eventId!));
+    // Advice written for a scheduled occurrence says nothing true about a cancelled, postponed or moved one
+    // (R2-LIFECYCLE-01): fresh prices don't prove the event still happens. The draft is obsolete, not stale.
+    const changed = eventChangedSince(event, now, await this.adviceStartAt(rec.adviceRunId));
+    if (changed) {
+      await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated', reviewNote: `event_changed: ${changed}` }).where(eq(t.recommendations.id, rec.id));
+      await audit(this.db, { actor: args.reviewerUserId, action: 'recommendation.invalidated_event_changed', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision, diff: { reason: changed } });
+      return { ok: false, status: 409, reason: changed };
+    }
+    // A27: chosen observations must be fresh at approval; otherwise revalidation is required.
     const obs = rec.chosenObservationIds.length ? await this.db.select().from(t.offerObservations).where(inArray(t.offerObservations.id, rec.chosenObservationIds)) : [];
     const stale = obs.filter((o) => !checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: event!.localStartAt, now }).fresh);
     if (stale.length) {
@@ -2677,6 +2699,7 @@ export class Concierge {
     let approved = intent.approvalId !== null;
     let hashMatches = true;
     let policyOk = true;
+    let eventChange: string | null = null;
     if (intent.requestId && intent.requestRevision !== null) {
       const [req] = await this.db.select({ rev: t.requests.currentRevision, eventId: t.requests.eventId }).from(t.requests).where(eq(t.requests.id, intent.requestId));
       revisionCurrent = req?.rev === intent.requestRevision;
@@ -2691,6 +2714,7 @@ export class Concierge {
         const [obs] = alert ? await this.db.select().from(t.offerObservations).where(eq(t.offerObservations.id, alert.observationId)) : [];
         const [event] = w ? await this.db.select().from(t.events).where(eq(t.events.id, w.eventId)) : [];
         evidenceFresh = !!obs && !!event && obs.eventId === event.id && checkFreshness({ fetchedAt: obs.fetchedAt, sourceAsOf: obs.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh;
+        if (w) eventChange = eventChangedSince(event, now);
         containsFixture = containsFixture || obs?.verificationMethod === 'fixture';
         // The policy and rights at send time, not at approval time, decide (SD16/SD17).
         if (approved && w) {
@@ -2703,8 +2727,11 @@ export class Concierge {
         hashMatches = rec?.draftHash === intent.approvedHash;
         if (rec && req?.eventId) {
           const [event] = await this.db.select().from(t.events).where(eq(t.events.id, req.eventId));
+          // An approval given while the event was scheduled doesn't carry over a cancellation, postponement or
+          // new date seen now (R2-LIFECYCLE-01).
+          eventChange = eventChangedSince(event, now, await this.adviceStartAt(rec.adviceRunId));
           const obs = rec.chosenObservationIds.length ? await this.db.select().from(t.offerObservations).where(inArray(t.offerObservations.id, rec.chosenObservationIds)) : [];
-          evidenceFresh = obs.every((o) => checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: event!.localStartAt, now }).fresh);
+          evidenceFresh = !!event && obs.every((o) => checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh);
           containsFixture = containsFixture || obs.some((o) => o.verificationMethod === 'fixture');
           // A draft written under a permission that has since gone (an override expired, a category downgraded)
           // doesn't send its claims (SD16): every operation its claims rely on must still be allowed today.
@@ -2724,8 +2751,10 @@ export class Concierge {
     }
     const capture = testModeFrom(switches) || (await isTestConversation(this.db, intent.conversationId));
     const sendGate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
-    const gate: { allowed: boolean; reasons: string[] } = policyOk ? (sendGate.allowed ? { allowed: true, reasons: [] } : sendGate) : { allowed: false, reasons: [...(sendGate.allowed ? [] : sendGate.reasons), 'policy_changed'] };
-    if ((!policyOk || !evidenceFresh) && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
+    const extra = [...(policyOk ? [] : ['policy_changed']), ...(eventChange ? [eventChange] : [])];
+    const gate: { allowed: boolean; reasons: string[] } = !extra.length ? (sendGate.allowed ? { allowed: true, reasons: [] } : sendGate) : { allowed: false, reasons: [...(sendGate.allowed ? [] : sendGate.reasons), ...extra] };
+    if ((!policyOk || !evidenceFresh || eventChange) && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
+    if (eventChange && intent.approvalId && intent.messageClass !== 'watch_alert') await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated', reviewNote: `event_changed: ${eventChange}` }).where(eq(t.recommendations.id, intent.approvalId));
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
@@ -2864,6 +2893,11 @@ export class Concierge {
         await pause(w, 'revision_superseded');
         continue;
       }
+      // A cancelled or postponed event has no price worth alerting on (R2-LIFECYCLE-01).
+      if (event.status !== 'scheduled') {
+        await pause(w, `event_${event.status}`);
+        continue;
+      }
       const snap = await policyForEvent(this.db, this.env, w.eventId, now);
       if (snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch', id: w.id }))) {
         await pause(w, `policy:${snap.decision.depth}`);
@@ -2922,7 +2956,8 @@ export class Concierge {
     const [event] = await this.db.select().from(t.events).where(eq(t.events.id, w.eventId));
     const stale = !obs || !event || !checkFreshness({ fetchedAt: obs.o.fetchedAt, sourceAsOf: obs.o.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh;
     const snap = await policyForEvent(this.db, this.env, w.eventId, now);
-    const blockedBy = req?.currentRevision !== w.revision ? 'revision_superseded' : stale ? 'stale_observation' : snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch_alert', id: alert.id })) ? `policy:${snap.decision.depth}` : !snap || capability(snap, 'price_watch').state !== 'available' ? `capability:${snap ? capability(snap, 'price_watch').reasons[0] ?? 'monitoring_unavailable' : 'event_missing'}` : null;
+    const changed = eventChangedSince(event, now);
+    const blockedBy = req?.currentRevision !== w.revision ? 'revision_superseded' : changed ? changed : stale ? 'stale_observation' : snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch_alert', id: alert.id })) ? `policy:${snap.decision.depth}` : !snap || capability(snap, 'price_watch').state !== 'available' ? `capability:${snap ? capability(snap, 'price_watch').reasons[0] ?? 'monitoring_unavailable' : 'event_missing'}` : null;
     if (blockedBy) {
       await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, alert.id));
       await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.invalidated_at_approval', entityKind: 'watch_alert', entityId: alert.id, diff: { reason: blockedBy } });
@@ -2959,6 +2994,20 @@ export class Concierge {
 // -------------------------------------------------------------------------------------------------
 export function sha(s: string): string {
   return createHash('sha256').update(s).digest('hex');
+}
+
+/**
+ * Why something prepared for an event no longer fits the event as it stands (R2-LIFECYCLE-01), or null when it
+ * still does: the event must exist, still be scheduled and not have started. With `draftedForStartAt` (advice,
+ * which records the occurrence it was written for) the start must also be unchanged; a missing record can't be
+ * shown to match. Without it (a watch alert, whose observation is minutes old) the start isn't compared.
+ */
+export function eventChangedSince(event: { status: string; localStartAt: Date } | undefined, now: Date, draftedForStartAt?: string | null): string | null {
+  if (!event) return 'event_missing';
+  if (event.status !== 'scheduled') return `event_${event.status}`;
+  if (draftedForStartAt !== undefined && (!draftedForStartAt || new Date(draftedForStartAt).getTime() !== event.localStartAt.getTime())) return draftedForStartAt ? 'event_rescheduled' : 'event_occurrence_unrecorded';
+  if (event.localStartAt <= now) return 'event_started';
+  return null;
 }
 
 export function reSubject(original: string | null, fallback: string): string {
