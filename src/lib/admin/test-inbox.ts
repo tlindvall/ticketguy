@@ -78,7 +78,7 @@ export async function testTranscript(requestId: string): Promise<Record<string, 
   const { db } = await getDb();
   const [req] = await db.select().from(t.requests).where(eq(t.requests.id, requestId));
   if (!req || !(await isTestConversation(db, req.conversationId))) return null;
-  const messages = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(asc(t.messages.receivedAt));
+  const messages = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt));
   const intents = await db.select().from(t.sendIntents).where(eq(t.sendIntents.conversationId, req.conversationId)).orderBy(asc(t.sendIntents.createdAt));
   const [last] = await db.select({ reason: t.requestTransitions.reason }).from(t.requestTransitions).where(eq(t.requestTransitions.requestId, req.id)).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
   const pendingOutbox = await db.select({ id: t.outboxEvents.id }).from(t.outboxEvents).where(and(inArray(t.outboxEvents.entityId, [req.id, ...messages.map((m) => m.id), ...intents.map((i) => i.id)]), inArray(t.outboxEvents.state, ['pending', 'leased']))).limit(1);

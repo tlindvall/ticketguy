@@ -395,7 +395,7 @@ export class Concierge {
 
     // The same safeguards run after either extractor. Quoted source prices and room names
     // cannot change the party or invent a cap, even when a model assigns those fields.
-    const interpretationTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const interpretationTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '');
     if (concertContext(interpretationTexts)) {
       const budget = concertBudget(latestText);
       const party = partyTerms(interpretationTexts).attendees;
@@ -623,7 +623,7 @@ export class Concierge {
 
     // Concert quote decisions run before discovery: entry and product terms need no catalog match.
     // Other unresolved offer questions retain the same comparison path (TGQA-R6 1006: "you don't need the event date to add these up").
-    const threadTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const threadTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '');
     // Their answer to our "how many new tickets?" question is about the same offers, whatever it refers back to.
     const [asked] = req.state === 'needs_clarification' ? await this.db.select({ id: t.requestTransitions.id }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.revision, req.currentRevision), eq(t.requestTransitions.reason, 'quantity_conflict'))).limit(1) : [];
     const supplied = suppliedOffers(latestText, threadTexts, venueTz ?? 'America/New_York', { continuing: !!asked });
@@ -936,8 +936,12 @@ export class Concierge {
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         // Told we skipped it ("you didn't answer"): said once, then answered (Research 1, rule 9).
         const owned = /\b(?:you didn'?t answer|didn'?t answer (?:my|the)|you ignored|not what I asked|you skipped)\b/i.test(flat(latestText)) ? ' You’re right that my last reply should have said that first.' : '';
-        const text = ['Hey,', `${lead} ${why}${owned}`, link, ...(altDateNote ? [altDateNote] : []), `${step} ${where}`.trim()].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the listing for <a href="${esc(url)}">${esc(occurrence)}</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`].join('\n');
+        // They asked for a watch: no listing shows an entry policy, so none is set up, and they're told so once
+        // (PW-ENTRY-01), rather than left to assume this route is watching.
+        const noWatch = merged.intent === 'watch_request' && !(quoted && allows) ? `I haven’t set up a price watch for this: listings don’t show whether a ticket admits people arriving at ${arrive}, so an alert couldn’t tell you a ticket works for you.` : null;
+        if (noWatch) await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: 'unverifiable:entry_rule' } });
+        const text = ['Hey,', `${lead} ${why}${owned}`, link, ...(altDateNote ? [altDateNote] : []), `${step} ${where}`.trim(), ...(noWatch ? [noWatch] : [])].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the listing for <a href="${esc(url)}">${esc(occurrence)}</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`, ...(noWatch ? [`<p style="margin:0 0 18px;">${esc(noWatch)}</p>`] : [])].join('\n');
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Late entry'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `entry:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'late_entry_unverified');
         return { state: 'referred', revision, extraction: merged };
@@ -1357,7 +1361,7 @@ export class Concierge {
       // Only after an answer actually reached them: advice, a price check or an official-sale referral.
       const answered = await this.db.select({ id: t.sendIntents.id }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, r.id), inArray(t.sendIntents.messageClass, ['recommendation', 'no_result', 'acknowledgment']), or(sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.dedupeKey} like 'official_sale:%'`), inArray(t.sendIntents.state, ['provider_accepted', 'delivered']))).limit(1);
       if (!answered.length) continue;
-      const [last] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+      const [last] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
       await this.queueSend({ messageClass: 'follow_up', contactId: c.id, conversationId: r.conversationId, requestId: r.id, revision: r.currentRevision, recipient: c.emailOriginal, subject: reSubject(last?.subject ?? null, `How was ${e.name}?`), template: 'follow_up', vars: { what: e.name }, inReplyTo: last?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `follow_up:${r.id}` });
       await this.db.insert(t.requestOutcomes).values({ requestId: r.id, kind: 'follow_up_sent', source: 'system', details: {}, at: now });
       queued += 1;
@@ -1426,7 +1430,7 @@ export class Concierge {
     const msgId = typeof a.payload.messageId === 'string' ? a.payload.messageId : null;
     const [msg] = msgId
       ? await this.db.select().from(t.messages).where(eq(t.messages.id, msgId))
-      : await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+      : await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
     if (!contact || !msg) return 'already_handled';
     await this.parkForStaff({ req, revision: req.currentRevision, reason: `work_failed:${a.eventType}: ${a.error.slice(0, 300)}`, contact, msg });
     return 'handed_off';
@@ -1570,7 +1574,7 @@ export class Concierge {
     const today = eventLocalDate(now, tz);
     // Their rules from the whole thread, latest word winning: "NOVEMBER 2026 only, Saturday or Sunday, start after
     // 7pm, not at 7", "MSG or Barclays ONLY" (TGQA-R6 1004). Every pick must keep all of them.
-    const threadMsgs = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const threadMsgs = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '');
     const venueNames = (await this.db.select({ name: t.venues.name, aliases: t.venues.aliases }).from(t.venues).limit(5000)).map((v) => ({ name: v.name.length >= 6 ? v.name : '', aliases: v.aliases.filter((x) => x.length >= 6 || /^[A-Z]{3,4}$/.test(x)) }));
     const goalChange = threadMsgs.findLastIndex(similarMusicGoal);
     const rules = eventConstraints(goalChange >= 0 ? threadMsgs.slice(goalChange) : threadMsgs, { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames });
@@ -2097,7 +2101,7 @@ export class Concierge {
 
   /** The rules on which event they mean, from every message in the thread and what their links and screenshot show. */
   private async resolveRules(req: typeof t.requests.$inferSelect, x: RequestExtraction, venueTz: string | null, receivedAt: Date): Promise<ResolveRules> {
-    const texts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const texts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '');
     // Venues matched by their own names: a long name, or a short all-capitals alias like MSG. "Home" or "Hall"
     // alone never makes a venue rule.
     const venues = (await this.db.select({ name: t.venues.name, aliases: t.venues.aliases }).from(t.venues).limit(5000)).map((v) => ({ name: v.name.length >= 6 ? v.name : '', aliases: v.aliases.filter((a) => a.length >= 6 || /^[A-Z]{3,4}$/.test(a)) }));
@@ -2322,7 +2326,7 @@ export class Concierge {
     const now = this.now();
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, al.contactId));
     if (!contact) return;
-    const [lastInbound] = await this.db.select({ id: t.messages.rfcMessageId, subject: t.messages.subject }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+    const [lastInbound] = await this.db.select({ id: t.messages.rfcMessageId, subject: t.messages.subject }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
     // Claim it first, so a second pass can never send it twice.
     const claimed = await this.db.update(t.eventAlerts).set({ state: 'sent', sentAt: now, lastCheckedAt: now, firedEventId }).where(and(eq(t.eventAlerts.id, al.id), eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
     if (!claimed.length) return;
@@ -2445,7 +2449,7 @@ export class Concierge {
     const said = latestIds.length ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, latestIds))).map((m) => m.text ?? '').join('\n') : '';
     const asks = questionsAsked(said);
     // Two or more offers laid out in their words: compared as the question, each kept apart (retest R2-B02).
-    const threadMessages = (await this.db.select({ text: t.messages.sanitizedText, at: t.messages.receivedAt }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
+    const threadMessages = (await this.db.select({ text: t.messages.sanitizedText, at: t.messages.receivedAt }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '');
     const saidInThread = threadMessages.join('\n');
     // The offers they laid out stay the question when a follow-up changes a requirement without restating them
     // ("I'm now happy to buy six… which of the same offers?", "I can raise it to $230… using only my supplied
@@ -2586,7 +2590,7 @@ export class Concierge {
     const [rec] = await this.db.insert(t.recommendations).values({ requestId: req.id, revision: args.revision, draftHash, chosenObservationIds: packet.verifiedOfferObservationIds, adviceRunId: adviceRun!.id, computedSavingsCents: null, bodyText: body.textBody, bodyHtml: body.htmlBody, subject, reviewStatus: 'pending', reviewNote: [draftNote, isFixtureRun ? 'FIXTURE DATA — cannot be sent' : null, contact?.countryConfirmed ? null : 'customer country unconfirmed'].filter(Boolean).join(' | ') || null, expiresAt: new Date(now.getTime() + 15 * 60_000) }).returning({ id: t.recommendations.id });
     await this.db.update(t.researchRuns).set({ status: 'completed', completedAt: now }).where(eq(t.researchRuns.id, runId));
     if (autoSend) {
-      const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+      const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
       await this.db.update(t.recommendations).set({ reviewStatus: 'auto_sent', reviewerUserId: 'system:price-check' }).where(eq(t.recommendations.id, rec!.id));
       await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: args.revision, recipient: contact!.emailOriginal, subject: reSubject(lastInbound?.subject ?? null, subject), template: 'raw_auto', vars: { text: body.textBody, html: body.htmlBody }, inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `rec:${rec!.id}:${draftHash}` });
       await audit(this.db, { actor: 'system', action: 'recommendation.auto_sent', entityKind: 'recommendation', entityId: rec!.id, revision: args.revision, diff: { reason: 'price_check_without_listings' } });
@@ -2701,7 +2705,7 @@ export class Concierge {
       return { ok: false, status: 409, reason: 'trend_rights_changed' };
     }
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
-    const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);
+    const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
     await this.db.update(t.recommendations).set({ reviewStatus: 'approved', reviewerUserId: args.reviewerUserId, reviewNote: args.note, approvedAt: now }).where(eq(t.recommendations.id, rec.id));
     const containsFixture = obs.some((o) => o.verificationMethod === 'fixture');
     const intent = await this.queueSend({ messageClass: obs.length ? 'recommendation' : 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(lastInbound?.subject ?? null, rec.subject), template: args.reviewerUserId === AUTO_APPROVER ? 'raw_auto' : 'raw', vars: { text: rec.bodyText, html: rec.bodyHtml }, inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: rec.id, approvedHash: rec.draftHash, dedupeKey: `rec:${rec.id}:${rec.draftHash}`, containsFixtureData: containsFixture });
@@ -2944,13 +2948,17 @@ export class Concierge {
     const [req] = await this.db.select({ conversationId: t.requests.conversationId }).from(t.requests).where(eq(t.requests.id, requestId));
     const [ver] = await this.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, requestId), eq(t.requestVersions.revision, revision)));
     const upTo = ver?.createdAt ?? this.now();
-    const texts = req ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'), lte(t.messages.receivedAt, upTo))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '') : [];
+    const texts = req ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'), lte(t.messages.receivedAt, upTo))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '') : [];
     const row = await loadEventRows(this.db, eventId);
     const tz = row?.v.timezone ?? 'America/New_York';
     const terms = partyTerms(texts, tz);
     const deliveryBy = terms.deadlineMinutes != null ? deadlineInstant(eventLocalDate(eventStartAt, tz), `${String(Math.floor(terms.deadlineMinutes / 60)).padStart(2, '0')}:${String(terms.deadlineMinutes % 60).padStart(2, '0')}`, tz) : null;
     const age = ageNeed(texts.join('\n'));
-    return constraintBasket(brief, brief.quantity ?? 1, eventStartAt, { pairsOk: terms.seating === 'pairs', deliveryBy, unverifiable: age ? [age] : [], revision });
+    // Hard requirements carried from their own words as well as the model's fields, so a market watch can't drop
+    // them (PW-SECTIONS-01, PW-ENTRY-01): sections they insist on, and an entry rule no listing shows.
+    const acceptableSections = sectionsRequired(texts) ?? (brief.seatingPreference ? sectionsRequired([brief.seatingPreference]) : null);
+    const entry = entryNeed(texts);
+    return constraintBasket(brief, brief.quantity ?? 1, eventStartAt, { pairsOk: terms.seating === 'pairs', deliveryBy, acceptableSections, unverifiable: [age, entry].filter((x): x is string => !!x), revision });
   }
 
   /**
@@ -2985,6 +2993,7 @@ export class Concierge {
     const now = this.now();
     const due = await this.db.select().from(t.watches).where(and(eq(t.watches.state, 'active'), lte(t.watches.nextCheckAt, now))).orderBy(asc(t.watches.nextCheckAt)).limit(limit);
     let alerts = 0;
+    let evaluated = 0;
     const configs = await this.db.select().from(t.adapterConfigs);
     const pause = async (w: typeof t.watches.$inferSelect, reason: string) => {
       await this.db.update(t.watches).set({ state: 'paused', pauseReason: reason, generation: sql`${t.watches.generation} + 1` }).where(eq(t.watches.id, w.id));
@@ -2992,6 +3001,12 @@ export class Concierge {
       await audit(this.db, { actor: 'system', action: 'watch.paused', entityKind: 'watch', entityId: w.id, diff: { reason } });
     };
     for (const w of due) {
+      // Claim it first: moving its next check on, only if it is still due, is atomic, so an overlapping tick or a
+      // manual run skips it rather than paying for a second read (PW-SCHEDULER-CLAIM-01). A crash after the claim
+      // waits for the next slot instead of retrying a paid read.
+      const [claimed] = await this.db.update(t.watches).set({ nextCheckAt: new Date(now.getTime() + w.cadenceMinutes * 60_000 + Math.floor(Math.random() * 60_000)) }).where(and(eq(t.watches.id, w.id), eq(t.watches.state, 'active'), lte(t.watches.nextCheckAt, now))).returning({ id: t.watches.id });
+      if (!claimed) continue;
+      evaluated += 1;
       if (w.expiresAt <= now) {
         await this.db.update(t.watches).set({ state: 'expired' }).where(eq(t.watches.id, w.id));
         continue;
@@ -3041,20 +3056,30 @@ export class Concierge {
         if (best && best.comparableTotalCents !== null) {
           const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `${best.offer.sourceId}:${best.offer.providerListingId ?? best.offer.section ?? 'x'}:${best.offer.row ?? ''}`, totalCents: best.comparableTotalCents });
           const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
-          const recent = await this.db.select({ n: sql<number>`count(*)::int`, last: sql<number | null>`min(payable_total_cents)` }).from(t.watchAlerts).where(and(eq(t.watchAlerts.watchId, w.id), eq(t.watchAlerts.generation, w.generation), gte(t.watchAlerts.createdAt, new Date(now.getTime() - 86_400_000))));
+          const recent = await this.alertHistory(w, now);
           const fresh = checkFreshness({ fetchedAt: new Date(best.offer.observedAt), sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, eventStartAt: event.localStartAt, now }).fresh;
           const d = shouldAlert({ targetTotalCents: w.targetTotalCents, candidateTotalCents: best.comparableTotalCents, candidateVerified: best.offer.priceCompleteness === 'verified_total', candidateFresh: fresh, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
           if (d.alert) {
             const [offerRow] = await this.db.insert(t.offers).values({ sourceId: best.offer.sourceId, providerListingId: best.offer.providerListingId, eventId: w.eventId, directPurchaseUrl: best.offer.directPurchaseUrl }).returning({ id: t.offers.id });
             const [obs] = await this.db.insert(t.offerObservations).values({ offerId: offerRow!.id, eventId: w.eventId, quantity: best.offer.quantity, section: best.offer.section, rowLabel: best.offer.row, seatsTogether: best.offer.seatsTogether, admissionType: best.offer.admissionType, payableTotalCents: best.comparableTotalCents, baseTotalCents: best.offer.baseTotalCents, mandatoryFeeTotalCents: best.offer.mandatoryFeeTotalCents, taxTotalCents: best.offer.taxTotalCents, deliveryTotalCents: best.offer.deliveryTotalCents, priceCompleteness: best.offer.priceCompleteness, restrictions: best.offer.restrictions, deliveryMethod: best.offer.deliveryMethod, availability: best.offer.availability, verificationMethod: best.offer.collectionMode, sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, fetchedAt: new Date(best.offer.observedAt), retentionUntil: new Date(now.getTime() + OBSERVATION_RETENTION_DAYS * 86_400_000), evidence: { evidenceId: best.offer.evidenceId } }).returning({ id: t.offerObservations.id });
-            await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: obs!.id, dedupeKey: key, payableTotalCents: best.comparableTotalCents, approvalState: 'pending' }).onConflictDoNothing();
-            alerts += 1;
+            const inserted = await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: obs!.id, dedupeKey: key, payableTotalCents: best.comparableTotalCents, approvalState: 'pending', createdAt: now }).onConflictDoNothing().returning({ id: t.watchAlerts.id });
+            alerts += inserted.length;
           }
         }
       }
-      await this.db.update(t.watches).set({ nextCheckAt: new Date(now.getTime() + w.cadenceMinutes * 60_000 + Math.floor(Math.random() * 60_000)) }).where(eq(t.watches.id, w.id));
     }
-    return { evaluated: due.length, alertsCreated: alerts };
+    return { evaluated, alertsCreated: alerts };
+  }
+
+  /**
+   * This generation's alerts so far: how many in the last 24 hours (the daily cap counts every one), and the lowest
+   * total alerted at any time, the baseline a new alert must beat by the re-alert rule. One the system invalidated
+   * (stale before approval, or stopped) never reached the customer, so it is no baseline.
+   */
+  private async alertHistory(w: typeof t.watches.$inferSelect, now: Date): Promise<Array<{ n: number; last: number | null }>> {
+    // An ISO string, not a Date: postgres-js won't bind a Date inside a raw sql fragment.
+    const since = new Date(now.getTime() - 86_400_000);
+    return this.db.select({ n: sql<number>`(count(*) filter (where ${t.watchAlerts.createdAt} >= ${since.toISOString()}::timestamptz))::int`, last: sql<number | null>`min(${t.watchAlerts.payableTotalCents}) filter (where ${t.watchAlerts.approvalState} <> 'invalidated')` }).from(t.watchAlerts).where(and(eq(t.watchAlerts.watchId, w.id), eq(t.watchAlerts.generation, w.generation)));
   }
 
   /**
@@ -3073,12 +3098,13 @@ export class Concierge {
     const est = marketEstimate(read.cheapestPerTicketCents, w.quantity, pct);
     const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `market:${w.quantity}+`, totalCents: est.estimatedTotalCents });
     const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
-    const recent = await this.db.select({ n: sql<number>`count(*)::int`, last: sql<number | null>`min(payable_total_cents)` }).from(t.watchAlerts).where(and(eq(t.watchAlerts.watchId, w.id), eq(t.watchAlerts.generation, w.generation), gte(t.watchAlerts.createdAt, new Date(now.getTime() - 86_400_000))));
+    const recent = await this.alertHistory(w, now);
     const d = shouldAlertMarket({ targetTotalCents: w.targetTotalCents, estimatedTotalCents: est.estimatedTotalCents, observedAt: read.at, now, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
     if (!d.alert) return 0;
     const lic = await marketLicence(this.db);
     const evidence = { basis: `${w.quantity}+`, listedPerTicketCents: read.cheapestPerTicketCents, listedTotalCents: est.listedTotalCents, estimatedTotalCents: est.estimatedTotalCents, feeAllowancePct: pct, listings: read.listings, observedAt: read.at.toISOString(), datasetId: SEATDATA_DATASET_ID, isFixture: !!lic.row?.isFixture };
-    await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: null, market: evidence, dedupeKey: key, payableTotalCents: est.estimatedTotalCents, approvalState: 'pending' }).onConflictDoNothing();
+    const inserted = await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: null, market: evidence, dedupeKey: key, payableTotalCents: est.estimatedTotalCents, approvalState: 'pending', createdAt: now }).onConflictDoNothing().returning({ id: t.watchAlerts.id });
+    if (!inserted.length) return 0;
     await audit(this.db, { actor: 'system', action: 'watch.market_alert_found', entityKind: 'watch', entityId: w.id, diff: { listedPerTicketCents: evidence.listedPerTicketCents, estimatedTotalCents: evidence.estimatedTotalCents, listings: evidence.listings } });
     return 1;
   }
@@ -3208,6 +3234,64 @@ export function ageNeed(text: string): string | null {
   if (minor) return `Admission for your ${minor[1]}-year-old (the venue’s age policy)`;
   if (/\b(?:no\s+21\s*\+|no\s+18\s*\+|all[- ]ages|our (?:teen|teenager|kids?|child|children|son|daughter))\b/i.test(t)) return 'The venue’s age policy for your group';
   return null;
+}
+
+/**
+ * Sections they insist on, as the section names a listing would carry: "only sections 101–105", "sections 101
+ * through 105 only", "must be in section 212", "only sections 101, 102 or 110". A range expands to its sections.
+ * A preference ("ideally section 101") is not a rule, and "any section is fine" clears one. The latest message that
+ * says either wins (PW-SECTIONS-01). Null when they named none.
+ */
+export function sectionsRequired(messagesOldestFirst: string[]): string[] | null {
+  let out: string[] | null = null;
+  const NUM = '[A-Za-z]?\\d{1,4}[A-Za-z]?';
+  const LIST = `${NUM}(?:\\s*(?:[-–—]|to|through|thru)\\s*${NUM})?(?:\\s*(?:,|or|and|/|&)\\s*${NUM}(?:\\s*(?:[-–—]|to|through|thru)\\s*${NUM})?)*`;
+  const hard = new RegExp(`\\b(?:(?:only|just|strictly)\\s+(?:in\\s+)?sections?\\s+(${LIST})|sections?\\s+(${LIST})\\s+only|(?:must|has to|have to|need to|needs to)\\s+be\\s+in\\s+sections?\\s+(${LIST})|(?:require|need)\\s+sections?\\s+(${LIST}))`, 'i');
+  for (const raw of messagesOldestFirst) {
+    for (const s of flat(raw).split(/(?<=[.;!?])\s+/)) {
+      if (/\b(?:any|whatever) section(?:s)?\b[^.]{0,20}\b(?:fine|ok|okay|works|good)\b|\bsections? (?:don'?t|doesn'?t|do not) matter\b/i.test(s)) { out = null; continue; }
+      if (/\b(?:ideally|prefer(?:ably|red)?|if possible|would like|nice to have)\b/i.test(s)) continue;
+      const m = hard.exec(s);
+      if (!m) continue;
+      const names: string[] = [];
+      for (const part of (m[1] ?? m[2] ?? m[3] ?? m[4]!).split(/\s*(?:,|\bor\b|\band\b|\/|&)\s*/i)) {
+        const r = new RegExp(`^(\\d{1,4})\\s*(?:[-–—]|to|through|thru)\\s*(\\d{1,4})$`, 'i').exec(part.trim());
+        if (r && Number(r[2]) >= Number(r[1]) && Number(r[2]) - Number(r[1]) <= 60) for (let n = Number(r[1]); n <= Number(r[2]); n++) names.push(String(n));
+        else if (part.trim()) names.push(part.trim().toUpperCase());
+      }
+      if (names.length) out = [...new Set(names)];
+    }
+  }
+  return out;
+}
+
+/**
+ * An entry rule they need and no listing can show (PW-ENTRY-01): "must permit entry after midnight", "late entry is
+ * required", "I cannot enter before midnight", "I can only arrive after midnight; entry then must be allowed". A show
+ * or doors time they quote is a fact about the event, never this. "We don't need late entry" clears it, and the
+ * latest message that says either wins.
+ */
+export function entryNeed(messagesOldestFirst: string[]): string | null {
+  let out: string | null = null;
+  const T = '(midnight|\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\.?)';
+  const rules = [
+    new RegExp(`\\b(?:must|has to|have to|needs? to|should)\\s+(?:permit|allow|accept)\\s+(?:late\\s+)?(?:entry|admission|us in|me in)(?:\\s+(?:after|until|at)\\s+${T})?`, 'i'),
+    /\b(?:late|after[- ]midnight|midnight|re-?)\s*entry\s+(?:is\s+|must be\s+)?(?:required|needed|necessary|essential|a must)\b/i,
+    /\bneed(?:s)?\s+(?:late|after[- ]midnight|re-?)\s*entry\b/i,
+    /\bentry\s+(?:then\s+|at that time\s+)?must\s+be\s+(?:allowed|permitted|possible)\b/i,
+    new RegExp(`\\b(?:can(?:'|no)?t|cannot|won'?t be able to)\\s+(?:enter|get in)\\s+(?:before|until)\\s+${T}`, 'i'),
+    new RegExp(`\\bcan only\\s+(?:arrive|enter|get (?:there|in))\\s+(?:after|from)\\s+${T}`, 'i'),
+  ];
+  for (const raw of messagesOldestFirst) {
+    for (const s of flat(raw).split(/(?<=[.;!?])\s+/)) {
+      if (/\b(?:(?:don'?t|do not|won'?t|no longer)\s+need\s+(?:late\s+|re-?)?entry|(?:late|re-?)\s*entry\s+(?:is\s+)?(?:not|isn'?t)\s+(?:required|needed|necessary))\b/i.test(s)) { out = null; continue; }
+      const m = rules.map((r) => r.exec(s)).find(Boolean);
+      if (!m) continue;
+      const when = /midnight/i.test(s) ? 'after midnight' : /\b(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(s)?.[1] ? `at ${/\b(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(s)![1]}` : 'late';
+      out = `Entry ${when} (the venue’s entry policy)`;
+    }
+  }
+  return out;
 }
 
 /**

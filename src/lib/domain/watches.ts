@@ -24,14 +24,14 @@ export function watchExpiry(args: { now: Date; eventStartAt: Date; purchaseDeadl
   return new Date(Math.min(...cands.map((d) => d.getTime())));
 }
 
-/** Price band: bucket by max($10, 5%) so oscillation inside a band does not re-alert. */
-export function priceBand(totalCents: number): number {
-  const step = Math.max(REALERT_MIN_CENTS, Math.round(totalCents * REALERT_MIN_PCT));
-  return Math.floor(totalCents / step);
-}
-
+/**
+ * One alert per watch generation, offer and exact total: the same price never alerts twice. Whether a different
+ * price is worth another alert is the re-alert rule's call, against the lowest total already alerted in this
+ * generation (`shouldAlert`), not the key's. A band key once did both, and its step grew with the price, so every
+ * total above $200 fell in the same band and a $390 → $260 drop was a "duplicate" (PW-REPEAT-KEY-01).
+ */
 export function alertDedupeKey(args: { watchId: string; generation: number; offerIdentity: string; totalCents: number }): string {
-  return `${args.watchId}:${args.generation}:${args.offerIdentity}:${priceBand(args.totalCents)}`;
+  return `${args.watchId}:${args.generation}:${args.offerIdentity}:${Math.round(args.totalCents)}`;
 }
 
 export type AlertDecision = { alert: boolean; reason: string };
@@ -56,6 +56,7 @@ function targetAndRepeats(args: { targetTotalCents: number; candidateTotalCents:
   if (args.dedupeKeyExists) return { alert: false, reason: 'duplicate_alert_key' };
   if (args.alertsInLast24h >= WATCH_MAX_ALERTS_PER_DAY) return { alert: false, reason: 'daily_alert_cap' };
   if (args.lastAlertedTotalCents !== null) {
+    // At least $10 AND at least 5% below the lowest total already alerted: the larger of the two (PW-REPEAT-CONTRACT-01).
     const reduction = args.lastAlertedTotalCents - args.candidateTotalCents;
     const needed = Math.max(REALERT_MIN_CENTS, Math.round(args.lastAlertedTotalCents * REALERT_MIN_PCT));
     if (reduction < needed) return { alert: false, reason: 'improvement_below_realert_threshold' };
@@ -87,8 +88,15 @@ export function marketWatchable(b: ConstraintBasket): string | null {
   if (b.requireAccessible) return 'accessible_seating';
   if (b.acceptableSections?.length) return 'sections';
   if (b.deliveryBy) return 'delivery_deadline';
-  if (b.unverifiable.length) return b.unverifiable[0]!;
+  if (b.unverifiable.length) return unverifiableReason(b.unverifiable[0]!);
   return null;
+}
+
+/** A stable reason code for an unverifiable requirement's label, for the audit (`market_unverifiable:<code>`). */
+export function unverifiableReason(label: string): string {
+  if (/age policy/i.test(label)) return 'age_rule';
+  if (/entry/i.test(label)) return 'entry_rule';
+  return 'requirement';
 }
 
 /**

@@ -105,7 +105,7 @@ export async function buildTestInbound(db: DbOrTx, e: Env, input: TestInboundInp
     if (!req) return { ok: false, error: 'request_not_found' };
     const [contact] = await db.select({ email: t.contacts.emailOriginal }).from(t.contacts).where(eq(t.contacts.id, req.contactId));
     from ??= contact?.email ?? null;
-    const thread = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(desc(t.messages.receivedAt));
+    const thread = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt));
     // The customer replies to our latest email; before we have sent one, to their own last message.
     const parent = thread.find((m) => m.direction === 'outbound') ?? thread[0] ?? null;
     const anchor = parent?.rfcMessageId ?? thread.find((m) => m.rfcMessageId)?.rfcMessageId ?? null;
@@ -153,7 +153,7 @@ export async function recentTestRequests(db: DbOrTx, limit = 30): Promise<Array<
     .select({ conversationId: t.messages.conversationId, from: t.messages.fromAddress, subject: t.messages.subject, at: t.messages.receivedAt })
     .from(t.messages)
     .where(and(eq(t.messages.direction, 'inbound'), eq(t.messages.provider, TEST_PROVIDER)))
-    .orderBy(desc(t.messages.receivedAt))
+    .orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt))
     .limit(limit * 4);
   const seen = new Set<string>();
   const out: Array<{ requestId: string; state: string; from: string; subject: string | null; at: Date }> = [];

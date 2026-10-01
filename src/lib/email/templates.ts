@@ -23,7 +23,9 @@ const REVIEWED_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We compar
 const AUTOMATED_FOOTER = 'AI-assisted ticket advice.';
 /** Templates that are only ever sent after a person approved that exact message. */
 const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert', 'watch_alert_market']);
-const disclosureFor = (name: string) => (REVIEWED_TEMPLATES.has(name) ? REVIEWED_FOOTER : AUTOMATED_FOOTER);
+// A market heads-up has no link by design, so its footer doesn't promise one (PW QA wave 1).
+const MARKET_ALERT_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We never buy, hold or resell tickets. Reply to this email any time.';
+const disclosureFor = (name: string) => (name === 'watch_alert_market' ? MARKET_ALERT_FOOTER : REVIEWED_TEMPLATES.has(name) ? REVIEWED_FOOTER : AUTOMATED_FOOTER);
 
 const BODY_OPEN = '<!doctype html><html><body style="margin:0;padding:0;"><div style="max-width:640px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#202124;">';
 const BODY_CLOSE = '</div></body></html>';
@@ -297,11 +299,14 @@ function renderBody(
       const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
       const n = words[q] ?? String(q);
       const listings = Number(v.listings ?? 0);
-      const lead = `Heads-up: resale listings with ${q} or more tickets for ${String(v.eventLabel)} now start at ${usd(v.listedPerTicketCents)} a ticket before fees, ${usd(v.listedTotalCents)} for ${n}${listings > 1 ? ` (${listings} listings could seat ${n})` : ''}.`;
-      const fit = `With fees of up to ${String(v.feeAllowancePct)}%, that’s about ${usd(v.estimatedTotalCents)} all in, inside your ${usd(v.targetTotalCents)}.`;
+      // The decision number leads and is the only bold: the estimate for the party against their budget.
+      const total = `about ${usd(v.estimatedTotalCents)} for ${n}`;
+      const lead = `Heads-up: resale listings now come to ${total} with fees, inside your ${usd(v.targetTotalCents)}.`;
+      const fit = `That’s for ${String(v.eventLabel)}: listings with ${q} or more tickets start at ${usd(v.listedPerTicketCents)} a ticket before fees, ${usd(v.listedTotalCents)} for ${n}${listings > 1 ? ` (${listings} listings could seat ${n})` : ''}, plus an assumed ${String(v.feeAllowancePct)}% for fees. Checkout fees can be higher.`;
       const limits = `This is from resale market data (StubHub and Vivid Seats listings, seen ${String(v.observedAt)}), not a ticket I’ve checked: I don’t have a link to it, it may be gone when you look, and a listing of ${q} or more may not sell exactly ${n} or be seats together. If you want it, look up the game on StubHub and Vivid Seats now and check the all-in price at checkout.`;
       const stop = 'Reply “stop” to end this watch.';
-      return wrap([lead, fit, limits, stop], [`<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, para(fit), para(limits), para(stop)]);
+      const i = lead.indexOf(total);
+      return wrap([lead, fit, limits, stop], [`<p style="margin:0 0 18px;">${esc(lead.slice(0, i))}<strong>${esc(total)}</strong>${esc(lead.slice(i + total.length))}</p>`, para(fit), para(limits), para(stop)]);
     }
     case 'raw':
     case 'raw_auto':

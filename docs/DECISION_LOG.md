@@ -1063,7 +1063,7 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Creating the watch.** It follows the event on SeatData first. It refuses a watch whose requirements listings can't show, and audits why (`market_unverifiable:<reason>`): accessible seating, sections, a delivery deadline, or an age or entry rule. The constraints carry `monitor: 'market'`.
 - **Checking it.** The first look is 5 minutes after the request, then no more often than every 3 hours. Each look is one paid listings read, under the daily cap.
 - **When it alerts.** It takes the cheapest listed price among active ordinary listings with at least the party's count. It alerts only when the listed total plus `MARKET_WATCH_FEE_ALLOWANCE_PCT` (default 30) fits the all-in target. Example: $75 × 4 = $300, so about $390, which is inside $400.
-- **Repeats.** Dedupe, the daily cap of 2 and the re-alert rule ($10 or 5% better) apply to that estimate.
+- **Repeats.** Dedupe, the daily cap of 2 and the re-alert rule apply to that estimate. A repeat must be at least $10 AND at least 5% below the lowest total already alerted (the larger of the two; corrected in #63, which also replaced the band key).
 - **The alert record.** It carries what it saw (`watch_alerts.market`: listed price, totals, allowance, listing count, read time), not an offer observation. Migration 0018 makes `observation_id` nullable, with exactly one of the two set. The evidence is kept on the alert because the licence retention sweep deletes market rows.
 - **A watch keeps its kind of source.** A watch created on a seller's verified totals is paused when the seller goes, and never continues on SeatData estimates. A seller alert is also never approved or sent on SeatData's rights.
 - **Approval and sending.** Staff approve it like any alert, and the staff page shows that it's an estimate. It is "now" for 3 hours from the read: approval and dispatch both refuse an older one (`stale_observation` / `evidence_stale`). Policy, the licence and rights are re-checked at approval and at send.
@@ -1078,3 +1078,30 @@ It is stored with its zone and compared with each offer's promised transfer, and
 **Not proven.**
 - **Fee allowance.** The 30% is an assumption, said as one. Actual StubHub and Vivid Seats fees vary, so an alert can still be over budget at checkout.
 - **Speed.** A 3-hour cadence and SeatData's own rescan (about 8 hours, about 30 minutes after a sales call) mean a cheap listing can come and go between looks.
+
+## 63. Price watch repeats: exact-price keys, an all-time baseline, and a claimed check
+
+**Why.** QA wave 1 on #78 (`docs/qa/PRICE_WATCH_QA_WAVE1.md`) found these problems:
+- the band dedupe key put every total above $200 in one band, so a $390 → $260 drop never alerted;
+- sections and late-entry rules never reached the market-watch guard;
+- overlapping ticks paid for two reads and over-counted alerts;
+- the brief said "$10 or 5%", but the code needed both.
+
+**What.**
+- **Repeats.**
+  - The dedupe key is the exact total, so the same price never alerts twice.
+  - A repeat must be at least $10 **and** at least 5% (the larger) below the lowest total already alerted in that watch generation, at any time. An alert the system invalidated never reached the customer, so it is no baseline.
+  - The daily cap still counts every alert in the rolling 24 hours.
+- **Hard requirements.**
+  - Section rules (`sectionsRequired`) and entry rules (`entryNeed`) are read from the thread and the model's fields into the basket.
+  - A market watch with either is refused (`market_unverifiable:sections` / `entry_rule`).
+  - When the late-entry reply answers first, it records `unverifiable:entry_rule` and says no watch was set up.
+- **Claiming.**
+  - A due watch is claimed by moving `next_check_at` on, while it is still due, before any read.
+  - A crash waits a cadence rather than retrying a paid read.
+  - Alerts are counted from the rows actually inserted.
+- **Copy.**
+  - The creation reply says once that it's monitoring, not checked seats, and calls the fee allowance an assumption.
+  - The alert leads with the bold estimate, and its footer doesn't promise a link.
+
+**Not decided here.** Whether a stale-invalidated alert should free its exact price for a later alert. It doesn't today.
