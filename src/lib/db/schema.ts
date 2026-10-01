@@ -327,6 +327,8 @@ export const requestVersions = pgTable(
     brief: jsonb('brief').$type<Record<string, unknown>>().notNull(),
     sourceMessageIds: jsonb('source_message_ids').$type<string[]>().notNull(),
     unresolvedFields: jsonb('unresolved_fields').$type<string[]>().notNull(),
+    /** The service-depth decision for this revision (DECISION_LOG #61): an audit record, not a standing permission. */
+    servicePolicy: jsonb('service_policy').$type<Record<string, unknown>>(),
     createdBy: text('created_by').notNull(), // 'system' | user id
     createdAt: createdAt(),
   },
@@ -390,7 +392,9 @@ export const events = pgTable(
   {
     id: id(),
     name: text('name').notNull(),
-    category: text('category').notNull(), // concert | nhl | nba | mlb | ...
+    category: text('category').notNull(), // concert | nhl | nba | mlb | ... | unknown
+    /** The provider's own taxonomy and how the category was reached (service-depth F01); null for fixture/manual events. */
+    classification: jsonb('classification').$type<{ segment: string | null; genre: string | null; subGenre: string | null; category: string; reason: string }>(),
     subtype: text('subtype'), // preseason | regular_season | playoffs | matinee | ...
     genre: text('genre'), // provider genre / sub-genre, lowercase ("rock / indie rock"); null when not given
     venueId: uuid('venue_id')
@@ -511,6 +515,8 @@ export const researchRuns = pgTable(
     mode: text('mode').notNull(), // fixture | manual | live
     status: text('status').notNull().default('running'),
     budgetUsdMicros: bigint('budget_usd_micros', { mode: 'number' }),
+    /** The policy and capability decisions this run executed under, the selected sources and any budget cut. */
+    servicePolicy: jsonb('service_policy').$type<Record<string, unknown>>(),
     startedAt: createdAt(),
     completedAt: ts('completed_at'),
     supersededAt: ts('superseded_at'),
@@ -717,6 +723,10 @@ export const watches = pgTable(
     nextCheckAt: ts('next_check_at').notNull(),
     expiresAt: ts('expires_at').notNull(),
     state: text('state').notNull().default('active'), // active | paused | cancelled | expired | fulfilled
+    /** Why it was paused: revision_superseded, policy:<reason>, capability:<reason>. Null while active. */
+    pauseReason: text('pause_reason'),
+    /** Every hard requirement of the request revision, normalized; evaluation checks the same ones comparison does. */
+    constraints: jsonb('constraints').$type<Record<string, unknown>>(),
     generation: integer('generation').notNull().default(1),
     lastAlertAt: ts('last_alert_at'),
     leaseUntil: ts('lease_until'),
@@ -1088,8 +1098,10 @@ export const trackedEvents = pgTable(
       .references(() => events.id),
     provider: text('provider').notNull(), // seatdata
     providerEventId: text('provider_event_id'),
-    state: text('state').notNull().default('pending_match'), // pending_match | requested | active | unmatched | ended
+    state: text('state').notNull().default('pending_match'), // pending_match | requested | active | unmatched | ended | paused
     reasons: jsonb('reasons').$type<string[]>().notNull().default([]), // request | cohort
+    /** Why polling stopped under the service-depth policy; history already held is kept within its licence. */
+    pauseReason: text('pause_reason'),
     nextPollAt: ts('next_poll_at').notNull(),
     lastPolledAt: ts('last_polled_at'),
     /** The newest provider snapshot we hold; the next poll asks only for what came after it. */

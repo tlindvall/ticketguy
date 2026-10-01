@@ -26,12 +26,14 @@ import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrow
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { dateWindowFor, eventLocalDate, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { dateWindowFor, eventLocalDate, localToInstant, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
 import { asksAboutOptOut, classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppression';
-import { sourcePlan } from '@/lib/sources/routing';
+import { planSources } from '@/lib/sources/routing';
+import { adapterFacts, capability, coveredSourceIds, gate as policyGate, loadEventRows, policyForEvent, storedPolicy } from '@/lib/intake/service-policy';
+import { isFoodDrink, operationsForClaims, outsideIntent, resolveServicePolicy, type Operation, type OutsideIntent } from '@/lib/domain/service-depth';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
 import { findAlternatives } from '@/lib/market/alternatives';
@@ -41,7 +43,7 @@ import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, te
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { cleanSeatField, flat, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, eventConstraints, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
-import { suppliedOffersAnswer } from '@/lib/advice/packet';
+import { joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
@@ -54,7 +56,7 @@ import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import { ModelOutputError } from '@/lib/ai/model-client';
-import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, WATCH_MAX_ACTIVE_PER_CONTACT } from '@/lib/domain/watches';
+import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
 
@@ -473,15 +475,22 @@ export class Concierge {
       const watchScope = scoped ? inThread(t.watches.requestId) : eq(t.watches.contactId, contact!.id);
       const alertScope = scoped ? inThread(t.eventAlerts.requestId) : eq(t.eventAlerts.contactId, contact!.id);
       const stoppedWatches = await this.db.update(t.watches).set({ state: 'cancelled', generation: sql`${t.watches.generation} + 1` }).where(and(watchScope, eq(t.watches.state, 'active'))).returning({ id: t.watches.id });
-      const stoppedAlerts = await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(alertScope, eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
+      // "Stop watching the prices" stops price watches; an on-sale or announcement alert is a different promise
+      // and stays, said so (SD26). "Stop the alerts", "stop everything" stop both.
+      const priceOnly = PRICE_WATCH_ONLY.test(flat(msg.sanitizedText ?? '')) && !ALL_ALERTS.test(flat(msg.sanitizedText ?? ''));
+      const stoppedAlerts = priceOnly ? [] : await this.db.update(t.eventAlerts).set({ state: 'cancelled' }).where(and(alertScope, eq(t.eventAlerts.state, 'active'))).returning({ id: t.eventAlerts.id });
+      const keptAlerts = priceOnly ? (await this.db.select({ n: sql<number>`count(*)::int` }).from(t.eventAlerts).where(and(alertScope, eq(t.eventAlerts.state, 'active'))))[0]?.n ?? 0 : 0;
       await this.stopWatchAlerts(stoppedWatches.map((w) => w.id));
       await audit(this.db, { actor: 'customer', action: 'watch.cancelled_by_customer', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id, scope: scoped ? 'thread' : 'contact', watches: stoppedWatches.length, alerts: stoppedAlerts.length } });
       // Always answered, from what was actually stored and changed (TG-B10): never silence, never a guess.
       const n = stoppedWatches.length + stoppedAlerts.length;
       const line = n
         ? `Done: I’ve stopped ${[stoppedWatches.length ? `${stoppedWatches.length === 1 ? 'the price watch' : `${stoppedWatches.length} price watches`}` : '', stoppedAlerts.length ? `${stoppedAlerts.length === 1 ? 'the event alert' : `${stoppedAlerts.length} event alerts`}` : ''].filter(Boolean).join(' and ')}${scoped ? ' on this request' : ''}. You won’t get any more alerts for ${n === 1 ? 'it' : 'them'}.`
-        : `There was no active price watch or alert${scoped ? ' on this request' : ''}, so nothing was being monitored and there’s nothing to stop.`;
-      const tail = 'Nothing else has changed: your other requests and your email preferences are as they were.';
+        : keptAlerts
+          ? `There was no active price watch${scoped ? ' on this request' : ''}, so there was nothing to stop.`
+          : `There was no active price watch or alert${scoped ? ' on this request' : ''}, so nothing was being monitored and there’s nothing to stop.`;
+      const kept = keptAlerts ? `Your ${keptAlerts === 1 ? 'event alert is' : `${keptAlerts} event alerts are`} still on; reply “stop the alerts” to end ${keptAlerts === 1 ? 'it' : 'them'} too.` : null;
+      const tail = [kept, 'Nothing else has changed: your other requests and your email preferences are as they were.'].filter(Boolean).join(' ');
       // Kept as a revision and an outcome, as any reply is: "stop, we bought them" is also a reported purchase.
       const rev = priorVersion ? req.currentRevision + 1 : 1;
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
@@ -585,6 +594,27 @@ export class Concierge {
       }
     }
 
+    // Outside launch scope however ticket-like the wording ("2 tickets for a pasta-making class Oct 5, $120"): a
+    // short scope reply before any ticket-detail intake, no search and no subscription (service depth, SD19). The
+    // controls above (cancel, stop, delete, purchase help) have already run, so this never swallows one (SD20).
+    // A first message only: "can my brother stream it online?" in a thread about seats is still that thread.
+    const outside = this.env.SERVICE_POLICY_MODE === 'off' || priorVersion ? null : outsideIntent(flat(latestText), { performerOrTeam: merged.performerOrTeam });
+    if (outside) {
+      const decision = resolveServicePolicy({ category: null, outsideIntent: outside, blockedCategories: this.env.blockedCategories, now });
+      if (this.env.SERVICE_POLICY_MODE === 'enforce') {
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], servicePolicy: { mode: 'enforce', ...decision }, createdBy: 'system' });
+        await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+        if (revision > 1) await this.invalidateForRevision(req.id, revision);
+        const { line, pointer } = outsideReply(outside);
+        const tail = 'If there’s a concert, game or show you’re thinking about, send it my way.';
+        const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Not something I do'), template: 'raw_auto', vars: { text: ['Hey,', line, ...(pointer ? [pointer] : []), tail].join('\n\n'), html: ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;">${esc(line)}</p>`, ...(pointer ? [`<p style="margin:0 0 18px;">${esc(pointer)}</p>`] : []), `<p style="margin:0 0 18px;">${esc(tail)}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `outside_product:${msg.id}` });
+        await this.transition(req.id, 'closed', 'outside_product');
+        return { state: 'closed', revision, extraction: merged };
+      }
+      await audit(this.db, { actor: 'system', action: 'service_policy.would_block', entityKind: 'request', entityId: req.id, diff: { operation: 'ticket_intake', depth: 'outside', category: outside, reasons: decision.reasons } });
+    }
+
     // Concert quote decisions run before discovery: entry and product terms need no catalog match.
     // Other unresolved offer questions retain the same comparison path (TGQA-R6 1006: "you don't need the event date to add these up").
     const threadTexts = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '');
@@ -617,6 +647,8 @@ export class Concierge {
         await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
         if (revision > 1) await this.invalidateForRevision(req.id, revision);
       }
+      // Their offers added up is Guide-level work: recorded as such for a food or drink event (no event on file).
+      if (this.env.SERVICE_POLICY_MODE !== 'off' && isFoodDrink(threadFlat)) await this.db.update(t.requestVersions).set({ servicePolicy: { mode: this.env.SERVICE_POLICY_MODE, ...resolveServicePolicy({ category: 'food_drink', blockedCategories: this.env.blockedCategories, now }) } }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, revision)));
       await this.transition(req.id, 'recommendation_sent', 'supplied_offers_compared');
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
       return { state: 'recommendation_sent', revision, extraction: merged };
@@ -634,6 +666,21 @@ export class Concierge {
       return { state: 'recommendation_sent', revision, extraction: merged };
     }
 
+
+    // A ticketed food or drink event with nothing to compare yet (Guide depth): what to check and what to send,
+    // rather than a catalog search and a "which event?" loop. Their offers, when they send them, are added up
+    // by the supplied-offer path, with no resale sweep, tracking or watch (SD05).
+    if (this.env.SERVICE_POLICY_MODE === 'enforce' && !priorVersion && !merged.performerOrTeam && !supplied.textOffers.length && isFoodDrink(flat(latestText))) {
+      const decision = resolveServicePolicy({ category: 'food_drink', blockedCategories: this.env.blockedCategories, now });
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], servicePolicy: { mode: 'enforce', ...decision }, createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+      const lead = 'Food and drink festivals usually sell only through the organizer, so the organizer’s ticket page is the place to buy.';
+      const checks = 'Before you pay, check what entry includes (tastings, drink tokens or admission only), the age rule (often 21+ where alcohol is served) and the session time.';
+      const ask = 'Send me the ticket options you’re looking at, with their prices, and I’ll check what each includes and add up the total for your group.';
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text: ['Hey,', lead, checks, ask].join('\n\n'), html: ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${lead}</strong></p>`, `<p style="margin:0 0 18px;">${checks}</p>`, `<p style="margin:0 0 18px;">${ask}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide_food:${msg.id}` });
+      await this.transition(req.id, 'referred', 'guide_food_drink');
+      return { state: 'referred', revision, extraction: merged };
+    }
 
     // "What's on?" — a kind of event, a place and some dates, but no performer or team: answer with options
     // instead of asking which event, how many tickets and which date.
@@ -736,7 +783,46 @@ export class Concierge {
 
     if (supplied.textOffers.length && resolution.kind !== 'resolved') return answerSupplied(false);
 
-    if (unresolved.some((u) => CLARIFIABLE.includes(u))) {
+    // A Guide event (an orchestra, a club night, a minor-league game) with nothing of theirs to check yet: the
+    // official route and the checks that matter, answered now. No quantity or budget is asked (they don't change
+    // where to buy), no research runs, and a watch or buy-or-wait question gets a plain limit (SD07, SD23).
+    // On general sale already, the official-sale reply below is that answer (with its venue notes and what's still
+    // to check), reached without a quantity question. A browse pick has its own bounded answer.
+    let guideNoFieldAsk = false;
+    if (this.env.SERVICE_POLICY_MODE === 'enforce' && resolution.kind === 'resolved' && !picked && !listing.fields && merged.quotedPriceCents == null && !merged.submittedUrls.length) {
+      const snap = await policyForEvent(this.db, this.env, resolution.event.id, now);
+      const guideDepth = !!snap && (snap.decision.depth === 'guide' || snap.decision.depth === 'outside' || snap.decision.reasons.includes('operator_blocked'));
+      if (snap && guideDepth) await this.db.update(t.requestVersions).set({ servicePolicy: storedPolicy(snap) }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, revision)));
+      const official = guideDepth ? await this.officialSale(resolution.event, now) : null;
+      const limitAsked = merged.intent === 'watch_request' || TREND_ASKED.test(flat(latestText));
+      if (guideDepth && official && !limitAsked && !merged.resaleAsked) guideNoFieldAsk = true;
+      else if (snap && guideDepth) {
+        const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
+        const page = official?.buyUrl ?? m?.url ?? null;
+        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Buy on ${official.seller}` : 'Event page', official?.affiliate ?? false) : page;
+        const lead = official ? `${resolution.label} is on sale at ${official.seller}, the official seller.` : `For ${resolution.label}, the official seller is the venue’s own box office or ticket page.`;
+        const venueNote = categoryBuyingNote(resolution.event.category, resolution.venue.name);
+        const checks = `Before you pay, check ${guideChecks(resolution.event.category)}.${venueNote ? ` ${venueNote}` : ''}`;
+        // What they asked for that nothing here has checked, said once (A05: three together, $450 all-in, step-free).
+        const toCheck = withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event);
+        const limits = [
+          merged.intent === 'watch_request' ? 'I don’t track prices or send alerts for this one, so nothing is being monitored.' : null,
+          TREND_ASKED.test(flat(latestText)) || merged.intent === 'watch_request' ? 'I don’t have price history for it either, so I can’t tell you whether waiting would pay off.' : null,
+        ].filter((x): x is string => !!x);
+        const ask = 'If you’re looking at tickets somewhere else, send me the price and what they include and I’ll check them.';
+        const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
+        const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
+        const text = ['Hey,', lead, ...(url ? [`Tickets: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Buy on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
+        if (merged.intent === 'watch_request') await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: `policy:${snap.decision.reasons.includes('operator_blocked') ? 'operator_blocked' : 'guide_official_only'}` } });
+        await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide:${req.id}:${revision}` });
+        await this.transition(req.id, 'referred', 'guide_official_route');
+        return { state: 'referred', revision, extraction: merged };
+      }
+    }
+
+    if (unresolved.some((u) => CLARIFIABLE.includes(u) && !(guideNoFieldAsk && (u === 'quantity' || u === 'budget_basis')))) {
       const count = req.clarificationCount + 1;
       if (count > 3) {
         await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
@@ -1866,6 +1952,9 @@ export class Concierge {
       // Only a sale the provider says opens later. On sale now is the official-sale reply; no sale date at all
       // could as easily mean sold out as not yet, and "isn't on sale yet" would then be wrong.
       if (e.localStartAt <= now || !e.publicSaleStartAt || e.publicSaleStartAt <= now) return null;
+      // No new alert promise where the depth doesn't make one (Guide/Outside; SD26 keeps price watches apart).
+      const snap = await policyForEvent(this.db, this.env, e.id, now);
+      if (snap && !(await policyGate(this.db, snap, 'event_alert', { kind: 'request', id: req.id }))) return null;
       const opens = e.publicSaleStartAt;
       kind = 'on_sale';
       vars = { kind, what: resolution.label, saleOpens: opens ? saleOpensLabel(opens, resolution.venue.timezone) : null };
@@ -1986,24 +2075,40 @@ export class Concierge {
     const { e: event, v: venue, ent } = evRow!;
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
 
-    const [run] = await this.db.insert(t.researchRuns).values({ requestId: req.id, revision: args.revision, mode: this.env.APP_MODE === 'fixture' ? 'fixture' : 'live', status: 'running' }).returning({ id: t.researchRuns.id });
-    const runId = run!.id;
+    // The service-depth decision for this event, read now (DECISION_LOG #61): what this research may spend. Under
+    // shadow it is recorded and nothing changes; under enforce, work the depth doesn't allow never starts.
+    const snap = this.env.SERVICE_POLICY_MODE === 'off' ? null : await policyForEvent(this.db, this.env, event.id, now);
+    const enforce = snap?.mode === 'enforce';
+    const may = async (op: Operation) => policyGate(this.db, snap, op, { kind: 'request', id: req.id });
 
-    // Source plan and adapters.
-    const plan = sourcePlan(event.category);
-    const required = plan.required.length ? plan.required : ['ticketmaster', 'seatgeek', 'stubhub'];
+    // Source plan and adapters: the route's candidates that are integrated, approved and cover this event, cut to
+    // the depth's budget under enforce. An empty plan stays empty (no generic marketplace fallback, F02).
     const configs = await this.db.select().from(t.adapterConfigs);
     const cfgBySource = new Map(configs.map((c) => [c.sourceId, c]));
-    const enabledFixtureSources = configs.filter((c) => c.enabled && c.implementation === 'fixture').map((c) => c.sourceId);
-    const sourceIds = [...new Set([...required, ...enabledFixtureSources])];
+    const facts = await adapterFacts(this.db);
+    const planned = planSources({ category: event.category, maxAutomatedSources: enforce ? snap!.decision.limits.automatedOfferSources : Number.MAX_SAFE_INTEGER, adapters: facts, coveredSourceIds: await coveredSourceIds(this.db, event, facts), fixtureEvent: event.isFixture });
+    const skipped = new Map(planned.unavailable.map((u) => [u.sourceId, u.reason]));
+    const sourceIds = [...planned.executable, ...planned.unavailable.map((u) => u.sourceId)];
+    const [run] = await this.db.insert(t.researchRuns).values({ requestId: req.id, revision: args.revision, mode: this.env.APP_MODE === 'fixture' ? 'fixture' : 'live', status: 'running', servicePolicy: storedPolicy(snap, { sources: planned }) }).returning({ id: t.researchRuns.id });
+    const runId = run!.id;
+    if (snap) await this.db.update(t.requestVersions).set({ servicePolicy: storedPolicy(snap) }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, args.revision)));
     const quantity = brief.quantity!;
-    const searchInput = { requestId: req.id, revision: args.revision, eventId: event.id, providerEventId: null, quantity, hardConstraints: {} };
+    // Every hard requirement goes to the sources too, not only to the comparison after them (F04).
+    const searchInput = { requestId: req.id, revision: args.revision, eventId: event.id, providerEventId: null, quantity, hardConstraints: constraintBasket(brief, quantity, event.localStartAt) as unknown as Record<string, unknown> };
 
     const allOffers: Offer[] = [];
     const checked: string[] = [];
     const unavailable: Array<{ sourceId: string; status: string }> = [];
     let ordinal = 0;
     for (const sourceId of sourceIds) {
+      const skip = skipped.get(sourceId);
+      // A source left out for coverage, budget or depth is recorded for staff and never called.
+      if (skip === 'event_not_covered' || skip === 'budget_exhausted' || skip === 'depth_no_automated_sources') {
+        ordinal += 1;
+        await this.db.insert(t.sourceChecks).values({ runId, sourceId, ordinal, status: 'not_supported', reasonCode: `policy:${skip}`, observedAt: now, resultCount: 0, limitations: [], evidence: {}, checkedBy: 'service_policy' });
+        unavailable.push({ sourceId, status: 'not_supported' });
+        continue;
+      }
       const cfg = cfgBySource.get(sourceId);
       const activation: AdapterActivation = { sourceId, implementation: (cfg?.implementation as AdapterActivation['implementation']) ?? 'not_integrated', enabled: cfg?.enabled ?? false, accessApprovalEvidence: cfg?.accessApprovalEvidence ?? null, monitoringAllowed: cfg?.monitoringAllowed ?? false };
       const adapter: TicketSourceAdapter = buildAdapter(activation, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: this.env.TICKETMASTER_DISCOVERY_API_KEY ?? null, ticketmasterEnabled: this.env.TICKETMASTER_DISCOVERY_ENABLED, now: this.now });
@@ -2038,15 +2143,20 @@ export class Concierge {
     const priorities: CustomerPriorities = { mustAttend: brief.mustAttend, waitRiskTolerance: brief.waitRiskTolerance, decisionDeadline: brief.decisionDeadline ? new Date(brief.decisionDeadline) : null, budgetTotalCents: constraints.budgetTotalCents, togetherRequired: brief.togetherRequired, splitGroupAllowed: brief.splitGroupAllowed, watchConsentGiven: brief.intent === 'watch_request' };
     const basketKey = basketKeyFor(event.id, quantity, best?.offer.seatClass ?? null);
     const leadMinutes = Math.round((event.localStartAt.getTime() - now.getTime()) / 60_000);
-    const { benchmark, benchmarkRunId } = await this.computeBenchmarkFor({ event, venue, ent, quantity, seatZone: best?.offer.seatClass ?? null, leadMinutes, now });
-    const { trend, trendRunId } = await this.computeTrendFor({ eventId: event.id, basketKey, now });
-    const monitoringCoverage = configs.some((c) => c.enabled && c.monitoringAllowed);
+    // History, trends and tracking only where the depth invests in them (Core); Compare and Guide abstain (F07).
+    const historyOk = await may('historical_context');
+    const trendOk = await may('trend_advice');
+    const trackingOk = await may('market_tracking');
+    const { benchmark, benchmarkRunId } = historyOk ? await this.computeBenchmarkFor({ event, venue, ent, quantity, seatZone: best?.offer.seatClass ?? null, leadMinutes, now }) : { benchmark: null, benchmarkRunId: null };
+    const { trend, trendRunId } = trendOk ? await this.computeTrendFor({ eventId: event.id, basketKey, now }) : { trend: null, trendRunId: null };
+    // Monitoring this event, not "some adapter somewhere may monitor" (F05): a source that covers it, and a depth that watches.
+    const monitoringCoverage = snap ? snap.capabilities.price_watch.state === 'available' || (!enforce && configs.some((c) => c.enabled && c.monitoringAllowed)) : configs.some((c) => c.enabled && c.monitoringAllowed);
     // Resale market statistics (DECISION_LOG #44): brought up to date for this event now, used in the decision
     // only when the licence allows it in advice, and shown only when it allows customer display.
     const licence = await marketLicence(this.db);
     const uses = marketUses(licence, this.env);
     let market: Awaited<ReturnType<typeof marketForGroup>> | null = null;
-    if (licence.allows('tracking')) {
+    if (licence.allows('tracking') && trackingOk && historyOk) {
       await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).refreshEvent(event.id);
       market = await marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now });
     }
@@ -2097,7 +2207,7 @@ export class Concierge {
     // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
     const travelling = TRAVELLING.test(saidInThread);
     // The market around the listing they showed us: cheaper seats for their group, from one fresh listings read.
-    const around = shown?.perTicketCents != null && licence.allows('tracking') ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
+    const around = shown?.perTicketCents != null && licence.allows('tracking') && trackingOk ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
     const marketAround = around && shown?.perTicketCents != null ? findAlternatives(around.listings, { perTicketCents: shown.perTicketCents, feeBasis: shown.feeBasis, section: shown.section, row: shown.row }, quantity) : null;
     // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
     const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
@@ -2126,7 +2236,7 @@ export class Concierge {
       const [answered] = await this.db.select({ id: t.requestOutcomes.id }).from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, req.id), eq(t.requestOutcomes.kind, 'staff_comparison_answered'))).limit(1);
       if (offered && !answered) await this.db.insert(t.requestOutcomes).values({ requestId: req.id, kind: 'staff_comparison_answered', source: 'staff', details: { minutes: Math.round((now.getTime() - offered.at.getTime()) / 60_000), sourceId: best.offer.sourceId, totalCents: best.comparableTotalCents, checked: cmp.eligible.length + cmp.needsReview.length + cmp.excluded.length }, actor: 'system', at: now });
     }
-    const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && !judged
+    const staffFollowUp = !(best && best.comparableTotalCents !== null) && (requirements.length > 0 || brief.resaleAsked) && !judged && (await may('staff_comparison'))
       ? await this.takeForStaffComparison({ requestId: req.id, contactEmail: contact?.emailLookup ?? '', requirements })
       : null;
     // Their terms read across the thread, latest word winning: how many go, extra tickets, the arrival deadline.
@@ -2358,6 +2468,7 @@ export class Concierge {
     let marketingPermission = false;
     let approved = intent.approvalId !== null;
     let hashMatches = true;
+    let policyOk = true;
     if (intent.requestId && intent.requestRevision !== null) {
       const [req] = await this.db.select({ rev: t.requests.currentRevision, eventId: t.requests.eventId }).from(t.requests).where(eq(t.requests.id, intent.requestId));
       revisionCurrent = req?.rev === intent.requestRevision;
@@ -2367,6 +2478,11 @@ export class Concierge {
         const [alert] = await this.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.id, intent.approvalId));
         const [w] = alert ? await this.db.select().from(t.watches).where(eq(t.watches.id, alert.watchId)) : [];
         approved = alert?.approvalState === 'approved' && w?.state === 'active' && w.generation === alert.generation;
+        // The policy and rights at send time, not at approval time, decide (SD16/SD17).
+        if (approved && w) {
+          const snap = await policyForEvent(this.db, this.env, w.eventId, now);
+          policyOk = !!snap && (await policyGate(this.db, snap, 'price_watch', { kind: 'send_intent', id: intent.id })) && capability(snap, 'price_watch').state === 'available';
+        }
       } else if (intent.approvalId) {
         const [rec] = await this.db.select().from(t.recommendations).where(eq(t.recommendations.id, intent.approvalId));
         approved = rec?.reviewStatus === 'approved';
@@ -2376,6 +2492,14 @@ export class Concierge {
           const obs = rec.chosenObservationIds.length ? await this.db.select().from(t.offerObservations).where(inArray(t.offerObservations.id, rec.chosenObservationIds)) : [];
           evidenceFresh = obs.every((o) => checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: event!.localStartAt, now }).fresh);
           containsFixture = containsFixture || obs.some((o) => o.verificationMethod === 'fixture');
+          // A draft written under a permission that has since gone (an override expired, a category downgraded)
+          // doesn't send its claims (SD16): every operation its claims rely on must still be allowed today.
+          if (rec.adviceRunId) {
+            const [run] = await this.db.select({ packet: t.adviceRuns.packet }).from(t.adviceRuns).where(eq(t.adviceRuns.id, rec.adviceRunId));
+            const kinds = ((run?.packet as { claimRecords?: Array<{ kind: string }> } | undefined)?.claimRecords ?? []).map((c) => c.kind);
+            const snap = await policyForEvent(this.db, this.env, req.eventId, now);
+            for (const op of operationsForClaims(kinds)) if (snap && !(await policyGate(this.db, snap, op, { kind: 'send_intent', id: intent.id }))) policyOk = false;
+          }
         }
       }
     }
@@ -2385,7 +2509,9 @@ export class Concierge {
       marketingPermission = !!perm && (!rev || rev.createdAt < perm.createdAt);
     }
     const capture = testModeFrom(switches) || (await isTestConversation(this.db, intent.conversationId));
-    const gate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
+    const sendGate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
+    const gate: { allowed: boolean; reasons: string[] } = policyOk ? (sendGate.allowed ? { allowed: true, reasons: [] } : sendGate) : { allowed: false, reasons: [...(sendGate.allowed ? [] : sendGate.reasons), 'policy_changed'] };
+    if (!policyOk && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
@@ -2433,28 +2559,46 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   private async maybeCreateWatch(a: { requestId: string; revision: number; contactId: string; eventId: string; eventStartAt: Date; brief: RequestExtraction; consentMessageId: string }): Promise<string | null> {
     const now = this.now();
+    const notCreated = async (reason: string) => {
+      await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: a.requestId, diff: { reason } });
+      return null;
+    };
     const target = wholePartyBudgetCents(a.brief.budgetCents, a.brief.budgetBasis, a.brief.quantity);
     if (target === null || !a.brief.quantity) return null; // budget is required for a target-price watch → clarification already asked via ambiguities path
     const active = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.watches).where(and(eq(t.watches.contactId, a.contactId), eq(t.watches.state, 'active')));
     if ((active[0]?.n ?? 0) >= WATCH_MAX_ACTIVE_PER_CONTACT) return null;
     // A watch whose alerts can't be sent would be "active" to staff and "stopped" on cancel while it never ran,
     // and the customer is told nothing is monitored (audit replay A07/A07-R1): none is stored until they can.
-    if (!this.env.WATCH_SEND_ENABLED) {
-      await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: a.requestId, diff: { reason: 'watch_alerts_disabled' } });
-      return null;
-    }
+    if (!this.env.WATCH_SEND_ENABLED) return notCreated('watch_alerts_disabled');
     const cadence = cadenceMinutes(a.eventStartAt, now, { lastMinuteApproved: false });
     if (cadence === null) return null;
-    // A watch needs a seller we may check on a schedule. Without one it could never alert, yet it showed as
-    // "active" to staff until it expired; the customer is already told we are not monitoring automatically.
-    const configs = await this.db.select({ enabled: t.adapterConfigs.enabled, monitoringAllowed: t.adapterConfigs.monitoringAllowed }).from(t.adapterConfigs);
-    if (!configs.some((c) => c.enabled && c.monitoringAllowed)) {
-      await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: a.requestId, diff: { reason: 'no_monitoring_coverage' } });
-      return null;
-    }
-    const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, consentMessageId: a.consentMessageId, cadenceMinutes: cadence, nextCheckAt: new Date(now.getTime() + cadence * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
-    await audit(this.db, { actor: 'system', action: 'watch.created', entityKind: 'watch', entityId: w!.id, diff: { consentMessageId: a.consentMessageId, targetTotalCents: target } });
+    // One decision for this event (F05): the depth must invest in watches (enforce), and a monitoring source must
+    // actually cover this event, not merely exist. Without both, no promise is recorded.
+    const snap = await policyForEvent(this.db, this.env, a.eventId, now);
+    if (snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'request', id: a.requestId }))) return notCreated(`policy:${snap.decision.reasons.find((r) => r === 'guide_official_only' || r === 'compare_no_tracking' || r === 'operator_blocked' || r === 'outside_product' || r === 'non_us_event') ?? snap.decision.depth}`);
+    const cap = snap ? capability(snap, 'price_watch') : null;
+    if (!cap || cap.state !== 'available') return notCreated(cap?.reasons.includes('event_not_covered') ? 'event_not_covered' : 'no_monitoring_coverage');
+    const basket = await this.basketFor(a.requestId, a.revision, a.brief, a.eventStartAt, a.eventId);
+    const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, constraints: basket as unknown as Record<string, unknown>, consentMessageId: a.consentMessageId, cadenceMinutes: cadence, nextCheckAt: new Date(now.getTime() + cadence * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
+    await audit(this.db, { actor: 'system', action: 'watch.created', entityKind: 'watch', entityId: w!.id, diff: { consentMessageId: a.consentMessageId, targetTotalCents: target, sources: cap.sourceIds, unverifiable: basket.unverifiable } });
     return w!.id;
+  }
+
+  /**
+   * The full constraint basket for a request revision, read from that revision and its own thread, never from a
+   * newer request (F04). Used when a watch is stored, and to rebuild one for a row stored before baskets existed.
+   */
+  private async basketFor(requestId: string, revision: number, brief: RequestExtraction, eventStartAt: Date, eventId: string): Promise<ConstraintBasket> {
+    const [req] = await this.db.select({ conversationId: t.requests.conversationId }).from(t.requests).where(eq(t.requests.id, requestId));
+    const [ver] = await this.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, requestId), eq(t.requestVersions.revision, revision)));
+    const upTo = ver?.createdAt ?? this.now();
+    const texts = req ? (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'), lte(t.messages.receivedAt, upTo))).orderBy(asc(t.messages.receivedAt))).map((m) => m.text ?? '') : [];
+    const row = await loadEventRows(this.db, eventId);
+    const tz = row?.v.timezone ?? 'America/New_York';
+    const terms = partyTerms(texts, tz);
+    const deliveryBy = terms.deadlineMinutes != null ? localToInstant(eventLocalDate(eventStartAt, tz), `${String(Math.floor(terms.deadlineMinutes / 60)).padStart(2, '0')}:${String(terms.deadlineMinutes % 60).padStart(2, '0')}`, tz) : null;
+    const age = ageNeed(texts.join('\n'));
+    return constraintBasket(brief, brief.quantity ?? 1, eventStartAt, { pairsOk: terms.seating === 'pairs', deliveryBy, unverifiable: age ? [age] : [], revision });
   }
 
   /**
@@ -2479,12 +2623,22 @@ export class Concierge {
     return { hours };
   }
 
-  /** Deterministic due-watch evaluation; never invokes a model. */
+  /**
+   * Deterministic due-watch evaluation; never invokes a model. Each watch is checked against today's policy and
+   * rights before any search (F05), searched only on sources that may monitor this event, and judged on the full
+   * constraint basket of its own revision (F04). A watch that can no longer run is paused with its reason, and
+   * anything it found that hasn't gone out is invalidated.
+   */
   async evaluateDueWatches(limit = 20): Promise<{ evaluated: number; alertsCreated: number }> {
     const now = this.now();
     const due = await this.db.select().from(t.watches).where(and(eq(t.watches.state, 'active'), lte(t.watches.nextCheckAt, now))).orderBy(asc(t.watches.nextCheckAt)).limit(limit);
     let alerts = 0;
     const configs = await this.db.select().from(t.adapterConfigs);
+    const pause = async (w: typeof t.watches.$inferSelect, reason: string) => {
+      await this.db.update(t.watches).set({ state: 'paused', pauseReason: reason, generation: sql`${t.watches.generation} + 1` }).where(eq(t.watches.id, w.id));
+      await this.stopWatchAlerts([w.id]);
+      await audit(this.db, { actor: 'system', action: 'watch.paused', entityKind: 'watch', entityId: w.id, diff: { reason } });
+    };
     for (const w of due) {
       if (w.expiresAt <= now) {
         await this.db.update(t.watches).set({ state: 'expired' }).where(eq(t.watches.id, w.id));
@@ -2492,18 +2646,32 @@ export class Concierge {
       }
       const [event] = await this.db.select().from(t.events).where(eq(t.events.id, w.eventId));
       const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, w.requestId));
-      if (!event || !req || req.currentRevision !== w.revision) {
-        await this.db.update(t.watches).set({ state: 'paused' }).where(eq(t.watches.id, w.id));
+      if (!event || !req || req.currentRevision !== w.revision || req.eventId !== w.eventId) {
+        await pause(w, 'revision_superseded');
         continue;
       }
+      const snap = await policyForEvent(this.db, this.env, w.eventId, now);
+      if (snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch', id: w.id }))) {
+        await pause(w, `policy:${snap.decision.depth}`);
+        continue;
+      }
+      // Rights and coverage are checked whatever the rollout mode: revoked monitoring means no polling at all.
+      const cap = snap ? capability(snap, 'price_watch') : null;
+      if (!cap || cap.state !== 'available') {
+        await pause(w, `capability:${cap?.reasons[0] ?? 'monitoring_unavailable'}`);
+        continue;
+      }
+      const basket = readBasket(w.constraints) ?? (await this.basketFor(w.requestId, w.revision, RequestExtractionSchema.parse((await this.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, w.requestId), eq(t.requestVersions.revision, w.revision))))[0]!.brief), event.localStartAt, w.eventId));
       const offers: Offer[] = [];
-      for (const cfg of configs.filter((c) => c.enabled && c.monitoringAllowed)) {
+      for (const cfg of configs.filter((c) => cap.sourceIds.includes(c.sourceId) && c.enabled && c.monitoringAllowed)) {
         const adapter = buildAdapter({ sourceId: cfg.sourceId, implementation: cfg.implementation as AdapterActivation['implementation'], enabled: true, accessApprovalEvidence: cfg.accessApprovalEvidence, monitoringAllowed: true }, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: null, ticketmasterEnabled: false, now: this.now });
-        const r = await adapter.search({ requestId: w.requestId, revision: w.revision, eventId: w.eventId, providerEventId: null, quantity: w.quantity, hardConstraints: {} });
+        const r = await adapter.search({ requestId: w.requestId, revision: w.revision, eventId: w.eventId, providerEventId: null, quantity: w.quantity, hardConstraints: basket as unknown as Record<string, unknown> });
         offers.push(...r.offers);
       }
-      const cmp = compareOffers(offers, { quantity: w.quantity, togetherRequired: w.togetherRequired, budgetTotalCents: w.targetTotalCents, excludeObstructedView: true, requireAccessible: false, acceptableSections: w.acceptableSections, eventStartAt: event.localStartAt.toISOString() }, w.eventId);
-      const best = cmp.eligible[0];
+      // The same eligibility as the first comparison: accessible stays required, the deadline stays a deadline.
+      const cmp = compareOffers(offers.filter((o) => meetsDelivery(o, basket)), { quantity: w.quantity, togetherRequired: basket.pairsOk ? false : basket.togetherRequired ?? w.togetherRequired, budgetTotalCents: w.targetTotalCents, excludeObstructedView: basket.excludeObstructedView, requireAccessible: basket.requireAccessible, acceptableSections: w.acceptableSections ?? basket.acceptableSections, eventStartAt: event.localStartAt.toISOString() }, w.eventId);
+      const best = basket.unverifiable.length ? undefined : cmp.eligible[0];
+      if (basket.unverifiable.length && cmp.eligible.length) await audit(this.db, { actor: 'system', action: 'watch.alert_withheld', entityKind: 'watch', entityId: w.id, diff: { reason: 'constraint_unverifiable', unverifiable: basket.unverifiable } });
       if (best && best.comparableTotalCents !== null) {
         const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `${best.offer.sourceId}:${best.offer.providerListingId ?? best.offer.section ?? 'x'}:${best.offer.row ?? ''}`, totalCents: best.comparableTotalCents });
         const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
@@ -2534,6 +2702,18 @@ export class Concierge {
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, w.contactId));
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, w.requestId));
     const [obs] = await this.db.select({ o: t.offerObservations, off: t.offers }).from(t.offerObservations).innerJoin(t.offers, eq(t.offers.id, t.offerObservations.offerId)).where(eq(t.offerObservations.id, alert.observationId));
+    // Approval is not a capability override (F05): today's revision, policy, rights and the observation's freshness
+    // are checked again before anything is queued.
+    const now = this.now();
+    const [event] = await this.db.select().from(t.events).where(eq(t.events.id, w.eventId));
+    const stale = !obs || !event || !checkFreshness({ fetchedAt: obs.o.fetchedAt, sourceAsOf: obs.o.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh;
+    const snap = await policyForEvent(this.db, this.env, w.eventId, now);
+    const blockedBy = req?.currentRevision !== w.revision ? 'revision_superseded' : stale ? 'stale_observation' : snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch_alert', id: alert.id })) ? `policy:${snap.decision.depth}` : !snap || capability(snap, 'price_watch').state !== 'available' ? `capability:${snap ? capability(snap, 'price_watch').reasons[0] ?? 'monitoring_unavailable' : 'event_missing'}` : null;
+    if (blockedBy) {
+      await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, alert.id));
+      await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.invalidated_at_approval', entityKind: 'watch_alert', entityId: alert.id, diff: { reason: blockedBy } });
+      return { ok: false, reason: blockedBy };
+    }
     const intent = await this.queueSend({ messageClass: 'watch_alert', contactId: contact!.id, conversationId: req!.conversationId, requestId: req!.id, revision: w.revision, recipient: contact!.emailOriginal, subject: `Ticket Guy alert: ${w.quantity} for ${formatUsd(alert.payableTotalCents)} total`, template: 'watch_alert', vars: { totalCents: alert.payableTotalCents, quantity: w.quantity, url: obs!.off.directPurchaseUrl, observedAt: obs!.o.fetchedAt.toISOString(), section: obs!.o.section }, inReplyTo: null, approvalId: alert.id, approvedHash: null, dedupeKey: `alert:${alert.dedupeKey}`, containsFixtureData: obs!.o.verificationMethod === 'fixture' });
     await this.db.update(t.watchAlerts).set({ approvalState: 'approved', sendIntentId: intent.id }).where(eq(t.watchAlerts.id, alert.id));
     await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.approved', entityKind: 'watch_alert', entityId: alert.id });
@@ -3160,6 +3340,11 @@ export function suppliedOffers(said: string, threadMessages: string[], tz: strin
   return { textOffers, offersSetAside };
 }
 
+/** "Stop watching the prices", "cancel the price watch": price watches only. */
+const PRICE_WATCH_ONLY = /\b(?:price watch(?:es)?|watching (?:the )?prices?|price alerts?|tracking (?:the )?prices?|monitoring (?:the )?prices?)\b/i;
+/** "Stop all the alerts", "stop everything", "the on-sale alert": every alert, not only price watches. */
+const ALL_ALERTS = /\b(?:all|everything|every alert|event alerts?|on-?sale alerts?|announcement|any (?:more )?alerts?|the alerts)\b/i;
+
 /** A follow-up about the offers already sent: the same ones, maybe with a requirement changed. */
 const REFERS_BACK = /\b(?:same|still|again|(?:not|haven'?t|hasn'?t|have not|has not) changed|unchanged|remains?|those|these|earlier|original|as before|you (?:correctly )?said|restor\w*|correct(?:ion|ed)?|the prices|my pick|your pick)\b/i;
 /** "Ignore Offer A, only B", "B on its own", "just B". */
@@ -3454,4 +3639,36 @@ export function staffedHoursLabel(e: { STAFFED_HOURS_START: number; STAFFED_HOUR
   const h = (n: number) => (n === 0 || n === 24 ? '12am' : n === 12 ? '12pm' : n < 12 ? `${n}am` : `${n - 12}pm`);
   const zone = e.STAFFED_HOURS_TIMEZONE === 'America/New_York' ? 'ET' : e.STAFFED_HOURS_TIMEZONE;
   return `${h(e.STAFFED_HOURS_START)} to ${h(e.STAFFED_HOURS_END)} ${zone}`;
+}
+
+/**
+ * The scope reply for something outside launch scope: what Ticket Guy does, in a line, and the readily known
+ * official route where there is one. No affiliate detour, no service jargon.
+ */
+export function outsideReply(kind: OutsideIntent): { line: string; pointer: string | null } {
+  switch (kind) {
+    case 'classes_workshops':
+      return { line: 'I help with tickets to live events, like concerts, games and shows, so I can’t book or compare classes or workshops.', pointer: 'The studio or organizer’s own site is where to book it.' };
+    case 'tours_experiences':
+      return { line: 'I help with tickets to live events, like concerts, games and shows, so I can’t book or compare guided tours.', pointer: 'The tour operator’s own site is where to book it.' };
+    case 'participation_permits':
+      return { line: 'I help with tickets to watch live events, so race entries, registrations and permits aren’t something I can get or monitor.', pointer: 'For a permit on federal land, Recreation.gov is the official route; for a race entry, it’s the race organizer’s registration page.' };
+    case 'travel_reservations':
+      return { line: 'I help with tickets to live events, so I can’t book or compare flights, hotels or restaurant reservations.', pointer: null };
+    case 'virtual_gambling':
+      return { line: 'I help with tickets to attend live events in person in the US, so online-only streams and betting aren’t something I cover.', pointer: null };
+  }
+}
+
+/** What's worth checking before buying a Guide-depth ticket, by kind of event. Only checks, never claims. */
+export function guideChecks(category: string): string {
+  switch (category) {
+    case 'classical': return 'the seating map (some seats have restricted views) and any student or rush discount you qualify for';
+    case 'attractions': case 'theme_parks': case 'cinema': return 'the entry time slot and exactly what the ticket includes';
+    case 'comedy': return 'any drink minimum and the age rule';
+    case 'electronic_nightlife': case 'club_concert': case 'concert': return 'the age rule and the latest entry time';
+    case 'fairs_community': case 'conventions': return 'what the pass covers (which days and sessions) and whether it can be transferred';
+    case 'food_drink': return 'what entry includes (tastings, drink tokens or admission only) and the age rule';
+    default: return 'whether it’s general admission or a reserved seat, and how the tickets are delivered';
+  }
 }

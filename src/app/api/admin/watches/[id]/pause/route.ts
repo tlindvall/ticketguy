@@ -14,7 +14,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const { db } = await getDb();
     const from = body.resume ? 'paused' : 'active';
     const to = body.resume ? 'active' : 'paused';
-    const rows = await db.update(t.watches).set({ state: to, generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.id, id), eq(t.watches.state, from))).returning({ id: t.watches.id });
+    const rows = await db.update(t.watches).set({ state: to, pauseReason: body.resume ? null : `staff:${body.reason}`, generation: sql`${t.watches.generation} + 1` }).where(and(eq(t.watches.id, id), eq(t.watches.state, from))).returning({ id: t.watches.id });
     if (!rows.length) return Response.json({ error: 'state_conflict' }, { status: 409 });
     await audit(db, { actor: staff.userId, action: `watch.${to}`, entityKind: 'watch', entityId: id, diff: { reason: body.reason } });
     return Response.json({ ok: true, state: to });

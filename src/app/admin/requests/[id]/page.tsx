@@ -62,6 +62,10 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const requiredLinks = researchLinks.filter((l) => l.role === 'required');
   const conditionalLinks = researchLinks.filter((l) => l.role === 'conditional');
   const brief = versions[0]?.brief as Record<string, unknown> | undefined;
+  // The service-depth decision this request ran under (DECISION_LOG #61), from its research run when there was
+  // one (that has the selected sources), else from the revision.
+  const [lastRun] = await db.select({ servicePolicy: t.researchRuns.servicePolicy }).from(t.researchRuns).where(eq(t.researchRuns.requestId, id)).orderBy(desc(t.researchRuns.startedAt)).limit(1);
+  const policy = (lastRun?.servicePolicy ?? versions.find((v) => v.servicePolicy)?.servicePolicy ?? null) as ServicePolicyView | null;
   const now = nowMs();
   const s = stateInfo(req.state);
   const [lastMove] = [...transitions].reverse();
@@ -175,6 +179,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
               </div>
             ) : <p className="mt-1 text-sm text-gray-500">Not matched to an event yet, so no prices can be checked.</p>}
           </div>
+          <ServicePolicyCard policy={policy} />
           <ListingEvidenceCard rows={shownListings} timeZone={event?.v.timezone ?? 'America/New_York'} />
           <OutcomesCard id={id} tags={req.problemTypes ?? []} rows={outcomes} timeZone={event?.v.timezone ?? 'America/New_York'} />
           {event ? <MarketCard market={market} tracked={tracked ?? null} licensed={licence.allows('tracking')} shown={marketUses(licence, appEnv()).display} quantity={Number(brief?.quantity ?? 2)} now={now} /> : null}
@@ -405,6 +410,34 @@ function OutcomesCard({ id, tags, rows, timeZone }: { id: string; tags: string[]
           <JsonForm url={`/api/admin/requests/${id}/outcomes`} submitLabel="Save outcome" fields={[{ name: 'kind', label: 'What happened (affiliate_confirmed_purchase, user_reported_purchase or user_reported_no_purchase)', required: true, placeholder: 'affiliate_confirmed_purchase' }, { name: 'network', label: 'Affiliate network, if any' }, { name: 'amountCents', label: 'Order total in cents, if shown', type: 'number' }, { name: 'note', label: 'Where you saw it', type: 'textarea', required: true }]} />
         </div>
       </details>
+    </div>
+  );
+}
+
+type ServicePolicyView = {
+  mode: string; policyVersion: string; category: string; format: string | null; depth: string; reasons: string[]; overrideId: string | null;
+  allowedOperations: string[]; capabilities?: Array<{ operation: string; state: string; sourceIds: string[]; reasons: string[] }>;
+  sources?: { executable: string[]; officialPointers: string[]; unavailable: Array<{ sourceId: string; reason: string }> };
+};
+
+/** Staff-only: what the service-depth policy allowed for this request and why. Never shown to customers. */
+function ServicePolicyCard({ policy }: { policy: ServicePolicyView | null }) {
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <h2 className="font-semibold">Service depth</h2>
+      {policy ? (
+        <dl className="mt-2 space-y-1 text-sm">
+          <div className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">Depth</dt><dd>{policy.depth} ({policy.category}{policy.format ? `, ${policy.format}` : ''}){policy.mode === 'shadow' ? ' · shadow only' : ''}</dd></div>
+          <div className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">Why</dt><dd>{policy.reasons.join(', ')}</dd></div>
+          {policy.overrideId ? <div className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">Override</dt><dd>{policy.overrideId}</dd></div> : null}
+          <div className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">Allowed</dt><dd>{policy.allowedOperations.length ? policy.allowedOperations.join(', ') : 'scope reply only'}</dd></div>
+          {policy.capabilities?.filter((c) => c.state !== 'available' && policy.allowedOperations.includes(c.operation)).map((c) => (
+            <div key={c.operation} className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">{c.operation}</dt><dd>unavailable: {c.reasons.join(', ')}</dd></div>
+          ))}
+          {policy.sources ? <div className="flex gap-2"><dt className="w-28 shrink-0 text-gray-500">Searched</dt><dd>{policy.sources.executable.join(', ') || 'none'}{policy.sources.unavailable.length ? ` · not searched: ${policy.sources.unavailable.map((u) => `${u.sourceId} (${u.reason.replace(/_/g, ' ')})`).join(', ')}` : ''}</dd></div> : null}
+          <div className="text-xs text-gray-500">Policy {policy.policyVersion}</div>
+        </dl>
+      ) : <p className="mt-1 text-sm text-gray-500">No decision recorded (policy off, or written before it existed).</p>}
     </div>
   );
 }
