@@ -723,6 +723,9 @@ export class Concierge {
         ...merged,
         ...(facts.observationDate && /^(?:today|yesterday|now)$/i.test(merged.dateExpression?.trim() ?? '') ? { dateExpression: null, resolvedLocalDate: null } : {}),
         quantity: facts.partyQuantity ?? facts.group?.quantity ?? (merged.quantity !== null && salesCounts.includes(merged.quantity) ? null : merged.quantity),
+        // A fee, quote or total they report is evidence, not what they'll spend (R2-FACT-ROLES-01): the budget
+        // changes only when they say one.
+        ...(BUDGET_WORDS.test(latestText) ? {} : { budgetCents: priorBrief?.budgetCents ?? null, budgetBasis: priorBrief?.budgetBasis ?? null }),
       };
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
       await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
