@@ -635,6 +635,9 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const partyOf = (n: number) => (n === 1 ? 'one' : n === 2 ? 'both' : `all ${countWord(n)}`);
   const ticketsWord = (n: number) => (n === q ? partyOf(n) : `${countWord(n)} tickets`);
   const budget = a.priorities.budgetTotalCents ?? null;
+  const statedCharges = (o: TextOffer) => o.orderFeeCents !== null || o.perTicketFeeCents !== null;
+  // A subtotal already includes any charges they supplied. Only the remaining fees are unknown.
+  const unknownFees = (o: TextOffer) => statedCharges(o) ? 'remaining fees' : 'fees';
   const deadline = terms.deadlineMinutes ?? terms.performanceStartMinutes ?? null;
   const tz = a.timeZone ?? 'America/New_York';
   // Their deadline, in the zone they wrote it in: "your 1pm New York deadline".
@@ -710,7 +713,7 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const best = [...fits].sort(byTotal)[0] ?? null;
   const lines = rows.map((r) => {
     const d = describe(r.o);
-    const room = r.feesUnknown && budget !== null && r.tot && r.tot.cents <= budget ? ` It fits your ${formatUsd(budget)} only if its fees come to ${formatUsd(budget - r.tot.cents)} or less.` : '';
+    const room = r.feesUnknown && budget !== null && r.tot && r.tot.cents <= budget ? ` It fits your ${formatUsd(budget)} only if its ${unknownFees(r.o)} come to ${formatUsd(budget - r.tot.cents)} or less.` : '';
     // The reason itself, not a status label in front of it: "Over your $600 budget by $50." (writing review).
     const reasons = r.why.map((w, i) => (i === 0 ? w.text.charAt(0).toUpperCase() + w.text.slice(1) : w.kind === 'budget' ? `it’s also ${w.text}` : w.text));
     const verdict = r.why.length ? ` ${reasons.join('; ')}.` : r === best ? '' : fits.includes(r) && best ? ` Also fits${r.tot!.cents > best.tot!.cents ? `, ${formatUsd(r.tot!.cents - best.tot!.cents)} more` : ', at the same total'}.` : room;
@@ -746,20 +749,23 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     // With a break-even to state, the threshold goes right beside the pick; budget left over would crowd it.
     if (budget !== null && best.tot!.cents <= budget && !open.length) bits.push(best.tot!.cents === budget ? `It’s exactly your ${formatUsd(budget)} budget.` : `It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.`);
     // An offer whose fees aren't known yet: the fee that would make it cheaper, not a guess at its fees.
-    for (const c of open.filter((r) => r.tot)) {
+    for (const c of rows.filter((r) => r !== best && r.tot && r.feesUnknown && r.why.every((w) => w.kind === 'budget'))) {
       const gap = best.tot!.cents - c.tot!.cents;
       bits.push(gap > 0
-        ? `${Name(c.o)} only beats it if its fees come to less than ${formatUsd(gap)} in total: at ${formatUsd(gap)} they tie, and above that ${short(best.o)} costs less.`
-        : `${Name(c.o)} already costs ${gap === 0 ? 'the same' : `${formatUsd(-gap)} more`} before its fees, so ${short(best.o)} costs less whatever they are.`);
+        ? `${Name(c.o)} only beats it if its ${unknownFees(c.o)} come to less than ${formatUsd(gap)} in total: at ${formatUsd(gap)} they tie, and above that ${short(best.o)} costs less.`
+        : gap === 0
+          ? `${Name(c.o)} already costs the same ${statedCharges(c.o) ? 'with the charges you supplied' : 'before its fees'}: they tie if there are no ${unknownFees(c.o)}, and ${short(best.o)} costs less if any are added.`
+          : statedCharges(c.o)
+            ? `${Name(c.o)} is already ${formatUsd(-gap)} more with the charges you supplied; any remaining fees would widen that gap.`
+            : `${Name(c.o)} already costs ${formatUsd(-gap)} more before its fees, so ${short(best.o)} costs less whatever they are.`);
     }
-    for (const r of rows.filter((r) => r !== best && r.tot && r.feesUnknown && r.tot.cents > best.tot!.cents && r.why.every((w) => w.kind === 'budget'))) bits.push(`${Name(r.o)} is already ${formatUsd(r.tot!.cents - best.tot!.cents)} more with the charges you supplied; any additional fees would widen that gap.`);
     const check = best.o.deliveryStated ? '' : ' Before you buy, check its delivery time on the listing.';
     choice = `${head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
   } else if (open.length >= 2 && open.every((r) => r.tot)) {
     choice = `${open.map((r) => Name(r.o)).join(' and ')} meet what you asked for so far, but their fees aren’t known yet, so I can’t say which costs less until you see the checkout totals. ${provenance}`;
   } else if (open.length === 1) {
     const c = open[0]!;
-    choice = `${Name(c.o)} is the only one left, but its fees aren’t known yet${c.tot && budget !== null ? `: it fits your ${formatUsd(budget)} only if they come to ${formatUsd(budget - c.tot.cents)} or less` : ''}. ${provenance}`;
+    choice = `${Name(c.o)} is the only one left, but its ${unknownFees(c.o)} aren’t known yet${c.tot && budget !== null ? `: it fits your ${formatUsd(budget)} only if they come to ${formatUsd(budget - c.tot.cents)} or less` : ''}. ${provenance}`;
   } else {
     // Nothing fits: the smallest single change that would make one work, said as a choice for them to make.
     const oneOff = rows.filter((r) => r.why.length === 1 && r.tot && !r.feesUnknown);

@@ -199,7 +199,7 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   // A clause counts too: "Same section and row; both offers say immediate transfer" (live V04).
   const shared = sentences(t).map((s) => /(?:^|[;:,]\s+)((?:All|Both|Each|all|both|each)\b.*)$/.exec(s)?.[1] ?? null).find((s) => s !== null && !/\b(?:offer|option|listing)\s+[A-Z1-9]\b/i.test(s) && DELIVERY.test(s)) ?? null;
   const sharedDelivery = shared ? deliveryIn(shared) : null;
-  const out: TextOffer[] = [];
+  let out: TextOffer[] = [];
   const year = Number(/\b(20\d{2})\b/.exec(t)?.[1] ?? calendarYear);
   const globalAdmission = /\b(?:copied )?(?:offers|quotes) for (?:actual |concert |event )*admission\b/i.test(t.slice(0, marks[0]!.index));
   const globalFees = /\b(?:copied )?(?:quotes|offers|prices)(?: (?:are|all|include))? (?:all[- ]in|include (?:all )?fees)\b/i.test(t.slice(0, marks[0]!.index)) || /\b(?:copied )?(?:quotes|offers|prices|tickets)(?:\s*,)?\s+(?:including (?:all )?fees|fees included)\s*:/i.test(t) || /\b(?:both|all|these)(?:(?: copied)? (?:offers|prices|quotes))?[^.;:]{0,30}(?:fees included|include (?:all )?fees)\b/i.test(t);
@@ -231,6 +231,7 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     let entitlement = admissionTerms(seg);
     const performance = performanceTerms(seg);
     const eligibility = eligibilityIn(seg);
+    const noOtherCharges = /\bno (?:taxes? or )?(?:other|further|extra|additional) (?:charges|fees|costs)\b|\bno (?:taxes?|charges) or (?:other )?(?:charges|fees)\b|\bnothing else (?:to pay|(?:is )?(?:added|charged))\b/i.test(seg);
     // In a ticket comparison, a priced named performance is a ticket quote. Packages and extras
     // still need explicit admission; their cheaper price never establishes entitlement.
     const requestedArtist = musicExperience([t]).artist;
@@ -238,7 +239,7 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     if (entitlement.productKind === 'unknown' && !entitlement.admissionStated && (globalAdmission || concertContext([t]) && performance.appearance === 'live' && /\b(?:herself|himself|themselves) performs? live\b|\blive concert admission\b/i.test(seg))) entitlement = { admission: 'included', admissionStated: true, productKind: 'admission' };
     // Mentioned without a price ("Offer B is immediate transfer, all fees included") it still updates that offer
     // when the thread's offers are merged; alone it isn't an offer.
-    if (!price && !entitlement.admissionStated && !entryTerm(seg) && !eligibility.availability && !eligibility.transferStated && !opts.priceless) continue;
+    if (!price && !entitlement.admissionStated && !entryTerm(seg) && !eligibility.availability && !eligibility.transferStated && !noOtherCharges && !opts.priceless) continue;
     const priceFound = price;
     const quote = price ?? { 0: '', 1: '', 2: '', index: seg.length };
     const cents = priceFound ? money(priceFound[1]!) : null;
@@ -281,7 +282,7 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       perTicketFeeCents: tFee ? money((tFee[1] ?? tFee[2])!) : null,
       // A total they quote for the order is what it costs ("Seller A is $360 total"), unless they say it's before fees.
       feeBasis: BEFORE_FEES.test(seg) ? 'before_fees' : ALL_IN.test(priceText) || globalFees ? 'all_in' : isTotal && /^\$\s?[\d,.]+\s*(?:in\s+)?total\b/i.test(priceText) && !fee && !tFee ? 'all_in' : 'unknown',
-      noOtherCharges: /\bno (?:taxes? or )?(?:other|further|extra|additional) (?:charges|fees|costs)\b|\bno (?:taxes?|charges) or (?:other )?(?:charges|fees)\b|\bnothing else to pay\b/i.test(seg),
+      noOtherCharges,
       accessible: says(seg, /\b(wheelchair|accessible|companion|ada)\b/i),
       obstructed: obstructedView(seg),
       // "Two adjacent pairs" is two pairs, not four together; "separate singles scattered around" is neither.
@@ -297,14 +298,7 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   }
   // "Nothing else added on the first two", "compare the final totals I gave", "no other charges" said once for the
   // offers: the fees they listed are all there is (TGQA-R6 14). Only offers whose fees they gave are closed by it.
-  const firstN = /\bnothing else (?:is )?(?:added|charged) on the first (two|three|four|2|3|4)\b/i.exec(t);
-  const allClosed = !firstN && /\b(?:(?:compare|those are|these are) the final totals|final totals? (?:I gave|I pasted|are)|nothing else (?:is )?(?:added|charged)|no other (?:charges|fees) on (?:any|all|either|both))\b/i.test(t);
-  if (firstN || allClosed) {
-    const n = firstN ? (WORDS[firstN[1]!.toLowerCase()] ?? Number(firstN[1])) : out.length;
-    out.forEach((o, i) => {
-      if (i < n && (o.orderFeeCents !== null || o.perTicketFeeCents !== null || o.feeBasis === 'all_in')) out[i] = { ...o, noOtherCharges: true };
-    });
-  }
+  out = withFinalFeeStatement(out, t);
   // The one offer kept from a comparison: what they say about it after its own sentence is still about it ("Neither
   // seat is a wheelchair space. The seller now says mobile transfer is immediate", live R05-F1).
   // A priceless mention beside it ("Ignore Offer A now") doesn't make it one of several.
@@ -315,6 +309,18 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     if (d) out[i] = { ...out[i]!, deliveryStated: true, deliveryMinutes: toVenueMinutes(d.minutes, d.zone, venueTz) };
   }
   return out.length >= minimum ? out : [];
+}
+
+/** A final-fee statement applies to the retained supplied offers as well as offers in that message. */
+export function withFinalFeeStatement(offers: TextOffer[], text: string, requireGlobal = false): TextOffer[] {
+  const t = flat(text);
+  const firstN = /\bnothing else (?:is )?(?:added|charged) on the first (two|three|four|2|3|4)\b/i.exec(t);
+  // A local "nothing else charged" can close the quoted offer, but cannot close the rest of a thread.
+  const allClosed = !firstN && (/\b(?:(?:compare|those are|these are) the final totals|final totals? (?:I gave|I pasted|are)|(?:no other (?:charges|fees)|nothing else (?:is )?(?:added|charged)) on (?:any|all|either|both))\b/i.test(t)
+    || !requireGlobal && /\bnothing else (?:is )?(?:added|charged)\b/i.test(t));
+  if (!firstN && !allClosed) return offers;
+  const n = firstN ? (WORDS[firstN[1]!.toLowerCase()] ?? Number(firstN[1])) : offers.length;
+  return offers.map((o, i) => i < n && (o.orderFeeCents !== null || o.perTicketFeeCents !== null || o.feeBasis === 'all_in') ? { ...o, noOtherCharges: true } : o);
 }
 
 /** The offer's own amount: its total when it has one, else its per-ticket price. */
@@ -508,7 +514,7 @@ export function offerTotal(o: TextOffer, partyQuantity: number): { cents: number
   // No price for a basket that requires stock the supplied offer explicitly lacks.
   if (o.productKind === 'package' && o.unitsAvailable != null && o.admissionsPerUnit != null && o.unitsAvailable * o.admissionsPerUnit < partyQuantity) return null;
   const tickets = o.quantity !== null && (o.mustBuyAll || o.totalCents !== null) ? Math.max(o.quantity, partyQuantity) : partyQuantity;
-  if (o.totalCents !== null) return { cents: o.totalCents + (o.orderFeeCents ?? 0) + (o.perTicketFeeCents ?? 0) * (o.quantity ?? partyQuantity), allIn: o.feeBasis === 'all_in' || (o.orderFeeCents !== null && o.noOtherCharges), tickets: o.quantity ?? partyQuantity };
+  if (o.totalCents !== null) return { cents: o.totalCents + (o.orderFeeCents ?? 0) + (o.perTicketFeeCents ?? 0) * (o.quantity ?? partyQuantity), allIn: o.feeBasis === 'all_in' || ((o.orderFeeCents !== null || o.perTicketFeeCents !== null) && o.noOtherCharges), tickets: o.quantity ?? partyQuantity };
   if (o.perTicketCents === null) return null;
   const units = o.admissionsPerUnit && o.productKind === 'package' ? Math.ceil(tickets / o.admissionsPerUnit) : tickets;
   const base = o.perTicketCents * units + (o.perTicketFeeCents ?? 0) * tickets;
