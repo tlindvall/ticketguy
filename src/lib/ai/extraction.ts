@@ -5,6 +5,7 @@ import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
+import { MARKETS } from '@/lib/domain/markets';
 import { neighbourhoodFor } from '@/lib/domain/neighbourhoods';
 import { stateCodeFor } from '@/lib/domain/us-states';
 import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
@@ -274,6 +275,18 @@ export class FixtureExtractor implements Extractor {
         break;
       }
     }
+    // Any other US market the service knows, named as a place ("in Austin", "around Nashville"): the short city list
+    // above covers the pilot; without this, "country shows in Austin" was searched in New York (Research 1).
+    if (!city && !hood) {
+      for (const mk of MARKETS) {
+        const hit = mk.match.exec(tc);
+        if (hit && /\b(?:in|around|near|to|at|visiting|from|for)\s+(?:the\s+|downtown\s+)?$/i.test(tc.slice(Math.max(0, hit.index - 20), hit.index))) {
+          city = mk.label;
+          ev('city', hit[0]);
+          break;
+        }
+      }
+    }
     // A state, when no city is named: "they're playing in Connecticut".
     if (!city) {
       const sm = /\b(?:in|to|around)\s+(?:the\s+state\s+of\s+)?([a-z]+(?:\s[a-z]+)?)\b/gi;
@@ -311,7 +324,8 @@ export class FixtureExtractor implements Extractor {
     const forSelf = /\b(for (my|a) (friend|dad|mom|mother|father|sister|brother|boss|colleague|client)|as a gift|gift for)\b/i.test(t) ? false : /\b(for (me|us|myself)|my (wife|husband|partner|kids|family) and (i|me))\b/i.test(t) ? true : null;
     const countryStatement = findResidenceStatement(t);
     // A kind of music is only read when nobody is named: "Kid Rock" is an artist, not a genre.
-    const genre = ent ? null : lexiconGenre(t);
+    // A genre they rule out is not the one they want: "country or Americana, not rock or pop" is country (Research 1).
+    const genre = ent ? null : lexiconGenre(t.replace(/\b(?:not|no|nor|never|rather than|instead of|except|other than)\s+(?:any\s+|more\s+)?[a-z&/ -]{1,40}?(?=[,.;:!?]|\s+(?:but|please|thanks|and i|i want|i'?d)\b|$)/gi, ' '));
     if (genre) ev('genreHint', genre.quote);
     const categoryHint = categoryHintFrom(t) ?? (genre ? 'concert' : null);
     // "What's on" with nothing specific named is a browse: answer with options instead of asking which event.

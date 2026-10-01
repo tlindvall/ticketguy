@@ -8,20 +8,21 @@ import { and, eq } from 'drizzle-orm';
  */
 export type SuppressionScope = 'global' | 'marketing' | 'watch';
 
-export async function addSuppression(db: DbOrTx, args: { emailLookup: string; scope: SuppressionScope; reason: string; provider?: string | null }): Promise<void> {
-  await db.insert(suppressions).values({ emailLookup: args.emailLookup, scope: args.scope, reason: args.reason, provider: args.provider ?? null }).onConflictDoNothing();
+/** `at` is the caller's clock, so an opt-out confirmed later reads the date it was recorded on that clock. */
+export async function addSuppression(db: DbOrTx, args: { emailLookup: string; scope: SuppressionScope; reason: string; provider?: string | null; at?: Date }): Promise<void> {
+  await db.insert(suppressions).values({ emailLookup: args.emailLookup, scope: args.scope, reason: args.reason, provider: args.provider ?? null, ...(args.at ? { createdAt: args.at } : {}) }).onConflictDoNothing();
 }
 
-export async function revokeMarketing(db: DbOrTx, args: { contactId: string | null; emailLookup: string; method: 'preference_form' | 'natural_language' | 'one_click' | 'staff'; evidence: Record<string, unknown>; noticeVersion: string }): Promise<void> {
-  await addSuppression(db, { emailLookup: args.emailLookup, scope: 'marketing', reason: 'unsubscribe' });
+export async function revokeMarketing(db: DbOrTx, args: { contactId: string | null; emailLookup: string; method: 'preference_form' | 'natural_language' | 'one_click' | 'staff'; evidence: Record<string, unknown>; noticeVersion: string; at?: Date }): Promise<void> {
+  await addSuppression(db, { emailLookup: args.emailLookup, scope: 'marketing', reason: 'unsubscribe', at: args.at });
   if (args.contactId) {
-    await db.insert(marketingPermissions).values({ contactId: args.contactId, topic: 'ticket_offers', status: 'revoked', noticeVersion: args.noticeVersion, method: args.method, evidence: args.evidence, revokedAt: new Date() });
+    await db.insert(marketingPermissions).values({ contactId: args.contactId, topic: 'ticket_offers', status: 'revoked', noticeVersion: args.noticeVersion, method: args.method, evidence: args.evidence, revokedAt: args.at ?? new Date() });
   }
 }
 
-export async function stopAll(db: DbOrTx, args: { contactId: string | null; emailLookup: string; evidence: Record<string, unknown> }): Promise<void> {
+export async function stopAll(db: DbOrTx, args: { contactId: string | null; emailLookup: string; evidence: Record<string, unknown>; at?: Date }): Promise<void> {
   await revokeMarketing(db, { ...args, method: 'natural_language', noticeVersion: 'n/a' });
-  await addSuppression(db, { emailLookup: args.emailLookup, scope: 'watch', reason: 'stop_all' });
+  await addSuppression(db, { emailLookup: args.emailLookup, scope: 'watch', reason: 'stop_all', at: args.at });
   if (args.contactId) {
     await db.update(watches).set({ state: 'cancelled' }).where(and(eq(watches.contactId, args.contactId), eq(watches.state, 'active')));
     await db.update(eventAlerts).set({ state: 'cancelled' }).where(and(eq(eventAlerts.contactId, args.contactId), eq(eventAlerts.state, 'active')));

@@ -113,7 +113,7 @@ export default async function Watches() {
             <tbody>{watches.map(({ w, e: ev }) => (
               <tr key={w.id}>
                 <td><Link className="underline" href={`/admin/requests/${w.requestId}`}>{ev.name}</Link></td><td>{w.quantity}</td><td>{formatUsd(w.targetTotalCents)} total</td>
-                <td><span className={`tg-badge ${w.state === 'active' ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{w.state}</span></td>
+                <td><span className={`tg-badge ${w.state === 'active' ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{w.state}</span>{w.pauseReason ? <span className="ml-1 text-xs text-gray-500">{w.pauseReason}</span> : null}</td>
                 <td>{w.nextCheckAt.getTime() < now && w.state === 'active' ? <span className="tg-badge tg-badge-warn">late</span> : null} {whenStaff(w.nextCheckAt)}</td><td>{whenStaff(w.expiresAt)}</td>
                 <td className="space-x-1">
                   {w.state === 'active' ? <ActionButton url={`/api/admin/watches/${w.id}/pause`} body={{ reason: 'staff pause' }} label="Pause" /> : w.state === 'paused' ? <ActionButton url={`/api/admin/watches/${w.id}/pause`} body={{ reason: 'staff resume', resume: true }} label="Resume" /> : null}

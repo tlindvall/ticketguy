@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MARKETING_SUBDOMAIN, SERVICE_DOMAIN } from './brand';
 import { parsePriceOverrides, type Price } from '@/lib/ai/prices';
+import { parseOverrides, type DepthOverride } from '@/lib/domain/service-depth';
 
 /**
  * Environment configuration. All booleans are parsed explicitly: only the literal strings
@@ -148,7 +149,7 @@ const rawSchema = z.object({
   ANTHROPIC_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   ANTHROPIC_ESCALATION_ENABLED: explicitBoolean,
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_BASE_MODEL: z.string().default('gpt-5.5'),
+  OPENAI_BASE_MODEL: z.string().default('gpt-6.1-sol'),
   OPENAI_BASE_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('low'),
   OPENAI_ESCALATION_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   /**
@@ -240,6 +241,14 @@ const rawSchema = z.object({
   PILOT_SUPPORTED_CATEGORIES: z.string().default(''),
   /** Categories we do not answer for: ones Ticketmaster is not the ticket for, or where "a ticket" means something else. */
   BLOCKED_CATEGORIES: z.string().default('high_school,conventions,attractions,theme_parks,cinema'),
+  /**
+   * Service-depth policy rollout (DECISION_LOG #61). shadow records each decision and what enforce would do, with
+   * no change to replies or provider calls; enforce applies the gates; off records nothing. Off never disables
+   * consent, evidence, source-access, suppression or safety checks.
+   */
+  SERVICE_POLICY_MODE: z.enum(['off', 'shadow', 'enforce']).default('shadow'),
+  /** Staff-approved depth promotions: a JSON array of {id, depth, eventIds|entitySlugs, owner, reason, expiresAt, evidence}. */
+  SERVICE_DEPTH_OVERRIDES: z.string().default(''),
   PILOT_SUPPORTED_MARKETS: z.string().default('new-york'),
   /** The market assumed, and said, when a request names no place and the customer has never named one. */
   DEFAULT_MARKET: z.string().default('new-york'),
@@ -266,6 +275,7 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
   aiGlobalDailyBudgetUsd: number;
   pilotSupportedMarkets: string[];
   blockedCategories: string[];
+  serviceDepthOverrides: DepthOverride[];
 };
 
 /**
@@ -369,6 +379,13 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     throw new ConfigurationError(err instanceof Error ? err.message : String(err));
   }
 
+  let serviceDepthOverrides: DepthOverride[];
+  try {
+    serviceDepthOverrides = parseOverrides(e.SERVICE_DEPTH_OVERRIDES);
+  } catch (err) {
+    throw new ConfigurationError(err instanceof Error ? err.message : String(err));
+  }
+
   const soft = e.AI_REQUEST_SOFT_BUDGET_USD ?? 0.5;
   const hard = e.AI_REQUEST_HARD_BUDGET_USD ?? 1.0;
   if (hard < soft) throw new ConfigurationError('AI_REQUEST_HARD_BUDGET_USD must be >= AI_REQUEST_SOFT_BUDGET_USD');
@@ -386,6 +403,7 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     aiRequestHardBudgetUsd: hard,
     aiGlobalDailyBudgetUsd: e.AI_GLOBAL_DAILY_BUDGET_USD ?? 10,
     blockedCategories: e.BLOCKED_CATEGORIES.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    serviceDepthOverrides,
     pilotSupportedMarkets: e.PILOT_SUPPORTED_MARKETS.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   };
 }

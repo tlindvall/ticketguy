@@ -109,7 +109,7 @@ export async function replayDead(db: DbOrTx, id: string, now: Date): Promise<boo
   return rows.length > 0;
 }
 
-export type OutboxLag = { pending: number; due: number; dead: number; oldestPendingSeconds: number | null };
+export type OutboxLag = { pending: number; due: number; leased: number; expiredLeases: number; dead: number; oldestPendingSeconds: number | null; oldestUnfinishedSeconds: number | null };
 
 /**
  * Outbox health. `due` is what the next dispatcher pass will pick up; `pending` also counts rows sitting in
@@ -122,17 +122,23 @@ export async function outboxLag(db: DbOrTx, now: Date): Promise<OutboxLag> {
   const [agg] = await db
     .select({
       pending: sql<number>`count(*) filter (where ${outboxEvents.state} = 'pending')::int`,
-      due: sql<number>`count(*) filter (where ${outboxEvents.state} = 'pending' and ${outboxEvents.nextAttemptAt} <= ${nowIso}::timestamptz)::int`,
+      due: sql<number>`count(*) filter (where (${outboxEvents.state} = 'pending' or (${outboxEvents.state} = 'leased' and ${outboxEvents.leaseUntil} < ${nowIso}::timestamptz)) and ${outboxEvents.nextAttemptAt} <= ${nowIso}::timestamptz)::int`,
+      leased: sql<number>`count(*) filter (where ${outboxEvents.state} = 'leased')::int`,
+      expiredLeases: sql<number>`count(*) filter (where ${outboxEvents.state} = 'leased' and ${outboxEvents.leaseUntil} < ${nowIso}::timestamptz)::int`,
       dead: sql<number>`count(*) filter (where ${outboxEvents.state} = 'dead')::int`,
       oldest: sql<Date | null>`min(created_at) filter (where ${outboxEvents.state} = 'pending')`,
+      oldestUnfinished: sql<Date | null>`min(created_at) filter (where ${outboxEvents.state} in ('pending','leased'))`,
     })
     .from(outboxEvents);
   const oldest = agg?.oldest ? new Date(agg.oldest) : null;
   return {
     pending: agg?.pending ?? 0,
     due: agg?.due ?? 0,
+    leased: agg?.leased ?? 0,
+    expiredLeases: agg?.expiredLeases ?? 0,
     dead: agg?.dead ?? 0,
     oldestPendingSeconds: oldest ? Math.round((now.getTime() - oldest.getTime()) / 1000) : null,
+    oldestUnfinishedSeconds: agg?.oldestUnfinished ? Math.max(0, Math.round((now.getTime() - new Date(agg.oldestUnfinished).getTime()) / 1000)) : null,
   };
 }
 

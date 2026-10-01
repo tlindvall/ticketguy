@@ -989,3 +989,59 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - a question about the stops on file.
 
 **One email.** An answer that goes out unreviewed (testing auto-approval, or an auto-sent price check) is not preceded by a "checking your options" acknowledgment unless that acknowledgment carries an assumption or a pick.
+
+## 61. Service depth: a category sets investment, evidence sets what can be said
+
+**Decision.** One typed, deterministic policy decides how much work each request gets (`src/lib/domain/service-depth.ts`, policy `sd-1`). There are four internal levels: Core, Compare, Guide and Outside. The levels are never named to customers.
+- **Concerts in touring formats and major-league sports** are Core: live comparison, history, buy/wait, tracking, price watches and the staffed pilot, where rights and data allow.
+- **Adjacent categories** are Compare: the offers we can see or the customer sends, plus official alternatives. No tracking, history or watches.
+- **Long-tail admission** is Guide: the official route, the checks that matter, and arithmetic on what they send.
+- **Classes, tours, permits, travel and online-only/betting** are Outside: a short scope reply, with a known official pointer where there is one.
+
+**Every route is mapped on purpose.** All 29 routing keys plus `food_drink`, `unknown` and the five Outside intents have a depth. Adding a key without one is a compile error.
+
+**Format, not genre, decides.** The format is read from the venue and the event name. Electronic music at an arena is a touring concert; at a club it is a club night. A concert whose format can't be read is Compare at most. An unknown category is Guide and never Core. The catalog now files unrecognised provider classifications as `unknown`, not `concert`, and keeps the provider's taxonomy on the event.
+
+**Policy and capability are separate questions.** An operation runs only when the depth allows it AND current rights, configuration and coverage allow it. Unknown is never available.
+- A price watch needs a monitoring source that covers this event, not just one that exists.
+- Live comparison needs an integrated, approved quote source.
+- Tracking needs the SeatData key and the licence.
+- An operator block (`BLOCKED_CATEGORIES`) allows the official route only, and no override lifts it.
+- A promotion is a staff-approved, expiring override for named events or entities (`SERVICE_DEPTH_OVERRIDES`). It raises depth only, and never on category, price, genre, city or payout.
+
+**Every entry point checks at the moment it runs:**
+- **Source planning.** The source plan keeps integrated, approved, covering sources, within the depth's budget. An empty plan stays empty, with no generic Ticketmaster/SeatGeek/StubHub fallback.
+- **Research.** Benchmarks, trends, tracker refreshes, listings reads and the staffed pilot run only where allowed.
+- **Market tracker.** Enrolment, direct refresh and due polls are all gated. A row is kept only while a reason still holds: the named cohort, or an open request whose depth tracks.
+- **Watches.** Watch creation, evaluation, alert approval and dispatch each recheck the depth and rights. Human approval is not a capability override.
+- **Drafts.** A draft whose claims rely on an operation that has since been withdrawn is blocked at send (`policy_changed`).
+
+**Watches keep every hard requirement (F04, a correctness fix in every mode).**
+- A watch stores the full constraint basket of its own revision: accessibility, together or pairs, delivery deadline and anything no listing can show, such as an age policy.
+- Evaluation searches with the basket and judges with the same eligibility as the first comparison.
+- An unverifiable requirement means no actionable alert.
+- A watch that can no longer run is paused with its reason, and anything unsent is invalidated.
+
+**Stopping price watches leaves event alerts alone.** "Stop monitoring the prices" stops price watches only. An on-sale or announcement alert stays on, and the reply says so.
+
+**Rollout.**
+- `SERVICE_POLICY_MODE=off|shadow|enforce`, defaulting to `shadow`. Shadow records each decision and every "would block" without changing a reply or adding a provider call.
+- `pnpm service-depth:reconcile` lists what enforcing would pause or invalidate in existing work; `--apply` does it.
+- Off never disables consent, evidence, source-access, suppression or safety checks.
+- The watch-constraint and event-specific coverage fixes, and the removed empty-plan fallback, apply in every mode.
+
+**Why.** Equal effort everywhere either spends money on categories we can't serve well, or promises history and alerts we can't deliver. Depth by category with capability by evidence keeps the deep work where it pays, and the honest answer everywhere else.
+
+## GPT-6.1 Sol replaces gpt-5.5 for extraction, listing reads and drafts (owner-directed, Oct 1 2026)
+
+- **Model.** `OPENAI_BASE_MODEL` defaults to `gpt-6.1-sol`, and the Render blueprint now pins it, so production runs the model this repository names. The SDK moves to `openai@7.25.0`, the first release that lists `gpt-6.1-sol`.
+- **Effort.** It stays at `low`, following the GPT-6 migration guide's advice to keep the current effective effort. The model's own default is `medium`. It rejects `none` and `minimal`, and the env schema never offered either.
+- **Request shape.** The rest of each request already matches the guide:
+  - the Responses API, with a strict Structured Outputs schema;
+  - no tools;
+  - no `temperature`, `top_p`, `top_logprobs` or logprobs `include`;
+  - no `prompt_cache_retention` to migrate.
+- **`store: false` is now set.** Every call is self-contained and nothing reads a stored response back. Leaving the default meant each customer email and screenshot stayed on OpenAI's side for at least 30 days.
+- **Still open: pricing.** The model page with pricing was not readable from this environment. Until `MODEL_PRICES_USD_PER_MTOKEN` is set, spend is counted at the conservative fallback rate.
+- **Still open: token caps.** The output-token caps (4,000 and 8,000, which include reasoning) are unchanged and should be checked against the model page.
+- **Still open: `safety_identifier`.** The GPT-5.6 guide recommends it for apps that serve end users, and we don't send it yet.

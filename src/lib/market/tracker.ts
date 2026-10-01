@@ -4,6 +4,7 @@ import type { Env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
 import { eventLocalDate, localToInstant } from '@/lib/domain/dates';
 import { audit } from '@/lib/util/audit';
+import { gate as policyGate, policyForEvent } from '@/lib/intake/service-policy';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
 import { toMarketListing, type MarketListing } from './alternatives';
 import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, type MarketBasis, type MarketContext, type SeriesPoint } from './series';
@@ -123,7 +124,9 @@ export class MarketTracker {
           .where(and(or(inArray(sql`lower(${t.entities.name})`, names), inArray(t.entities.slug, names)), gte(t.events.localStartAt, now), lte(t.events.localStartAt, new Date(now.getTime() + 120 * 86_400_000))))
       : [];
     const want = new Map<string, Set<string>>();
-    for (const r of fromRequests) want.set(r.id, new Set(['request']));
+    // A customer's request enrols its event only where the depth invests in tracking (Core, F03); the cohort is
+    // staff-approved research and keeps its own reason. A Guide request never quietly promotes its event.
+    for (const r of fromRequests) if (await this.requestMayTrack(r.id)) want.set(r.id, new Set(['request']));
     for (const r of cohort) want.set(r.id, new Set([...(want.get(r.id) ?? []), 'cohort']));
     if (!want.size) return 0;
     const existing = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.provider, SEATDATA_PROVIDER), inArray(t.trackedEvents.eventId, [...want.keys()])));
@@ -134,6 +137,9 @@ export class MarketTracker {
       if (!row) {
         await this.db.insert(t.trackedEvents).values({ eventId, provider: SEATDATA_PROVIDER, reasons: [...reasons], nextPollAt: now }).onConflictDoNothing();
         added += 1;
+      } else if (row.state === 'paused') {
+        // Eligible again (an approved override, a corrected category): resume where it left off.
+        await this.db.update(t.trackedEvents).set({ state: row.providerEventId ? 'active' : 'pending_match', pauseReason: null, reasons: [...new Set([...row.reasons, ...reasons])], nextPollAt: now }).where(eq(t.trackedEvents.id, row.id));
       } else if ([...reasons].some((x) => !row.reasons.includes(x))) {
         await this.db.update(t.trackedEvents).set({ reasons: [...new Set([...row.reasons, ...reasons])] }).where(eq(t.trackedEvents.id, row.id));
       }
@@ -141,9 +147,34 @@ export class MarketTracker {
     return added;
   }
 
+  /** Whether a customer request may keep this event tracked: the service-depth gate (recorded under shadow). */
+  private async requestMayTrack(eventId: string): Promise<boolean> {
+    const snap = await policyForEvent(this.db, this.deps.env, eventId, this.now());
+    return policyGate(this.db, snap, 'market_tracking', { kind: 'event', id: eventId });
+  }
+
+  /**
+   * The reasons a tracked row still has, judged now (F03): the cohort while the entity is still named in
+   * MARKET_TRACK_ENTITIES, a request while an open request for the event exists and its depth allows tracking.
+   * The stored reason strings alone are not a justification to keep polling.
+   */
+  async validReasons(tr: typeof t.trackedEvents.$inferSelect): Promise<string[]> {
+    const out: string[] = [];
+    if (tr.reasons.includes('cohort')) {
+      const names = this.deps.env.MARKET_TRACK_ENTITIES;
+      const [hit] = names.length ? await this.db.select({ id: t.events.id }).from(t.events).innerJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(and(eq(t.events.id, tr.eventId), or(inArray(sql`lower(${t.entities.name})`, names), inArray(t.entities.slug, names)))) : [];
+      if (hit) out.push('cohort');
+    }
+    if (tr.reasons.includes('request')) {
+      const [open] = await this.db.select({ id: t.requests.id }).from(t.requests).where(and(eq(t.requests.eventId, tr.eventId), notInArray(t.requests.state, ['closed', 'unsupported']))).limit(1);
+      if (open && (await this.requestMayTrack(tr.eventId))) out.push('request');
+    }
+    return out;
+  }
+
   /** One pass: enrol, then match or poll what is due (customers' events first), then score shadow advice. */
-  async run(opts: { limit?: number } = {}): Promise<{ skipped?: string; enrolled: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number }> {
-    const out = { enrolled: 0, matched: 0, polled: 0, points: 0, ended: 0, shadow: 0, scored: 0, budgetLeft: 0 };
+  async run(opts: { limit?: number } = {}): Promise<{ skipped?: string; enrolled: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number; paused: number }> {
+    const out = { enrolled: 0, matched: 0, polled: 0, points: 0, ended: 0, shadow: 0, scored: 0, budgetLeft: 0, paused: 0 };
     const why = await this.blocked();
     if (why) return { ...out, skipped: why };
     out.enrolled = await this.enroll();
@@ -159,6 +190,13 @@ export class MarketTracker {
       if ((await this.callsToday()) >= limit) {
         await this.log('stats', tr.eventId, 'skipped_budget', 0);
         break;
+      }
+      // A row whose reasons no longer hold is paused before any provider call; its history stays (F03, SD14).
+      if (this.deps.env.SERVICE_POLICY_MODE === 'enforce' && !(await this.validReasons(tr)).length) {
+        await this.db.update(t.trackedEvents).set({ state: 'paused', pauseReason: 'policy:no_valid_reason' }).where(eq(t.trackedEvents.id, tr.id));
+        await audit(this.db, { actor: 'system', action: 'market.tracking_paused', entityKind: 'event', entityId: tr.eventId, diff: { reasons: tr.reasons } });
+        out.paused += 1;
+        continue;
       }
       const [ev] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, tr.eventId));
       if (!ev) continue;
@@ -198,6 +236,8 @@ export class MarketTracker {
   async refreshEvent(eventId: string): Promise<{ refreshed: boolean; reason?: string }> {
     const why = await this.blocked();
     if (why) return { refreshed: false, reason: why };
+    // A direct refresh is enrolment too: the same depth gate as the scheduled pass (F03).
+    if (!(await this.requestMayTrack(eventId))) return { refreshed: false, reason: 'policy' };
     const now = this.now();
     await this.db.insert(t.trackedEvents).values({ eventId, provider: SEATDATA_PROVIDER, reasons: ['request'], nextPollAt: now }).onConflictDoNothing();
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));

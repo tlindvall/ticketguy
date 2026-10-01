@@ -143,23 +143,29 @@ function renderBody(
       const options = (v.options as string[]) ?? [];
       const picks = (vars.picks as Pick[] | undefined) ?? options.map((line) => ({ line, title: line, reason: '', eventUrl: null, links: [] }));
       const more = Number(v.moreCount ?? 0);
+      // The answer to what they asked comes first, in bold; a correction is acknowledged once, right after it.
+      const answer = v.answer ? String(v.answer) : '';
+      const corrections = ((vars.corrections as string[] | undefined) ?? []).join(' ');
       const lead = [
         'Hey,',
         String(v.headline ?? ''),
         v.assumption ? String(v.assumption) : '',
       ].filter(Boolean);
+      const top = [answer, corrections].filter(Boolean);
       const tail = options.length
         ? [
             more > 0 ? `There ${more === 1 ? 'is 1 more' : `are ${more} more`} in that window. Reply "more" to see them, or tell me ${String(v.narrowBy ?? 'an artist, team or venue')} and I'll narrow it down.` : '',
-            v.single
+            v.pickNext
+              ? String(v.pickNext)
+              : v.single
               ? 'Want me to check prices? Just tell me how many tickets.'
               : v.quantity ? `Reply with the one you want, and I’ll check prices for ${String(v.quantity)} tickets.` : 'Reply with the one you want and how many tickets, and I’ll check the prices.',
           ]
-        : [String(v.emptyNote ?? ''), `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
+        : [String(v.emptyNote ?? ''), v.nextStep ? String(v.nextStep) : `Want me to look at different dates, or is there ${String(v.askFor ?? 'an artist or team')} you have in mind?`];
       const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
       const ra = vars.ra as Ra | null | undefined;
-      const text = [...lead, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...(ra ? [raText(ra)] : []), ...end];
-      const html = [...lead.map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...(ra ? [raHtml(ra)] : []), ...end.map(para)];
+      const text = [lead[0]!, ...top, ...lead.slice(1), ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...(ra ? [raText(ra)] : []), ...end];
+      const html = [para(lead[0]!), ...(answer ? [`<p style="margin:0 0 18px;"><strong>${esc(answer)}</strong>${corrections ? ` ${esc(corrections)}` : ''}</p>`] : corrections ? [para(corrections)] : []), ...lead.slice(1).map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...(ra ? [raHtml(ra)] : []), ...end.map(para)];
       return wrap(text, html);
     }
     case 'event_alert_set': {

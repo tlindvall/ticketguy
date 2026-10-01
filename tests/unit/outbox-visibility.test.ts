@@ -53,3 +53,14 @@ describe('outbox visibility while retrying', () => {
 });
 
 const retrying = (rows: Array<{ eventKey: string }>) => rows.map((r) => r.eventKey);
+
+it('shows stalled leased work even when there are no pending rows or recorded failures', async () => {
+  const h = await openTestDb();
+  try {
+    const now = new Date('2026-09-30T23:15:00Z');
+    await enqueueOutbox(h.db, { eventType: 'request.interpret', eventKey: 'stalled-interpret', entityId: 'test-request', payload: {}, now });
+    await leaseDueOutbox(h.db, { limit: 1, now, leaseSeconds: 10 });
+    expect(await outboxLag(h.db, new Date(now.getTime() + 5000))).toMatchObject({ pending: 0, due: 0, leased: 1, expiredLeases: 0, oldestUnfinishedSeconds: 5 });
+    expect(await outboxLag(h.db, new Date(now.getTime() + 20000))).toMatchObject({ pending: 0, due: 1, leased: 1, expiredLeases: 1, oldestUnfinishedSeconds: 20 });
+  } finally { await h.close(); }
+});

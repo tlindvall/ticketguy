@@ -44,8 +44,10 @@ export function slugify(name: string): string {
 
 /**
  * Category the routing matrix understands, from the provider's classification. The routing keys are the
- * contract (src/lib/sources/routing.ts); anything unmapped falls to the broadest key in its segment so a
- * request still gets a source plan rather than none.
+ * contract (src/lib/sources/routing.ts). Inside a known segment, an unmapped genre falls to the broadest key in
+ * it. Outside the known segments the category is `unknown`, never `concert`: an unrecognised product must not
+ * inherit concert depth (service-depth F01). The genre names the music, not the format: electronic music keeps
+ * its routing key, and whether it's an arena show or a club night is decided from the venue (eventFormat).
  */
 export function categoryFor(e: { segment: string | null; genre: string | null; subGenre: string | null; name: string }): string {
   const seg = (e.segment ?? '').toLowerCase();
@@ -67,7 +69,8 @@ export function categoryFor(e: { segment: string | null; genre: string | null; s
   }
   if (seg === 'music') {
     if (genre === 'dance/electronic' || genre === 'electronic') return 'electronic_nightlife';
-    if (/festival|fest\b/.test(name)) return 'festival';
+    // "Fest" alone isn't a festival ("Riot Fest" is, "Metalfest Night at the Bowery" may not be); the word is.
+    if (/\bfestival\b/.test(name) || genre === 'festival') return 'festival';
     return 'concert';
   }
   if (seg === 'arts & theatre' || seg === 'arts and theatre') {
@@ -80,7 +83,19 @@ export function categoryFor(e: { segment: string | null; genre: string | null; s
   }
   if (seg === 'family') return 'family';
   if (seg === 'film') return 'cinema';
-  return 'concert';
+  if (seg === 'miscellaneous') {
+    if (/food|drink|wine|beer/.test(genre + ' ' + sub)) return 'food_drink';
+    if (/fair|festival|community|civic/.test(genre + ' ' + sub)) return 'fairs_community';
+    if (/expo|hobby|convention/.test(genre + ' ' + sub)) return 'conventions';
+  }
+  return 'unknown';
+}
+
+/** How the category was reached, kept with the event so staff can see why it got its depth. */
+export function classificationFor(e: { segment: string | null; genre: string | null; subGenre: string | null; name: string }): { segment: string | null; genre: string | null; subGenre: string | null; category: string; reason: string } {
+  const category = categoryFor(e);
+  const known = ['sports', 'music', 'arts & theatre', 'arts and theatre', 'family', 'film'].includes((e.segment ?? '').toLowerCase());
+  return { segment: e.segment, genre: e.genre, subGenre: e.subGenre, category, reason: category === 'unknown' ? 'unmapped_segment' : known ? 'provider_segment' : 'provider_genre' };
 }
 
 /**
@@ -245,7 +260,8 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
   const homeMk = primaryAttraction ? teamHomeMarket(primaryAttraction.name) : null;
   if (homeMk && isHome !== false && e.venue.city && !inMarket({ city: e.venue.city, latitude: e.venue.latitude ?? null, longitude: e.venue.longitude ?? null }, homeMk)) isHome = false;
 
-  const category = categoryFor(e);
+  const classification = classificationFor(e);
+  const category = classification.category;
   const subtype = subtypeFor(e);
   const genre = genreFor(e);
   const sale = { saleStatus: e.statusCode === 'unknown' ? null : e.statusCode, publicSaleStartAt: e.publicSaleStart ? new Date(e.publicSaleStart) : null, publicSaleEndAt: e.publicSaleEnd ? new Date(e.publicSaleEnd) : null, faceMinCents: e.faceMinCents, faceMaxCents: e.faceMaxCents, doorsAt: e.doorsAt ? new Date(e.doorsAt) : null };
@@ -253,11 +269,11 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
 
   const existing = await db.select({ eventId: t.eventSourceMappings.eventId }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
   if (existing[0]) {
-    await db.update(t.events).set({ name: e.name, category, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
+    await db.update(t.events).set({ name: e.name, category, classification, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
     await db.update(t.eventSourceMappings).set({ authoritativeUrl: e.url, verifiedAt: new Date() }).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
     return { eventId: existing[0].eventId, entityIds };
   }
-  const [row] = await db.insert(t.events).values({ name: e.name, category, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
+  const [row] = await db.insert(t.events).values({ name: e.name, category, classification, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
   await db.insert(t.eventSourceMappings).values({ eventId: row!.id, sourceId: DISCOVERY_SOURCE_ID, sourceEventId: e.providerEventId, authoritativeUrl: e.url, role: 'discovery', confidence: 'provider_id', verifiedAt: new Date() }).onConflictDoNothing();
   return { eventId: row!.id, entityIds };
 }

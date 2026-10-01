@@ -87,3 +87,45 @@ export function sourcePlan(category: string): { required: string[]; conditional:
   }
   return { required: [...required], conditional: route.conditional.filter((c) => !required.has(c)) };
 }
+
+export type PlannedSources = {
+  /** Sources the research will call: in the plan, integrated, access-approved, within the depth's budget. */
+  executable: string[];
+  /** Official routing authorities: pointers for the customer, never searched. */
+  officialPointers: string[];
+  /** In the plan but not called, with why: not integrated, no approval, not covering this event, or over budget. */
+  unavailable: Array<{ sourceId: string; reason: 'source_not_integrated' | 'source_access_unapproved' | 'event_not_covered' | 'budget_exhausted' | 'depth_no_automated_sources' }>;
+};
+
+/**
+ * The plan for one request under its service depth (service-depth F02). Candidates from the route are
+ * intersected with enabled implementations, access approvals and the event's coverage, then cut to the depth's
+ * source budget. An empty plan stays empty: no generic Ticketmaster/SeatGeek/StubHub fallback. Fixture adapters
+ * join only for fixture events (the synthetic world), and count against the same budget. A manual source is a
+ * staffed check of whatever event is asked about, so it needs no provider mapping.
+ */
+export function planSources(a: {
+  category: string;
+  maxAutomatedSources: number;
+  adapters: Array<{ sourceId: string; implementation: string; enabled: boolean; capabilities: string[]; accessApproved: boolean }>;
+  coveredSourceIds: string[];
+  fixtureEvent: boolean;
+}): PlannedSources {
+  const route = routeFor(a.category);
+  const plan = sourcePlan(a.category);
+  const officialPointers = route ? [...route.officialStart] : [];
+  const bySource = new Map(a.adapters.map((c) => [c.sourceId, c]));
+  const fixtures = a.fixtureEvent ? a.adapters.filter((c) => c.enabled && c.implementation === 'fixture').map((c) => c.sourceId) : [];
+  const candidates = [...new Set([...plan.required.filter((s) => !officialPointers.includes(s) || bySource.has(s)), ...fixtures])];
+  const executable: string[] = [];
+  const unavailable: PlannedSources['unavailable'] = [];
+  for (const sourceId of candidates) {
+    const c = bySource.get(sourceId);
+    if (!c || !c.enabled || !c.capabilities.includes('quote_search')) unavailable.push({ sourceId, reason: a.maxAutomatedSources === 0 ? 'depth_no_automated_sources' : 'source_not_integrated' });
+    else if (!c.accessApproved) unavailable.push({ sourceId, reason: 'source_access_unapproved' });
+    else if (!a.coveredSourceIds.includes(sourceId) && c.implementation !== 'fixture' && c.implementation !== 'manual') unavailable.push({ sourceId, reason: 'event_not_covered' });
+    else if (executable.length >= a.maxAutomatedSources) unavailable.push({ sourceId, reason: a.maxAutomatedSources === 0 ? 'depth_no_automated_sources' : 'budget_exhausted' });
+    else executable.push(sourceId);
+  }
+  return { executable, officialPointers, unavailable };
+}

@@ -83,6 +83,8 @@ export type BuildPacketArgs = {
   benchmarkRunId: string | null;
   trend: TrendResult | null;
   trendRunId: string | null;
+  /** Every dataset behind the trend allows showing it to customers (R2-TREND-RIGHTS-01). Default: allowed. */
+  trendDisplayAllowed?: boolean;
   policy: PolicyResult;
   priorities: CustomerPriorities;
   sourcesChecked: string[];
@@ -416,6 +418,9 @@ const countWord = (n: number) => COUNT_WORDS[n] ?? String(n);
  * their group, and whether anything argues for moving quickly. It reads the calculated context only and
  * never says where prices will go.
  */
+/** Fewer listings than this for their group size is thin supply, said as a caution. */
+const SUPPLY_ADEQUATE_MIN = 15;
+
 function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   const m = a.market;
   const c = m?.context;
@@ -462,13 +467,21 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   const canWait = !a.travelling && p.mustAttend !== true && (p.waitRiskTolerance === 'medium' || p.waitRiskTolerance === 'high') && p.decisionDeadline !== null;
   // Scarcity for their group only from counts for their group size, never from all-event listing counts (R4-B07).
   const groupCounts = m.supplyScope === 'group';
+  // Falling prices say nothing about how much there is to choose from (R2-SUPPLY-COPY-01): reassurance about
+  // waiting needs a known, adequate count for their group size, read fresh. Unknown supply is said as unknown,
+  // and a thin count is a caution whichever way prices are moving.
+  const supplyKnown = fresh && s.now !== null && (groupCounts || q === 1);
+  const thin = supplyKnown && s.now! < SUPPLY_ADEQUATE_MIN && (q > 1 || s.now! <= 1);
+  const listingsWord = (n: number) => `${n} listing${n === 1 ? '' : 's'}`;
+  const deadline = p.decisionDeadline ? ` by ${checkedAt(p.decisionDeadline, a.timeZone).replace(/,? \d{1,2}:\d{2} [AP]M [A-Z]{2,5}$/, '')}` : '';
   if (fresh && groupCounts && s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait.');
+  else if (thin) parts.push(`${trendKnown && c.direction === 'down' ? 'Prices have been easing, but there' : 'There'} ${s.now === 1 ? 'was only 1 listing' : `were only ${listingsWord(s.now!)}`} ${q > 1 ? `with ${countWord(q)} or more tickets` : ''} when I checked, so I wouldn’t count on waiting: if you find seats that meet what you need at a price you’re happy with, I wouldn’t hold out.`.replace(/ {2,}/g, ' '));
   else if (trendKnown && c.direction === 'down') {
-    if (canWait) parts.push('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush before your deadline.');
-    else if (a.travelling || p.mustAttend === true) parts.push('Prices have been easing, but since you can’t risk missing it, I wouldn’t hold out for a lower price.');
+    if (a.travelling || p.mustAttend === true) parts.push('Prices have been easing, but since you can’t risk missing it, I wouldn’t hold out for a lower price.');
+    else if (canWait && supplyKnown) parts.push(`Prices have been easing, and there were ${listingsWord(s.now!)}${q > 1 ? ` with ${countWord(q)} or more tickets` : ''} when I checked${q > 1 ? ' (some may not split into exactly your number or sit together)' : ''}. Waiting${deadline} is reasonable if you’re ok with the risk that the seats you want go; it isn’t a promise prices keep falling.`);
+    else if (canWait) parts.push(`Prices have been easing, but I can’t see how many listings there are for a group your size, so that alone isn’t a reason to wait. If you do wait, it’s a risk that the seats you want go${deadline ? `, and I’d decide${deadline}` : ''}.`);
     else parts.push('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
   } else if (trendKnown && c.direction === 'up') parts.push(`Prices have been climbing, so waiting hasn’t been paying off for this ${a.eventNoun ?? 'game'}.`);
-  else if (fresh && groupCounts && s.now !== null && s.now < 15 && q > 1) parts.push('There aren’t many blocks for a group your size, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait long.');
   else if (!trendKnown && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
   return readClaim(a, parts, c, s);
@@ -531,7 +544,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const size = m.basis ? basisSize(m.basis) : q;
   const moved = (s: MarketContext['supply']) => s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? `, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${s.before} over the last ${s.hours} hours` : '';
   const supplyText = (s: MarketContext['supply']) =>
-    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${s.now} listings have ${group} or more tickets${moved(s)}.` : ` About ${s.now} listings are up${moved(s)}.`;
+    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${s.now} listing${s.now === 1 ? ' has' : 's have'} ${group} or more tickets${moved(s)}.` : ` About ${s.now} listing${s.now === 1 ? ' is' : 's are'} up${moved(s)}.`;
   // A group's series starts at the first listings read, so its current floor is worth saying before there is a trend.
   const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
   if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
@@ -608,7 +621,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
  * would make an offer work is named. Their notes, not listings we've seen, so the pick is conditional on what
  * they copied and nothing is called a good price.
  */
-type OfferVerdict = { o: TextOffer; tot: ReturnType<typeof offerTotal>; why: Array<{ kind: 'admission' | 'performance' | 'entry' | 'access' | 'short' | 'block' | 'extra' | 'view' | 'together' | 'budget' | 'late' | 'no_time'; text: string }>; feesUnknown: boolean };
+type OfferVerdict = { o: TextOffer; tot: ReturnType<typeof offerTotal>; why: Array<{ kind: 'admission' | 'performance' | 'entry' | 'availability' | 'day' | 'transfer' | 'access' | 'short' | 'block' | 'extra' | 'view' | 'together' | 'budget' | 'late' | 'no_time'; text: string }>; feesUnknown: boolean };
 
 /**
  * Their offers compared without an event on file (TGQA-R6 1006): the arithmetic and the hard rules need only what
@@ -622,8 +635,10 @@ export function suppliedOffersAnswer(a: { offers: TextOffer[]; quantity: number;
 function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const need = a.offerNeeds ?? { noObstructed: false, togetherRequired: false, baseline: null, terms: null };
   const terms = need.terms ?? { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, seating: null };
-  // How many are going, which is not always how many they'd buy ("happy to buy six; only five of us").
-  const q = terms.attendees ?? a.quantity;
+  // How many are going, which is not always how many they'd buy ("happy to buy six; only five of us"), and less
+  // any ticket someone already holds: the purchase is the new admissions only (R1-M02).
+  const owned = terms.owned ?? 0;
+  const q = terms.toBuy ?? terms.attendees ?? a.quantity;
   // "Offer B" / "the green listing" as named; mid-sentence, a lettered offer is just its letter ("B costs less").
   const Name = (o: TextOffer) => o.name.charAt(0).toUpperCase() + o.name.slice(1);
   const short = (o: TextOffer) => (/^[A-Z1-9]$/.test(o.label) ? o.label : o.name);
@@ -633,33 +648,50 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const zoneName = zoned ? venueZoneName(a.timeZone ?? 'America/New_York') : null;
   const at = (m: number) => `${timeLabel(m)}${zoneName ? ` ${zoneName} time` : ''}`;
   const partyOf = (n: number) => (n === 1 ? 'one' : n === 2 ? 'both' : `all ${countWord(n)}`);
-  const ticketsWord = (n: number) => (n === q ? partyOf(n) : `${countWord(n)} tickets`);
+  const ticketsWord = (n: number) => (n === q ? (owned ? `the ${n === 1 ? 'new ticket' : `${countWord(n)} new tickets`}` : partyOf(n)) : `${countWord(n)} tickets`);
   const budget = a.priorities.budgetTotalCents ?? null;
-  const deadline = terms.deadlineMinutes;
+  const statedCharges = (o: TextOffer) => o.orderFeeCents !== null || o.perTicketFeeCents !== null;
+  // A subtotal already includes any charges they supplied. Only the remaining fees are unknown.
+  const unknownFees = (o: TextOffer) => statedCharges(o) ? 'remaining fees' : 'fees';
+  const deadline = terms.deadlineMinutes ?? terms.performanceStartMinutes ?? null;
   const tz = a.timeZone ?? 'America/New_York';
   // Their deadline, in the zone they wrote it in: "your 1pm New York deadline".
   // Only when it differs from the venue's does the zone need saying; "your noon deadline" is clear on its own.
   const otherZone = !!terms.deadlineZone && terms.deadlineZone !== venueZoneName(tz);
   const dl = (m: number) => (otherZone ? `${timeLabel(fromVenueMinutes(m, terms.deadlineZone!, tz))} ${terms.deadlineZone}` : at(m));
+  // One fixed basket ("a fixed bundle of two admissions") is said as that, not as stock and a per-package count.
+  const oneBasket = (o: TextOffer) => o.productKind === 'package' && o.unitsAvailable === 1 && o.admissionsPerUnit != null;
+  // A bundle that doesn't say how many it admits, priced as the bundle ("a bundle of admissions for $180"): its price
+  // is the bundle's, never a per-person price to multiply, and it covers nobody until its count is known (R1-M02).
+  const unknownCapacity = (o: TextOffer) => o.productKind === 'package' && o.quantity === null && o.admissionsPerUnit == null && !(o.perTicketCents !== null && o.priceBasisStated);
   const price = (o: TextOffer, tot: ReturnType<typeof offerTotal>) => {
     const fees = o.feeBasis === 'all_in' ? ' including fees' : o.feeBasis === 'before_fees' ? ' before fees' : '';
     if (o.totalCents === null && o.perTicketCents === null) return 'price not stated';
-    if (o.totalCents !== null) return `${formatUsd(o.totalCents)} in total${fees}${o.orderFeeCents !== null ? `, plus ${formatUsd(o.orderFeeCents)} for the order = ${formatUsd(tot!.cents)}` : ''}${tot && tot.tickets !== q ? ` for ${countWord(tot.tickets)} tickets` : ''}`;
+    if (unknownCapacity(o)) return `${formatUsd((o.totalCents ?? o.perTicketCents)!)} for the bundle${fees}; how many it admits isn’t stated`;
+    if (o.totalCents !== null && !tot) return oneBasket(o) ? `${formatUsd(o.totalCents)} for the bundle${fees}` : `${formatUsd(o.totalCents)} per quoted package${fees}; insufficient package stock for your party`;
+    if (o.totalCents !== null) return `${formatUsd(o.totalCents)} in total${fees}${o.orderFeeCents !== null || o.perTicketFeeCents !== null ? `, plus ${[o.orderFeeCents !== null ? `${formatUsd(o.orderFeeCents)} for the order` : '', o.perTicketFeeCents !== null ? `${formatUsd(o.perTicketFeeCents)} per ticket` : ''].filter(Boolean).join(' and ')} = ${formatUsd(tot!.cents)}` : ''}${tot && tot.tickets !== q ? ` for ${countWord(tot.tickets)} tickets` : ''}`;
     const packageUnits = o.productKind === 'package' && o.admissionsPerUnit != null;
     const each = `${formatUsd(o.perTicketCents!)} ${packageUnits ? 'per package' : 'each'}${o.perTicketFeeCents ? '' : fees}`;
-    if (!tot) return each;
+    if (!tot) return packageUnits && oneBasket(o) ? `${formatUsd(o.perTicketCents!)} for the bundle${fees}` : each;
     // Every fee they gave is in the working, not only in the total: "$52.50 each, plus $12.75 a ticket in fees and
     // $8 for the whole order: $269" (live V04 showed the $8 and hid the $12.75).
     const extras = [o.perTicketFeeCents ? `${formatUsd(o.perTicketFeeCents)} a ticket in fees` : null, o.orderFeeCents !== null ? `${formatUsd(o.orderFeeCents)} for the whole order` : null].filter(Boolean);
     if (extras.length) return `${each}, plus ${extras.join(' and ')}: ${formatUsd(tot.cents)}${tot.allIn ? ' in total' : ''} for ${ticketsWord(tot.tickets)}`;
+    if (packageUnits && oneBasket(o)) return `${formatUsd(tot.cents)} for the bundle${fees}`;
     if (packageUnits) return `${each}, ${formatUsd(tot.cents)} for ${countWord(Math.ceil(tot.tickets / o.admissionsPerUnit!))} ${Math.ceil(tot.tickets / o.admissionsPerUnit!) === 1 ? 'package' : 'packages'} admitting ${ticketsWord(tot.tickets)}`;
     return tot.tickets > 1 ? `${each}, ${formatUsd(tot.cents)} for ${ticketsWord(tot.tickets)}${o.feeBasis === 'before_fees' ? ' plus fees' : ''}` : each;
   };
-  const describe = (o: TextOffer) =>
-    [o.productKind === 'package' && o.admissionsPerUnit != null ? `${o.unitsAvailable != null ? `${countWord(o.unitsAvailable)} packages available, ` : ''}${countWord(o.admissionsPerUnit)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'} per package` : o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.productKind && o.productKind !== 'unknown' ? (o.productKind === 'admission' ? 'concert admission' : o.productKind) : o.accessible ? 'wheelchair-accessible spaces' : terms.concertAdmission ? 'admission unverified' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
+  const describe = (o: TextOffer) => oneBasket(o)
+    ? [`a fixed bundle of ${countWord(o.admissionsPerUnit!)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'}`, o.together ? 'together' : o.together === false ? 'not together' : null, o.tier ?? null].filter(Boolean).join(', ')
+    : [o.productKind === 'package' && o.admissionsPerUnit != null ? `${o.unitsAvailable != null ? `${countWord(o.unitsAvailable)} ${o.unitsAvailable === 1 ? 'package' : 'packages'} available, ` : ''}${countWord(o.admissionsPerUnit)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'} per package` : o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.productKind && o.productKind !== 'unknown' ? (o.productKind === 'admission' ? 'concert admission' : o.productKind) : o.accessible ? 'wheelchair-accessible spaces' : o.admission === 'excluded' ? 'no admission' : terms.concertAdmission && o.admission !== 'included' ? 'admission unverified' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.tier ? o.tier : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
   const rows: OfferVerdict[] = offers.map((o) => {
-    const tot = offerTotal(o, q);
+    const tot = unknownCapacity(o) ? null : offerTotal(o, q);
     const why: OfferVerdict['why'] = [];
+    if (unknownCapacity(o)) why.push({ kind: 'short', text: `it doesn’t say how many admissions the bundle includes, so I can’t count it as covering ${q === 1 ? 'you' : `${countWord(q)}${owned ? ' new tickets' : ''}`}` });
+    if (o.availability === 'unavailable') why.push({ kind: 'availability', text: 'it is marked sold out or unavailable, so it is not an actionable option' });
+    if (terms.requiredDay && (o.validDays && !o.validDays.includes(terms.requiredDay) || o.invalidDays?.includes(terms.requiredDay))) why.push({ kind: 'day', text: `${o.validDays ? `it is ${o.validDays.join('/')} only, ` : ''}not valid for your ${terms.requiredDay} admission` });
+    if (o.collectionRestriction) why.push({ kind: 'transfer', text: o.collectionRestriction });
+    if (o.transferRestriction) why.push({ kind: 'transfer', text: o.transferRestriction });
     if (o.admission === 'excluded') why.push({ kind: 'admission', text: 'it includes no concert admission, so it cannot get you into the show and is excluded from the admission comparison' });
     else if (o.admission === 'unknown' && (terms.concertAdmission || offers.some((x) => x.productKind !== 'unknown' && x.productKind !== undefined))) why.push({ kind: 'admission', text: 'admission entitlement is unknown; confirm that this product includes entry before buying' });
     const performance = performanceFailure(o.performance, terms.musicExperience);
@@ -668,12 +700,18 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     if (entry) why.push({ kind: 'entry', text: entry });
     if (a.accessibilityRequired && !o.accessible) why.push({ kind: 'access', text: 'it isn’t described as accessible seating, which you need' });
     if (!a.accessibilityRequired && o.accessible) why.push({ kind: 'access', text: `these are wheelchair or companion spaces, which ${q > 1 ? 'no one in your group needs' : 'you don’t need'}; they’re for people who need them, and the venue can ask you to move` });
-    if (o.quantity !== null && o.quantity < q) why.push({ kind: 'short', text: `it’s only ${countWord(o.quantity)} tickets, and you need ${countWord(q)}` });
+    if (o.quantity !== null && o.quantity < q) {
+      // A fixed basket short of the party is short whatever it costs: it would leave someone out (R1-M02).
+      const noun = o.productKind === 'package' ? (o.quantity === 1 ? 'admission' : 'admissions') : o.quantity === 1 ? 'ticket' : 'tickets';
+      const left = q - o.quantity;
+      why.push({ kind: 'short', text: `it has only ${countWord(o.quantity)} ${noun}, and you need ${countWord(q)}${owned ? ` new ${q === 1 ? 'one' : 'ones'}` : ''}, so it would leave ${left === 1 ? 'one person' : `${countWord(left)} people`} out` });
+    }
     if (o.quantity !== null && o.quantity > q) {
       const allowed = terms.extra === 'allowed' && (terms.maxBuy === null || o.quantity <= terms.maxBuy);
       if (!allowed && (o.mustBuyAll || terms.extra === 'refused')) why.push({ kind: o.mustBuyAll ? 'block' : 'extra', text: o.mustBuyAll ? `it’s ${countWord(o.quantity)} tickets the seller won’t split, and you ${terms.extra === 'refused' ? 'won’t buy an extra' : `want ${countWord(q)}`}` : `it’s ${countWord(o.quantity)} tickets, and you won’t buy an extra; ask the seller whether they’ll sell exactly ${countWord(q)}` });
     }
-    if (need.noObstructed && o.obstructed === true) why.push({ kind: 'view', text: 'it has an obstructed view, which you ruled out' });
+    if (terms.view !== 'any' && (need.noObstructed || terms.view === 'unobstructed') && o.obstructed === true) why.push({ kind: 'view', text: 'it has an obstructed view, which you ruled out' });
+    if (terms.concertAdmission && terms.view === 'unobstructed' && o.obstructed === null) why.push({ kind: 'view', text: 'an unobstructed view is not established by this offer, and you require it' });
     // Pairs are enough when each adult sits with a child (TGQA-R6 18): scattered singles fail that, adjacent pairs don't.
     // How they said the party must sit decides, not a general "together" the reader inferred: adjacent pairs are
     // enough when each child only needs an adult beside them, and nothing is required once they lift it (TGQA-R8 S01).
@@ -695,19 +733,24 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
       }
     }
     const feesUnknown = !!tot && !tot.allIn && o.feeBasis !== 'all_in';
-    if (budget !== null && tot && tot.cents > budget) why.push({ kind: 'budget', text: `over your ${formatUsd(budget)} budget by ${formatUsd(tot.cents - budget)}${tot.allIn ? '' : ' before its fees'}` });
+    if (budget !== null && tot && tot.cents > budget) why.push({ kind: 'budget', text: `over your ${formatUsd(budget)} budget by ${formatUsd(tot.cents - budget)}${tot.allIn ? '' : o.orderFeeCents !== null || o.perTicketFeeCents !== null ? ' with the stated charges; any remaining fees are unconfirmed' : ' before its fees'}` });
     return { o, tot, why, feesUnknown };
   });
   const fits = rows.filter((r) => !r.why.length && r.tot && !r.feesUnknown);
   const open = rows.filter((r) => !r.why.length && (!r.tot || r.feesUnknown));
   const byTotal = (x: OfferVerdict, y: OfferVerdict) => x.tot!.cents - y.tot!.cents;
-  const best = [...fits].sort(byTotal)[0] ?? null;
+  const cheapest = [...fits].sort(byTotal)[0] ?? null;
+  // What matters most to them decides between offers that both fit (Research 1, R1-04): "being in the lower tier
+  // matters most" takes the lower-tier one and names what it costs; "keeping the spend down" keeps the cheaper.
+  const priority = terms.priority ?? null;
+  const wanted = priority?.kind === 'feature' ? fits.find((r) => r.o.tier && sameFeature(r.o.tier, priority.words)) ?? null : null;
+  const best = wanted ?? cheapest;
   const lines = rows.map((r) => {
     const d = describe(r.o);
-    const room = r.feesUnknown && budget !== null && r.tot && r.tot.cents <= budget ? ` It fits your ${formatUsd(budget)} only if its fees come to ${formatUsd(budget - r.tot.cents)} or less.` : '';
+    const room = r.feesUnknown && budget !== null && r.tot && r.tot.cents <= budget ? ` It fits your ${formatUsd(budget)} only if its ${unknownFees(r.o)} come to ${formatUsd(budget - r.tot.cents)} or less.` : '';
     // The reason itself, not a status label in front of it: "Over your $600 budget by $50." (writing review).
     const reasons = r.why.map((w, i) => (i === 0 ? w.text.charAt(0).toUpperCase() + w.text.slice(1) : w.kind === 'budget' ? `it’s also ${w.text}` : w.text));
-    const verdict = r.why.length ? ` ${reasons.join('; ')}.` : r === best ? '' : fits.includes(r) && best ? ` Also fits${r.tot!.cents > best.tot!.cents ? `, ${formatUsd(r.tot!.cents - best.tot!.cents)} more` : ', at the same total'}.` : room;
+    const verdict = r.why.length ? ` ${reasons.join('; ')}.` : r === best ? '' : fits.includes(r) && best ? ` Also fits${r.tot!.cents > best.tot!.cents ? `, ${formatUsd(r.tot!.cents - best.tot!.cents)} more` : r.tot!.cents < best.tot!.cents ? `, ${formatUsd(best.tot!.cents - r.tot!.cents)} less` : ', at the same total'}.` : room;
     return `${Name(r.o)}${d ? ` (${d})` : ''}: ${price(r.o, r.tot)}.${verdict}`;
   });
   // A promised transfer time is the seller's word, not a transfer that has happened (TGQA-R8 S02).
@@ -729,6 +772,14 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
       ? `Looking at ${best.o.name} on its own, with nothing from ${setAside} applied: it meets what you asked for, at ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`
       : `${Name(best.o)} ${open.length ? 'is the straightforward choice if you’d rather skip another checkout' : fits.length > 1 ? 'wins this one' : 'is the one that meets what you asked for'}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`;
     const bits: string[] = [];
+    if (terms.concertAdmission && fits.length === 1) for (const r of rows.filter((r) => r !== best)) {
+      // Admission only when it's excluded: an unknown one is "confirm first", not a reason to skip.
+      const unusable = r.why.find((w) => ['availability', 'day', 'transfer', 'view', 'short'].includes(w.kind) || (w.kind === 'admission' && r.o.admission === 'excluded'));
+      // A cheaper add-on is said for what it is, not as a bargain beside the tickets (R1-M01).
+      const addOn = unusable?.kind === 'admission' && r.o.admission === 'excluded' && ['upgrade', 'parking', 'shuttle'].includes(r.o.productKind);
+      if (addOn) bits.push(`Skip ${short(r.o)}: it’s ${r.o.productKind === 'upgrade' ? 'an upgrade' : `a ${r.o.productKind} pass`} with no concert admission, so its ${r.tot ? formatUsd(r.tot.cents) : 'price'} doesn’t get ${q === 1 ? 'you' : q === 2 ? 'either of you' : 'anyone'} into the show.`);
+      else if (unusable) bits.push(`Skip ${short(r.o)}: ${unusable.text}.`);
+    }
     // Three or more that fit: the saving against each, not just the runner-up (TGQA-R6 14: "saves $10 or $5").
     const others = named ? [] : [...fits].sort(byTotal).filter((r) => r !== best);
     if (others.length >= 2) bits.push(`That’s ${others.slice(0, 3).map((o) => vs(best, o)).join(' and ')}.`);
@@ -736,19 +787,35 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     // With a break-even to state, the threshold goes right beside the pick; budget left over would crowd it.
     if (budget !== null && best.tot!.cents <= budget && !open.length) bits.push(best.tot!.cents === budget ? `It’s exactly your ${formatUsd(budget)} budget.` : `It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.`);
     // An offer whose fees aren't known yet: the fee that would make it cheaper, not a guess at its fees.
-    for (const c of open.filter((r) => r.tot)) {
+    for (const c of rows.filter((r) => r !== best && r.tot && r.feesUnknown && r.why.every((w) => w.kind === 'budget'))) {
       const gap = best.tot!.cents - c.tot!.cents;
       bits.push(gap > 0
-        ? `${Name(c.o)} only beats it if its fees come to less than ${formatUsd(gap)} in total: at ${formatUsd(gap)} they tie, and above that ${short(best.o)} costs less.`
-        : `${Name(c.o)} already costs ${gap === 0 ? 'the same' : `${formatUsd(-gap)} more`} before its fees, so ${short(best.o)} costs less whatever they are.`);
+        ? `${Name(c.o)} only beats it if its ${unknownFees(c.o)} come to less than ${formatUsd(gap)} in total: at ${formatUsd(gap)} they tie, and above that ${short(best.o)} costs less.`
+        : gap === 0
+          ? `${Name(c.o)} already costs the same ${statedCharges(c.o) ? 'with the charges you supplied' : 'before its fees'}: they tie if there are no ${unknownFees(c.o)}, and ${short(best.o)} costs less if any are added.`
+          : statedCharges(c.o)
+            ? `${Name(c.o)} is already ${formatUsd(-gap)} more with the charges you supplied; any remaining fees would widen that gap.`
+            : `${Name(c.o)} already costs ${formatUsd(-gap)} more before its fees, so ${short(best.o)} costs less whatever they are.`);
     }
+    if (owned) bits.unshift(owned === 1 ? 'Your own ticket is already covered.' : `The ${countWord(owned)} tickets you already have are covered.`);
     const check = best.o.deliveryStated ? '' : ' Before you buy, check its delivery time on the listing.';
-    choice = `${head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
+    // Their priority, said back as the reason: the pick is for them, not the cheapest by default.
+    const dearer = priority?.kind === 'price' && best === cheapest ? [...fits].sort(byTotal).filter((r) => r !== best && r.tot!.cents > best.tot!.cents && r.o.tier)[0] : undefined;
+    const personal = wanted && wanted !== cheapest && cheapest
+      ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `It costs ${formatUsd(best.tot!.cents - cheapest.tot!.cents)} more than ${cheapest.o.name}, and since ${priority?.kind === 'feature' ? `the ${priority.words}` : 'that'} is what matters most to you, that’s the difference worth paying.${budget !== null && best.tot!.cents <= budget ? ` It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.` : ''}` }
+      : dearer
+        ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `${budget !== null ? `It leaves ${formatUsd(budget - best.tot!.cents)} under your ${formatUsd(budget)} cap. ` : ''}${dearer.o.name} costs ${formatUsd(dearer.tot!.cents - best.tot!.cents)} more for the ${dearer.o.tier}; since keeping the spend down matters most to you, I wouldn’t pay that difference on the facts you’ve supplied.` }
+        : null;
+    // A seat's place in the venue is their word, not a view anyone has checked.
+    const basis = offers.some((o) => o.tier) && deadline === null ? 'That’s based on your quotes; I haven’t verified availability or the view.' : provenance;
+    choice = personal
+      ? `${personal.head} ${personal.why} ${basis}${check}`.replace(/\s+/g, ' ').trim()
+      : `${head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
   } else if (open.length >= 2 && open.every((r) => r.tot)) {
     choice = `${open.map((r) => Name(r.o)).join(' and ')} meet what you asked for so far, but their fees aren’t known yet, so I can’t say which costs less until you see the checkout totals. ${provenance}`;
   } else if (open.length === 1) {
     const c = open[0]!;
-    choice = `${Name(c.o)} is the only one left, but its fees aren’t known yet${c.tot && budget !== null ? `: it fits your ${formatUsd(budget)} only if they come to ${formatUsd(budget - c.tot.cents)} or less` : ''}. ${provenance}`;
+    choice = `${Name(c.o)} is the only one left, but its ${unknownFees(c.o)} aren’t known yet${c.tot && budget !== null ? `: it fits your ${formatUsd(budget)} only if they come to ${formatUsd(budget - c.tot.cents)} or less` : ''}. ${provenance}`;
   } else {
     // Nothing fits: the smallest single change that would make one work, said as a choice for them to make.
     const oneOff = rows.filter((r) => r.why.length === 1 && r.tot && !r.feesUnknown);
@@ -957,28 +1024,40 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     if (a.trend.adequacy === 'sufficient' && w) {
       const dirWord = a.trend.direction === 'down' ? 'fallen' : a.trend.direction === 'up' ? 'risen' : 'moved';
       const newSource = a.trend.floorLoweredByNewSource ? ' The lower price comes from a different seller, so this reflects a new cheaper option rather than existing sellers cutting prices.' : '';
+      // The window ends at the latest observation, not at the time of this reply (R2-TREND-TIME-01).
+      const latest = a.trend.latestObservedAt ?? a.observedAt;
+      const lagMinutes = (a.observedAt.getTime() - latest.getTime()) / 60_000;
+      const span = lagMinutes <= 90 ? `over the last ${w.windowHours} hours` : `in the ${w.windowHours} hours up to ${checkedAt(latest, a.timeZone)}`;
       claims.push({
         id: 'C_TREND',
         kind: 'trend_change',
-        text: `Your group's cheapest comparable option has ${dirWord} from ${formatUsd(w.baselineCents)} to ${formatUsd(w.currentCents)} over the last ${w.windowHours} hours (${a.trend.direction === 'flat' || a.trend.direction === 'mixed' ? 'no clear direction' : a.trend.direction}).${newSource} Past movement does not predict the next one.`,
+        text: `Your group's cheapest comparable option has ${dirWord} from ${formatUsd(w.baselineCents)} to ${formatUsd(w.currentCents)} ${span} (${a.trend.direction === 'flat' || a.trend.direction === 'mixed' ? 'no clear direction' : a.trend.direction}).${newSource} Past movement does not predict the next one.`,
         values: { baselineCents: w.baselineCents, currentCents: w.currentCents, windowHours: w.windowHours, direction: a.trend.direction },
-        scope: { quantity: q, seatZone: null, feeBasis: 'verified_total', observedAt: obs },
+        scope: { quantity: q, seatZone: null, feeBasis: 'verified_total', observedAt: latest.toISOString() },
         evidenceIds: a.trend.validObservationIds,
         methodVersion: a.trend.methodVersion,
         limitations: a.trend.qualityFlags,
-        customerVisible: true,
+        customerVisible: a.trendDisplayAllowed !== false,
       });
     } else {
+      // A series that ended long ago is history: said with its real dates, never as recent (R2-TREND-TIME-01).
+      const h = a.trend.historical;
+      const latest = a.trend.latestObservedAt;
+      const text = h
+        ? `The newest comparable price I have for your group is from ${checkedAt(h.toAt, a.timeZone)}, too old to say how prices are moving now. Between ${checkedAt(h.fromAt, a.timeZone)} and then, it went from ${formatUsd(h.fromCents)} to ${formatUsd(h.toCents)}.`
+        : latest && a.trend.freshness === 'historical'
+          ? `The newest comparable price I have for your group is from ${checkedAt(latest, a.timeZone)}, too old to say how prices are moving now.`
+          : `We have only ${a.trend.validObservationIds.length} comparable price observation${a.trend.validObservationIds.length === 1 ? '' : 's'} over ${Math.round(a.trend.spanMinutes / 60)} hours for your group size, which isn't enough to call a trend.`;
       claims.push({
         id: 'C_NOTREND',
         kind: 'trend_change',
-        text: `We have only ${a.trend.validObservationIds.length} comparable price observations over ${Math.round(a.trend.spanMinutes / 60)} hours for your group size, which isn't enough to call a trend.`,
+        text,
         values: { observations: a.trend.validObservationIds.length, spanMinutes: a.trend.spanMinutes },
-        scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+        scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: latest?.toISOString() ?? obs },
         evidenceIds: a.trend.validObservationIds,
         methodVersion: a.trend.methodVersion,
         limitations: a.trend.reasons,
-        customerVisible: true,
+        customerVisible: h ? a.trendDisplayAllowed !== false : true,
       });
     }
   }
@@ -1305,7 +1384,13 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
 }
 
 /** "a and b", or "a; and b" when an item already has its own "and"; of two, one with a trailing clause goes last. */
-function joinRequirements(items: string[]): string {
+/** "lower tier" against "lower tier seats", "the floor" against "floor seats": the same part of the venue. */
+function sameFeature(tier: string, words: string): boolean {
+  const norm = (x: string) => x.toLowerCase().replace(/-/g, ' ').replace(/\b(?:the|seats?|a)\b/g, '').replace(/\blevel\b/, 'tier').replace(/\s+/g, ' ').trim();
+  return norm(tier) === norm(words) || norm(tier).includes(norm(words)) || norm(words).includes(norm(tier));
+}
+
+export function joinRequirements(items: string[]): string {
   if (items.length === 1) return items[0]!;
   const xs = items.length > 2 ? items : [...items.filter((x) => !x.includes(',')), ...items.filter((x) => x.includes(','))];
   const semi = xs.length > 2 || xs.slice(0, -1).some((x) => /\band\b|,/.test(x));

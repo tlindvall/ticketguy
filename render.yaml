@@ -27,6 +27,9 @@ services:
       # Set it explicitly only once a custom domain is attached.
       - key: EXTRACTION_PROVIDER
         value: openai
+      # Pinned here, not left to the code default, so the model in production is what this file says.
+      - key: OPENAI_BASE_MODEL
+        value: gpt-6.1-sol
       # Database-backed media must stay well inside the database plan's storage. Raise only with the plan.
       - key: MEDIA_MAX_TOTAL_BYTES
         value: "268435456"

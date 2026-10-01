@@ -26,6 +26,7 @@
     "registry:build": "node scripts/build-registry.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
     "watches:evaluate": "tsx scripts/evaluate-watches.ts",
+    "service-depth:reconcile": "tsx scripts/reconcile-service-depth.ts",
     "staff:create": "tsx scripts/create-staff.ts",
     "lexicon:doc": "tsx scripts/lexicon-doc.ts"
   },
@@ -38,7 +39,7 @@
     "drizzle-orm": "0.45.3",
     "inngest": "4.20.0",
     "next": "16.3.5",
-    "openai": "7.23.0",
+    "openai": "7.25.0",
     "postgres": "3.4.9",
     "react": "19.3.0",
     "react-dom": "19.3.0",
