@@ -46,6 +46,8 @@ import { breaks, eventConstraints, unglue, type EventConstraints } from '@/lib/d
 import { joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
+import { trendRights } from '@/lib/advice/trend-rights';
+import { evidenceFacts, suppliedEvidenceAnswer } from '@/lib/advice/supplied-evidence';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
 import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
@@ -653,6 +655,30 @@ export class Concierge {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your offers compared'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `offers:${msg.id}` });
       return { state: 'recommendation_sent', revision, extraction: merged };
     };
+    // Their own figures, and a question about what they mean (Research 2, R2-EVIDENCE-01): the arithmetic and the
+    // distinction first, before any event search or "which event?" intake. A quote's "today" is when it was seen,
+    // not the day they want to go, and tickets in a sales report aren't how many they need.
+    const evidence = suppliedEvidenceAnswer(threadTexts);
+    if (evidence) {
+      const facts = evidenceFacts(threadTexts);
+      const salesCounts = [facts.sales?.orders, facts.sales?.tickets, facts.listings?.from, facts.listings?.to].filter((n): n is number => typeof n === 'number');
+      const brief: RequestExtraction = {
+        ...merged,
+        ...(facts.observationDate && /^(?:today|yesterday|now)$/i.test(merged.dateExpression?.trim() ?? '') ? { dateExpression: null, resolvedLocalDate: null } : {}),
+        quantity: facts.partyQuantity ?? facts.group?.quantity ?? (merged.quantity !== null && salesCounts.includes(merged.quantity) ? null : merged.quantity),
+      };
+      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+      await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
+      if (revision > 1) await this.invalidateForRevision(req.id, revision);
+      const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const first = /^(.+?[.!?])(\s|$)/.exec(evidence.lead)?.[1] ?? evidence.lead;
+      const paras = [...evidence.items, ...(evidence.nextStep ? [evidence.nextStep] : [])];
+      const text = [evidence.lead, ...paras].join('\n\n');
+      const html = [`<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(evidence.lead.slice(first.length))}</p>`, ...paras.map((p) => `<p style="margin:0 0 18px;">${esc(p)}</p>`)].join('\n');
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your figures'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `evidence:${msg.id}` });
+      await this.transition(req.id, 'recommendation_sent', `supplied_evidence:${evidence.kinds.join(',')}`);
+      return { state: 'recommendation_sent', revision, extraction: brief };
+    }
     if (supplied.textOffers.length && concertContext(threadTexts)) return answerSupplied(true);
     const concert = concertQuestion(threadTexts);
     if (concert) {
@@ -2276,7 +2302,7 @@ export class Concierge {
     const trendOk = await may('trend_advice');
     const trackingOk = await may('market_tracking');
     const { benchmark, benchmarkRunId } = historyOk ? await this.computeBenchmarkFor({ event, venue, ent, quantity, seatZone: best?.offer.seatClass ?? null, leadMinutes, now }) : { benchmark: null, benchmarkRunId: null };
-    const { trend, trendRunId } = trendOk ? await this.computeTrendFor({ eventId: event.id, basketKey, now }) : { trend: null, trendRunId: null };
+    const { trend, trendRunId, displayAllowed: trendDisplayAllowed } = trendOk ? await this.computeTrendFor({ eventId: event.id, basketKey, now }) : { trend: null, trendRunId: null, displayAllowed: false };
     // Monitoring this event, not "some adapter somewhere may monitor" (F05): a source that covers it, and a depth that watches.
     const monitoringCoverage = snap ? snap.capabilities.price_watch.state === 'available' || (!enforce && configs.some((c) => c.enabled && c.monitoringAllowed)) : configs.some((c) => c.enabled && c.monitoringAllowed);
     // Resale market statistics (DECISION_LOG #44): brought up to date for this event now, used in the decision
@@ -2372,7 +2398,7 @@ export class Concierge {
     // A made-up example they want read, not bought (A11: "this is a synthetic QA example, not an actual offer").
     const synthetic = !!shown && /\b(?:synthetic|fictional|made[- ]up|hypothetical|imaginary|pretend|mock|sample)\b[^.]{0,40}\b(?:example|offer|screenshot|image|listing)s?\b|\bnot (?:an? )?(?:actual|real) offer\b|\bdon'?t (?:search|check) live (?:inventory|listings)\b|\bnot a real offer\b/i.test(flat(saidInThread));
     const trendAsked = TREND_ASKED.test(flat(said)) ? { noAlerts: NO_ALERTS.test(flat(said)), riskOk: brief.waitRiskTolerance === 'high' } : null;
-    const packet = buildPacket({ trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     for (const c of packet.claimRecords) if (c.url && !isFixtureRun) c.url = await this.trackLink(req.id, c.url, c.linkLabel ?? null, c.id === 'C_OFFICIAL' ? !!official?.affiliate : false);
     const hash = packetHash(packet);
@@ -2463,13 +2489,34 @@ export class Concierge {
     return { benchmark, benchmarkRunId: run!.id };
   }
 
-  private async computeTrendFor(a: { eventId: string; basketKey: string; now: Date }): Promise<{ trend: TrendResult | null; trendRunId: string | null }> {
-    const rows = await this.db.select().from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, a.eventId), eq(t.marketSnapshots.basketKey, a.basketKey))).orderBy(asc(t.marketSnapshots.observedAt));
-    const admissible = rows.filter((r) => !r.isFixture || this.env.APP_MODE === 'fixture');
-    if (admissible.length === 0) return { trend: null, trendRunId: null };
+  /**
+   * The group-basket trend, from snapshots this use is permitted for (R2-TREND-RIGHTS-01). Each contributing
+   * dataset must be approved, inside its retention, and approved for advice (a trend steers buy or wait);
+   * showing it also needs customer display. A snapshot with no dataset record has no rights. Fixture rows count
+   * only in the fixture world, and only while the fixture dataset itself is approved for derived figures.
+   * Snapshots after `now` are never read (R2-TREND-TIME-01).
+   */
+  private async trendClaimsStillAllowed(adviceRunId: string | null, now: Date): Promise<boolean> {
+    if (!adviceRunId) return true;
+    const [run] = await this.db.select({ packet: t.adviceRuns.packet }).from(t.adviceRuns).where(eq(t.adviceRuns.id, adviceRunId));
+    const claims = (run?.packet as { claimRecords?: Array<{ kind: string; customerVisible: boolean; evidenceIds: string[] }> } | null)?.claimRecords ?? [];
+    const ids = [...new Set(claims.filter((c) => c.kind === 'trend_change' && c.customerVisible).flatMap((c) => c.evidenceIds))];
+    if (!ids.length) return true;
+    const rows = await this.db.select({ id: t.marketSnapshots.id, datasetId: t.marketSnapshots.datasetId, isFixture: t.marketSnapshots.isFixture }).from(t.marketSnapshots).where(inArray(t.marketSnapshots.id, ids));
+    const datasets = new Map((await this.db.select().from(t.marketDatasets)).map((d) => [d.id, d]));
+    const v = trendRights(rows, datasets, { now, fixtureWorld: this.env.APP_MODE === 'fixture' });
+    return rows.length === ids.length && v.admitted.size === ids.length && v.displayAllowed;
+  }
+
+  private async computeTrendFor(a: { eventId: string; basketKey: string; now: Date }): Promise<{ trend: TrendResult | null; trendRunId: string | null; displayAllowed: boolean }> {
+    const rows = await this.db.select().from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, a.eventId), eq(t.marketSnapshots.basketKey, a.basketKey), lte(t.marketSnapshots.observedAt, new Date(a.now.getTime() + 5 * 60_000)))).orderBy(asc(t.marketSnapshots.observedAt));
+    const datasets = new Map((await this.db.select().from(t.marketDatasets)).map((d) => [d.id, d]));
+    const verdict = trendRights(rows, datasets, { now: a.now, fixtureWorld: this.env.APP_MODE === 'fixture' });
+    const admissible = rows.filter((r) => verdict.admitted.has(r.id));
+    if (admissible.length === 0) return { trend: null, trendRunId: null, displayAllowed: false };
     const trend = computeTrend(admissible.map((r) => ({ id: r.id, observedAt: r.observedAt, basketKey: r.basketKey, cheapestEligibleTotalCents: r.cheapestEligibleTotalCents, sourceIds: r.sourceIds, feeBasis: r.feeBasis as 'verified_total' | 'estimated_total' | 'incomplete', coverageComplete: r.coverageComplete, qualityFlags: r.qualityFlags, cheapestSourceId: (r.qualityFlags.find((f) => f.startsWith('cheapest_source:')) ?? '').split(':')[1] ?? null })), a.now);
     const [run] = await this.db.insert(t.trendRuns).values({ eventId: a.eventId, basketKey: a.basketKey, sourceIntersection: trend.sourceIntersection, windows: trend.windows as unknown as Record<string, unknown>, baselineSnapshotId: trend.windows.h24?.baselineObservationId ?? null, currentSnapshotId: trend.validObservationIds[trend.validObservationIds.length - 1] ?? null, direction: trend.direction, adequacy: trend.adequacy, qualityFlags: trend.qualityFlags, methodVersion: trend.methodVersion }).returning({ id: t.trendRuns.id });
-    return { trend, trendRunId: run!.id };
+    return { trend, trendRunId: run!.id, displayAllowed: verdict.displayAllowed };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -2501,6 +2548,13 @@ export class Concierge {
       await this.db.update(t.recommendations).set({ reviewNote: `revalidation_required: ${stale.length} observation(s) older than the freshness window` }).where(eq(t.recommendations.id, rec.id));
       await audit(this.db, { actor: args.reviewerUserId, action: 'recommendation.approval_blocked_stale_evidence', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision });
       return { ok: false, status: 409, reason: 'evidence_stale_revalidate_first' };
+    }
+    // A stored trend is shown only while its datasets still allow it (R2-TREND-RIGHTS-01): a draft written
+    // before a licence was revoked, or its retention ran out, doesn't carry the old permission forward.
+    if (!(await this.trendClaimsStillAllowed(rec.adviceRunId, now))) {
+      await this.db.update(t.recommendations).set({ reviewNote: 'trend_rights_changed: recompute before sending' }).where(eq(t.recommendations.id, rec.id));
+      await audit(this.db, { actor: args.reviewerUserId, action: 'recommendation.approval_blocked_trend_rights', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision });
+      return { ok: false, status: 409, reason: 'trend_rights_changed' };
     }
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
     const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt)).limit(1);

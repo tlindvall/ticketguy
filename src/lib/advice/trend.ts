@@ -2,12 +2,23 @@
  * Trend engine (ADVICE_ENGINE §6). Gate: ≥4 valid observations spanning ≥6 hours, stable basket,
  * adequate common-source coverage. Direction requires endpoint movement > 3% AND > $5 per group, with
  * the median pairwise slope agreeing. No extrapolation; missing baselines yield null windows.
+ *
+ * Time (Research 2, R2-TREND-TIME-01): observations after `now` are not evidence and are dropped; the series
+ * is read over the 72 hours up to its latest valid observation; and that observation must be no older than
+ * the market series' stale cut-off for the trend to count as current. An older series is never relabelled as
+ * recent: it is insufficient for timing, and `historical` keeps its actual dated interval for description.
  */
-export const TREND_METHOD_VERSION = 'trend-1.0';
+export const TREND_METHOD_VERSION = 'trend-1.1';
 export const TREND_MIN_OBSERVATIONS = 4;
 export const TREND_MIN_SPAN_MINUTES = 6 * 60;
 export const TREND_DIRECTION_MIN_PCT = 0.03;
 export const TREND_DIRECTION_MIN_CENTS = 500;
+/** Same cut-off as the listed-price market series (MARKET_STALE_HOURS): beyond it a series is history. */
+export const TREND_MAX_ENDPOINT_AGE_HOURS = 24;
+/** The longest window the trend reports; older observations don't steer direction or span. */
+export const TREND_LOOKBACK_HOURS = 72;
+/** Clock skew tolerated before an observation counts as from the future. */
+const FUTURE_SKEW_MINUTES = 5;
 
 export type TrendObservation = {
   id: string;
@@ -46,6 +57,12 @@ export type TrendResult = {
   /** True when the latest cheapest offer comes from a source that did not supply the previous cheapest (A59). */
   floorLoweredByNewSource: boolean;
   qualityFlags: string[];
+  /** When the latest usable observation was made: what "now" means in any wording, never the reply's time. */
+  latestObservedAt: Date | null;
+  /** 'current' only when the latest usable observation is within TREND_MAX_ENDPOINT_AGE_HOURS of now. */
+  freshness: 'current' | 'historical' | 'none';
+  /** A series that would have been sufficient but ended too long ago: its real dates, for description only. */
+  historical: { fromAt: Date; toAt: Date; fromCents: number; toCents: number; direction: 'up' | 'down' | 'flat' | 'mixed' } | null;
 };
 
 const WINDOW_TOLERANCE_MINUTES = 90;
@@ -59,7 +76,13 @@ function median(xs: number[]): number {
 export function computeTrend(observations: TrendObservation[], now: Date): TrendResult {
   const reasons: string[] = [];
   const qualityFlags = new Set<string>();
-  const sorted = [...observations].sort((a, b) => a.observedAt.getTime() - b.observedAt.getTime());
+  const nowMs = now.getTime();
+  const future = observations.filter((o) => o.observedAt.getTime() > nowMs + FUTURE_SKEW_MINUTES * 60_000);
+  if (future.length) {
+    reasons.push(`future_observations_excluded:${future.length}`);
+    qualityFlags.add('future_observation');
+  }
+  const sorted = observations.filter((o) => !future.includes(o)).sort((a, b) => a.observedAt.getTime() - b.observedAt.getTime());
 
   // A53: coverage breaks, fee-basis changes, incomplete pagination and basket changes invalidate observations.
   const basketKeys = new Set(sorted.map((o) => o.basketKey));
@@ -84,6 +107,16 @@ export function computeTrend(observations: TrendObservation[], now: Date): Trend
     }
     return true;
   });
+  // Only the 72 hours up to the latest valid observation steer the result (plus the window tolerance, so a
+  // 72-hour baseline can still be found).
+  const endAt = valid.length ? valid[valid.length - 1]!.observedAt.getTime() : null;
+  const inWindow = endAt === null ? valid : valid.filter((o) => endAt - o.observedAt.getTime() <= (TREND_LOOKBACK_HOURS * 60 + WINDOW_TOLERANCE_MINUTES) * 60_000);
+  if (inWindow.length < valid.length) qualityFlags.add('older_than_lookback_ignored');
+  return finishTrend(inWindow, { reasons, qualityFlags, now });
+}
+
+function finishTrend(valid: TrendObservation[], ctx: { reasons: string[]; qualityFlags: Set<string>; now: Date }): TrendResult {
+  const { reasons, qualityFlags, now } = ctx;
 
   // Adequate common-source coverage: every valid observation must share the intersection set, and it must be non-empty.
   const intersection = valid.length ? valid.map((o) => new Set(o.sourceIds)).reduce((acc, s) => new Set([...acc].filter((x) => s.has(x)))) : new Set<string>();
@@ -103,7 +136,12 @@ export function computeTrend(observations: TrendObservation[], now: Date): Trend
     spanMinutes,
     sourceIntersection: [...intersection].sort(),
     qualityFlags: [...qualityFlags].sort(),
+    latestObservedAt: usable.length ? usable[usable.length - 1]!.observedAt : null,
+    freshness: 'none',
+    historical: null,
   };
+  const ageHours = base.latestObservedAt ? (now.getTime() - base.latestObservedAt.getTime()) / 3_600_000 : null;
+  if (ageHours !== null) base.freshness = ageHours > TREND_MAX_ENDPOINT_AGE_HOURS ? 'historical' : 'current';
 
   if (usable.length < TREND_MIN_OBSERVATIONS) reasons.push(`fewer_than_${TREND_MIN_OBSERVATIONS}_valid_observations:${usable.length}`);
   if (spanMinutes < TREND_MIN_SPAN_MINUTES) reasons.push(`span_under_6h:${spanMinutes}m`);
@@ -156,6 +194,11 @@ export function computeTrend(observations: TrendObservation[], now: Date): Trend
   else if (endpointChangeCents < 0 && medianSlope < 0) direction = 'down';
   else direction = 'mixed';
 
-  void now;
+  if (base.freshness === 'historical') {
+    // Sufficient as history, not as a reading of today: every timing consumer sees 'insufficient'.
+    reasons.push(`endpoint_stale:${Math.round(ageHours!)}h`);
+    qualityFlags.add('endpoint_stale');
+    return { ...base, qualityFlags: [...qualityFlags].sort(), direction: 'insufficient', adequacy: 'insufficient', windows, endpointChangeCents, endpointChangePct, medianPairwiseSlopeCentsPerHour: medianSlope, floorLoweredByNewSource, historical: { fromAt: first.observedAt, toAt: current!.observedAt, fromCents: first.cheapestEligibleTotalCents!, toCents: current!.cheapestEligibleTotalCents!, direction } };
+  }
   return { ...base, direction, adequacy: 'sufficient', windows, endpointChangeCents, endpointChangePct, medianPairwiseSlopeCentsPerHour: medianSlope, floorLoweredByNewSource };
 }

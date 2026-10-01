@@ -83,6 +83,8 @@ export type BuildPacketArgs = {
   benchmarkRunId: string | null;
   trend: TrendResult | null;
   trendRunId: string | null;
+  /** Every dataset behind the trend allows showing it to customers (R2-TREND-RIGHTS-01). Default: allowed. */
+  trendDisplayAllowed?: boolean;
   policy: PolicyResult;
   priorities: CustomerPriorities;
   sourcesChecked: string[];
@@ -416,6 +418,9 @@ const countWord = (n: number) => COUNT_WORDS[n] ?? String(n);
  * their group, and whether anything argues for moving quickly. It reads the calculated context only and
  * never says where prices will go.
  */
+/** Fewer listings than this for their group size is thin supply, said as a caution. */
+const SUPPLY_ADEQUATE_MIN = 15;
+
 function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   const m = a.market;
   const c = m?.context;
@@ -462,13 +467,21 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   const canWait = !a.travelling && p.mustAttend !== true && (p.waitRiskTolerance === 'medium' || p.waitRiskTolerance === 'high') && p.decisionDeadline !== null;
   // Scarcity for their group only from counts for their group size, never from all-event listing counts (R4-B07).
   const groupCounts = m.supplyScope === 'group';
+  // Falling prices say nothing about how much there is to choose from (R2-SUPPLY-COPY-01): reassurance about
+  // waiting needs a known, adequate count for their group size, read fresh. Unknown supply is said as unknown,
+  // and a thin count is a caution whichever way prices are moving.
+  const supplyKnown = fresh && s.now !== null && (groupCounts || q === 1);
+  const thin = supplyKnown && s.now! < SUPPLY_ADEQUATE_MIN && (q > 1 || s.now! <= 1);
+  const listingsWord = (n: number) => `${n} listing${n === 1 ? '' : 's'}`;
+  const deadline = p.decisionDeadline ? ` by ${checkedAt(p.decisionDeadline, a.timeZone).replace(/,? \d{1,2}:\d{2} [AP]M [A-Z]{2,5}$/, '')}` : '';
   if (fresh && groupCounts && s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait.');
+  else if (thin) parts.push(`${trendKnown && c.direction === 'down' ? 'Prices have been easing, but there' : 'There'} ${s.now === 1 ? 'was only 1 listing' : `were only ${listingsWord(s.now!)}`} ${q > 1 ? `with ${countWord(q)} or more tickets` : ''} when I checked, so I wouldn’t count on waiting: if you find seats that meet what you need at a price you’re happy with, I wouldn’t hold out.`.replace(/ {2,}/g, ' '));
   else if (trendKnown && c.direction === 'down') {
-    if (canWait) parts.push('Prices have been easing and there’s still plenty to choose from, so there’s no need to rush before your deadline.');
-    else if (a.travelling || p.mustAttend === true) parts.push('Prices have been easing, but since you can’t risk missing it, I wouldn’t hold out for a lower price.');
+    if (a.travelling || p.mustAttend === true) parts.push('Prices have been easing, but since you can’t risk missing it, I wouldn’t hold out for a lower price.');
+    else if (canWait && supplyKnown) parts.push(`Prices have been easing, and there were ${listingsWord(s.now!)}${q > 1 ? ` with ${countWord(q)} or more tickets` : ''} when I checked${q > 1 ? ' (some may not split into exactly your number or sit together)' : ''}. Waiting${deadline} is reasonable if you’re ok with the risk that the seats you want go; it isn’t a promise prices keep falling.`);
+    else if (canWait) parts.push(`Prices have been easing, but I can’t see how many listings there are for a group your size, so that alone isn’t a reason to wait. If you do wait, it’s a risk that the seats you want go${deadline ? `, and I’d decide${deadline}` : ''}.`);
     else parts.push('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
   } else if (trendKnown && c.direction === 'up') parts.push(`Prices have been climbing, so waiting hasn’t been paying off for this ${a.eventNoun ?? 'game'}.`);
-  else if (fresh && groupCounts && s.now !== null && s.now < 15 && q > 1) parts.push('There aren’t many blocks for a group your size, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait long.');
   else if (!trendKnown && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
   return readClaim(a, parts, c, s);
@@ -531,7 +544,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const size = m.basis ? basisSize(m.basis) : q;
   const moved = (s: MarketContext['supply']) => s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? `, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${s.before} over the last ${s.hours} hours` : '';
   const supplyText = (s: MarketContext['supply']) =>
-    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${s.now} listings have ${group} or more tickets${moved(s)}.` : ` About ${s.now} listings are up${moved(s)}.`;
+    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${s.now} listing${s.now === 1 ? ' has' : 's have'} ${group} or more tickets${moved(s)}.` : ` About ${s.now} listing${s.now === 1 ? ' is' : 's are'} up${moved(s)}.`;
   // A group's series starts at the first listings read, so its current floor is worth saying before there is a trend.
   const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
   if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
@@ -990,28 +1003,40 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     if (a.trend.adequacy === 'sufficient' && w) {
       const dirWord = a.trend.direction === 'down' ? 'fallen' : a.trend.direction === 'up' ? 'risen' : 'moved';
       const newSource = a.trend.floorLoweredByNewSource ? ' The lower price comes from a different seller, so this reflects a new cheaper option rather than existing sellers cutting prices.' : '';
+      // The window ends at the latest observation, not at the time of this reply (R2-TREND-TIME-01).
+      const latest = a.trend.latestObservedAt ?? a.observedAt;
+      const lagMinutes = (a.observedAt.getTime() - latest.getTime()) / 60_000;
+      const span = lagMinutes <= 90 ? `over the last ${w.windowHours} hours` : `in the ${w.windowHours} hours up to ${checkedAt(latest, a.timeZone)}`;
       claims.push({
         id: 'C_TREND',
         kind: 'trend_change',
-        text: `Your group's cheapest comparable option has ${dirWord} from ${formatUsd(w.baselineCents)} to ${formatUsd(w.currentCents)} over the last ${w.windowHours} hours (${a.trend.direction === 'flat' || a.trend.direction === 'mixed' ? 'no clear direction' : a.trend.direction}).${newSource} Past movement does not predict the next one.`,
+        text: `Your group's cheapest comparable option has ${dirWord} from ${formatUsd(w.baselineCents)} to ${formatUsd(w.currentCents)} ${span} (${a.trend.direction === 'flat' || a.trend.direction === 'mixed' ? 'no clear direction' : a.trend.direction}).${newSource} Past movement does not predict the next one.`,
         values: { baselineCents: w.baselineCents, currentCents: w.currentCents, windowHours: w.windowHours, direction: a.trend.direction },
-        scope: { quantity: q, seatZone: null, feeBasis: 'verified_total', observedAt: obs },
+        scope: { quantity: q, seatZone: null, feeBasis: 'verified_total', observedAt: latest.toISOString() },
         evidenceIds: a.trend.validObservationIds,
         methodVersion: a.trend.methodVersion,
         limitations: a.trend.qualityFlags,
-        customerVisible: true,
+        customerVisible: a.trendDisplayAllowed !== false,
       });
     } else {
+      // A series that ended long ago is history: said with its real dates, never as recent (R2-TREND-TIME-01).
+      const h = a.trend.historical;
+      const latest = a.trend.latestObservedAt;
+      const text = h
+        ? `The newest comparable price I have for your group is from ${checkedAt(h.toAt, a.timeZone)}, too old to say how prices are moving now. Between ${checkedAt(h.fromAt, a.timeZone)} and then, it went from ${formatUsd(h.fromCents)} to ${formatUsd(h.toCents)}.`
+        : latest && a.trend.freshness === 'historical'
+          ? `The newest comparable price I have for your group is from ${checkedAt(latest, a.timeZone)}, too old to say how prices are moving now.`
+          : `We have only ${a.trend.validObservationIds.length} comparable price observation${a.trend.validObservationIds.length === 1 ? '' : 's'} over ${Math.round(a.trend.spanMinutes / 60)} hours for your group size, which isn't enough to call a trend.`;
       claims.push({
         id: 'C_NOTREND',
         kind: 'trend_change',
-        text: `We have only ${a.trend.validObservationIds.length} comparable price observations over ${Math.round(a.trend.spanMinutes / 60)} hours for your group size, which isn't enough to call a trend.`,
+        text,
         values: { observations: a.trend.validObservationIds.length, spanMinutes: a.trend.spanMinutes },
-        scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+        scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: latest?.toISOString() ?? obs },
         evidenceIds: a.trend.validObservationIds,
         methodVersion: a.trend.methodVersion,
         limitations: a.trend.reasons,
-        customerVisible: true,
+        customerVisible: h ? a.trendDisplayAllowed !== false : true,
       });
     }
   }
