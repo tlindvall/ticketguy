@@ -93,7 +93,7 @@ describe('Research 1: adjacent-event decisions', () => {
     it('supplied-rule control: the two-item rule, food or soft drinks count, and the link with its status', async () => {
       const [r] = await converse([COMEDY_RULE]);
       answered(r!, '$48 covers entry for the two of you, not the whole night.');
-      expect(r!.text).toContain('The rule you supplied says two qualifying items per person, and food or non-alcoholic drinks count, so it isn’t a requirement to drink alcohol.');
+      expect(r!.text).toContain('The rule you supplied says two qualifying items per person (four for the two of you), and food or non-alcoholic drinks count, so you don’t have to buy alcohol.');
       expect(r!.html).toContain('<a href="https://comedycellar.com/reservations/">');
       expect(r!.text).toContain('I haven’t checked it myself in this reply.');
     });
@@ -107,15 +107,16 @@ describe('Research 1: adjacent-event decisions', () => {
       expect(first!.text).toContain('meets your sit-together requirement at $220 total, leaving $20 of your $240. For a one-night visit, that’s the safer plan.');
       expect(first!.brief.genreHint ?? null).toBeNull();
       answered(second!, 'Winning lets you buy, but I can’t tell from what you’ve sent whether those seats would be together.');
-      expect(second!.text).toContain('only the plan if the seller confirms they’re together');
+      expect(second!.text).toContain('are the plan only once the seats offered are shown together');
       expect(second!.text).toContain('$220 total, leaving $20 of your $240');
     });
     it('supplied-terms control: adjacent seats aren’t guaranteed even if you win, with the terms linked', async () => {
       const [r] = await converse([BROADWAY_TERMS]);
       answered(r!, 'I wouldn’t count the lottery as your guaranteed plan.');
-      expect(r!.text).toContain('The terms you supplied also say adjacent seats aren’t guaranteed even if you win.');
+      expect(r!.text).toContain('The terms you supplied also say even winning doesn’t guarantee adjacent seats.');
       expect(r!.html).toContain('<a href="https://lottery.broadwaydirect.com/terms/">');
-      expect(r!.text).toContain('I haven’t checked them myself in this reply.');
+      // One status line for the terms and availability (post-deploy R1 writing review).
+      expect(r!.text).toContain('I haven’t checked the terms or availability myself.');
     });
   });
 

@@ -1,0 +1,111 @@
+{
+  "live": {
+    "01": [
+      "For the same hypothetical New York pop concert, two adults need two actual concert tickets with reserved seats together. My cap is $200 TOTAL including fees. I prefer the lower tier when it fits my budget, but an upper-tier pair is acceptable. Offer A: TWO actual concert admissions, two adjacent reserved upper-tier seats, $190 TOTAL including all fees. Offer B: TWO actual concert admissions, two adjacent reserved lower-tier seats, $240 TOTAL including all fees. Offer C: TWO VIP lounge UPGRADES, $100 TOTAL including all fees; concert admission is explicitly NOT included and separate concert tickets are required. I don't already own any tickets. Which offer fits now? Use only these supplied quotes, not live verification, and don't assume anything about sightlines.",
+      "Change ONLY my total budget cap to $250 including all fees. Everything else stays the same: two adults, reserved seats together, lower-tier preference, no existing tickets, and the same three offers. Which would you choose now, why did the recommendation change, and how much does it cost above the other usable option?"
+    ],
+    "02": [
+      "Help me compare hypothetical quotes for the same Denver country concert. There are THREE of us going, but I already own my concert ticket. Only my TWO friends need new tickets; I am not buying mine again. We don't need to sit with my existing seat, but the friends need to sit together. My budget is $250 TOTAL including fees for the NEW tickets only. Offer A: a fixed bundle of TWO actual concert admissions, two adjacent reserved seats, $180 TOTAL all-in, exactly TWO admissions available. Offer B: a fixed bundle of THREE actual concert admissions, three adjacent reserved seats, $240 TOTAL all-in, exactly THREE admissions available. No partial-bundle purchase is offered. I want to spend as little as possible while covering the friends. Which bundle do I need, how many new tickets, and what remains of my budget? Use these supplied facts only; these are not verified live inventory.",
+      "One more friend is joining. Now FOUR of us are going: my already-owned ticket plus THREE friends who each need a new ticket. Keep the same $250 all-in budget for the new tickets only, the same fixed bundles, and the requirement that the friends sit together. Which bundle covers the new purchase now, and what is the remaining budget? Don't buy my ticket again."
+    ],
+    "03": [
+      "Help me reason about two hypothetical quotes for the same US pop concert and the same night. A: two adjacent reserved upper-tier seats, $240 TOTAL including all fees. B: two adjacent reserved lower-tier seats, $285 TOTAL including all fees. Both admit our group and meet our access needs. My cap is $300 total for both. Keeping the spend down is my top priority. Which would you choose and why? These are supplied quotes, not verified inventory; do not search for an event or assume anything about the view.",
+      "Change only my preference: I now value being in the lower tier enough to pay the difference, provided we stay under the same $300 total cap. The quotes and all other requirements are unchanged. Which would you pick for me now?"
+    ]
+  },
+  "local": {
+    "R1-09-COMEDY-MINIMUM": {
+      "opening": "Two adults, both 27, looking at Comedy Cellar in New York. A copied quote says $24 cover per person including cover-related charges; food and drink are separate. Our whole-night cap is $100. Does that mean the night costs $48, and do we have to buy alcohol? Please link the official rule and tell me what price information is missing; don't make a reservation.",
+      "followup": "For this hypothetical calculation, add only the missing spending fact: we'd buy exactly two qualifying items each at $9 per item, with ALL food/drink charges and tips included in that $9. Keep the $24-per-person cover and $100 total cap. What's the complete supplied total and budget room? These are supplied prices, not the venue's live menu.",
+      "control": "Two adults, both 27, looking at Comedy Cellar in New York. A copied quote says $24 cover per person including cover-related charges; food and drink are separate. Our whole-night cap is $100. Does that mean the night costs $48, and do we have to buy alcohol? Please link the official rule and tell me what price information is missing; don't make a reservation.\n\nAdditional supplied policy summary, not an independently fetched rule: the official reservation page https://comedycellar.com/reservations/ requires two qualifying items per attendee; food, drinks or water can qualify. It does not require two alcoholic drinks. No item prices are supplied. Answer conditionally using this summary."
+    },
+    "R1-08-BROADWAY-LOTTERY": {
+      "opening": "Two adults visiting New York for just one night. I need two seats together and can't risk missing the show. I'm considering a participating Broadway Direct lottery quoting $50 per ticket if selected; I have not won. A separate hypothetical quote offers two actual adjacent seats for the same performance for $220 TOTAL all-in. Our cap is $240. Can I treat the lottery as a guaranteed $100 alternative? Use the official lottery terms; these example prices are not live inventory.",
+      "followup": "Change only the lottery result: assume I have now won eligibility to purchase two tickets at the quoted price. I still need seats together and cannot accept separated seats. No seat assignment has been supplied. Does winning itself confirm that requirement? Everything else is unchanged.",
+      "control": "Two adults visiting New York for just one night. I need two seats together and can't risk missing the show. I'm considering a participating Broadway Direct lottery quoting $50 per ticket if selected; I have not won. A separate hypothetical quote offers two actual adjacent seats for the same performance for $220 TOTAL all-in. Our cap is $240. Can I treat the lottery as a guaranteed $100 alternative? Use the official lottery terms; these example prices are not live inventory.\n\nAdditional supplied policy summary, not an independently fetched rule: https://lottery.broadwaydirect.com/terms/ describes entry as a chance to be selected to purchase. Even winning does not guarantee adjacent seats. Use those supplied terms without assuming a seat assignment or live availability."
+    },
+    "R1-08-FAMILY-LAP-CHILD": {
+      "opening": "My partner and I want Disney On Ice in Seattle with our child, who will be 23 months old on the show date and sit on my lap. Do we buy two tickets or three? We haven't chosen the arena or performance yet. Please give the relevant US rule and say what you need to confirm; don't shop a made-up show.",
+      "followup": "Change only our child's age on the performance date: 25 months. Same two adults and no selected arena or performance. Does the US show's general rule now require a separate child ticket? Don't promise a free or discounted ticket.",
+      "control": "My partner and I want Disney On Ice in Seattle with our child, who will be 23 months old on the show date and sit on my lap. Do we buy two tickets or three? We haven't chosen the arena or performance yet. Please give the relevant US rule and say what you need to confirm; don't shop a made-up show.\n\nAdditional supplied policy summary, not an independently fetched rule: the US FAQ https://www.disneyonice.com/en-us/faq/ generally requires tickets for age two or older and permits under-two lap attendance, but local arenas can require a ticket at every age. No arena policy is supplied. Answer conditionally using this summary."
+    }
+  },
+  "wording": {
+    "owned-exact": {
+      "messages": [
+        "Help me compare hypothetical quotes for the same Denver country concert. There are THREE of us going, but I already own my concert ticket. Only my TWO friends need new tickets; I am not buying mine again. We don't need to sit with my existing seat, but the friends need to sit together. My budget is $250 TOTAL including fees for the NEW tickets only. Offer A: a fixed bundle of TWO actual concert admissions, two adjacent reserved seats, $180 TOTAL all-in, exactly TWO admissions available. Offer B: a fixed bundle of THREE actual concert admissions, three adjacent reserved seats, $240 TOTAL all-in, exactly THREE admissions available. No partial-bundle purchase is offered. I want to spend as little as possible while covering the friends. Which bundle do I need, how many new tickets, and what remains of my budget? Use these supplied facts only; these are not verified live inventory.",
+        "One more friend is joining. Now FOUR of us are going: my already-owned ticket plus THREE friends who each need a new ticket. Keep the same $250 all-in budget for the new tickets only, the same fixed bundles, and the requirement that the friends sit together. Which bundle covers the new purchase now, and what is the remaining budget? Don't buy my ticket again."
+      ],
+      "field": "toBuy",
+      "expected": 3
+    },
+    "owned-equivalent-control": {
+      "messages": [
+        "Help me compare hypothetical quotes for the same Denver country concert. There are THREE of us going, but I already have my own ticket. Only my TWO friends need new tickets; I am not buying mine again. We don't need to sit with my existing seat, but the friends need to sit together. My budget is $250 TOTAL including fees for the NEW tickets only. Offer A: a fixed bundle of TWO actual concert admissions, two adjacent reserved seats, $180 TOTAL all-in, exactly TWO admissions available. Offer B: a fixed bundle of THREE actual concert admissions, three adjacent reserved seats, $240 TOTAL all-in, exactly THREE admissions available. No partial-bundle purchase is offered. I want to spend as little as possible while covering the friends. Which bundle do I need, how many new tickets, and what remains of my budget? Use these supplied facts only; these are not verified live inventory.",
+        "One more friend is joining. Now FOUR of us are going: my already-owned ticket plus THREE friends who each need a new ticket. Keep the same $250 all-in budget for the new tickets only, the same fixed bundles, and the requirement that the friends sit together. Which bundle covers the new purchase now, and what is the remaining budget? Don't buy my ticket again."
+      ],
+      "field": "toBuy",
+      "expected": 3
+    },
+    "preference-exact": {
+      "messages": [
+        "Help me reason about two hypothetical quotes for the same US pop concert and the same night. A: two adjacent reserved upper-tier seats, $240 TOTAL including all fees. B: two adjacent reserved lower-tier seats, $285 TOTAL including all fees. Both admit our group and meet our access needs. My cap is $300 total for both. Keeping the spend down is my top priority. Which would you choose and why? These are supplied quotes, not verified inventory; do not search for an event or assume anything about the view.",
+        "Change only my preference: I now value being in the lower tier enough to pay the difference, provided we stay under the same $300 total cap. The quotes and all other requirements are unchanged. Which would you pick for me now?"
+      ],
+      "field": "priority.kind",
+      "expected": "feature"
+    },
+    "preference-equivalent-control": {
+      "messages": [
+        "Help me reason about two hypothetical quotes for the same US pop concert and the same night. A: two adjacent reserved upper-tier seats, $240 TOTAL including all fees. B: two adjacent reserved lower-tier seats, $285 TOTAL including all fees. Both admit our group and meet our access needs. My cap is $300 total for both. Keeping the spend down is my top priority. Which would you choose and why? These are supplied quotes, not verified inventory; do not search for an event or assume anything about the view.",
+        "Being in the lower tier matters most; keep all other requirements and the $300 total cap."
+      ],
+      "field": "priority.kind",
+      "expected": "feature"
+    },
+    "minimum-rule-exact": {
+      "messages": [
+        "Two adults, both 27, looking at Comedy Cellar in New York. A copied quote says $24 cover per person including cover-related charges; food and drink are separate. Our whole-night cap is $100. Does that mean the night costs $48, and do we have to buy alcohol? Please link the official rule and tell me what price information is missing; don't make a reservation.\n\nAdditional supplied policy summary, not an independently fetched rule: the official reservation page https://comedycellar.com/reservations/ requires two qualifying items per attendee; food, drinks or water can qualify. It does not require two alcoholic drinks. No item prices are supplied. Answer conditionally using this summary."
+      ],
+      "field": "policyUsed",
+      "expected": true
+    },
+    "minimum-rule-equivalent-control": {
+      "messages": [
+        "Two adults, both 27, looking at Comedy Cellar in New York. A copied quote says $24 cover per person including cover-related charges; food and drink are separate. Our whole-night cap is $100. Does that mean the night costs $48, and do we have to buy alcohol? Please link the official rule and tell me what price information is missing; don't make a reservation.\n\nAdditional supplied policy summary, not an independently fetched rule: the official reservation page https://comedycellar.com/reservations/ requires two qualifying items per person; food, drinks or water can qualify. It does not require two alcoholic drinks. No item prices are supplied. Answer conditionally using this summary."
+      ],
+      "field": "policyUsed",
+      "expected": true
+    },
+    "lottery-win-exact": {
+      "messages": [
+        "Two adults visiting New York for just one night. I need two seats together and can't risk missing the show. I'm considering a participating Broadway Direct lottery quoting $50 per ticket if selected; I have not won. A separate hypothetical quote offers two actual adjacent seats for the same performance for $220 TOTAL all-in. Our cap is $240. Can I treat the lottery as a guaranteed $100 alternative? Use the official lottery terms; these example prices are not live inventory.",
+        "Change only the lottery result: assume I have now won eligibility to purchase two tickets at the quoted price. I still need seats together and cannot accept separated seats. No seat assignment has been supplied. Does winning itself confirm that requirement? Everything else is unchanged."
+      ],
+      "field": "winAcknowledged",
+      "expected": true
+    },
+    "lottery-win-equivalent-control": {
+      "messages": [
+        "Two adults visiting New York for just one night. I need two seats together and can't risk missing the show. I'm considering a participating Broadway Direct lottery quoting $50 per ticket if selected; I have not won. A separate hypothetical quote offers two actual adjacent seats for the same performance for $220 TOTAL all-in. Our cap is $240. Can I treat the lottery as a guaranteed $100 alternative? Use the official lottery terms; these example prices are not live inventory.",
+        "Change only the lottery result: assume I won eligibility to purchase two tickets at the quoted price. I still need seats together and cannot accept separated seats. No seat assignment has been supplied. Does winning itself confirm that requirement? Everything else is unchanged."
+      ],
+      "field": "winAcknowledged",
+      "expected": true
+    },
+    "lottery-adjacent-quote-exact": {
+      "messages": [
+        "Two adults visiting New York for just one night. I need two seats together and can't risk missing the show. I'm considering a participating Broadway Direct lottery quoting $50 per ticket if selected; I have not won. A separate hypothetical quote offers two actual adjacent seats for the same performance for $220 TOTAL all-in. Our cap is $240. Can I treat the lottery as a guaranteed $100 alternative? Use the official lottery terms; these example prices are not live inventory."
+      ],
+      "field": "alternativeUsed",
+      "expected": true
+    },
+    "lottery-adjacent-quote-equivalent-control": {
+      "messages": [
+        "Two adults visiting New York for just one night. I need two seats together and can't risk missing the show. I'm considering a participating Broadway Direct lottery quoting $50 per ticket if selected; I have not won. An adjacent pair for $220 TOTAL all-in is another hypothetical supplied quote. Our cap is $240. Can I treat the lottery as a guaranteed $100 alternative? Use the official lottery terms; these example prices are not live inventory."
+      ],
+      "field": "alternativeUsed",
+      "expected": true
+    }
+  }
+}
