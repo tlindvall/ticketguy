@@ -19,7 +19,7 @@ describe('a watch alert sends only on evidence still fresh at dispatch', () => {
   let clock = FIXTURE_NOW;
   const provider = new RecordingProvider();
   const who = (k: string) => `fresh-${k}@customer.example`;
-  const KEYS = ['fresh', 'stale', 'cached', 'near', 'mismatch', 'real-fresh', 'real-stale'];
+  const KEYS = ['fresh', 'stale', 'cached', 'near', 'mismatch', 'real-fresh', 'real-stale', 'cancelled'];
   const intakeEnv = testEnv({ WATCH_SEND_ENABLED: 'true' });
   // Sendable apart from the evidence: live mode, sending on, every customer allowlisted.
   const sendEnv = testEnv({ APP_MODE: 'live', EMAIL_SEND_ENABLED: 'true', RESEND_API_KEY: 're_test_key', EXTRACTION_PROVIDER: 'rules', WATCH_SEND_ENABLED: 'true', EMAIL_TEST_RECIPIENT_ALLOWLIST: KEYS.map(who).join(',') });
@@ -127,5 +127,19 @@ describe('a watch alert sends only on evidence still fresh at dispatch', () => {
     clock = at(20, FAR);
     expect(await sender().dispatchSend(stale.sendIntentId)).toMatchObject({ outcome: 'blocked', reasons: expect.arrayContaining(['evidence_stale']) });
     expect(provider.sent).toHaveLength(1);
+  });
+
+  // R2-LIFECYCLE-01, for watches. Last: it cancels the event every case here watches.
+  it('withholds a fresh alert once the event is cancelled, and pauses the watch', async () => {
+    await testMode(true);
+    const a = await approvedAlert('cancelled', FAR);
+    const [w] = await h.db.select().from(t.watches).where(eq(t.watches.id, a.watchId));
+    await h.db.update(t.events).set({ status: 'cancelled' }).where(eq(t.events.id, w!.eventId));
+    clock = FAR;
+    expect(await sender().dispatchSend(a.sendIntentId)).toMatchObject({ outcome: 'blocked', reasons: expect.arrayContaining(['event_cancelled']) });
+    expect(await alertState(a.alertId)).toBe('invalidated');
+    await h.db.update(t.watches).set({ nextCheckAt: clock }).where(eq(t.watches.id, a.watchId));
+    await intake().evaluateDueWatches(50);
+    expect((await h.db.select().from(t.watches).where(eq(t.watches.id, a.watchId)))[0]).toMatchObject({ state: 'paused', pauseReason: 'event_cancelled' });
   });
 });
