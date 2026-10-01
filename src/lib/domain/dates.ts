@@ -99,22 +99,45 @@ export function minutesBetween(a: Date, b: Date): number {
 }
 
 /**
- * The instant at which a venue's local wall-clock time occurs. Discovery gives most events a start instant,
- * but a time-to-be-announced event has only a local date; this turns that into a comparable instant without
- * a timezone library, by guessing UTC and correcting by the zone's offset at that guess (two passes cover a
- * DST edge). It is only ever used for ordering and windowing, never shown as the event time.
+ * Every instant at which a venue's wall-clock time occurs (R2-TIME-FOLD-01), earliest first: one normally, two
+ * in the hour that repeats when clocks go back (1:30 AM in Los Angeles on Nov 1, 2026 is both 08:30Z and
+ * 09:30Z), none in the hour skipped when they go forward. Only an explicit offset tells the two apart, so a
+ * caller that must not guess checks for more than one.
+ */
+export function localTimeInstants(localDate: string, localTime: string, timeZone: string): Date[] {
+  const want = wallMs(localDate, localTime);
+  // The zone's offsets a day either side cover both sides of any transition near this time.
+  const offsets = new Set([-86_400_000, 0, 86_400_000].map((d) => offsetMs(new Date(want + d), timeZone)));
+  const out = [...offsets].map((o) => want - o).filter((ms) => offsetMs(new Date(ms), timeZone) === want - ms);
+  return [...new Set(out)].sort((a, b) => a - b).map((ms) => new Date(ms));
+}
+
+/**
+ * One instant for a venue's local wall-clock time. Discovery gives most events a start instant, but a
+ * time-to-be-announced event has only a local date; this turns that into a comparable instant without a
+ * timezone library. It is only ever used for ordering, windowing and deadlines, never shown as the event time.
+ * In the repeated hour it is the first occurrence, so a deadline is never later than meant; in a skipped hour
+ * it is that clock time after the jump (2:30 AM reads as 3:30 AM), as a clock would show it.
  */
 export function localToInstant(localDate: string, localTime: string, timeZone: string): Date {
+  const all = localTimeInstants(localDate, localTime, timeZone);
+  if (all.length) return all[0]!;
+  const want = wallMs(localDate, localTime);
+  return new Date(want - offsetMs(new Date(want - 86_400_000), timeZone));
+}
+
+/** "2026-11-01", "01:30" read as if it were UTC: the wall time in milliseconds. */
+function wallMs(localDate: string, localTime: string): number {
   const [y, m, d] = localDate.split('-').map(Number) as [number, number, number];
   const [hh, mm] = localTime.split(':').map(Number) as [number, number];
-  let guess = Date.UTC(y, m - 1, d, hh, mm ?? 0);
-  for (let pass = 0; pass < 2; pass += 1) {
-    const p = localDateParts(new Date(guess), timeZone);
-    const seen = Date.UTC(p.y, p.m - 1, p.d, p.hour, minuteInZone(new Date(guess), timeZone));
-    const want = Date.UTC(y, m - 1, d, hh, mm ?? 0);
-    guess += want - seen;
-  }
-  return new Date(guess);
+  return Date.UTC(y, m - 1, d, hh, mm ?? 0);
+}
+
+/** How far the zone's wall clock is ahead of UTC at an instant (negative in the Americas). */
+function offsetMs(instant: Date, timeZone: string): number {
+  const p = localDateParts(instant, timeZone);
+  const whole = Math.floor(instant.getTime() / 60_000) * 60_000;
+  return Date.UTC(p.y, p.m - 1, p.d, p.hour, minuteInZone(instant, timeZone)) - whole;
 }
 
 function minuteInZone(instant: Date, timeZone: string): number {

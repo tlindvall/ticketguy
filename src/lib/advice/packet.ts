@@ -114,6 +114,12 @@ export type BuildPacketArgs = {
   subject?: SubjectListing | null;
   /** The event's own local date and start, to check the listing against. */
   eventLocalDate?: string | null;
+  /**
+   * Who and where the event is, to check the listing against (R2-IDENTITY-01): the performer or both teams with
+   * their aliases (`names[0]` is the one said back), team nicknames ("Rangers"), the event's own name, and the
+   * venue's names and city.
+   */
+  eventIdentity?: { names: string[]; nicknames: string[]; venueNames: string[]; city: string | null } | null;
   /** The event's start, to size delivery margins in its venue's zone. */
   eventStartAt?: Date | null;
   /** Whether the buyer said they need accessible seating. */
@@ -201,6 +207,34 @@ function subjectClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
   };
 }
 
+/** Lower case, no accents, punctuation or "the": "Beyoncé — The Renaissance Tour" → "beyonce renaissance tour". */
+const fold = (x: string) => x.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\bthe\b/g, ' ').replace(/\s+/g, ' ').trim();
+/** Whether one name contains the other as whole words; a short fragment ("NY") matches nothing. */
+const sameName = (said: string, names: string[]) => {
+  const a = fold(said);
+  return a.length >= 3 && names.some((n) => {
+    const b = fold(n);
+    return b.length >= 3 && (` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `));
+  });
+};
+/** The places a listing may name for a venue's city: "NYC" and the boroughs are New York, Inglewood is Los Angeles. */
+const CITY_ALIASES: Record<string, string> = { nyc: 'new york', 'new york city': 'new york', manhattan: 'new york', brooklyn: 'new york', queens: 'new york', bronx: 'new york', 'staten island': 'new york', flushing: 'new york', la: 'los angeles', inglewood: 'los angeles', 'east rutherford': 'new york', elmont: 'new york', uniondale: 'new york', sf: 'san francisco', philly: 'philadelphia', dc: 'washington', 'washington dc': 'washington', 'washington d c': 'washington' };
+const cityKey = (x: string) => {
+  const f = fold(x.replace(/,.*$/, '')).replace(/\bsaint\b/g, 'st').replace(/\bfort\b/g, 'ft');
+  return CITY_ALIASES[f] ?? f;
+};
+
+/** Where the listing names a different performer, city or venue than the event (R2-IDENTITY-01); null when it doesn't. */
+function identityMismatch(a: BuildPacketArgs, sub: SubjectListing): { artist: string | null; city: string | null; venue: string | null } {
+  const id = a.eventIdentity;
+  if (!id) return { artist: null, city: null, venue: null };
+  const artist = sub.eventName && id.names.length && !sameName(sub.eventName, [...id.names, ...id.nicknames]) ? id.names[0]! : null;
+  const venue = sub.venue && id.venueNames.length && !sameName(sub.venue, id.venueNames) ? id.venueNames[0]! : null;
+  // Not settled by a matching venue name: there's a Fillmore and a Paramount Theatre in many cities.
+  const city = sub.city && id.city && cityKey(sub.city) !== cityKey(id.city) && !sameName(sub.city, [id.city]) ? id.city : null;
+  return { artist, city, venue };
+}
+
 /**
  * The catches worth checking before paying, most material first, from what the listing showed and what it
  * didn't. Each is a fact about the listing or a gap in it; none is a verdict on the seller.
@@ -211,7 +245,12 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
   // What's missing is a fact about what we were given, not about the listing: a detail left out of an email
   // may well be on the seller's page (TG-B08). A screenshot is closer to the page, and still only a crop of it.
   const missing = (what: string) => (sub.source === 'screenshot' ? `The screenshot doesn’t show ${what}` : `You haven’t included ${what}`);
+  const wrong = identityMismatch(a, sub);
+  const noun = a.eventNoun ?? 'game or show';
+  if (wrong.artist) out.push(`The listing is for ${sub.eventName}, not ${wrong.artist}. Make sure it’s the right ${noun}.`);
   if (sub.eventDate && a.eventLocalDate && sub.eventDate !== a.eventLocalDate) out.push(`The date on the listing (${shortDate(sub.eventDate)}) isn’t the date I have for this event (${shortDate(a.eventLocalDate)}). Make sure it’s the right game or show.`);
+  if (wrong.venue) out.push(`The listing says ${sub.venue}, but this ${a.eventNoun ?? 'event'} is at ${wrong.venue}. Make sure it’s the right ${noun}.`);
+  if (wrong.city) out.push(`The listing says ${sub.city}, but this ${a.eventNoun ?? 'event'} is in ${wrong.city}. Make sure it’s the right ${noun}.`);
   if (sub.quantity && sub.quantity !== q) out.push(`It’s for ${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}, not the ${q} you asked about.`);
   const budget = a.priorities.budgetTotalCents;
   const totalHasFees = sub.wholePartyCents != null && sub.perTicketCents != null && sub.wholePartyCents > sub.perTicketCents * (sub.quantity ?? q) + 50;
@@ -256,6 +295,8 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
 /** The reason not to buy a listing as it stands, when there is one: the wrong event, count, seats or budget. */
 function hardProblem(a: BuildPacketArgs, sub: SubjectListing): string | null {
   const q = a.quantity;
+  const artist = identityMismatch(a, sub).artist;
+  if (artist) return `it’s for ${sub.eventName}, not ${artist}`;
   if (sub.eventDate && a.eventLocalDate && sub.eventDate !== a.eventLocalDate) return `the date on it (${shortDate(sub.eventDate)}) isn’t the event you asked about (${shortDate(a.eventLocalDate)})`;
   if (sub.quantity && sub.quantity < q) return `it’s for ${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}, and you need ${q}`;
   if (sub.restrictionCodes.includes('accessible_seating') && !a.accessibilityRequired) return 'these are accessible seats, meant for people who need them';
