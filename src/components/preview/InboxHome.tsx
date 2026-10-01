@@ -2,11 +2,11 @@ import Link from 'next/link';
 import type { LaunchState } from '@/lib/config/launch';
 import { SvgLibrary } from '@/components/public/Landing';
 import { HeroDemo } from './HeroDemo';
-import { CopyAddress } from './CopyAddress';
 import { TrustSection } from './TrustSection';
 import { PixelCursor } from './PixelCursor';
 import { FloatingGuy } from './FloatingGuy';
 import { EventTypes } from './EventTypes';
+import { AskTabs } from './AskTabs';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
@@ -19,7 +19,7 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and the reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + focus + composer (with its labelled example reply) → three things to ask → how it works →
+ * Order: promise + focus + composer (with its labelled example reply) → three things to ask (AskTabs) → how it works →
  * your side of the market (principles; the source map is on /sources) → coverage (concerts and major sports) →
  * a catch-check example → FAQ → closing. Claims follow the service-depth policy: no unmeasured reply times, examples
  * labelled, market data described as context, listing facts attributed to the listing.
@@ -28,30 +28,6 @@ import './inbox.css';
 /** `preview` marks the page as the staff-only preview (a banner, and the logo links back to the preview). */
 type Props = { state: LaunchState; address: string; preview?: boolean };
 
-type Starter = { tone: 'cream' | 'navy' | 'gray'; subject: string; lines: string[]; shows: string; body: string };
-const STARTERS: Starter[] = [
-  {
-    tone: 'navy',
-    subject: 'Is $150 each for these Dua Lipa tickets a good price?',
-    lines: ['Is $150 each for these', 'Dua Lipa tickets', 'a good price?'],
-    shows: 'Check a price',
-    body: 'Ticket link or screenshot:\nHow many (optional):\n',
-  },
-  {
-    tone: 'cream',
-    subject: 'Four Knicks tickets next Saturday. Under $600 total.',
-    lines: ['Four Knicks tickets', 'next Saturday.', 'Under $600 total.'],
-    shows: 'Find tickets',
-    body: 'Where you’d like to sit (optional):\nSeats together? (optional)\n',
-  },
-  {
-    tone: 'gray',
-    subject: 'These seats look cheap. What’s the catch?',
-    lines: ['These seats', 'look cheap.', 'What’s the catch?'],
-    shows: 'Spot the catch',
-    body: 'Ticket link or screenshot:\nWhat you’re unsure about (optional):\n',
-  },
-];
 
 const FAQ: Array<{ q: string; a: string }> = [
   { q: 'What does it cost?', a: 'Nothing. Ticket Guy is free. Some seller links pay us a commission if you buy, but that never decides what we recommend.' },
@@ -101,31 +77,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
         </section>
 
 
-        <section className="starters wrap" aria-labelledby="starters-title">
-          <div className="section-head">
-            <h2 id="starters-title">Three things to ask your guy.</h2>
-            <p>Choose one to open a draft in your email app. <CopyAddress address={address} className="inline-copy" label="Or copy the address" /></p>
-          </div>
-          <ul className="starter-grid">
-            {STARTERS.map((s) => (
-              <li key={s.subject}>
-                <a className={`starter starter-${s.tone}`} href={mailto(s.subject, s.body)} aria-label={`Start an email: ${s.subject}`}>
-                  <span className="starter-titlebar">New message</span>
-                  <span className="starter-to"><span className="mono">To:</span> <span className="starter-address">{address}</span></span>
-                  <svg className="starter-mark" aria-hidden="true"><use href="#ticket-mark" /></svg>
-                  <span className="starter-subject">
-                    <span className="mono">Subject:</span>
-                    {s.lines.map((l) => <span key={l} className="starter-line">{l}</span>)}
-                  </span>
-                  <span className="starter-footer">
-                    <span>{s.shows}</span>
-                    <span className={s.tone === 'navy' ? 'btn-lime btn-small' : 'btn-plain btn-small'}>Start an email <span aria-hidden="true">›</span></span>
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <AskTabs address={address} />
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>
