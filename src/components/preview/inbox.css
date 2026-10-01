@@ -253,8 +253,11 @@
 .tgx .asks-panel { position: relative; align-self: center; aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid var(--ink); background: var(--ink); box-shadow: 8px 8px 0 rgba(20, 36, 56, .12); }
 .tgx .asks-scene { position: absolute; inset: 0; animation: tgx-fadein .45s ease both; }
 .tgx .asks-scene img { object-fit: cover; object-position: 50% 25%; }
-.tgx .asks-scene.is-whole { background: var(--cream); }
-.tgx .asks-scene.is-whole img { object-fit: contain; object-position: 50% 50%; padding: 2%; }
+.tgx .asks-inset { position: absolute; top: 6%; right: 5%; width: 46%; border: 1px solid var(--ink); background: var(--paper); box-shadow: 5px 5px 0 rgba(20, 36, 56, .25); animation: tgx-in .45s ease .15s both; }
+.tgx .asks-inset img { display: block; width: 100%; height: auto; }
+.tgx .asks-points { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+.tgx .asks-points li { position: relative; padding-left: 26px; font-size: 16px; line-height: 1.45; color: var(--ink); }
+.tgx .asks-points li::before { content: "✓"; position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 18px; height: 18px; background: var(--lime); border: 1px solid var(--ink); font-size: 11px; font-weight: 800; }
 @keyframes tgx-fadein { from { opacity: 0; } to { opacity: 1; } }
 .tgx .asks-mail { position: absolute; left: 6%; width: min(64%, 420px); bottom: 6%; display: block; background: var(--paper); border: 1px solid var(--ink); box-shadow: 6px 6px 0 rgba(20, 36, 56, .25); color: var(--ink); text-decoration: none; animation: tgx-in .45s ease .1s both; }
 .tgx .asks-mail:hover { transform: translate(-2px, -2px); box-shadow: 9px 9px 0 rgba(20, 36, 56, .3); }
@@ -267,11 +270,10 @@
 @media (max-width: 900px) {
   .tgx .asks { grid-template-columns: 1fr; }
   .tgx .asks-panel { aspect-ratio: 4 / 5; }
-  .tgx .asks-panel:has(.is-whole) { aspect-ratio: 3 / 2; }
   .tgx .asks-mail { width: auto; right: 6%; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tgx .asks-open, .tgx .asks-scene, .tgx .asks-mail { animation: none; }
+  .tgx .asks-open, .tgx .asks-scene, .tgx .asks-mail, .tgx .asks-inset { animation: none; }
   .tgx .asks-tab { transition: none; }
 }
 
