@@ -19,8 +19,12 @@ describe('timing advice follows the buyer, not just the market', () => {
     expect(p.claimRecords.find((c) => c.id === 'C_READ')!.text).toContain('Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out');
     expect(p.followUps).toEqual(expect.arrayContaining(['When do you need to have tickets sorted by?', 'Would you rather lock in seats now, or wait for a better price and accept you might miss out?']));
   });
-  it('a buyer who can wait, and has a deadline, is told there is no need to rush before it', () => {
-    expect(read(args({ priorities: { mustAttend: false, waitRiskTolerance: 'high', decisionDeadline: new Date('2026-10-28T00:00:00Z'), budgetTotalCents: null, togetherRequired: null, splitGroupAllowed: null, watchConsentGiven: false } }))).toContain('no need to rush before your deadline');
+  it('a buyer who can wait, with a deadline, keeps the risk and the date; venue-wide counts are not their supply', () => {
+    // R2-SUPPLY-COPY-01: 400 listings across the venue say nothing about blocks of two together.
+    const text = read(args({ priorities: { mustAttend: false, waitRiskTolerance: 'high', decisionDeadline: new Date('2026-10-28T00:00:00Z'), budgetTotalCents: null, togetherRequired: null, splitGroupAllowed: null, watchConsentGiven: false } }));
+    expect(text).toContain('I can’t see how many listings there are for a group your size, so that alone isn’t a reason to wait');
+    expect(text).toContain('I’d decide by Oct 27');
+    expect(text).not.toMatch(/plenty|no need to rush/);
   });
   it('someone travelling to it, or who must go, is not told to hold out', () => {
     expect(read(args({ travelling: true }))).toContain('since you can’t risk missing it, I wouldn’t hold out for a lower price');
