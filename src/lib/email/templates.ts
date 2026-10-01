@@ -22,7 +22,7 @@ function esc(s: string): string {
 const REVIEWED_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We compare options and link you to the seller; we never buy, hold or resell tickets. Reply to this email any time.';
 const AUTOMATED_FOOTER = 'AI-assisted ticket advice.';
 /** Templates that are only ever sent after a person approved that exact message. */
-const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert']);
+const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert', 'watch_alert_market']);
 const disclosureFor = (name: string) => (REVIEWED_TEMPLATES.has(name) ? REVIEWED_FOOTER : AUTOMATED_FOOTER);
 
 const BODY_OPEN = '<!doctype html><html><body style="margin:0;padding:0;"><div style="max-width:640px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#202124;">';
@@ -288,6 +288,20 @@ function renderBody(
       const dollars = `$${(total / 100).toFixed(total % 100 === 0 ? 0 : 2)}`;
       const line = `A verified option for ${String(v.quantity)} together${v.section ? ` in section ${String(v.section)}` : ''} is now ${dollars} total (checked ${String(v.observedAt)}).`;
       return wrap([line, `Link: ${String(v.url)}`, `Prices can change before checkout. Reply "stop" to end this watch.`], [`<p>${esc(line)}</p>`, `<p><a href="${esc(String(v.url))}">View this offer</a></p>`, `<p>Prices can change before checkout. Reply "stop" to end this watch.</p>`]);
+    }
+    case 'watch_alert_market': {
+      // A heads-up from resale market data (DECISION_LOG #62): listed prices before fees, the fee allowance said as
+      // an assumption, and what the data can't show said once. Never "found", never a link we didn't check.
+      const usd = (c: unknown) => { const n = Number(c ?? 0); return `$${(n / 100).toFixed(n % 100 === 0 ? 0 : 2)}`; };
+      const q = Number(v.quantity ?? 0);
+      const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+      const n = words[q] ?? String(q);
+      const listings = Number(v.listings ?? 0);
+      const lead = `Heads-up: resale listings with ${q} or more tickets for ${String(v.eventLabel)} now start at ${usd(v.listedPerTicketCents)} a ticket before fees, ${usd(v.listedTotalCents)} for ${n}${listings > 1 ? ` (${listings} listings could seat ${n})` : ''}.`;
+      const fit = `With fees of up to ${String(v.feeAllowancePct)}%, that’s about ${usd(v.estimatedTotalCents)} all in, inside your ${usd(v.targetTotalCents)}.`;
+      const limits = `This is from resale market data (StubHub and Vivid Seats listings, seen ${String(v.observedAt)}), not a ticket I’ve checked: I don’t have a link to it, it may be gone when you look, and a listing of ${q} or more may not sell exactly ${n} or be seats together. If you want it, look up the game on StubHub and Vivid Seats now and check the all-in price at checkout.`;
+      const stop = 'Reply “stop” to end this watch.';
+      return wrap([lead, fit, limits, stop], [`<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, para(fit), para(limits), para(stop)]);
     }
     case 'raw':
     case 'raw_auto':

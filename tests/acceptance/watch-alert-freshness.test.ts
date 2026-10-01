@@ -43,8 +43,8 @@ describe('a watch alert sends only on evidence still fresh at dispatch', () => {
     await intake().evaluateDueWatches(50);
     const [alert] = await h.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.watchId, w!.id));
     // An approved manual observation rather than fixture content, so nothing but freshness stands in the way.
-    await h.db.update(t.offerObservations).set({ verificationMethod: 'approved_manual' }).where(eq(t.offerObservations.id, alert!.observationId));
-    await adjust?.(alert!.observationId);
+    await h.db.update(t.offerObservations).set({ verificationMethod: 'approved_manual' }).where(eq(t.offerObservations.id, alert!.observationId!));
+    await adjust?.(alert!.observationId!);
     const approval = await sender().approveWatchAlert({ alertId: alert!.id, reviewerUserId: 'staff' });
     expect(approval).toMatchObject({ ok: true });
     return { alertId: alert!.id, sendIntentId: approval.sendIntentId!, watchId: w!.id };
@@ -112,7 +112,7 @@ describe('a watch alert sends only on evidence still fresh at dispatch', () => {
     await testMode(true);
     const a = await approvedAlert('mismatch', FAR);
     const [alert] = await h.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.id, a.alertId));
-    await h.db.update(t.offerObservations).set({ eventId: FX.events.knicks }).where(eq(t.offerObservations.id, alert!.observationId));
+    await h.db.update(t.offerObservations).set({ eventId: FX.events.knicks }).where(eq(t.offerObservations.id, alert!.observationId!));
     clock = FAR;
     expect(await sender().dispatchSend(a.sendIntentId)).toMatchObject({ outcome: 'blocked', reasons: expect.arrayContaining(['evidence_stale']) });
   });

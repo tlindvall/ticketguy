@@ -234,6 +234,11 @@ const rawSchema = z.object({
    */
   SEATDATA_API_KEY: z.string().optional(),
   SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(50),
+  /**
+   * The fee allowance a SeatData market alert assumes on top of listed prices (DECISION_LOG #62): an alert goes
+   * out only when the listed total plus this share still fits the customer's all-in budget, and says so.
+   */
+  MARKET_WATCH_FEE_ALLOWANCE_PCT: z.coerce.number().int().min(0).max(100).default(30),
   /** Teams/performers tracked every day whether or not anyone has asked (the evaluation cohort). Names as in the catalog. */
   MARKET_TRACK_ENTITIES: csv,
 

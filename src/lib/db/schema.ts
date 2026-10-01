@@ -739,6 +739,19 @@ export const watches = pgTable(
   ],
 );
 
+/** A SeatData market alert's evidence: listed prices before fees, never a verified offer (DECISION_LOG #62). */
+export type MarketAlertEvidence = {
+  basis: string;
+  listedPerTicketCents: number;
+  listedTotalCents: number;
+  estimatedTotalCents: number;
+  feeAllowancePct: number;
+  listings: number;
+  observedAt: string;
+  datasetId: string;
+  isFixture: boolean;
+};
+
 export const watchAlerts = pgTable(
   'watch_alerts',
   {
@@ -747,16 +760,25 @@ export const watchAlerts = pgTable(
       .notNull()
       .references(() => watches.id),
     generation: integer('generation').notNull(),
-    observationId: uuid('observation_id')
-      .notNull()
-      .references(() => offerObservations.id),
+    /** The verified offer observation behind a seller alert; null for a SeatData market alert. */
+    observationId: uuid('observation_id').references(() => offerObservations.id),
+    /**
+     * What a SeatData market alert saw (DECISION_LOG #62): the listed price per ticket before fees, the estimate
+     * with the fee allowance, how many listings can seat the group, and when. Kept on the alert itself, because the
+     * licence's retention sweep deletes market rows. Null for a seller alert.
+     */
+    market: jsonb('market').$type<MarketAlertEvidence>(),
     dedupeKey: text('dedupe_key').notNull(),
     payableTotalCents: integer('payable_total_cents').notNull(),
     approvalState: text('approval_state').notNull().default('pending'),
     sendIntentId: uuid('send_intent_id'),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex('watch_alerts_dedupe_uq').on(t.dedupeKey), index('watch_alerts_watch_idx').on(t.watchId, t.createdAt)],
+  (t) => [
+    uniqueIndex('watch_alerts_dedupe_uq').on(t.dedupeKey),
+    index('watch_alerts_watch_idx').on(t.watchId, t.createdAt),
+    check('watch_alerts_one_evidence', sql`(${t.observationId} is null) <> (${t.market} is null)`),
+  ],
 );
 
 // ---------------------------------------------------------------------------

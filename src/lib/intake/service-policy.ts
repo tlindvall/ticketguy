@@ -1,8 +1,8 @@
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, sql } from 'drizzle-orm';
 import type { DbOrTx } from '@/lib/db';
 import type { Env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
-import { SEATDATA_DATASET_ID } from '@/lib/market/series';
+import { SEATDATA_DATASET_ID, SEATDATA_PROVIDER } from '@/lib/market/series';
 import { audit } from '@/lib/util/audit';
 import {
   OPERATIONS, allows, evaluateOperationCapability, eventFormat, resolveServicePolicy,
@@ -51,14 +51,14 @@ export async function coveredSourceIds(db: DbOrTx, event: { id: string; isFixtur
   return [...new Set([...mapped, ...fixtures])];
 }
 
-async function licenceFacts(db: DbOrTx, now: Date): Promise<{ tracking: boolean; benchmark: boolean; advice: boolean }> {
+async function licenceFacts(db: DbOrTx, now: Date): Promise<{ tracking: boolean; benchmark: boolean; advice: boolean; alerts: boolean }> {
   const rows = await db.select().from(t.marketDatasets);
   const live = (r: typeof t.marketDatasets.$inferSelect) => r.status === 'approved' && (!r.rawRetentionUntil || r.rawRetentionUntil > now);
   const seat = rows.find((r) => r.id === SEATDATA_DATASET_ID);
   const seatUses = seat && live(seat) ? seat.approvedUses : [];
   // A historical benchmark can come from any approved dataset (the synthetic one in the fixture world).
   const benchmark = rows.some((r) => live(r) && r.approvedUses.includes('benchmark'));
-  return { tracking: seatUses.includes('tracking'), benchmark, advice: seatUses.includes('advice') };
+  return { tracking: seatUses.includes('tracking'), benchmark, advice: seatUses.includes('advice'), alerts: seatUses.includes('alerts') };
 }
 
 type EventRows = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null };
@@ -82,9 +82,14 @@ export function decisionForEvent(env: Pick<Env, 'blockedCategories' | 'serviceDe
   });
 }
 
-export async function capabilitiesFor(db: DbOrTx, env: Pick<Env, 'SEATDATA_API_KEY' | 'WATCH_SEND_ENABLED'>, decision: ServicePolicyDecision, event: { id: string; isFixture: boolean }, now: Date): Promise<{ capabilities: Record<Operation, EventCapabilityDecision>; rights: Record<Operation, EventCapabilityDecision> }> {
+export async function capabilitiesFor(db: DbOrTx, env: Pick<Env, 'SEATDATA_API_KEY' | 'WATCH_SEND_ENABLED'> & Partial<Pick<Env, 'EMAIL_TEST_RECIPIENT_ALLOWLIST'>>, decision: ServicePolicyDecision, event: { id: string; isFixture: boolean }, now: Date): Promise<{ capabilities: Record<Operation, EventCapabilityDecision>; rights: Record<Operation, EventCapabilityDecision> }> {
   const adapters = await adapterFacts(db);
-  const ctx = { decision, adapters, coveredSourceIds: await coveredSourceIds(db, event, adapters), licence: await licenceFacts(db, now), marketKey: !!env.SEATDATA_API_KEY, watchSendEnabled: env.WATCH_SEND_ENABLED, now };
+  const licence = await licenceFacts(db, now);
+  // Alerts from SeatData's listings: the licence's alerts use, or tracking while every email goes only to the
+  // owner's named testers (internal use, as for market numbers in replies; see marketUses).
+  const alerts = licence.tracking && (licence.alerts || (env.EMAIL_TEST_RECIPIENT_ALLOWLIST?.length ?? 0) > 0);
+  const [followed] = alerts ? await db.select({ id: t.trackedEvents.id }).from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, event.id), eq(t.trackedEvents.provider, SEATDATA_PROVIDER), eq(t.trackedEvents.state, 'active'), isNotNull(t.trackedEvents.providerEventId))).limit(1) : [];
+  const ctx = { decision, adapters, coveredSourceIds: await coveredSourceIds(db, event, adapters), licence, marketKey: !!env.SEATDATA_API_KEY, watchSendEnabled: env.WATCH_SEND_ENABLED, market: { alerts, covered: !!followed }, now };
   const all = (d: ServicePolicyDecision) => Object.fromEntries(OPERATIONS.map((op) => [op, evaluateOperationCapability({ ...ctx, decision: d }, op)])) as Record<Operation, EventCapabilityDecision>;
   // Rights alone: the same checks with every operation permitted, so shadow and off change nothing.
   return { capabilities: all(decision), rights: all({ ...decision, allowedOperations: [...OPERATIONS] }) };

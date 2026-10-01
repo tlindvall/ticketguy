@@ -20,7 +20,7 @@ import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisFor
  * working key is not permission.
  */
 
-export type LicenceUse = 'tracking' | 'benchmark' | 'advice' | 'customer_display';
+export type LicenceUse = 'tracking' | 'benchmark' | 'advice' | 'customer_display' | 'alerts';
 
 export async function marketLicence(db: DbOrTx): Promise<{ status: string; uses: string[]; allows: (u: LicenceUse) => boolean; row: typeof t.marketDatasets.$inferSelect | null }> {
   const [row] = await db.select().from(t.marketDatasets).where(eq(t.marketDatasets.id, SEATDATA_DATASET_ID));
@@ -381,7 +381,7 @@ export class MarketTracker {
    * paid request, under the same gates as tracking, only for an event already matched to SeatData. The result
    * is used for this answer and never stored. Wheelchair, companion, parking and suite listings are left out.
    */
-  async currentListings(eventId: string): Promise<{ at: Date; listings: MarketListing[] } | null> {
+  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare'): Promise<{ at: Date; listings: MarketListing[] } | null> {
     if (await this.blocked()) return null;
     if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return null;
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
@@ -393,12 +393,25 @@ export class MarketTracker {
       const raw = Array.isArray(r.listings) ? r.listings : [];
       const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
-      await this.log('listings_compare', eventId, 'success', api.calls - before, listings.length, `${raw.length} listings`);
+      await this.log(kind, eventId, 'success', api.calls - before, listings.length, `${raw.length} listings`);
       return { at: this.now(), listings };
     } catch (e) {
-      await this.log('listings_compare', eventId, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+      await this.log(kind, eventId, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       return null;
     }
+  }
+
+  /**
+   * What a SeatData price watch looks at (DECISION_LOG #62): the cheapest listed price per ticket among active
+   * ordinary listings that have at least the party's count, and how many such listings there are. One paid read,
+   * under the same licence gates and daily cap as every other read. Null when it can't read; zero listings is an
+   * answer, not a failure.
+   */
+  async listingsForWatch(eventId: string, quantity: number): Promise<{ at: Date; cheapestPerTicketCents: number | null; listings: number } | null> {
+    const r = await this.currentListings(eventId, 'listings_watch');
+    if (!r) return null;
+    const fits = r.listings.filter((l) => l.quantity >= quantity).map((l) => l.priceCents).sort((a, b) => a - b);
+    return { at: r.at, cheapestPerTicketCents: fits[0] ?? null, listings: fits.length };
   }
 
   private async groupsReadSince(eventId: string, since: Date): Promise<boolean> {
