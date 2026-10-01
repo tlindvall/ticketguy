@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEPTH_RULES, EXTRA_POLICY_IDS, OPERATIONS, ROUTE_KEYS, allows, evaluateOperationCapability, eventFormat, isFoodDrink, operationsForClaims,
+  DEPTH_RULES, EXTRA_POLICY_IDS, OPERATIONS, ROUTE_KEYS, allows, evaluateOperationCapability, eventFormat, isFoodDrink, isMarketWatch, operationsForClaims,
   outsideIntent, parseOverrides, policyCategory, resolveServicePolicy, type AdapterFacts, type ServiceDepth,
 } from '@/lib/domain/service-depth';
 import { CATEGORY_ROUTES, planSources } from '@/lib/sources/routing';
 import { categoryFor } from '@/lib/catalog/sync';
 import { compareOffers } from '@/lib/domain/comparison';
-import { constraintBasket, meetsDelivery, readBasket } from '@/lib/domain/watches';
+import { constraintBasket, marketEstimate, marketWatchable, meetsDelivery, readBasket, shouldAlertMarket } from '@/lib/domain/watches';
 import type { Offer } from '@/lib/domain/types';
 
 /**
@@ -181,6 +181,20 @@ describe('capability: permission AND rights AND coverage', () => {
     expect(evaluateOperationCapability({ ...base, decision: resolve('nhl'), coveredSourceIds: ['mon'], marketKey: false }, 'market_tracking').state).toBe('unavailable');
     expect(allows(resolve('nhl'), 'market_tracking')).toBe(true);
   });
+  it('#62: SeatData listings watch when no seller covers the event, only with the alerts licence and the event followed there', () => {
+    const none = { ...base, adapters: [] as AdapterFacts[], coveredSourceIds: [] as string[] };
+    const nba = resolve('nba');
+    expect(evaluateOperationCapability({ ...none, decision: nba, market: { alerts: true, covered: true } }, 'price_watch')).toMatchObject({ state: 'available', sourceIds: ['seatdata'] });
+    expect(evaluateOperationCapability({ ...none, decision: nba, market: { alerts: true, covered: false } }, 'price_watch')).toMatchObject({ state: 'unavailable', reasons: ['event_not_covered'] });
+    expect(evaluateOperationCapability({ ...none, decision: nba, market: { alerts: false, covered: true } }, 'price_watch')).toMatchObject({ state: 'unavailable', reasons: ['monitoring_unavailable'] });
+    expect(evaluateOperationCapability({ ...none, decision: nba, marketKey: false, market: { alerts: true, covered: true } }, 'price_watch').state).toBe('unavailable');
+    expect(evaluateOperationCapability({ ...none, decision: nba, watchSendEnabled: false, market: { alerts: true, covered: true } }, 'price_watch').reasons).toEqual(['delivery_disabled']);
+    // Depth still decides first, and a seller that covers the event is preferred to listed prices.
+    expect(evaluateOperationCapability({ ...none, decision: resolve('classical'), market: { alerts: true, covered: true } }, 'price_watch').reasons).toEqual(['guide_official_only']);
+    expect(evaluateOperationCapability({ ...base, decision: nba, coveredSourceIds: ['mon'], market: { alerts: true, covered: true } }, 'price_watch').sourceIds).toEqual(['mon']);
+    expect(isMarketWatch(['seatdata'])).toBe(true);
+    expect(isMarketWatch(['mon', 'seatdata'])).toBe(false);
+  });
   it('maps advice claims to the operations they rely on, abstentions to none', () => {
     expect(operationsForClaims(['trend_change', 'current_offer', 'official_sale', 'coverage', 'missing_history']).sort()).toEqual(['live_comparison', 'trend_advice']);
   });
@@ -233,5 +247,28 @@ describe('SD22: affiliate payout never enters the ranking', () => {
   it('picks the cheaper eligible offer whether or not it pays a commission', () => {
     const cmp = compareOffers([offer('paid', 30000, 'https://aff.example.invalid/x'), offer('free', 25000, null)], { quantity: 2, togetherRequired: true, budgetTotalCents: null, excludeObstructedView: true, requireAccessible: false, acceptableSections: null, eventStartAt: '2026-10-24T23:30:00Z' }, 'e');
     expect(cmp.eligible[0]!.offer.id).toBe('free');
+  });
+});
+
+describe('#62: SeatData market alerts', () => {
+  const at = new Date('2026-10-01T15:00:00Z');
+  const base = { targetTotalCents: 40000, observedAt: at, now: at, lastAlertedTotalCents: null, alertsInLast24h: 0, dedupeKeyExists: false };
+  it('adds the fee allowance to the listed total before comparing with the all-in target', () => {
+    expect(marketEstimate(7500, 4, 30)).toEqual({ listedTotalCents: 30000, estimatedTotalCents: 39000 });
+    expect(shouldAlertMarket({ ...base, estimatedTotalCents: 39000 })).toEqual({ alert: true, reason: 'qualified' });
+    expect(shouldAlertMarket({ ...base, estimatedTotalCents: marketEstimate(8000, 4, 30).estimatedTotalCents })).toMatchObject({ alert: false, reason: 'above_target' });
+  });
+  it('is never "now" from an old read, and keeps the dedupe, daily cap and re-alert rules', () => {
+    expect(shouldAlertMarket({ ...base, estimatedTotalCents: 39000, now: new Date(at.getTime() + 181 * 60_000) })).toMatchObject({ reason: 'stale_observation' });
+    expect(shouldAlertMarket({ ...base, estimatedTotalCents: 39000, dedupeKeyExists: true })).toMatchObject({ reason: 'duplicate_alert_key' });
+    expect(shouldAlertMarket({ ...base, estimatedTotalCents: 39000, alertsInLast24h: 2 })).toMatchObject({ reason: 'daily_alert_cap' });
+    expect(shouldAlertMarket({ ...base, estimatedTotalCents: 39000, lastAlertedTotalCents: 39500 })).toMatchObject({ reason: 'improvement_below_realert_threshold' });
+  });
+  it('watches only what listings can show: count, together and budget', () => {
+    const start = new Date('2026-10-30T23:30:00Z');
+    expect(marketWatchable(constraintBasket({ togetherRequired: true, budgetCents: 40000, budgetBasis: 'whole_party', accessibilityNeeds: null }, 4, start))).toBeNull();
+    expect(marketWatchable(constraintBasket({ togetherRequired: true, budgetCents: 40000, budgetBasis: 'whole_party', accessibilityNeeds: 'wheelchair' }, 4, start))).toBe('accessible_seating');
+    expect(marketWatchable(constraintBasket({ togetherRequired: true, budgetCents: 40000, budgetBasis: 'whole_party', accessibilityNeeds: null }, 4, start, { acceptableSections: ['101'] }))).toBe('sections');
+    expect(marketWatchable(constraintBasket({ togetherRequired: true, budgetCents: 40000, budgetBasis: 'whole_party', accessibilityNeeds: null }, 4, start, { deliveryBy: new Date('2026-10-30T20:00:00Z') }))).toBe('delivery_deadline');
   });
 });

@@ -47,6 +47,11 @@ export function shouldAlert(args: {
 }): AlertDecision {
   if (!args.candidateVerified) return { alert: false, reason: 'unverified_total_cannot_meet_threshold' }; // A08
   if (!args.candidateFresh) return { alert: false, reason: 'stale_observation' }; // A27
+  return targetAndRepeats(args);
+}
+
+/** The target, dedupe, daily cap and re-alert rules, shared by seller and market alerts. */
+function targetAndRepeats(args: { targetTotalCents: number; candidateTotalCents: number; lastAlertedTotalCents: number | null; alertsInLast24h: number; dedupeKeyExists: boolean }): AlertDecision {
   if (args.candidateTotalCents > args.targetTotalCents) return { alert: false, reason: 'above_target' };
   if (args.dedupeKeyExists) return { alert: false, reason: 'duplicate_alert_key' };
   if (args.alertsInLast24h >= WATCH_MAX_ALERTS_PER_DAY) return { alert: false, reason: 'daily_alert_cap' };
@@ -56,6 +61,34 @@ export function shouldAlert(args: {
     if (reduction < needed) return { alert: false, reason: 'improvement_below_realert_threshold' };
   }
   return { alert: true, reason: 'qualified' };
+}
+
+/**
+ * A SeatData market alert (DECISION_LOG #62): listed prices before fees, so never a verified total. The listed
+ * total plus the fee allowance must fit the target, the listings must be recent, and the usual dedupe, daily cap
+ * and re-alert rules apply to that estimate.
+ */
+export const MARKET_WATCH_MIN_CADENCE_MINUTES = 3 * 60;
+/** A market point older than this is not "now" (SeatData rescans an event about every 8 hours). */
+export const MARKET_ALERT_MAX_AGE_MINUTES = 3 * 60;
+
+export function marketEstimate(listedPerTicketCents: number, quantity: number, feeAllowancePct: number): { listedTotalCents: number; estimatedTotalCents: number } {
+  const listedTotalCents = listedPerTicketCents * quantity;
+  return { listedTotalCents, estimatedTotalCents: Math.round(listedTotalCents * (1 + feeAllowancePct / 100)) };
+}
+
+export function shouldAlertMarket(args: { targetTotalCents: number; estimatedTotalCents: number; observedAt: Date; now: Date; lastAlertedTotalCents: number | null; alertsInLast24h: number; dedupeKeyExists: boolean }): AlertDecision {
+  if (args.now.getTime() - args.observedAt.getTime() > MARKET_ALERT_MAX_AGE_MINUTES * 60_000) return { alert: false, reason: 'stale_observation' };
+  return targetAndRepeats({ ...args, candidateTotalCents: args.estimatedTotalCents });
+}
+
+/** A basket a market alert can honour: nothing beyond count, together and budget, which listings can't show. */
+export function marketWatchable(b: ConstraintBasket): string | null {
+  if (b.requireAccessible) return 'accessible_seating';
+  if (b.acceptableSections?.length) return 'sections';
+  if (b.deliveryBy) return 'delivery_deadline';
+  if (b.unverifiable.length) return b.unverifiable[0]!;
+  return null;
 }
 
 /**

@@ -18,6 +18,7 @@ const USE_LABEL: Record<string, string> = {
   benchmark: 'Compute typical prices from past games',
   advice: 'Let it steer buy / wait advice',
   customer_display: 'Show numbers from it to customers',
+  alerts: 'Email customers alerts from its listings (price watches)',
 };
 
 const TRACK_STATE: Record<string, string> = { pending_match: 'Finding it on SeatData', requested: 'Asked SeatData to add it', active: 'Tracking', unmatched: 'Not on SeatData', ended: 'Event over' };
@@ -91,6 +92,7 @@ export default async function Market() {
                   { name: 'benchmark', label: USE_LABEL.benchmark!, type: 'checkbox', defaultValue: lic.uses.includes('benchmark') },
                   { name: 'advice', label: USE_LABEL.advice!, type: 'checkbox', defaultValue: lic.uses.includes('advice') },
                   { name: 'customerDisplay', label: USE_LABEL.customer_display!, type: 'checkbox', defaultValue: lic.uses.includes('customer_display') },
+                  { name: 'alerts', label: USE_LABEL.alerts!, type: 'checkbox', defaultValue: lic.uses.includes('alerts') },
                   { name: 'licenseReference', label: 'What allows it (licence version, SeatData email date and sender, exact uses granted)', type: 'textarea', defaultValue: lic.row?.licenseReference ?? '' },
                   { name: 'rawRetentionUntil', label: 'Keep data until (blank = no end date in the licence)', type: 'datetime' },
                 ]}

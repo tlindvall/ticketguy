@@ -344,6 +344,23 @@ describe('service-depth policy, enforced', () => {
     expect(sent.reasons).toContain('policy_changed');
   });
 
+  it('#62: a seller alert is not approved on SeatData\'s rights once the seller\'s monitoring is revoked', async () => {
+    const { c, requestId } = await ask('Rangers Oct 15, 2 tickets, $500 total. Let me know if it drops.');
+    const [w] = await h.db.select().from(t.watches).where(eq(t.watches.requestId, requestId));
+    now = new Date(w!.nextCheckAt.getTime() + 60_000);
+    await c.evaluateDueWatches();
+    const [alert] = await h.db.select().from(t.watchAlerts).where(eq(t.watchAlerts.watchId, w!.id));
+    expect(alert).toMatchObject({ approvalState: 'pending', market: null });
+    await h.db.update(t.adapterConfigs).set({ monitoringAllowed: false }).where(eq(t.adapterConfigs.sourceId, FX.source));
+    try {
+      // SeatData still covers the game (tracking, testers' allowlist), but this alert was found on the seller.
+      expect(await c.approveWatchAlert({ alertId: alert!.id, reviewerUserId: 'staff' })).toEqual({ ok: false, reason: 'capability:monitoring_unavailable' });
+    } finally {
+      await h.db.update(t.adapterConfigs).set({ monitoringAllowed: true }).where(eq(t.adapterConfigs.sourceId, FX.source));
+      await c.cancelWatch({ watchId: w!.id, actor: 'customer', reason: 'stop' });
+    }
+  });
+
   it('SD17: monitoring rights revoked after creation: no polling, a paused watch with its reason, cancel still works', async () => {
     const { c, requestId } = await ask('Rangers Oct 15, 2 tickets, $500 total. Let me know if it drops.');
     const [w] = await h.db.select().from(t.watches).where(eq(t.watches.requestId, requestId));

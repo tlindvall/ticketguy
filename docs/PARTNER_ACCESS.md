@@ -47,6 +47,7 @@ SeatData (seatdata.io) reports resale market statistics per event: cheapest and 
 2. Render shell: `pnpm tsx scripts/probe-seatdata.ts` confirms the live response shapes (structure only).
 3. `/admin/market` → Change licence: approve **tracking** (and **benchmark**) under the standard licence's internal-use terms, with the licence version as the reference.
 4. **advice** and **customer display** only after SeatData confirms in writing that email advice, charts, alerts and historical comparisons shown to customers are allowed; record the email date, sender and exact wording.
+5. **alerts** (price-watch heads-ups from their listings, DECISION_LOG #62) only after that written OK names alerts to customers explicitly. It also needs `WATCH_SEND_ENABLED=true` and the watch scheduler. `MARKET_WATCH_FEE_ALLOWANCE_PCT` (default 30) is the fee share an alert assumes.
 
 Known limits: fees are not in the statistics; `all_in_price` is empty for StubHub sales and some sales details are inferred (sales are not used); refreshes are about every 30 minutes for requested events; no price exists for three or more seats together.
 

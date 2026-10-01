@@ -33,17 +33,18 @@ import { deriveInterestObservations } from '@/lib/domain/interests';
 import { asksAboutOptOut, classifyOptOutText, revokeMarketing, stopAll } from '@/lib/domain/suppression';
 import { planSources } from '@/lib/sources/routing';
 import { adapterFacts, capability, coveredSourceIds, gate as policyGate, loadEventRows, policyForEvent, storedPolicy } from '@/lib/intake/service-policy';
-import { isFoodDrink, operationsForClaims, outsideIntent, resolveServicePolicy, type Operation, type OutsideIntent } from '@/lib/domain/service-depth';
+import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolveServicePolicy, type Operation, type OutsideIntent } from '@/lib/domain/service-depth';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
 import { findAlternatives } from '@/lib/market/alternatives';
+import { SEATDATA_DATASET_ID } from '@/lib/market/series';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, eventConstraints, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
-import { joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
+import { checkedAt, joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { trendRights } from '@/lib/advice/trend-rights';
@@ -59,7 +60,7 @@ import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import { ModelOutputError } from '@/lib/ai/model-client';
-import { cadenceMinutes, watchExpiry, shouldAlert, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
+import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
 
@@ -2430,7 +2431,7 @@ export class Concierge {
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
     if (brief.intent === 'watch_request') {
       const [w] = await this.db.select().from(t.watches).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).orderBy(desc(t.watches.createdAt)).limit(1);
-      watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt } : { running: false };
+      watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt, market: (w.constraints as { monitor?: string } | null)?.monitor === 'market' ? { feeAllowancePct: this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT } : null } : { running: false };
     }
     // Cheaper offers the comparison rejected for a hard requirement: named with the reason, never offered.
     const perSeat = (o: Offer) => { const tot = o.payableTotalCents ?? o.baseTotalCents; return tot === null ? null : tot / o.quantity; };
@@ -2743,15 +2744,18 @@ export class Concierge {
         approved = alert?.approvalState === 'approved' && w?.state === 'active' && w.generation === alert.generation;
         // The alert says "now $X": the observation behind it must still be fresh at send time, not just at approval.
         // A missing observation or event withholds it rather than being taken as fresh.
-        const [obs] = alert ? await this.db.select().from(t.offerObservations).where(eq(t.offerObservations.id, alert.observationId)) : [];
+        const [obs] = alert?.observationId ? await this.db.select().from(t.offerObservations).where(eq(t.offerObservations.id, alert.observationId)) : [];
         const [event] = w ? await this.db.select().from(t.events).where(eq(t.events.id, w.eventId)) : [];
-        evidenceFresh = !!obs && !!event && obs.eventId === event.id && checkFreshness({ fetchedAt: obs.fetchedAt, sourceAsOf: obs.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh;
+        // A market alert's evidence is the listings read it carries: "now" for as long as that read is recent.
+        evidenceFresh = !!event && (alert?.market ? marketAlertFresh(alert.market, now) : !!obs && obs.eventId === event.id && checkFreshness({ fetchedAt: obs.fetchedAt, sourceAsOf: obs.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh);
+        containsFixture = containsFixture || !!alert?.market?.isFixture;
         if (w) eventChange = eventChangedSince(event, now);
         containsFixture = containsFixture || obs?.verificationMethod === 'fixture';
         // The policy and rights at send time, not at approval time, decide (SD16/SD17).
         if (approved && w) {
           const snap = await policyForEvent(this.db, this.env, w.eventId, now);
-          policyOk = !!snap && (await policyGate(this.db, snap, 'price_watch', { kind: 'send_intent', id: intent.id })) && capability(snap, 'price_watch').state === 'available';
+          // A seller alert needs the seller's rights, not SeatData's (DECISION_LOG #62).
+          policyOk = !!snap && (await policyGate(this.db, snap, 'price_watch', { kind: 'send_intent', id: intent.id })) && capability(snap, 'price_watch').state === 'available' && (!!alert?.market || !isMarketWatch(capability(snap, 'price_watch').sourceIds));
         }
       } else if (intent.approvalId) {
         const [rec] = await this.db.select().from(t.recommendations).where(eq(t.recommendations.id, intent.approvalId));
@@ -2847,6 +2851,9 @@ export class Concierge {
     if (!this.env.WATCH_SEND_ENABLED) return notCreated('watch_alerts_disabled');
     const cadence = cadenceMinutes(a.eventStartAt, now, { lastMinuteApproved: false });
     if (cadence === null) return null;
+    // SeatData can watch when no seller can (DECISION_LOG #62): follow the event there first, so the capability
+    // knows whether SeatData has it. Same gates as any refresh (licence, depth, daily cap).
+    if (this.env.SEATDATA_API_KEY) await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).refreshEvent(a.eventId).catch(() => null);
     // One decision for this event (F05): the depth must invest in watches (enforce), and a monitoring source must
     // actually cover this event, not merely exist. Without both, no promise is recorded.
     const snap = await policyForEvent(this.db, this.env, a.eventId, now);
@@ -2854,7 +2861,14 @@ export class Concierge {
     const cap = snap ? capability(snap, 'price_watch') : null;
     if (!cap || cap.state !== 'available') return notCreated(cap?.reasons.includes('event_not_covered') ? 'event_not_covered' : 'no_monitoring_coverage');
     const basket = await this.basketFor(a.requestId, a.revision, a.brief, a.eventStartAt, a.eventId);
-    const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, constraints: basket as unknown as Record<string, unknown>, consentMessageId: a.consentMessageId, cadenceMinutes: cadence, nextCheckAt: new Date(now.getTime() + cadence * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
+    // A SeatData watch sees listed prices, counts and nothing else: a requirement listings can't show (accessible
+    // seating, sections, a delivery deadline) means no watch rather than an alert that ignores it. Its first look
+    // is soon, then no more often than every few hours, since each look is a paid read.
+    const market = isMarketWatch(cap.sourceIds);
+    const unwatchable = market ? marketWatchable(basket) : null;
+    if (unwatchable) return notCreated(`market_unverifiable:${unwatchable}`);
+    const every = market ? Math.max(cadence, MARKET_WATCH_MIN_CADENCE_MINUTES) : cadence;
+    const [w] = await this.db.insert(t.watches).values({ requestId: a.requestId, revision: a.revision, contactId: a.contactId, eventId: a.eventId, quantity: a.brief.quantity, targetTotalCents: target, togetherRequired: a.brief.togetherRequired ?? true, constraints: (market ? { ...basket, monitor: 'market' } : basket) as unknown as Record<string, unknown>, consentMessageId: a.consentMessageId, cadenceMinutes: every, nextCheckAt: new Date(now.getTime() + (market ? 5 : every) * 60_000), expiresAt: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) }).returning({ id: t.watches.id });
     await audit(this.db, { actor: 'system', action: 'watch.created', entityKind: 'watch', entityId: w!.id, diff: { consentMessageId: a.consentMessageId, targetTotalCents: target, sources: cap.sourceIds, unverifiable: basket.unverifiable } });
     return w!.id;
   }
@@ -2941,33 +2955,69 @@ export class Concierge {
         await pause(w, `capability:${cap?.reasons[0] ?? 'monitoring_unavailable'}`);
         continue;
       }
-      const basket = readBasket(w.constraints) ?? (await this.basketFor(w.requestId, w.revision, RequestExtractionSchema.parse((await this.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, w.requestId), eq(t.requestVersions.revision, w.revision))))[0]!.brief), event.localStartAt, w.eventId));
-      const offers: Offer[] = [];
-      for (const cfg of configs.filter((c) => cap.sourceIds.includes(c.sourceId) && c.enabled && c.monitoringAllowed)) {
-        const adapter = buildAdapter({ sourceId: cfg.sourceId, implementation: cfg.implementation as AdapterActivation['implementation'], enabled: true, accessApprovalEvidence: cfg.accessApprovalEvidence, monitoringAllowed: true }, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: null, ticketmasterEnabled: false, now: this.now });
-        const r = await adapter.search({ requestId: w.requestId, revision: w.revision, eventId: w.eventId, providerEventId: null, quantity: w.quantity, hardConstraints: basket as unknown as Record<string, unknown> });
-        offers.push(...r.offers);
+      // A watch keeps the kind of source it was promised with: one on a seller's verified totals never turns into
+      // SeatData estimates when the seller goes (DECISION_LOG #62).
+      if (isMarketWatch(cap.sourceIds) && (w.constraints as { monitor?: string } | null)?.monitor !== 'market') {
+        await pause(w, 'capability:monitoring_unavailable');
+        continue;
       }
-      // The same eligibility as the first comparison: accessible stays required, the deadline stays a deadline.
-      const cmp = compareOffers(offers.filter((o) => meetsDelivery(o, basket)), { quantity: w.quantity, togetherRequired: basket.pairsOk ? false : basket.togetherRequired ?? w.togetherRequired, budgetTotalCents: w.targetTotalCents, excludeObstructedView: basket.excludeObstructedView, requireAccessible: basket.requireAccessible, acceptableSections: w.acceptableSections ?? basket.acceptableSections, eventStartAt: event.localStartAt.toISOString() }, w.eventId);
-      const best = basket.unverifiable.length ? undefined : cmp.eligible[0];
-      if (basket.unverifiable.length && cmp.eligible.length) await audit(this.db, { actor: 'system', action: 'watch.alert_withheld', entityKind: 'watch', entityId: w.id, diff: { reason: 'constraint_unverifiable', unverifiable: basket.unverifiable } });
-      if (best && best.comparableTotalCents !== null) {
-        const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `${best.offer.sourceId}:${best.offer.providerListingId ?? best.offer.section ?? 'x'}:${best.offer.row ?? ''}`, totalCents: best.comparableTotalCents });
-        const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
-        const recent = await this.db.select({ n: sql<number>`count(*)::int`, last: sql<number | null>`min(payable_total_cents)` }).from(t.watchAlerts).where(and(eq(t.watchAlerts.watchId, w.id), eq(t.watchAlerts.generation, w.generation), gte(t.watchAlerts.createdAt, new Date(now.getTime() - 86_400_000))));
-        const fresh = checkFreshness({ fetchedAt: new Date(best.offer.observedAt), sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, eventStartAt: event.localStartAt, now }).fresh;
-        const d = shouldAlert({ targetTotalCents: w.targetTotalCents, candidateTotalCents: best.comparableTotalCents, candidateVerified: best.offer.priceCompleteness === 'verified_total', candidateFresh: fresh, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
-        if (d.alert) {
-          const [offerRow] = await this.db.insert(t.offers).values({ sourceId: best.offer.sourceId, providerListingId: best.offer.providerListingId, eventId: w.eventId, directPurchaseUrl: best.offer.directPurchaseUrl }).returning({ id: t.offers.id });
-          const [obs] = await this.db.insert(t.offerObservations).values({ offerId: offerRow!.id, eventId: w.eventId, quantity: best.offer.quantity, section: best.offer.section, rowLabel: best.offer.row, seatsTogether: best.offer.seatsTogether, admissionType: best.offer.admissionType, payableTotalCents: best.comparableTotalCents, baseTotalCents: best.offer.baseTotalCents, mandatoryFeeTotalCents: best.offer.mandatoryFeeTotalCents, taxTotalCents: best.offer.taxTotalCents, deliveryTotalCents: best.offer.deliveryTotalCents, priceCompleteness: best.offer.priceCompleteness, restrictions: best.offer.restrictions, deliveryMethod: best.offer.deliveryMethod, availability: best.offer.availability, verificationMethod: best.offer.collectionMode, sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, fetchedAt: new Date(best.offer.observedAt), retentionUntil: new Date(now.getTime() + OBSERVATION_RETENTION_DAYS * 86_400_000), evidence: { evidenceId: best.offer.evidenceId } }).returning({ id: t.offerObservations.id });
-          await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: obs!.id, dedupeKey: key, payableTotalCents: best.comparableTotalCents, approvalState: 'pending' }).onConflictDoNothing();
-          alerts += 1;
+      const basket = readBasket(w.constraints) ?? (await this.basketFor(w.requestId, w.revision, RequestExtractionSchema.parse((await this.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, w.requestId), eq(t.requestVersions.revision, w.revision))))[0]!.brief), event.localStartAt, w.eventId));
+      // A SeatData watch looks at listed prices for listings that can seat the party (DECISION_LOG #62).
+      if (isMarketWatch(cap.sourceIds)) alerts += await this.evaluateMarketWatch(w, now);
+      else {
+        const offers: Offer[] = [];
+        for (const cfg of configs.filter((c) => cap.sourceIds.includes(c.sourceId) && c.enabled && c.monitoringAllowed)) {
+          const adapter = buildAdapter({ sourceId: cfg.sourceId, implementation: cfg.implementation as AdapterActivation['implementation'], enabled: true, accessApprovalEvidence: cfg.accessApprovalEvidence, monitoringAllowed: true }, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: null, ticketmasterEnabled: false, now: this.now });
+          const r = await adapter.search({ requestId: w.requestId, revision: w.revision, eventId: w.eventId, providerEventId: null, quantity: w.quantity, hardConstraints: basket as unknown as Record<string, unknown> });
+          offers.push(...r.offers);
+        }
+        // The same eligibility as the first comparison: accessible stays required, the deadline stays a deadline.
+        const cmp = compareOffers(offers.filter((o) => meetsDelivery(o, basket)), { quantity: w.quantity, togetherRequired: basket.pairsOk ? false : basket.togetherRequired ?? w.togetherRequired, budgetTotalCents: w.targetTotalCents, excludeObstructedView: basket.excludeObstructedView, requireAccessible: basket.requireAccessible, acceptableSections: w.acceptableSections ?? basket.acceptableSections, eventStartAt: event.localStartAt.toISOString() }, w.eventId);
+        const best = basket.unverifiable.length ? undefined : cmp.eligible[0];
+        if (basket.unverifiable.length && cmp.eligible.length) await audit(this.db, { actor: 'system', action: 'watch.alert_withheld', entityKind: 'watch', entityId: w.id, diff: { reason: 'constraint_unverifiable', unverifiable: basket.unverifiable } });
+        if (best && best.comparableTotalCents !== null) {
+          const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `${best.offer.sourceId}:${best.offer.providerListingId ?? best.offer.section ?? 'x'}:${best.offer.row ?? ''}`, totalCents: best.comparableTotalCents });
+          const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
+          const recent = await this.db.select({ n: sql<number>`count(*)::int`, last: sql<number | null>`min(payable_total_cents)` }).from(t.watchAlerts).where(and(eq(t.watchAlerts.watchId, w.id), eq(t.watchAlerts.generation, w.generation), gte(t.watchAlerts.createdAt, new Date(now.getTime() - 86_400_000))));
+          const fresh = checkFreshness({ fetchedAt: new Date(best.offer.observedAt), sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, eventStartAt: event.localStartAt, now }).fresh;
+          const d = shouldAlert({ targetTotalCents: w.targetTotalCents, candidateTotalCents: best.comparableTotalCents, candidateVerified: best.offer.priceCompleteness === 'verified_total', candidateFresh: fresh, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
+          if (d.alert) {
+            const [offerRow] = await this.db.insert(t.offers).values({ sourceId: best.offer.sourceId, providerListingId: best.offer.providerListingId, eventId: w.eventId, directPurchaseUrl: best.offer.directPurchaseUrl }).returning({ id: t.offers.id });
+            const [obs] = await this.db.insert(t.offerObservations).values({ offerId: offerRow!.id, eventId: w.eventId, quantity: best.offer.quantity, section: best.offer.section, rowLabel: best.offer.row, seatsTogether: best.offer.seatsTogether, admissionType: best.offer.admissionType, payableTotalCents: best.comparableTotalCents, baseTotalCents: best.offer.baseTotalCents, mandatoryFeeTotalCents: best.offer.mandatoryFeeTotalCents, taxTotalCents: best.offer.taxTotalCents, deliveryTotalCents: best.offer.deliveryTotalCents, priceCompleteness: best.offer.priceCompleteness, restrictions: best.offer.restrictions, deliveryMethod: best.offer.deliveryMethod, availability: best.offer.availability, verificationMethod: best.offer.collectionMode, sourceAsOf: best.offer.providerUpdatedAt ? new Date(best.offer.providerUpdatedAt) : null, fetchedAt: new Date(best.offer.observedAt), retentionUntil: new Date(now.getTime() + OBSERVATION_RETENTION_DAYS * 86_400_000), evidence: { evidenceId: best.offer.evidenceId } }).returning({ id: t.offerObservations.id });
+            await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: obs!.id, dedupeKey: key, payableTotalCents: best.comparableTotalCents, approvalState: 'pending' }).onConflictDoNothing();
+            alerts += 1;
+          }
         }
       }
       await this.db.update(t.watches).set({ nextCheckAt: new Date(now.getTime() + w.cadenceMinutes * 60_000 + Math.floor(Math.random() * 60_000)) }).where(eq(t.watches.id, w.id));
     }
     return { evaluated: due.length, alertsCreated: alerts };
+  }
+
+  /**
+   * One look for a SeatData watch: one paid listings read, the cheapest listed price among listings that can seat
+   * the party, plus the fee allowance, against their all-in target. What it saw is kept on the alert, for staff to
+   * approve like any alert. Returns how many alerts it created (0 or 1).
+   */
+  private async evaluateMarketWatch(w: typeof t.watches.$inferSelect, now: Date): Promise<number> {
+    const read = await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).listingsForWatch(w.eventId, w.quantity);
+    if (!read) {
+      await audit(this.db, { actor: 'system', action: 'watch.market_unread', entityKind: 'watch', entityId: w.id });
+      return 0;
+    }
+    if (read.cheapestPerTicketCents === null) return 0;
+    const pct = this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT;
+    const est = marketEstimate(read.cheapestPerTicketCents, w.quantity, pct);
+    const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `market:${w.quantity}+`, totalCents: est.estimatedTotalCents });
+    const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
+    const recent = await this.db.select({ n: sql<number>`count(*)::int`, last: sql<number | null>`min(payable_total_cents)` }).from(t.watchAlerts).where(and(eq(t.watchAlerts.watchId, w.id), eq(t.watchAlerts.generation, w.generation), gte(t.watchAlerts.createdAt, new Date(now.getTime() - 86_400_000))));
+    const d = shouldAlertMarket({ targetTotalCents: w.targetTotalCents, estimatedTotalCents: est.estimatedTotalCents, observedAt: read.at, now, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
+    if (!d.alert) return 0;
+    const lic = await marketLicence(this.db);
+    const evidence = { basis: `${w.quantity}+`, listedPerTicketCents: read.cheapestPerTicketCents, listedTotalCents: est.listedTotalCents, estimatedTotalCents: est.estimatedTotalCents, feeAllowancePct: pct, listings: read.listings, observedAt: read.at.toISOString(), datasetId: SEATDATA_DATASET_ID, isFixture: !!lic.row?.isFixture };
+    await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: null, market: evidence, dedupeKey: key, payableTotalCents: est.estimatedTotalCents, approvalState: 'pending' }).onConflictDoNothing();
+    await audit(this.db, { actor: 'system', action: 'watch.market_alert_found', entityKind: 'watch', entityId: w.id, diff: { listedPerTicketCents: evidence.listedPerTicketCents, estimatedTotalCents: evidence.estimatedTotalCents, listings: evidence.listings } });
+    return 1;
   }
 
   /** Staff approval of a watch alert creates a gated send intent; cancellation observed at dispatch time wins (A26). */
@@ -2981,19 +3031,27 @@ export class Concierge {
     }
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, w.contactId));
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, w.requestId));
-    const [obs] = await this.db.select({ o: t.offerObservations, off: t.offers }).from(t.offerObservations).innerJoin(t.offers, eq(t.offers.id, t.offerObservations.offerId)).where(eq(t.offerObservations.id, alert.observationId));
+    const [obs] = alert.observationId ? await this.db.select({ o: t.offerObservations, off: t.offers }).from(t.offerObservations).innerJoin(t.offers, eq(t.offers.id, t.offerObservations.offerId)).where(eq(t.offerObservations.id, alert.observationId)) : [];
     // Approval is not a capability override (F05): today's revision, policy, rights and the observation's freshness
-    // are checked again before anything is queued.
+    // are checked again before anything is queued. A market alert is as fresh as the listings read behind it.
     const now = this.now();
     const [event] = await this.db.select().from(t.events).where(eq(t.events.id, w.eventId));
-    const stale = !obs || !event || !checkFreshness({ fetchedAt: obs.o.fetchedAt, sourceAsOf: obs.o.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh;
+    const stale = !event || (alert.market ? !marketAlertFresh(alert.market, now) : !obs || !checkFreshness({ fetchedAt: obs.o.fetchedAt, sourceAsOf: obs.o.sourceAsOf, eventStartAt: event.localStartAt, now }).fresh);
     const snap = await policyForEvent(this.db, this.env, w.eventId, now);
     const changed = eventChangedSince(event, now);
-    const blockedBy = req?.currentRevision !== w.revision ? 'revision_superseded' : changed ? changed : stale ? 'stale_observation' : snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch_alert', id: alert.id })) ? `policy:${snap.decision.depth}` : !snap || capability(snap, 'price_watch').state !== 'available' ? `capability:${snap ? capability(snap, 'price_watch').reasons[0] ?? 'monitoring_unavailable' : 'event_missing'}` : null;
+    const blockedBy = req?.currentRevision !== w.revision ? 'revision_superseded' : changed ? changed : stale ? 'stale_observation' : snap && !(await policyGate(this.db, snap, 'price_watch', { kind: 'watch_alert', id: alert.id })) ? `policy:${snap.decision.depth}` : !snap || capability(snap, 'price_watch').state !== 'available' ? `capability:${snap ? capability(snap, 'price_watch').reasons[0] ?? 'monitoring_unavailable' : 'event_missing'}` : !alert.market && isMarketWatch(capability(snap, 'price_watch').sourceIds) ? 'capability:monitoring_unavailable' : null;
     if (blockedBy) {
       await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, alert.id));
       await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.invalidated_at_approval', entityKind: 'watch_alert', entityId: alert.id, diff: { reason: blockedBy } });
       return { ok: false, reason: blockedBy };
+    }
+    if (alert.market) {
+      const m = alert.market;
+      const [venue] = await this.db.select().from(t.venues).where(eq(t.venues.id, event!.venueId));
+      const intent = await this.queueSend({ messageClass: 'watch_alert', contactId: contact!.id, conversationId: req!.conversationId, requestId: req!.id, revision: w.revision, recipient: contact!.emailOriginal, subject: `Ticket Guy heads-up: ${w.quantity}+ tickets listed from ${formatUsd(m.listedPerTicketCents)} each`, template: 'watch_alert_market', vars: { quantity: w.quantity, eventLabel: venue ? eventLabel(event!, venue) : event!.name, listedPerTicketCents: m.listedPerTicketCents, listedTotalCents: m.listedTotalCents, estimatedTotalCents: m.estimatedTotalCents, feeAllowancePct: m.feeAllowancePct, targetTotalCents: w.targetTotalCents, listings: m.listings, observedAt: checkedAt(new Date(m.observedAt), venue?.timezone ?? 'America/New_York') }, inReplyTo: null, approvalId: alert.id, approvedHash: null, dedupeKey: `alert:${alert.dedupeKey}`, containsFixtureData: m.isFixture });
+      await this.db.update(t.watchAlerts).set({ approvalState: 'approved', sendIntentId: intent.id }).where(eq(t.watchAlerts.id, alert.id));
+      await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.approved', entityKind: 'watch_alert', entityId: alert.id, diff: { market: true } });
+      return { ok: true, sendIntentId: intent.id };
     }
     const intent = await this.queueSend({ messageClass: 'watch_alert', contactId: contact!.id, conversationId: req!.conversationId, requestId: req!.id, revision: w.revision, recipient: contact!.emailOriginal, subject: `Ticket Guy alert: ${w.quantity} for ${formatUsd(alert.payableTotalCents)} total`, template: 'watch_alert', vars: { totalCents: alert.payableTotalCents, quantity: w.quantity, url: obs!.off.directPurchaseUrl, observedAt: obs!.o.fetchedAt.toISOString(), section: obs!.o.section }, inReplyTo: null, approvalId: alert.id, approvedHash: null, dedupeKey: `alert:${alert.dedupeKey}`, containsFixtureData: obs!.o.verificationMethod === 'fixture' });
     await this.db.update(t.watchAlerts).set({ approvalState: 'approved', sendIntentId: intent.id }).where(eq(t.watchAlerts.id, alert.id));
@@ -3268,6 +3326,12 @@ export function acknowledgementLine(x: RequestExtraction): string {
   if (x.dateExpression && !/^\d{4}-\d{2}-\d{2}$/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
   return `${line}. Got it.`;
+}
+
+/** A market alert is "now" only while the listings read behind it is recent (DECISION_LOG #62). */
+export function marketAlertFresh(m: { observedAt: string }, now: Date): boolean {
+  const age = now.getTime() - new Date(m.observedAt).getTime();
+  return age >= 0 && age <= MARKET_ALERT_MAX_AGE_MINUTES * 60_000;
 }
 
 export function eventLabel(e: { name: string; localStartAt: Date; doorsAt?: Date | null }, v: { name: string; city: string | null; timezone: string }): string {

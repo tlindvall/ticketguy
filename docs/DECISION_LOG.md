@@ -1045,3 +1045,36 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Still open: pricing.** The model page with pricing was not readable from this environment. Until `MODEL_PRICES_USD_PER_MTOKEN` is set, spend is counted at the conservative fallback rate.
 - **Still open: token caps.** The output-token caps (4,000 and 8,000, which include reasoning) are unchanged and should be checked against the model page.
 - **Still open: `safety_identifier`.** The GPT-5.6 guide recommends it for apps that serve end users, and we don't send it yet.
+
+## 62. SeatData's resale listings can run a price watch, as a heads-up on listed prices
+
+**Why.** A customer asks "4 Knicks tickets together under $400 for next week's game, alert me if you find them". Before this, nothing could watch it. A price watch needs a source we may check on a schedule, and no seller feed is connected. SeatData already reads every listing for followed events (#45), so it can see "a listing for four or more is now $75 a ticket". What it can't give is a verified offer:
+- prices are before fees;
+- there is no link;
+- nothing checks the seats are adjacent, or that the seller will sell exactly four.
+
+**What.**
+- **Where it runs.** `price_watch` can use SeatData (source `seatdata`) when no seller covers the event. It needs all of these:
+  - the SeatData key;
+  - the licence's new **alerts** use (on `/admin/market`, written reference required, tracking required too);
+  - the event followed on SeatData.
+
+  While email is limited to the test allowlist, tracking alone is enough, as for market numbers in replies (internal use). A seller that covers the event is still preferred.
+- **Creating the watch.** It follows the event on SeatData first. It refuses a watch whose requirements listings can't show, and audits why (`market_unverifiable:<reason>`): accessible seating, sections, a delivery deadline, or an age or entry rule. The constraints carry `monitor: 'market'`.
+- **Checking it.** The first look is 5 minutes after the request, then no more often than every 3 hours. Each look is one paid listings read, under the daily cap.
+- **When it alerts.** It takes the cheapest listed price among active ordinary listings with at least the party's count. It alerts only when the listed total plus `MARKET_WATCH_FEE_ALLOWANCE_PCT` (default 30) fits the all-in target. Example: $75 × 4 = $300, so about $390, which is inside $400.
+- **Repeats.** Dedupe, the daily cap of 2 and the re-alert rule ($10 or 5% better) apply to that estimate.
+- **The alert record.** It carries what it saw (`watch_alerts.market`: listed price, totals, allowance, listing count, read time), not an offer observation. Migration 0018 makes `observation_id` nullable, with exactly one of the two set. The evidence is kept on the alert because the licence retention sweep deletes market rows.
+- **A watch keeps its kind of source.** A watch created on a seller's verified totals is paused when the seller goes, and never continues on SeatData estimates. A seller alert is also never approved or sent on SeatData's rights.
+- **Approval and sending.** Staff approve it like any alert, and the staff page shows that it's an estimate. It is "now" for 3 hours from the read: approval and dispatch both refuse an older one (`stale_observation` / `evidence_stale`). Policy, the licence and rights are re-checked at approval and at send.
+- **What the customer is told.**
+  - **When the watch starts:** "I'm watching resale listings for this: if listings with 4 or more tickets show up at a price that, with fees of up to 30%, fits your $400 in total, I'll email you a heads-up." It adds that there's no link, and no promise of seats together or of exactly four.
+  - **The alert itself** (`watch_alert_market`) gives the listed price and the estimate with the allowance named. It says it's market data from StubHub and Vivid Seats listings, not a ticket we checked, and that the customer should check the all-in price at checkout. It never says "found", never gives a link, and never names SeatData.
+
+**Still needed before customers get these.**
+- SeatData's written OK for alerts that show their listing prices to customers. The standard licence restricts redistribution.
+- `WATCH_SEND_ENABLED=true`, the watch scheduler (Inngest, or `POST /api/internal/watches` from a cron, added here because no fallback existed), and staff approval of each alert.
+
+**Not proven.**
+- **Fee allowance.** The 30% is an assumption, said as one. Actual StubHub and Vivid Seats fees vary, so an alert can still be over budget at checkout.
+- **Speed.** A 3-hour cadence and SeatData's own rescan (about 8 hours, about 30 minutes after a sales call) mean a cheap listing can come and go between looks.
