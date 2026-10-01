@@ -25,7 +25,7 @@ What was built from the service-depth implementation guide (reviewed baseline `6
 | F06 | Outside intents get a scope reply before ticket intake. Food/drink gets a bounded Guide reply. A resolved Guide event gets the official route without a quantity loop. Operator blocks stay stronger than any depth. | enforce |
 | F07 | Research runs benchmark, trend, tracking, listings reads and the staffed pilot only where allowed. A dispatch rechecks claim operations. | enforce |
 | F08 | `request_versions.service_policy` and `research_runs.service_policy` snapshots. The admin request page shows depth, reasons, override, unavailable capabilities and searched/skipped sources. The watch list shows the pause reason. | shadow and enforce |
-| F09 | FAQ wording qualifies coverage, history and alerts. The headline is unchanged. | always |
+| F09 | Covered by the homepage update on main (`c3237ff`): coverage, history and buy/wait are qualified there. This PR changes no homepage copy. | n/a |
 
 ## Turning it on
 

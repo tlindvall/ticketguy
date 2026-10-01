@@ -1,4 +1,5 @@
 import { admissionTerms, entryTerm, nightTiming, concertContext, musicExperience, performanceTerms, type PerformanceTerms, type MusicExperience, type Admission, type ProductKind, type EntryTerm, type NightTiming } from './concert-terms';
+import { eligibilityIn, obstructedView, requestedDay, requiredView, type OfferEligibility } from './offer-eligibility';
 import { unglue } from '@/lib/domain/event-constraints';
 /**
  * Offers a customer lays out in their own words ("Offer A says wheelchair-accessible spaces, $80 each including
@@ -6,7 +7,7 @@ import { unglue } from '@/lib/domain/event-constraints';
  * with what the text says about it and nothing more: these are their notes, not listings we've seen, and no
  * field of one offer is ever filled from another (post-#54 QA, R3-B01).
  */
-export type TextOffer = {
+export type TextOffer = OfferEligibility & {
   admission: Admission;
   admissionStated: boolean;
   productKind: ProductKind;
@@ -164,7 +165,7 @@ function offerMarks(t: string, minimum = 2): Array<{ index: number; label: strin
   // Bare letters: "A is five ordinary seats…, B is six together…", "A at $360 arrives by 5pm, B at $390…" (TGQA-R6 07, 09),
   // also beside a lettered one in the same message ("The same Offer B is immediate…; A is $360…", R8 14).
   // "and B $220 TOTAL" in a list, but not "A $24 fee applies" opening a sentence.
-  const bare = [...t.matchAll(/(?:^|[.;:!?]\s+|,\s+|\band\s+|\bbut\s+|\bto\s+|\bIf\s+)([A-E])(?:'s\s+(?:corrected\s+|revised\s+|updated\s+)?(?:price|entry|terms|condition)\b|\s+(?:is|has|costs|at|for|gives|says|copied offer says|remains|still|now|would be|comes to|was|delivers|arrives)\s|[, :]\s+)|(?:,\s+|\band\s+|:\s+)([A-E])\s+(?=\$)/g)]
+  const bare = [...t.matchAll(/(?:^|[.;:!?]\s+|,\s+|\band\s+|\bbut\s+|\bto\s+|\bIf\s+)([A-E])(?:'s\s+(?:corrected\s+|revised\s+|updated\s+)?(?:price|entry|terms|condition|checkout|fees?|availability|status)\b|\s+(?:is|has|costs|at|for|gives|says|copied offer says|remains|still|now|would be|comes to|was|delivers|arrives)\s|[, :]\s+)|(?:,\s+|\band\s+|:\s+)([A-E])\s+(?=\$)/g)]
     .map((m) => ({ index: m.index! + m[0].indexOf((m[1] ?? m[2])!), label: (m[1] ?? m[2])!, name: `Offer ${m[1] ?? m[2]}` }));
   const letters = [...lettered, ...bare.filter((b) => !lettered.some((l) => l.label === b.label || Math.abs(l.index - b.index) < 8))].sort((a, b) => a.index - b.index);
   if (new Set(letters.map((m) => m.label)).size >= minimum) return letters;
@@ -200,7 +201,8 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
   const sharedDelivery = shared ? deliveryIn(shared) : null;
   const out: TextOffer[] = [];
   const year = Number(/\b(20\d{2})\b/.exec(t)?.[1] ?? calendarYear);
-  const globalFees = /\b(?:copied )?(?:quotes|offers|prices|tickets)(?:\s*,)?\s+(?:including (?:all )?fees|fees included)\s*:/i.test(t) || /\b(?:both|all|these)(?:(?: copied)? (?:offers|prices|quotes))?[^.;:]{0,30}(?:fees included|include (?:all )?fees)\b/i.test(t);
+  const globalAdmission = /\b(?:copied )?(?:offers|quotes) for (?:actual |concert |event )*admission\b/i.test(t.slice(0, marks[0]!.index));
+  const globalFees = /\b(?:copied )?(?:quotes|offers|prices)(?: (?:are|all|include))? (?:all[- ]in|include (?:all )?fees)\b/i.test(t.slice(0, marks[0]!.index)) || /\b(?:copied )?(?:quotes|offers|prices|tickets)(?:\s*,)?\s+(?:including (?:all )?fees|fees included)\s*:/i.test(t) || /\b(?:both|all|these)(?:(?: copied)? (?:offers|prices|quotes))?[^.;:]{0,30}(?:fees included|include (?:all )?fees)\b/i.test(t);
   for (let i = 0; i < marks.length; i++) {
     const label = marks[i]!.label;
     // An offer already read with its price is done; one first mentioned without a price ("Vivid now shows $25 in
@@ -228,13 +230,15 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     }
     let entitlement = admissionTerms(seg);
     const performance = performanceTerms(seg);
+    const eligibility = eligibilityIn(seg);
     // In a ticket comparison, a priced named performance is a ticket quote. Packages and extras
     // still need explicit admission; their cheaper price never establishes entitlement.
     const requestedArtist = musicExperience([t]).artist;
     if (concertContext([t]) && price && entitlement.productKind === 'unknown' && !entitlement.admissionStated && requestedArtist && seg.toLowerCase().includes(requestedArtist.toLowerCase()) && /\b(?:for|in|at)\b/i.test(seg)) entitlement = { admission: 'included', admissionStated: true, productKind: 'admission' };
+    if (entitlement.productKind === 'unknown' && !entitlement.admissionStated && (globalAdmission || concertContext([t]) && performance.appearance === 'live' && /\b(?:herself|himself|themselves) performs? live\b|\blive concert admission\b/i.test(seg))) entitlement = { admission: 'included', admissionStated: true, productKind: 'admission' };
     // Mentioned without a price ("Offer B is immediate transfer, all fees included") it still updates that offer
     // when the thread's offers are merged; alone it isn't an offer.
-    if (!price && !entitlement.admissionStated && !entryTerm(seg) && !opts.priceless) continue;
+    if (!price && !entitlement.admissionStated && !entryTerm(seg) && !eligibility.availability && !eligibility.transferStated && !opts.priceless) continue;
     const priceFound = price;
     const quote = price ?? { 0: '', 1: '', 2: '', index: seg.length };
     const cents = priceFound ? money(priceFound[1]!) : null;
@@ -249,14 +253,18 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     const qty = new RegExp(`(?<!\\b(?:row|section|sec|seats?|aisle|block)\\s)(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:(?!per\\b|each\\b|one\\b|two\\b|\\d)[a-z-]+\\s+){0,6}?(?:seats?|tickets?|admissions?|upgrades?|packages?|together|in a row)\\b`, 'i').exec(quantityText);
     const units = new RegExp(`(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:VIP\\s+)?packages?\\b(?!\\s+(?:includes?|contains?))`, 'i').exec(seg);
     const perUnit = new RegExp(`\\b(?:each package includes?\\s+${NUMBER}|${NUMBER}\\s+(?:concert\\s+)?admissions?\\s+per\\s+(?:[^.;]{0,12} )?package)`, 'i').exec(seg);
-    const admissionsPerUnit = perUnit ? num((perUnit[1] ?? perUnit[2])!) : null;
+    const includedCount = new RegExp(`\\b(?:including|includes?|contains?)\\s+${NUMBER}\\s+(?:concert\\s+)?admissions?`, 'i').exec(seg);
     const unitsAvailable = units ? num(units[1]!) : null;
+    // "Two packages including two admissions" describes two admissions in total, not two per package.
+    const admissionsPerUnit = perUnit ? num((perUnit[1] ?? perUnit[2])!) : unitsAvailable === 1 && includedCount ? num(includedCount[1]!) : null;
+    const packageAdmissions = entitlement.productKind === 'package' && includedCount && !perUnit ? num(includedCount[1]!) : null;
     const priceText = seg.slice(quote.index);
     const own = deliveryIn(seg) ?? sharedDelivery;
     const earlier = out.findIndex((o) => o.label === label);
     const push = (o: TextOffer) => (earlier >= 0 ? (out[earlier] = mergeOffer(out[earlier]!, o)) : out.push(o));
     push({
       ...entitlement,
+      ...eligibility,
       entry: entryTerm(seg, year),
       performance,
       unitsAvailable,
@@ -265,17 +273,17 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       label,
       name: marks[i]!.name,
       alias: marks[i]!.alias ?? null,
-      quantity: unitsAvailable !== null && admissionsPerUnit !== null ? unitsAvailable * admissionsPerUnit : admissionsPerUnit !== null ? null : qty ? num(qty[1]!) : null,
+      quantity: unitsAvailable !== null && admissionsPerUnit !== null ? unitsAvailable * admissionsPerUnit : packageAdmissions ?? (admissionsPerUnit !== null || entitlement.productKind === 'package' ? null : qty ? num(qty[1]!) : null),
       mustBuyAll: /\b(?:cannot|can't|can ?not|won't|will not|doesn't|does not)\s+(?:be\s+)?split\b|\b(?:must|have to|has to)\s+(?:all\s+)?be\s+(?:bought|purchased|sold)\b|\ball\s+\w+\s+must be\b|\bno splits?\b|\bsold (?:only )?(?:as a (?:block|set)|together)\b|\b(?:must|have to|has to)\s+buy\s+all\b|\brequires?\s+(?:you\s+to\s+)?(?:buy(?:ing)?|purchas(?:e|ing))\s+all\b|\ball\s+\w+\s+or\s+none\b|\bwon't sell (?:fewer|less)\b|\bmust\s+(?:purchase|buy|take)\s+(?:every|all|the whole)\b/i.test(seg),
       perTicketCents: isTotal ? null : cents,
       totalCents: isTotal ? cents : null,
       orderFeeCents: fee ? money(fee[1]!) : null,
       perTicketFeeCents: tFee ? money((tFee[1] ?? tFee[2])!) : null,
       // A total they quote for the order is what it costs ("Seller A is $360 total"), unless they say it's before fees.
-      feeBasis: BEFORE_FEES.test(priceText) ? 'before_fees' : ALL_IN.test(priceText) || globalFees ? 'all_in' : isTotal && /^\$\s?[\d,.]+\s*(?:in\s+)?total\b/i.test(priceText) && !fee && !tFee ? 'all_in' : 'unknown',
+      feeBasis: BEFORE_FEES.test(seg) ? 'before_fees' : ALL_IN.test(priceText) || globalFees ? 'all_in' : isTotal && /^\$\s?[\d,.]+\s*(?:in\s+)?total\b/i.test(priceText) && !fee && !tFee ? 'all_in' : 'unknown',
       noOtherCharges: /\bno (?:taxes? or )?(?:other|further|extra|additional) (?:charges|fees|costs)\b|\bno (?:taxes?|charges) or (?:other )?(?:charges|fees)\b|\bnothing else to pay\b/i.test(seg),
       accessible: says(seg, /\b(wheelchair|accessible|companion|ada)\b/i),
-      obstructed: /\bunobstructed\b|\b(?:clear|full) view\b|\bnot obstructed\b/i.test(seg) ? false : /\b(?:obstructed|limited|partial|restricted)(?:\s+|-)view\b|\bview (?:is )?(?:obstructed|limited)\b|\bobstructed\b/i.test(seg) ? true : null,
+      obstructed: obstructedView(seg),
       // "Two adjacent pairs" is two pairs, not four together; "separate singles scattered around" is neither.
       together: /\bnot together\b|\bsplit (?:up|across)\b|\b(?:separate|scattered|single)\s+(?:singles|seats)\b|\bsingles\b|\bscattered\b|\b(?:two|2|adjacent)\s+(?:adjacent\s+)?pairs\b/i.test(seg) ? false : /\b(?:together|adjacent)\b/i.test(seg) ? true : null,
       pairs: /\b(?:two|2)\s+(?:adjacent\s+)?pairs\b|\bin (?:adjacent )?pairs\b/i.test(seg),
@@ -330,6 +338,13 @@ export function mergeOffer(old: TextOffer, u: TextOffer): TextOffer {
     ...old,
     ...price,
     ...delivery,
+    availability: u.availability ?? old.availability,
+    validDays: u.validDays ?? old.validDays,
+    invalidDays: u.invalidDays ?? (u.validDays ? old.invalidDays?.filter((d) => !u.validDays!.includes(d)) ?? null : old.invalidDays),
+    collectionRestriction: u.collectionStated ? u.collectionRestriction : old.collectionRestriction,
+    collectionStated: u.collectionStated || old.collectionStated,
+    transferRestriction: u.transferStated ? u.transferRestriction : old.transferRestriction,
+    transferStated: u.transferStated || old.transferStated,
     admission: u.admissionStated ? u.admission : old.admission,
     admissionStated: old.admissionStated || u.admissionStated,
     productKind: u.productKind !== 'unknown' ? u.productKind : old.productKind,
@@ -397,6 +412,9 @@ export type PartyTerms = {
   night?: NightTiming | null;
   concertAdmission?: boolean;
   musicExperience?: MusicExperience;
+  requiredDay?: string | null;
+  view?: 'unobstructed' | 'any' | null;
+  performanceStartMinutes?: number | null;
 };
 
 /** "Each child must sit directly beside an adult; two adjacent adult-child pairs are fine." */
@@ -415,7 +433,11 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
     const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
     if (going) out.attendees = num((going[1] ?? going[2] ?? going[3] ?? going[4])!);
     if (!going) {
-      const people = new RegExp(`(?:^|[.;!?]\\s+|\\bSame\\s+)${NUMBER}\\s+(?:adults?|people)(?:\\s+and\\s+${NUMBER}\\s+(?:children|kids))?\\b(?!\\s+(?:must|can|sits?|has to|with|beside))`, 'i').exec(t);
+      const needed = new RegExp(`\\b(?:need|want)\\s+${NUMBER}\\s+(?:seats?|tickets?|admissions?)\\b`, 'i').exec(t.split(/\b(?:Offer|Option|Listing) [A-Z]\b/)[0]!);
+      if (needed) out.attendees = num(needed[1]!);
+      const ownPeople = new RegExp(`\\b${NUMBER}\\s+(?:adults?|people|attendees?)\\b(?!\\s+(?:must|can|sits?|has to|with|beside))`, 'i').exec(t.split(/\b(?:Offer|Option|Listing) [A-Z]\b/)[0]!);
+      if (ownPeople) out.attendees = num(ownPeople[1]!);
+      const people = new RegExp(`(?:^|[.;!?]\\s+|\\bSame\\s+)${NUMBER}\\s+(?:adults?|people|attendees?)(?:\\s+and\\s+${NUMBER}\\s+(?:children|kids))?\\b(?!\\s+(?:must|can|sits?|has to|with|beside))`, 'i').exec(t);
       if (people) out.attendees = num(people[1]!) + (people[2] ? num(people[2]) : 0);
       else if (/\bboth of us\b/i.test(t)) out.attendees = 2;
     }
@@ -464,6 +486,13 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
       }
     }
   }
+  out.requiredDay = requestedDay(messagesOldestFirst);
+  out.view = requiredView(messagesOldestFirst);
+  out.performanceStartMinutes = null;
+  for (const text of messagesOldestFirst) {
+    const m = new RegExp(`\\bperformance starts?\\s+(?:at )?${TIME}`, 'i').exec(flat(text));
+    if (m) out.performanceStartMinutes = minutesOf(m[1]!);
+  }
   out.night = nightTiming(messagesOldestFirst);
   out.concertAdmission = concertContext(messagesOldestFirst);
   out.musicExperience = musicExperience(messagesOldestFirst);
@@ -476,8 +505,10 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
  * be paying for, which for a block that won't split is the whole block.
  */
 export function offerTotal(o: TextOffer, partyQuantity: number): { cents: number; allIn: boolean; tickets: number } | null {
+  // No price for a basket that requires stock the supplied offer explicitly lacks.
+  if (o.productKind === 'package' && o.unitsAvailable != null && o.admissionsPerUnit != null && o.unitsAvailable * o.admissionsPerUnit < partyQuantity) return null;
   const tickets = o.quantity !== null && (o.mustBuyAll || o.totalCents !== null) ? Math.max(o.quantity, partyQuantity) : partyQuantity;
-  if (o.totalCents !== null) return { cents: o.totalCents + (o.orderFeeCents ?? 0), allIn: o.feeBasis === 'all_in' || (o.orderFeeCents !== null && o.noOtherCharges), tickets: o.quantity ?? partyQuantity };
+  if (o.totalCents !== null) return { cents: o.totalCents + (o.orderFeeCents ?? 0) + (o.perTicketFeeCents ?? 0) * (o.quantity ?? partyQuantity), allIn: o.feeBasis === 'all_in' || (o.orderFeeCents !== null && o.noOtherCharges), tickets: o.quantity ?? partyQuantity };
   if (o.perTicketCents === null) return null;
   const units = o.admissionsPerUnit && o.productKind === 'package' ? Math.ceil(tickets / o.admissionsPerUnit) : tickets;
   const base = o.perTicketCents * units + (o.perTicketFeeCents ?? 0) * tickets;

@@ -1,6 +1,6 @@
 /**
- * "Your side of the ticket market": the principles behind a reply, and Ticket Guy at the centre of the ticket
- * sources it knows, in orbit. Lime marks the sources behind live price data; the rest are mapped (routing and
+ * The /sources page: what each kind of information is (market data, the listing you send, mapped sellers and
+ * official routes), and Ticket Guy at the centre of the ticket sources it knows, in orbit. Lime marks the sources behind live price data; the rest are mapped (routing and
  * referral), which the legend says in words, so the diagram never reads as live comparison across all of them. Every name here
  * is in the source registry (research/ticket-guy-us-source-registry.json) or, for SeatData, the licensed
  * market-data feed (src/lib/market/seatdata.ts). Names are shown as plain text, not logos: they describe the
@@ -21,17 +21,16 @@ const ORBITS: Orbit[] = [
 
 export function SourceUniverse() {
   return (
-    <section className="universe-section wrap" aria-labelledby="universe-title">
+    <section className="universe-section sources-page wrap" aria-labelledby="universe-title">
       <div className="universe-copy">
-        <h2 id="universe-title">Your side of the ticket market.</h2>
-        <ul className="principles">
-          <li><strong>Your budget and plans drive the call.</strong> Not the seller, not the listing.</li>
-          <li><strong>Commission never does.</strong> Some links pay us; they don’t change what we recommend.</li>
-          <li><strong>If we’re not sure, we say so.</strong> Every reply says what we checked and what we couldn’t.</li>
-        </ul>
-        <p className="universe-how"><span className="how-label">How we know:</span> the listing you send, live resale price data from StubHub and Vivid Seats, and a map of 135 US ticket sellers, so we know where an event sells and can send you there.</p>
+        <h1 id="universe-title">Where our information comes from.</h1>
+        <dl className="sources-kinds">
+          <div><dt><span className="lg lg-live" aria-hidden="true" />Market data</dt><dd>Asking prices and their history from StubHub and Vivid Seats, through SeatData. Market context: not verified listings, and not a partnership.</dd></div>
+          <div><dt><span className="lg lg-sent" aria-hidden="true" />The listing you send</dt><dd>What your link or screenshot says: section, row, price, fees shown and delivery. We tell you it comes from the listing.</dd></div>
+          <div><dt><span className="lg" aria-hidden="true" />Sellers and official booking pages</dt><dd>135 US ticket sellers and official routes, mapped so we know where an event sells and can point you there. Not integrated listings; some links may earn us a commission.</dd></div>
+        </dl>
       </div>
-      <div className="universe" role="img" aria-label={`Ticket Guy at the centre of the ticket sources it knows. Live price data: SeatData, covering StubHub and Vivid Seats. Mapped: ${ORBITS.flatMap((o) => o.names).filter((n) => !LIVE.has(n)).join(', ')}, and more.`}>
+      <div className="universe" role="img" aria-label={`Ticket Guy at the centre of the ticket sources it knows. Market data: SeatData, covering StubHub and Vivid Seats asking prices. Mapped: ${ORBITS.flatMap((o) => o.names).filter((n) => !LIVE.has(n)).join(', ')}, and more.`}>
         {ORBITS.map((o, oi) => (
           <div key={oi} className={`orbit orbit-${o.tier}${o.reverse ? ' orbit-rev' : ''}`} style={{ '--r': `${o.r}cqw`, '--d': `${o.seconds}s` } as React.CSSProperties} aria-hidden="true">
             <span className="orbit-ring" />
@@ -58,7 +57,7 @@ export function SourceUniverse() {
         {ORBITS.flatMap((o) => o.names.map((n) => <li key={n} className={LIVE.has(n) ? 'is-core' : undefined}>{n}</li>))}
         <li className="is-more">+ 100 more</li>
       </ul>
-      <p className="universe-legend"><span className="lg lg-live" aria-hidden="true" />Live price data <span className="lg" aria-hidden="true" />Mapped: we know where they sell and link you there</p>
+      <p className="universe-legend"><span className="lg lg-live" aria-hidden="true" />Market data <span className="lg" aria-hidden="true" />Mapped seller or booking route</p>
       <p className="universe-note">Seller names are trademarks of their owners, shown to describe the sources we compare and link to. No partnership or endorsement is implied.</p>
     </section>
   );
