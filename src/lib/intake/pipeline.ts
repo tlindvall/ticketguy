@@ -444,8 +444,8 @@ export class Concierge {
       const before = stopsOnFile;
       const already = kind === 'stop_all' ? before.some((b) => b.scope === 'watch') && before.some((b) => b.scope === 'marketing') : before.some((b) => b.scope === 'marketing');
       const running = kind === 'stop_all' ? (await this.db.select({ id: t.watches.id }).from(t.watches).where(and(eq(t.watches.contactId, contact!.id), eq(t.watches.state, 'active')))).length + (await this.db.select({ id: t.eventAlerts.id }).from(t.eventAlerts).where(and(eq(t.eventAlerts.contactId, contact!.id), eq(t.eventAlerts.state, 'active')))).length : 0;
-      if (kind === 'stop_all') await stopAll(this.db, { contactId: contact!.id, emailLookup: contact!.emailLookup, evidence: { messageId: msg.id } });
-      else await revokeMarketing(this.db, { contactId: contact!.id, emailLookup: contact!.emailLookup, method: 'natural_language', evidence: { messageId: msg.id }, noticeVersion: 'n/a' });
+      if (kind === 'stop_all') await stopAll(this.db, { contactId: contact!.id, emailLookup: contact!.emailLookup, evidence: { messageId: msg.id }, at: this.now() });
+      else await revokeMarketing(this.db, { contactId: contact!.id, emailLookup: contact!.emailLookup, method: 'natural_language', evidence: { messageId: msg.id }, noticeVersion: 'n/a', at: this.now() });
       await audit(this.db, { actor: 'system', action: kind === 'stop_all' ? 'contact.stop_all' : 'contact.marketing_opt_out', entityKind: 'contact', entityId: contact!.id, diff: { messageId: msg.id, alreadyRecorded: already } });
       // One plain confirmation of what was recorded, from the stored state; asked again, the same answer, and
       // nothing starts up again (TGQA-R6 1014: two opt-outs went unanswered).
@@ -624,7 +624,7 @@ export class Concierge {
     const answerSupplied = async (recordVersion: boolean) => {
       const tz = venueTz ?? 'America/New_York';
       const terms = partyTerms(threadTexts, tz);
-      const quantity = terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
+      const quantity = terms.toBuy ?? terms.attendees ?? merged.quantity ?? DEFAULT_QUANTITY;
       const threadFlat = flat(threadTexts.join('\n'));
       const concertCap = concertContext(threadTexts) ? [...threadTexts].reverse().map(concertBudget).find((b) => b !== null) : null;
       const comparison = suppliedOffersAnswer({
@@ -645,7 +645,8 @@ export class Concierge {
       const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const html = [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${esc(first)}</strong>${esc(lead.slice(first.length))}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${esc(i).replace(/^(Offer [A-E])/, '<strong>$1</strong>').replace(/(\$[\d,.]+)/g, '<strong>$1</strong>')}</li>`).join('')}</ul>`, ...links.map(({ url, label }) => `<p><a href="${esc(url)}">${esc(label)}</a></p>`)].join('\n');
       if (recordVersion) {
-        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+        // With a ticket already held, the brief's quantity is what they're buying, not the party (R1-M02).
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: terms.owned ? { ...merged, quantity } : merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
         await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: now }).where(eq(t.requests.id, req.id));
         if (revision > 1) await this.invalidateForRevision(req.id, revision);
       }

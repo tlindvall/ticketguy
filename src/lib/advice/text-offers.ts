@@ -57,7 +57,7 @@ export type TextOffer = OfferEligibility & {
 };
 
 /** "Upper tier", "lower level", "mezzanine", "the floor": the part of the venue an offer is in. */
-const TIER = /\b(?:upper|lower|middle|top|bottom|first|second|club|field|loge|terrace|plaza|main)\s+(?:tier|level|bowl|deck|balcony)\b|\b(?:mezzanine|balcony|orchestra|floor seats?|the floor|pit|courtside|loge|front rows?)\b/i;
+const TIER = /\b(?:upper|lower|middle|top|bottom|first|second|club|field|loge|terrace|plaza|main)[\s-]+(?:tier|level|bowl|deck|balcony)\b|\b(?:mezzanine|balcony|orchestra|floor seats?|the floor|pit|courtside|loge|front rows?)\b/i;
 
 const money = (s: string) => Math.round(Number(s.replace(/,/g, '')) * 100);
 const WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, pair: 2 };
@@ -253,16 +253,23 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
     // "$190 all-in for both" and "$316 including fees in total" put the fee words between the price and "for both".
     const forAllAfterFees = !quote[2] && /^\s*(?:all[- ]in|including (?:all |every )?(?:fees?|charges)|with fees)\s*,?\s*(?:for (?:both|all\b|the two|the pair|the (?:whole )?(?:order|block))|(?:in )?total)/i.test(seg.slice(quote.index + quote[0].length));
     const totalCorrection = /^\s*(?:is|represents)\s+(?:the\s+)?TOTAL\b/i.test(seg.slice(quote.index + quote[0].length));
-    const isTotal = forTheBlock || forAllAfterFees || totalCorrection || /total|for (both|all|the two|the pair)/i.test(quote[2] ?? '');
+    // "two adjacent upper-tier seats, $190 all-in": a count of seats then an all-in price with no "each" is the
+    // block's all-in price (R1-M01 replay). A per-ticket word anywhere in the offer keeps it per ticket.
+    const countThenAllIn = !quote[2] && /^\s*all[- ]in\b(?!\s+(?:each|per|a ticket|apiece))/i.test(seg.slice(quote.index + quote[0].length)) && /\b(?:two|three|four|five|six|seven|eight|nine|ten|pair|\d{1,2})\s+(?:[a-z-]+\s+){0,4}?(?:seats|tickets|admissions)\b[^$]{0,6}$/i.test(seg.slice(0, quote.index)) && !/\b(?:each|per (?:ticket|seat)|a ticket|apiece)\b/i.test(seg);
+    const isTotal = forTheBlock || forAllAfterFees || totalCorrection || countThenAllIn || /total|for (both|all|the two|the pair)/i.test(quote[2] ?? '');
     // "six ordinary unobstructed seats together", not "row 12 seats 7-9".
     const quantityText = seg.replace(/\bZone (?:One|\d+)\b/gi, 'room');
     const qty = new RegExp(`(?<!\\b(?:row|section|sec|seats?|aisle|block)\\s)(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:(?!per\\b|each\\b|one\\b|two\\b|\\d)[a-z-]+\\s+){0,6}?(?:seats?|tickets?|admissions?|upgrades?|packages?|together|in a row)\\b`, 'i').exec(quantityText);
     const units = new RegExp(`(?<![$\\d.,]\\s?)\\b${NUMBER}\\s+(?:VIP\\s+)?packages?\\b(?!\\s+(?:includes?|contains?))`, 'i').exec(seg);
     const perUnit = new RegExp(`\\b(?:each package includes?\\s+${NUMBER}|${NUMBER}\\s+(?:concert\\s+)?admissions?\\s+per\\s+(?:[^.;]{0,12} )?package)`, 'i').exec(seg);
     const includedCount = new RegExp(`\\b(?:including|includes?|contains?)\\s+${NUMBER}\\s+(?:concert\\s+)?admissions?`, 'i').exec(seg);
-    const unitsAvailable = units ? num(units[1]!) : null;
+    // "a fixed bundle of two adjacent concert admissions for $180, exactly two available, no partial purchase": one
+    // basket of two, priced as a basket. Stock is the basket itself only when they say it's fixed or limited (R1-M02).
+    const bundleOf = new RegExp(`\\b(?:bundle|package|block|set|lot)\\s+of\\s+${NUMBER}\\s+(?:[a-z-]+\\s+){0,3}?(?:admissions?|tickets?|seats?)\\b`, 'i').exec(seg);
+    const fixedBasket = !!bundleOf && /\bfixed\b|\bexactly\s+\w+\s+available\b|\bonly\s+(?:one|1)\s+(?:bundle|package)\b|\bno partial\b|\bpartial purchases? (?:is |are )?not\b/i.test(seg);
+    const unitsAvailable = units ? num(units[1]!) : fixedBasket ? 1 : null;
     // "Two packages including two admissions" describes two admissions in total, not two per package.
-    const admissionsPerUnit = perUnit ? num((perUnit[1] ?? perUnit[2])!) : unitsAvailable === 1 && includedCount ? num(includedCount[1]!) : null;
+    const admissionsPerUnit = perUnit ? num((perUnit[1] ?? perUnit[2])!) : unitsAvailable === 1 && includedCount ? num(includedCount[1]!) : bundleOf && entitlement.productKind === 'package' ? num(bundleOf[1]!) : null;
     const packageAdmissions = entitlement.productKind === 'package' && includedCount && !perUnit ? num(includedCount[1]!) : null;
     const priceText = seg.slice(quote.index);
     const own = deliveryIn(seg) ?? sharedDelivery;
@@ -275,12 +282,12 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       performance,
       unitsAvailable,
       admissionsPerUnit,
-      priceBasisStated: !!quote[2] || forTheBlock || forAllAfterFees || totalCorrection,
+      priceBasisStated: !!quote[2] || forTheBlock || forAllAfterFees || totalCorrection || countThenAllIn,
       label,
       name: marks[i]!.name,
       alias: marks[i]!.alias ?? null,
       quantity: unitsAvailable !== null && admissionsPerUnit !== null ? unitsAvailable * admissionsPerUnit : packageAdmissions ?? (admissionsPerUnit !== null || entitlement.productKind === 'package' ? null : qty ? num(qty[1]!) : null),
-      mustBuyAll: /\b(?:cannot|can't|can ?not|won't|will not|doesn't|does not)\s+(?:be\s+)?split\b|\b(?:must|have to|has to)\s+(?:all\s+)?be\s+(?:bought|purchased|sold)\b|\ball\s+\w+\s+must be\b|\bno splits?\b|\bsold (?:only )?(?:as a (?:block|set)|together)\b|\b(?:must|have to|has to)\s+buy\s+all\b|\brequires?\s+(?:you\s+to\s+)?(?:buy(?:ing)?|purchas(?:e|ing))\s+all\b|\ball\s+\w+\s+or\s+none\b|\bwon't sell (?:fewer|less)\b|\bmust\s+(?:purchase|buy|take)\s+(?:every|all|the whole)\b/i.test(seg),
+      mustBuyAll: /\b(?:cannot|can't|can ?not|won't|will not|doesn't|does not)\s+(?:be\s+)?split\b|\b(?:must|have to|has to)\s+(?:all\s+)?be\s+(?:bought|purchased|sold)\b|\ball\s+\w+\s+must be\b|\bno splits?\b|\bsold (?:only )?(?:as a (?:block|set)|together)\b|\b(?:must|have to|has to)\s+buy\s+all\b|\brequires?\s+(?:you\s+to\s+)?(?:buy(?:ing)?|purchas(?:e|ing))\s+all\b|\ball\s+\w+\s+or\s+none\b|\bwon't sell (?:fewer|less)\b|\bmust\s+(?:purchase|buy|take)\s+(?:every|all|the whole)\b|\bno partial (?:purchases?|sales?)\b|\bpartial purchases? (?:is |are )?not (?:offered|allowed|possible)\b/i.test(seg),
       perTicketCents: isTotal ? null : cents,
       totalCents: isTotal ? cents : null,
       orderFeeCents: fee ? money(fee[1]!) : null,
@@ -433,13 +440,25 @@ export type PartyTerms = {
    * lower tier matters most"). The latest message that says so wins; null when they didn't say (Research 1, R1-04).
    */
   priority?: { kind: 'price' } | { kind: 'feature'; words: string } | null;
+  /** Admissions someone in the party already holds ("I already have my own ticket"), latest statement wins (R1-M02). */
+  owned?: number | null;
+  /**
+   * New admissions to buy, which is not the party size when someone already has a ticket: said outright ("three
+   * friends now need new tickets"), else the party less what's owned. Null when nobody holds one.
+   */
+  toBuy?: number | null;
 };
+
+const OWNED_ONE = /\b(?:I|my (?:partner|wife|husband|friend|son|daughter))\s+(?:already\s+|still\s+)?(?:has|have|own|owns|hold|holds|bought|got)\s+(?:my|his|her|their)\s+own\s+(?:ticket|seat|admission)\b|\bI\s+(?:already\s+(?:have|own|hold|bought|got)|own)\s+(?:a|one|my)\s+(?:ticket|seat|admission)\b/i;
+const OWNED_N = new RegExp(`\\b(?:I|we)\\s+(?:already\\s+(?:have|own|hold|bought|got)|own)\\s+${NUMBER}\\s+(?:tickets?|seats?|admissions?)\\b`, 'i');
+const OWNED_NONE = /\b(?:I|we)\s+(?:don'?t|do not)\s+(?:own|have)\s+any\s+tickets\b|\b(?:I|we)\s+(?:own|have)\s+no\s+tickets\b/i;
+const TO_BUY = new RegExp(`\\b${NUMBER}\\s+(?:(?:more|other)\\s+)?(?:friends?|people|guests?|others|of them|of my friends)\\s+(?:now\\s+|still\\s+|will\\s+)?needs?\\s+(?:new\\s+|their own\\s+)?(?:tickets?|admissions?|seats?)\\b|\\bneed\\s+${NUMBER}\\s+(?:more|new|additional|extra)\\s+(?:tickets?|admissions?|seats?)\\b`, 'i');
 
 const PRIORITY_TAIL = '[^.!?]{0,40}\\b(?:matters? (?:the )?most|most important|is (?:the |our |my )?(?:top |main )?priority|comes first|(?:is )?worth (?:paying (?:for|the extra)|the extra))';
 /** "Keeping the spend down matters most", "the price is our priority". */
 const PRICE_FIRST = new RegExp(`\\b(?:keep(?:ing)? (?:the )?(?:spend|spending|cost|price|total)s? (?:down|low)|spend(?:ing)? (?:less|as little)|saving money|(?:the )?(?:lowest )?price|(?:the )?cost|the total)${PRIORITY_TAIL}|\\b(?:cheapest|lowest price) (?:is what we want|wins)\\b`, 'i');
 /** "Being in the lower tier matters most", "the view is worth paying for". */
-const FEATURE_FIRST = new RegExp(`\\b(?:being (?:in|on|at) |sitting (?:in|on) |seats? (?:in|on) |a |the )?((?:upper|lower|middle|club|field|loge|main) (?:tier|level|bowl|deck|balcony)|mezzanine|balcony|orchestra|(?:the )?floor|front rows?|(?:a )?better view|the view|closer seats|being closer)${PRIORITY_TAIL}`, 'i');
+const FEATURE_FIRST = new RegExp(`\\b(?:being (?:in|on|at) |sitting (?:in|on) |seats? (?:in|on) |a |the )?((?:upper|lower|middle|club|field|loge|main)[ -](?:tier|level|bowl|deck|balcony)(?: seats?)?|mezzanine|balcony|orchestra|(?:the )?floor|front rows?|(?:a )?better view|the view|closer seats|being closer)${PRIORITY_TAIL}`, 'i');
 
 /** "Each child must sit directly beside an adult; two adjacent adult-child pairs are fine." */
 const PAIRS_OK = /\bone adult (?:must |can |will |has to )?sits? (?:with|beside|next to) each (?:child|kid)\b|\bsplit into (?:2|two) and (?:2|two)\b|\bin pairs\b|\beach adult (?:can |must )?sits? (?:beside|with|next to) (?:a|one) (?:child|kid)\b|\beach (?:child|kid) (?:must |has to |needs to |should )?(?:sits? )?(?:directly )?(?:beside|next to|with) an? (?:adult|parent)\b|\b(?:adjacent |two |2 )*(?:adult[- ](?:child|kid) )?pairs (?:are|is) (?:fine|ok|okay|acceptable|allowed)\b|\b(?:two|2) adjacent (?:adult[- ](?:child|kid) )?pairs\b[^.;]{0,30}\b(?:fine|ok|okay|acceptable|allowed)\b/i;
@@ -451,7 +470,7 @@ const NOT_TOGETHER = /\b(?:don'?t|do not) (?:need|have) to sit together\b|\b(?:d
 const ALL_TOGETHER = /\b(?:must|need to|have to|want to) (?:all )?sit together\b|\ball (?:\w+ )?(?:of us )?together\b|\bseats? (?:all )?together\b/i;
 
 export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New_York'): PartyTerms {
-  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null, priority: null };
+  const out: PartyTerms = { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, deadlineZone: null, seating: null, priority: null, owned: null, toBuy: null };
   for (const raw of messagesOldestFirst) {
     const t = flat(raw);
     const going = new RegExp(`\\b(?:only|just)\\s+${NUMBER}\\s+of\\s+us\\b|\\b${NUMBER}\\s+of\\s+us\\b|\\bthere\\s+(?:are|will be)\\s+${NUMBER}\\s+of\\s+us\\b|\\b(?:we are|we're)\\s+${NUMBER}\\b(?!\\s*(?:minutes?|hours?|years?))`, 'i').exec(t);
@@ -465,11 +484,19 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
       if (people) out.attendees = num(people[1]!) + (people[2] ? num(people[2]) : 0);
       else if (/\bboth of us\b/i.test(t)) out.attendees = 2;
     }
+    // Tickets someone already has, and how many new ones that leaves to buy (R1-M02). A message that restates the
+    // party without a new count makes the count derived again, so a stale "two friends" never outlives "four of us".
+    const ownedN = OWNED_N.exec(t);
+    const owned = ownedN ? num(ownedN[1]!) : OWNED_ONE.test(t) ? 1 : OWNED_NONE.test(t) ? 0 : null;
+    if (owned !== null) out.owned = owned;
+    const toBuy = TO_BUY.exec(t);
+    if (toBuy) out.toBuy = num((toBuy[1] ?? toBuy[2])!);
+    else if (going || owned !== null) out.toBuy = null;
     // Pairs are enough when each adult sits with a child: "we can split into 2 and 2 only if one adult sits with each
     // child", "each child must sit directly beside an adult; two adjacent adult-child pairs are fine" (TGQA-R6 18,
     // R8 S01). A later "we no longer require that" lifts it; the latest message wins.
     const feature = FEATURE_FIRST.exec(t);
-    if (feature) out.priority = { kind: 'feature', words: feature[1]!.toLowerCase().replace(/^(?:a|the) /, '') };
+    if (feature) out.priority = { kind: 'feature', words: feature[1]!.toLowerCase().replace(/^(?:a|the) /, '').replace(/[- ]seats?$/, '').replace(/-/g, ' ') };
     else if (PRICE_FIRST.test(t)) out.priority = { kind: 'price' };
     if (ANY_SEATS.test(t)) out.seating = 'any';
     else if (PAIRS_OK.test(t)) out.seating = 'pairs';
@@ -513,6 +540,8 @@ export function partyTerms(messagesOldestFirst: string[], venueTz = 'America/New
       }
     }
   }
+  if (out.toBuy == null && out.owned && out.attendees) out.toBuy = out.attendees > out.owned ? out.attendees - out.owned : null;
+  if (!out.owned) out.toBuy = out.toBuy ?? null;
   out.requiredDay = requestedDay(messagesOldestFirst);
   out.view = requiredView(messagesOldestFirst);
   out.performanceStartMinutes = null;
