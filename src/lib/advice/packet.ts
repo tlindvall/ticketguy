@@ -635,8 +635,10 @@ export function suppliedOffersAnswer(a: { offers: TextOffer[]; quantity: number;
 function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const need = a.offerNeeds ?? { noObstructed: false, togetherRequired: false, baseline: null, terms: null };
   const terms = need.terms ?? { attendees: null, extra: null, maxBuy: null, deadlineMinutes: null, seating: null };
-  // How many are going, which is not always how many they'd buy ("happy to buy six; only five of us").
-  const q = terms.attendees ?? a.quantity;
+  // How many are going, which is not always how many they'd buy ("happy to buy six; only five of us"), and less
+  // any ticket someone already holds: the purchase is the new admissions only (R1-M02).
+  const owned = terms.owned ?? 0;
+  const q = terms.toBuy ?? terms.attendees ?? a.quantity;
   // "Offer B" / "the green listing" as named; mid-sentence, a lettered offer is just its letter ("B costs less").
   const Name = (o: TextOffer) => o.name.charAt(0).toUpperCase() + o.name.slice(1);
   const short = (o: TextOffer) => (/^[A-Z1-9]$/.test(o.label) ? o.label : o.name);
@@ -646,7 +648,7 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   const zoneName = zoned ? venueZoneName(a.timeZone ?? 'America/New_York') : null;
   const at = (m: number) => `${timeLabel(m)}${zoneName ? ` ${zoneName} time` : ''}`;
   const partyOf = (n: number) => (n === 1 ? 'one' : n === 2 ? 'both' : `all ${countWord(n)}`);
-  const ticketsWord = (n: number) => (n === q ? partyOf(n) : `${countWord(n)} tickets`);
+  const ticketsWord = (n: number) => (n === q ? (owned ? `the ${n === 1 ? 'new ticket' : `${countWord(n)} new tickets`}` : partyOf(n)) : `${countWord(n)} tickets`);
   const budget = a.priorities.budgetTotalCents ?? null;
   const statedCharges = (o: TextOffer) => o.orderFeeCents !== null || o.perTicketFeeCents !== null;
   // A subtotal already includes any charges they supplied. Only the remaining fees are unknown.
@@ -657,26 +659,35 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
   // Only when it differs from the venue's does the zone need saying; "your noon deadline" is clear on its own.
   const otherZone = !!terms.deadlineZone && terms.deadlineZone !== venueZoneName(tz);
   const dl = (m: number) => (otherZone ? `${timeLabel(fromVenueMinutes(m, terms.deadlineZone!, tz))} ${terms.deadlineZone}` : at(m));
+  // One fixed basket ("a fixed bundle of two admissions") is said as that, not as stock and a per-package count.
+  const oneBasket = (o: TextOffer) => o.productKind === 'package' && o.unitsAvailable === 1 && o.admissionsPerUnit != null;
+  // A bundle that doesn't say how many it admits, priced as the bundle ("a bundle of admissions for $180"): its price
+  // is the bundle's, never a per-person price to multiply, and it covers nobody until its count is known (R1-M02).
+  const unknownCapacity = (o: TextOffer) => o.productKind === 'package' && o.quantity === null && o.admissionsPerUnit == null && !(o.perTicketCents !== null && o.priceBasisStated);
   const price = (o: TextOffer, tot: ReturnType<typeof offerTotal>) => {
     const fees = o.feeBasis === 'all_in' ? ' including fees' : o.feeBasis === 'before_fees' ? ' before fees' : '';
     if (o.totalCents === null && o.perTicketCents === null) return 'price not stated';
-    if (o.totalCents !== null && !tot) return `${formatUsd(o.totalCents)} per quoted package${fees}; insufficient package stock for your party`;
+    if (unknownCapacity(o)) return `${formatUsd((o.totalCents ?? o.perTicketCents)!)} for the bundle${fees}; how many it admits isn’t stated`;
+    if (o.totalCents !== null && !tot) return oneBasket(o) ? `${formatUsd(o.totalCents)} for the bundle${fees}` : `${formatUsd(o.totalCents)} per quoted package${fees}; insufficient package stock for your party`;
     if (o.totalCents !== null) return `${formatUsd(o.totalCents)} in total${fees}${o.orderFeeCents !== null || o.perTicketFeeCents !== null ? `, plus ${[o.orderFeeCents !== null ? `${formatUsd(o.orderFeeCents)} for the order` : '', o.perTicketFeeCents !== null ? `${formatUsd(o.perTicketFeeCents)} per ticket` : ''].filter(Boolean).join(' and ')} = ${formatUsd(tot!.cents)}` : ''}${tot && tot.tickets !== q ? ` for ${countWord(tot.tickets)} tickets` : ''}`;
     const packageUnits = o.productKind === 'package' && o.admissionsPerUnit != null;
     const each = `${formatUsd(o.perTicketCents!)} ${packageUnits ? 'per package' : 'each'}${o.perTicketFeeCents ? '' : fees}`;
-    if (!tot) return each;
+    if (!tot) return packageUnits && oneBasket(o) ? `${formatUsd(o.perTicketCents!)} for the bundle${fees}` : each;
     // Every fee they gave is in the working, not only in the total: "$52.50 each, plus $12.75 a ticket in fees and
     // $8 for the whole order: $269" (live V04 showed the $8 and hid the $12.75).
     const extras = [o.perTicketFeeCents ? `${formatUsd(o.perTicketFeeCents)} a ticket in fees` : null, o.orderFeeCents !== null ? `${formatUsd(o.orderFeeCents)} for the whole order` : null].filter(Boolean);
     if (extras.length) return `${each}, plus ${extras.join(' and ')}: ${formatUsd(tot.cents)}${tot.allIn ? ' in total' : ''} for ${ticketsWord(tot.tickets)}`;
+    if (packageUnits && oneBasket(o)) return `${formatUsd(tot.cents)} for the bundle${fees}`;
     if (packageUnits) return `${each}, ${formatUsd(tot.cents)} for ${countWord(Math.ceil(tot.tickets / o.admissionsPerUnit!))} ${Math.ceil(tot.tickets / o.admissionsPerUnit!) === 1 ? 'package' : 'packages'} admitting ${ticketsWord(tot.tickets)}`;
     return tot.tickets > 1 ? `${each}, ${formatUsd(tot.cents)} for ${ticketsWord(tot.tickets)}${o.feeBasis === 'before_fees' ? ' plus fees' : ''}` : each;
   };
-  const describe = (o: TextOffer) =>
-    [o.productKind === 'package' && o.admissionsPerUnit != null ? `${o.unitsAvailable != null ? `${countWord(o.unitsAvailable)} ${o.unitsAvailable === 1 ? 'package' : 'packages'} available, ` : ''}${countWord(o.admissionsPerUnit)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'} per package` : o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.productKind && o.productKind !== 'unknown' ? (o.productKind === 'admission' ? 'concert admission' : o.productKind) : o.accessible ? 'wheelchair-accessible spaces' : terms.concertAdmission && o.admission !== 'included' ? 'admission unverified' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.tier ? o.tier : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
+  const describe = (o: TextOffer) => oneBasket(o)
+    ? [`a fixed bundle of ${countWord(o.admissionsPerUnit!)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'}`, o.together ? 'together' : o.together === false ? 'not together' : null, o.tier ?? null].filter(Boolean).join(', ')
+    : [o.productKind === 'package' && o.admissionsPerUnit != null ? `${o.unitsAvailable != null ? `${countWord(o.unitsAvailable)} ${o.unitsAvailable === 1 ? 'package' : 'packages'} available, ` : ''}${countWord(o.admissionsPerUnit)} ${o.admissionsPerUnit === 1 ? 'admission' : 'admissions'} per package` : o.quantity !== null ? `${countWord(o.quantity)}${o.together ? ' together' : ''}` : null, o.productKind && o.productKind !== 'unknown' ? (o.productKind === 'admission' ? 'concert admission' : o.productKind) : o.accessible ? 'wheelchair-accessible spaces' : o.admission === 'excluded' ? 'no admission' : terms.concertAdmission && o.admission !== 'included' ? 'admission unverified' : o.quantity === null ? 'ordinary seats' : null, o.quantity === null && o.together ? 'together' : null, o.pairs ? 'two adjacent pairs' : o.together === false ? 'not together' : null, o.obstructed === true ? 'obstructed view' : o.obstructed === false ? 'unobstructed' : null, o.mustBuyAll ? 'can’t be split' : null, o.deliveryMinutes === 0 ? 'immediate transfer' : o.deliveryMinutes !== null ? `delivery by ${at(o.deliveryMinutes)}${o.deliveryAsWritten ? ` (${o.deliveryAsWritten})` : ''}` : null, o.tier ? o.tier : null, o.section ? `section ${o.section}` : null, o.row ? `row ${o.row}` : null].filter(Boolean).join(', ');
   const rows: OfferVerdict[] = offers.map((o) => {
-    const tot = offerTotal(o, q);
+    const tot = unknownCapacity(o) ? null : offerTotal(o, q);
     const why: OfferVerdict['why'] = [];
+    if (unknownCapacity(o)) why.push({ kind: 'short', text: `it doesn’t say how many admissions the bundle includes, so I can’t count it as covering ${q === 1 ? 'you' : `${countWord(q)}${owned ? ' new tickets' : ''}`}` });
     if (o.availability === 'unavailable') why.push({ kind: 'availability', text: 'it is marked sold out or unavailable, so it is not an actionable option' });
     if (terms.requiredDay && (o.validDays && !o.validDays.includes(terms.requiredDay) || o.invalidDays?.includes(terms.requiredDay))) why.push({ kind: 'day', text: `${o.validDays ? `it is ${o.validDays.join('/')} only, ` : ''}not valid for your ${terms.requiredDay} admission` });
     if (o.collectionRestriction) why.push({ kind: 'transfer', text: o.collectionRestriction });
@@ -689,7 +700,12 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
     if (entry) why.push({ kind: 'entry', text: entry });
     if (a.accessibilityRequired && !o.accessible) why.push({ kind: 'access', text: 'it isn’t described as accessible seating, which you need' });
     if (!a.accessibilityRequired && o.accessible) why.push({ kind: 'access', text: `these are wheelchair or companion spaces, which ${q > 1 ? 'no one in your group needs' : 'you don’t need'}; they’re for people who need them, and the venue can ask you to move` });
-    if (o.quantity !== null && o.quantity < q) why.push({ kind: 'short', text: `it’s only ${countWord(o.quantity)} ${o.quantity === 1 ? 'ticket' : 'tickets'}, and you need ${countWord(q)}` });
+    if (o.quantity !== null && o.quantity < q) {
+      // A fixed basket short of the party is short whatever it costs: it would leave someone out (R1-M02).
+      const noun = o.productKind === 'package' ? (o.quantity === 1 ? 'admission' : 'admissions') : o.quantity === 1 ? 'ticket' : 'tickets';
+      const left = q - o.quantity;
+      why.push({ kind: 'short', text: `it has only ${countWord(o.quantity)} ${noun}, and you need ${countWord(q)}${owned ? ` new ${q === 1 ? 'one' : 'ones'}` : ''}, so it would leave ${left === 1 ? 'one person' : `${countWord(left)} people`} out` });
+    }
     if (o.quantity !== null && o.quantity > q) {
       const allowed = terms.extra === 'allowed' && (terms.maxBuy === null || o.quantity <= terms.maxBuy);
       if (!allowed && (o.mustBuyAll || terms.extra === 'refused')) why.push({ kind: o.mustBuyAll ? 'block' : 'extra', text: o.mustBuyAll ? `it’s ${countWord(o.quantity)} tickets the seller won’t split, and you ${terms.extra === 'refused' ? 'won’t buy an extra' : `want ${countWord(q)}`}` : `it’s ${countWord(o.quantity)} tickets, and you won’t buy an extra; ask the seller whether they’ll sell exactly ${countWord(q)}` });
@@ -757,8 +773,12 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
       : `${Name(best.o)} ${open.length ? 'is the straightforward choice if you’d rather skip another checkout' : fits.length > 1 ? 'wins this one' : 'is the one that meets what you asked for'}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`;
     const bits: string[] = [];
     if (terms.concertAdmission && fits.length === 1) for (const r of rows.filter((r) => r !== best)) {
-      const unusable = r.why.find((w) => ['availability', 'day', 'transfer', 'view'].includes(w.kind));
-      if (unusable) bits.push(`Skip ${short(r.o)}: ${unusable.text}.`);
+      // Admission only when it's excluded: an unknown one is "confirm first", not a reason to skip.
+      const unusable = r.why.find((w) => ['availability', 'day', 'transfer', 'view', 'short'].includes(w.kind) || (w.kind === 'admission' && r.o.admission === 'excluded'));
+      // A cheaper add-on is said for what it is, not as a bargain beside the tickets (R1-M01).
+      const addOn = unusable?.kind === 'admission' && r.o.admission === 'excluded' && ['upgrade', 'parking', 'shuttle'].includes(r.o.productKind);
+      if (addOn) bits.push(`Skip ${short(r.o)}: it’s ${r.o.productKind === 'upgrade' ? 'an upgrade' : `a ${r.o.productKind} pass`} with no concert admission, so its ${r.tot ? formatUsd(r.tot.cents) : 'price'} doesn’t get ${q === 1 ? 'you' : q === 2 ? 'either of you' : 'anyone'} into the show.`);
+      else if (unusable) bits.push(`Skip ${short(r.o)}: ${unusable.text}.`);
     }
     // Three or more that fit: the saving against each, not just the runner-up (TGQA-R6 14: "saves $10 or $5").
     const others = named ? [] : [...fits].sort(byTotal).filter((r) => r !== best);
@@ -777,11 +797,12 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[]): ClaimRecord {
             ? `${Name(c.o)} is already ${formatUsd(-gap)} more with the charges you supplied; any remaining fees would widen that gap.`
             : `${Name(c.o)} already costs ${formatUsd(-gap)} more before its fees, so ${short(best.o)} costs less whatever they are.`);
     }
+    if (owned) bits.unshift(owned === 1 ? 'Your own ticket is already covered.' : `The ${countWord(owned)} tickets you already have are covered.`);
     const check = best.o.deliveryStated ? '' : ' Before you buy, check its delivery time on the listing.';
     // Their priority, said back as the reason: the pick is for them, not the cheapest by default.
     const dearer = priority?.kind === 'price' && best === cheapest ? [...fits].sort(byTotal).filter((r) => r !== best && r.tot!.cents > best.tot!.cents && r.o.tier)[0] : undefined;
     const personal = wanted && wanted !== cheapest && cheapest
-      ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `It costs ${formatUsd(best.tot!.cents - cheapest.tot!.cents)} more than ${cheapest.o.name}, and since ${priority?.kind === 'feature' ? `the ${priority.words}` : 'that'} is what matters most to you, that’s the difference worth paying.` }
+      ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `It costs ${formatUsd(best.tot!.cents - cheapest.tot!.cents)} more than ${cheapest.o.name}, and since ${priority?.kind === 'feature' ? `the ${priority.words}` : 'that'} is what matters most to you, that’s the difference worth paying.${budget !== null && best.tot!.cents <= budget ? ` It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.` : ''}` }
       : dearer
         ? { head: `I’d take ${short(best.o)} for you: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`, why: `${budget !== null ? `It leaves ${formatUsd(budget - best.tot!.cents)} under your ${formatUsd(budget)} cap. ` : ''}${dearer.o.name} costs ${formatUsd(dearer.tot!.cents - best.tot!.cents)} more for the ${dearer.o.tier}; since keeping the spend down matters most to you, I wouldn’t pay that difference on the facts you’ve supplied.` }
         : null;
@@ -1365,7 +1386,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
 /** "a and b", or "a; and b" when an item already has its own "and"; of two, one with a trailing clause goes last. */
 /** "lower tier" against "lower tier seats", "the floor" against "floor seats": the same part of the venue. */
 function sameFeature(tier: string, words: string): boolean {
-  const norm = (x: string) => x.toLowerCase().replace(/\b(?:the|seats?|a)\b/g, '').replace(/\blevel\b/, 'tier').replace(/\s+/g, ' ').trim();
+  const norm = (x: string) => x.toLowerCase().replace(/-/g, ' ').replace(/\b(?:the|seats?|a)\b/g, '').replace(/\blevel\b/, 'tier').replace(/\s+/g, ' ').trim();
   return norm(tier) === norm(words) || norm(tier).includes(norm(words)) || norm(words).includes(norm(tier));
 }
 
