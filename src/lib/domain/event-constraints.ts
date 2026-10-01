@@ -200,7 +200,11 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
         const listed = `(?:the\\s+)?(?:${any})(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*`;
         const before = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at)\\s+(?:at\\s+|in\\s+)?(?=${listed})(?:[^.;!?]*?)(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i');
         const after = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*\\s+(?:are|is)\\s+(?:excluded|not (?:permitted|allowed|ok|okay|wanted|an option)|ruled out|out|off the table)`, 'i');
+        // A correction about where it is rules it out too: "Constellation Room is in Santa Ana, not Los Angeles",
+        // "X isn't in LA" (Research 1 NW-02). Without the "not", "X is in Santa Ana, which is fine" asks for it.
+        const corrected = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])\\s+(?:is|'s|are)\\s+(?:actually\\s+|really\\s+)?(?:in|located in)\\s+[^.;!?]{1,40}?,?\\s+not\\s+(?:in\\s+)?\\w|(?<![\\w-])${nameRe(n)}(?![\\w-])\\s+(?:isn't|is not|aren't|are not)\\s+(?:actually\\s+|really\\s+)?(?:in|located in)\\b`, 'i');
         const m = before.exec(lower);
+        if (corrected.test(lower)) excluded.add(v.canonical);
         if ((m && new RegExp(`^(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at)\\s+(?:at\\s+|in\\s+)?${listed}$`, 'i').test(m[0])) || after.test(lower)) excluded.add(v.canonical);
       }
     }
@@ -277,7 +281,7 @@ export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boo
   return why;
 }
 
-function displayVenue(term: string): string {
+export function displayVenue(term: string): string {
   return term.length <= 4 ? term.toUpperCase() : term.replace(/\b\w/g, (x) => x.toUpperCase());
 }
 

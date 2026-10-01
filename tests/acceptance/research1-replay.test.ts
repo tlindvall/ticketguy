@@ -101,7 +101,12 @@ describe('Research 1: useful advice and email responses', () => {
         expect(r.eventId).toBe(R1.e.dusky);
       }
       expect(second!.text).toContain('You’re right that my last reply should have said that first.');
-      expect(second!.text).toContain('I checked Sat, Oct 3 too: I don’t have a Dusky show on file that night');
+      // The other night is checked for the kind of music, not only the act, and the link names night and room
+      // (Research 2 link/email review, R2-EMAIL-POLICY-01).
+      expect(second!.text).toContain('I checked Sat, Oct 3 too: I don’t have Dusky or another house night in Brooklyn on file then');
+      expect(second!.text).toContain('Here’s the listing for Dusky at Elsewhere, Fri, Oct 2 at 10:30pm:');
+      expect(second!.text).toContain('Nothing I have states Elsewhere’s last entry for that night.');
+      expect(second!.text).not.toMatch(/own page or box office/);
       writing(second!, { first: false });
     });
 
@@ -116,9 +121,12 @@ describe('Research 1: useful advice and email responses', () => {
         expect(r.text).toContain('Harbor Lights at The Wiltern');
         expect(r.text).toContain('Canyon Choir at Greek Theatre');
         // A candidate is not a suitable offer: what isn't established, said before the list, not "my picks".
-        expect(r.text.split('\n\n')[1]).toBe('I haven’t checked seats or prices for these yet, so none is established against what you need: reserved seats, not general admission; 2 seats together; and $300 in total for both, once fees are added.');
+        // One short status in bold, the requirements named after it, and the checks named in the next step
+        // (Research 2 link/email review, R2-EMAIL-HIERARCHY-01).
+        expect(r.text.split('\n\n')[1]).toBe('I haven’t verified a match for your dates and budget yet.');
+        expect(r.text).toContain('Not checked yet for any of these: reserved seats, not general admission; 2 seats together; and $300 in total for both, once fees are added.');
         expect(r.text).not.toMatch(/my (?:two|three) picks/);
-        expect(r.text).toContain('Tell me which one appeals, and I’ll check it against those.');
+        expect(r.text).toContain('Tell me which one, and I’ll check reserved seating, seats together and the all-in total.');
       }
       writing(first!, { first: true });
       writing(second!, { first: false });
