@@ -56,6 +56,8 @@ export type AdvicePacket = {
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
   headline?: string;
   evidenceExpiresAt: string | null;
+  /** The occurrence this advice was written for; approval and send check the event still has it (R2-LIFECYCLE-01). */
+  eventStartAt?: string | null;
   nextCheckpointAt: string | null;
   stopConditions: string[];
   watchConsentReference: string | null;
@@ -1376,6 +1378,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     headline: `${a.eventLabel} · ${a.quantity === 1 ? '1 ticket' : `${a.quantity} tickets`}${a.priorities.budgetTotalCents != null && a.priorities.budgetTotalCents !== (a.quote ? a.quote.perTicketCents * a.quantity : null) && a.priorities.budgetTotalCents !== (a.subject?.wholePartyCents ?? null) && !(a.textOffers ?? []).some((o) => (o.totalCents ?? (o.perTicketCents ?? -1) * a.quantity) === a.priorities.budgetTotalCents) ? ` · up to ${formatUsd(a.priorities.budgetTotalCents)} in total` : ''}${a.link ? ` · from the ${a.link.marketplace} link you sent` : ''}`,
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
+    eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,
     stopConditions: a.policy.stopConditions,
     watchConsentReference: a.watchConsentReference,
