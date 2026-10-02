@@ -141,6 +141,13 @@
       "when": 1790884218779,
       "tag": "0019_tracked_link_purpose",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790969044239,
+      "tag": "0020_listing_sightings",
+      "breakpoints": true
     }
   ]
 }

@@ -1193,6 +1193,25 @@ export const marketFetches = pgTable(
 );
 
 /**
+ * The resale listing numbers seen in the feed, and the event each was listed under: read off listings reads the
+ * tracker already pays for, so a checkout link that carries only a listing number (StubHub's
+ * "<cart>|<listing>|<qty>|0") can be placed at its event. Only the number and its event are kept, never a price or
+ * a seat. `marketplace` is 'unknown' when the feed doesn't say which marketplace a listing is on.
+ */
+export const marketListingSightings = pgTable(
+  'market_listing_sightings',
+  {
+    id: id(),
+    marketplace: text('marketplace').notNull(),
+    listingId: text('listing_id').notNull(),
+    eventId: uuid('event_id').notNull(),
+    firstSeenAt: ts('first_seen_at').notNull(),
+    lastSeenAt: ts('last_seen_at').notNull(),
+  },
+  (t) => [uniqueIndex('market_listing_sightings_uq').on(t.marketplace, t.listingId, t.eventId), index('market_listing_sightings_listing_idx').on(t.listingId)],
+);
+
+/**
  * What the engine would have advised at a moment, for standard customer profiles, and — once the checkpoint
  * has passed — what the market then did. It is how we find out whether "wait" is worth the risk before we
  * tell a customer to (DECISION_LOG #44). Nothing here is ever sent.

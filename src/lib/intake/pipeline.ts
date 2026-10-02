@@ -437,6 +437,12 @@ export class Concierge {
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    // A checkout link with only a listing number, seen in the resale feed at one event: that is the event they mean,
+    // as surely as if they had named it (live Oct 2: "Are these a good deal?" with a StubHub checkout link).
+    if (!merged.performerOrTeam && !merged.eventName && !merged.resolvedLocalDate) {
+      const seen = await this.eventForListing(merged.submittedUrls);
+      if (seen) merged = { ...merged, performerOrTeam: seen.ent?.name ?? seen.e.name, eventName: seen.e.name, resolvedLocalDate: eventLocalDate(seen.e.localStartAt, seen.v.timezone), city: merged.city ?? seen.v.city, ambiguities: merged.ambiguities.filter((a) => !['event_location_unknown', 'performer_ambiguous'].includes(a)) };
+    }
     if (similarMusicGoal(latestText)) merged = { ...merged, performerOrTeam: null, eventName: null, intent: 'browse', categoryHint: 'concert', genreHint: extraction.genreHint ?? (/\bpop\b/i.test(latestText) ? 'pop' : merged.genreHint), resolvedLocalDate: extraction.resolvedLocalDate, dateExpression: extraction.dateExpression, submittedUrls: extraction.submittedUrls };
 
 
@@ -2226,7 +2232,31 @@ export class Concierge {
       if (time !== null && also.length === 2 && also.includes(time)) c.exactTimeAlso = also;
     }
     const linkedEventIds = ticketLinksIn(x.submittedUrls).map((l) => l.eventId).filter((id): id is string => !!id);
+    // A checkout link names no event, but its listing number may have been seen in the resale feed: that event's own
+    // ids pin it, so one of two shows that day isn't taken for the other.
+    const seen = await this.eventForListing(x.submittedUrls);
+    if (seen) linkedEventIds.push(...(await this.db.select({ id: t.eventSourceMappings.sourceEventId }).from(t.eventSourceMappings).where(eq(t.eventSourceMappings.eventId, seen.e.id))).map((r) => r.id).filter((id): id is string => !!id));
     return { ...c, linkedEventIds };
+  }
+
+  /**
+   * The event a linked listing was seen at in the resale feed, from the listing numbers the tracker keeps off reads it
+   * already made: only when the number was seen in the last three weeks, at exactly one event still to come. A link
+   * that names its event never needs this; a number seen at two events is no answer.
+   */
+  private async eventForListing(urls: string[]): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null } | null> {
+    const link = ticketLinksIn(urls).find((l) => l.listingId && !l.eventId && !l.localDate && !l.slugText);
+    if (!link?.listingId) return null;
+    const now = this.now();
+    const rows = await this.db
+      .select({ e: t.events, v: t.venues, ent: t.entities })
+      .from(t.marketListingSightings)
+      .innerJoin(t.events, eq(t.events.id, t.marketListingSightings.eventId))
+      .innerJoin(t.venues, eq(t.venues.id, t.events.venueId))
+      .leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId))
+      .where(and(eq(t.marketListingSightings.listingId, link.listingId), inArray(t.marketListingSightings.marketplace, [link.marketplace, 'unknown']), gte(t.marketListingSightings.lastSeenAt, new Date(now.getTime() - LISTING_SIGHTING_DAYS * 86_400_000)), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, now)));
+    const events = new Map(rows.map((r) => [r.e.id, r]));
+    return events.size === 1 ? [...events.values()][0]! : null;
   }
 
   /**
@@ -4248,6 +4278,8 @@ const ONE_OFFER_ALONE = /\b(?:ignore|set aside|forget|drop|disregard|on its own|
 const ASKS_ABOUT_OFFERS = /\b(?:offers?|options?|listings?|sellers?|prices? I (?:pasted|gave|sent)|(?:change|changes) (?:your|the) pick|which (?:one|is cheaper|fits|costs less)|the totals?)\b/i;
 
 /** "Better to buy now or wait?", "do you have price history showing prices falling?", "trending down or up". */
+/** How long a listing number seen in the resale feed stays good for placing a checkout link at its event. */
+const LISTING_SIGHTING_DAYS = 21;
 const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
 /** "Please don't set up any alerts". */
 const NO_ALERTS = /\b(?:don'?t|do not|no need to)\s+set(?:\s+up)?\s+(?:any\s+)?(?:alerts?|a watch|watches)\b|\bno alerts?\b/i;
