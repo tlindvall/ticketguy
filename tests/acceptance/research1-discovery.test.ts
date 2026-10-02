@@ -98,7 +98,9 @@ describe('Research 1 discovery: hard dates, exclusions and a finished decision',
     });
     it('the correction rules the venue and Orange County out, keeps Saturday, and answers each status', async () => {
       const [, second] = await converse(LA);
-      expect(second!.text).toContain('I\'ve left out Constellation Room and Orange County.');
+      // The decisive fact first, and what is kept (R2 retest, NW-02-SKIP).
+      expect(second!.text.split('\n\n')[1]).toMatch(/^Constellation Room and Orange County are excluded\. We’re keeping Saturday/);
+      expect(second!.text).not.toContain('I\'ve left out');
       expect(second!.text).toContain('Rachel Bochner');
       expect(second!.text).toContain('Sat, Oct 10');
       expect(second!.text).not.toMatch(/Lilyisthatyou|at Constellation Room|for KING & COUNTRY|Parrotfish|Fri, Oct 9|Want that one instead/);

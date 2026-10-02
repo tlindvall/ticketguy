@@ -7,7 +7,7 @@ import { FixtureExtractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
 import { Concierge } from '@/lib/intake/pipeline';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
-import { linkDecision } from '@/lib/links/click';
+import { boundDestination, destinationMatches, linkDecision, recheckPage } from '@/lib/links/click';
 import { openTestDb, inbound, testEnv } from '../harness';
 
 let handle: DbHandle;
@@ -114,6 +114,71 @@ describe('buy links are checked at click time', () => {
     expect(await linkDecision(handle.db, buy, at(5))).toMatchObject({ go: false, reason: 'event_cancelled' });
     await handle.db.update(t.events).set({ status: 'scheduled' }).where(eq(t.events.id, eventId));
     expect(await linkDecision(handle.db, await reload(), at(5))).toMatchObject({ go: true });
+  });
+
+  // R2 retest: fresh observations don't carry advice past its own expiresAt.
+  it('advice past its expiresAt is gated even on fresh prices, at the boundary too', async () => {
+    const [rec] = await handle.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const original = rec!.expiresAt;
+    await handle.db.update(t.recommendations).set({ expiresAt: at(10) }).where(eq(t.recommendations.id, rec!.id));
+    try {
+      expect(await linkDecision(handle.db, buy, at(9))).toEqual({ go: true, url: SELLER, legacy: false });
+      for (const m of [10, 11]) expect(await linkDecision(handle.db, buy, at(m))).toMatchObject({ go: false, reason: 'advice_expired', until: at(10) });
+      const page = recheckPage((await linkDecision(handle.db, buy, at(11))) as Parameters<typeof recheckPage>[0], `/go/${buy.id}?current=1`);
+      expect(page).toContain('This advice has expired');
+      expect(page).toContain('was good until Sep 30, 7:25 PM EDT, and that time has passed.');
+      expect(page).toContain(`href="/go/${buy.id}?current=1"`);
+      // Reference and legacy links keep redirecting after it.
+      expect(await linkDecision(handle.db, { ...buy, purpose: 'reference' }, at(11))).toMatchObject({ go: true });
+      expect(await linkDecision(handle.db, { ...buy, purpose: 'legacy' }, at(11))).toMatchObject({ go: true, legacy: true });
+    } finally {
+      await handle.db.update(t.recommendations).set({ expiresAt: original }).where(eq(t.recommendations.id, rec!.id));
+    }
+  });
+
+  // R2-LINK-CONTEXT-01: a stored destination that isn't the advised offer's is never followed, even via "current page".
+  it('a buy link whose stored URL is not the offer it was made for is not followed', async () => {
+    const { GET } = await import('@/app/go/[id]/route');
+    const get = (q = '') => GET(new Request(`https://ticketguy.test/go/${buy.id}${q}`, { headers: { 'user-agent': 'Mozilla/5.0' } }), { params: Promise.resolve({ id: buy.id }) });
+    const WRONG = 'https://example.com/another-artist-denver-2026-10-18';
+    await handle.db.update(t.trackedLinks).set({ url: WRONG }).where(eq(t.trackedLinks.id, buy.id));
+    vi.useFakeTimers({ now: at(5), toFake: ['Date'] });
+    try {
+      expect(await linkDecision(handle.db, await reload(), at(5))).toMatchObject({ go: false, reason: 'destination_mismatch' });
+      for (const q of ['', '?current=1']) {
+        const r = await get(q);
+        expect(r.status, q).toBe(200);
+        expect(r.headers.get('location')).toBeNull();
+        const html = await r.text();
+        expect(html).toContain('This link doesn’t match my advice');
+        expect(html).not.toContain('current page');
+        expect(html).not.toContain(WRONG);
+      }
+    } finally {
+      vi.useRealTimers();
+      await handle.db.update(t.trackedLinks).set({ url: SELLER }).where(eq(t.trackedLinks.id, buy.id));
+    }
+    expect(await linkDecision(handle.db, await reload(), at(5))).toMatchObject({ go: true });
+  });
+
+  it('an affiliate wrapper of the advised offer is the same destination; a slug is not identity', () => {
+    const obs = [{ eventId: 'e1', offerId: 'o1' }];
+    const offers = new Map([['o1', { eventId: 'e1', directPurchaseUrl: SELLER, affiliateUrl: 'https://aff.example/r/abc' }]]);
+    expect(destinationMatches(SELLER, 'e1', obs, offers)).toBe(true);
+    expect(destinationMatches('https://aff.example/r/abc', 'e1', obs, offers)).toBe(true);
+    expect(destinationMatches(`https://aff.example/track?pub=1&u=${encodeURIComponent(SELLER)}`, 'e1', obs, offers)).toBe(true);
+    // Another event's offer, or a URL that only looks right, is not it.
+    expect(destinationMatches(SELLER, 'e2', obs, offers)).toBe(false);
+    expect(destinationMatches(`${SELLER}-qa-example-artist`, 'e1', obs, offers)).toBe(false);
+    expect(destinationMatches(SELLER, 'e1', [{ eventId: 'e2', offerId: 'o1' }], offers)).toBe(false);
+  });
+
+  it('at creation, a buy link binds only to its observation’s own destination at that event', async () => {
+    const [rec] = await handle.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    expect(await boundDestination(handle.db, SELLER, rec!.chosenObservationIds, eventId)).toBe(true);
+    expect(await boundDestination(handle.db, 'https://example.com/another-artist-denver-2026-10-18', rec!.chosenObservationIds, eventId)).toBe(false);
+    expect(await boundDestination(handle.db, SELLER, rec!.chosenObservationIds, FX.events.knicks)).toBe(false);
+    expect(await boundDestination(handle.db, SELLER, [], eventId)).toBe(false);
   });
 
   it('reference links redirect; a legacy link says so; a buy link with no advice is not trusted', async () => {

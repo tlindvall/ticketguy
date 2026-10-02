@@ -7,18 +7,55 @@ import { eventChangedSince } from '@/lib/domain/event-lifecycle';
 type Link = typeof t.trackedLinks.$inferSelect;
 
 /** Why a buy link's advice can't be stood behind at click time; each has its own explanation on the page. */
-export type RecheckReason = 'unbound' | 'advice_missing' | 'advice_withdrawn' | 'advice_superseded' | 'other_event' | 'event_cancelled' | 'event_postponed' | 'event_rescheduled' | 'event_started' | 'event_missing' | 'event_occurrence_unrecorded' | 'price_stale';
+export type RecheckReason = 'unbound' | 'advice_missing' | 'advice_withdrawn' | 'advice_superseded' | 'other_event' | 'event_cancelled' | 'event_postponed' | 'event_rescheduled' | 'event_started' | 'event_missing' | 'event_occurrence_unrecorded' | 'price_stale' | 'advice_expired' | 'destination_mismatch';
 
 export type LinkDecision =
   | { go: true; url: string; legacy: boolean }
-  | { go: false; url: string; reason: RecheckReason; eventLabel: string | null; checkedAt: Date | null; timeZone: string | null };
+  | { go: false; url: string; reason: RecheckReason; eventLabel: string | null; checkedAt: Date | null; timeZone: string | null; until?: Date | null };
+
+type Offer = { eventId: string; directPurchaseUrl: string; affiliateUrl: string | null };
+
+/**
+ * Whether a stored destination is the seller page of an offer we advised on, for this occurrence (R2-LINK-CONTEXT-01):
+ * the offer's own URL, its stored affiliate URL, or a wrapper that carries the offer's URL as a parameter. Identity
+ * comes from the observation and its offer, never from words in the URL.
+ */
+export function destinationMatches(url: string, eventId: string | null, observations: Array<{ eventId: string; offerId: string }>, offers: Map<string, Offer>): boolean {
+  if (!eventId) return false;
+  const params = (() => {
+    try {
+      return [...new URL(url).searchParams.values()];
+    } catch {
+      return [];
+    }
+  })();
+  return observations.some((o) => {
+    const offer = offers.get(o.offerId);
+    if (!offer || o.eventId !== eventId || offer.eventId !== eventId) return false;
+    return url === offer.directPurchaseUrl || (!!offer.affiliateUrl && url === offer.affiliateUrl) || params.includes(offer.directPurchaseUrl);
+  });
+}
+
+/** The offers behind some observations, by offer id. */
+async function offersFor(db: DbOrTx, observations: Array<{ offerId: string }>): Promise<Map<string, Offer>> {
+  const ids = [...new Set(observations.map((o) => o.offerId))];
+  const rows = ids.length ? await db.select({ id: t.offers.id, eventId: t.offers.eventId, directPurchaseUrl: t.offers.directPurchaseUrl, affiliateUrl: t.offers.affiliateUrl }).from(t.offers).where(inArray(t.offers.id, ids)) : [];
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+/** At creation: whether a buy link's URL is the destination of the observations it is made for, at this event. */
+export async function boundDestination(db: DbOrTx, url: string, observationIds: string[], eventId: string): Promise<boolean> {
+  const obs = observationIds.length ? await db.select({ eventId: t.offerObservations.eventId, offerId: t.offerObservations.offerId }).from(t.offerObservations).where(inArray(t.offerObservations.id, observationIds)) : [];
+  return destinationMatches(url, eventId, obs, await offersFor(db, obs));
+}
 
 /**
  * Whether a click goes straight to the stored URL (R2-LINK-STALE-01, R2-LINK-CONTEXT-01). Reference links (an
  * event page, an artist, the official sale) always do. A buy link does only while its advice still stands: the
  * advice exists and wasn't withdrawn or replaced by a newer request revision, the request is still for the event
- * the link was made for, that event is still as the advice found it, and the quoted price is inside its freshness
- * window. Otherwise the click gets a page that says why, with the seller's current page offered as that, never as
+ * the link was made for, that event is still as the advice found it, the stored URL is the advised offer's own
+ * destination at that event, the quoted price is inside its freshness window, and the advice hasn't passed its own
+ * expiresAt (R2 retest). Otherwise the click gets a page that says why, with the seller's current page offered as that, never as
  * the old quote. A 'legacy' link (stored before purposes were recorded) redirects as it always did: its purpose is
  * unknown, and it says so in the click record.
  */
@@ -40,7 +77,11 @@ export async function linkDecision(db: DbOrTx, link: Link, now: Date): Promise<L
   if (changed) return stop(changed as RecheckReason);
   const obs = rec.chosenObservationIds.length ? await db.select().from(t.offerObservations).where(inArray(t.offerObservations.id, rec.chosenObservationIds)) : [];
   const checkedAt = obs.length ? new Date(Math.min(...obs.map((o) => Math.min(o.fetchedAt.getTime(), o.sourceAsOf?.getTime() ?? Infinity)))) : null;
+  // Where it goes must be what was advised, for this occurrence: a stored URL that isn't the offer's is never followed.
+  if (!destinationMatches(link.url, link.eventId, obs, await offersFor(db, obs))) return stop('destination_mismatch');
   if (!obs.length || obs.some((o) => !checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: row!.e.localStartAt, now }).fresh)) return stop('price_stale', checkedAt);
+  // The advice's own limit, once the data is fresh: fresh prices don't extend advice past when it said it lapses.
+  if (rec.expiresAt && rec.expiresAt.getTime() <= now.getTime()) return { ...(stop('advice_expired', checkedAt) as Extract<LinkDecision, { go: false }>), until: rec.expiresAt };
   return { go: true, url: link.url, legacy: false };
 }
 
@@ -53,6 +94,12 @@ export function recheckCopy(d: Extract<LinkDecision, { go: false }>): { title: s
   switch (d.reason) {
     case 'price_stale':
       return { title: 'Check the price before you buy', body: `The price I quoted${what} was checked ${when ? `on ${when}` : 'a while ago'}. Ticket prices move, so it may not be there at that price now. Reply to my email and I’ll check it again.` };
+    case 'advice_expired': {
+      const until = d.until && d.timeZone ? new Intl.DateTimeFormat('en-US', { timeZone: d.timeZone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d.until) : null;
+      return { title: 'This advice has expired', body: `The advice I sent${what} was good until ${until ?? 'a set time'}, and that time has passed. Prices and seats may have changed since. Reply to my email and I’ll check it again.` };
+    }
+    case 'destination_mismatch':
+      return { title: 'This link doesn’t match my advice', body: `The page this link points to isn’t the listing I advised on${what}, so I won’t send you there. Reply to my email and I’ll send you a fresh link.` };
     case 'event_cancelled':
       return { title: 'This event has been cancelled', body: `The event${what} is listed as cancelled, so my advice on it no longer applies. Don’t buy on it; reply to my email if you’d like me to look for something else.` };
     case 'event_postponed':
@@ -73,6 +120,7 @@ export function recheckCopy(d: Extract<LinkDecision, { go: false }>): { title: s
 /** The page a stale or changed buy link shows: why, and the seller's current page, labelled as that. */
 export function recheckPage(d: Extract<LinkDecision, { go: false }>, currentHref: string): string {
   const { title, body } = recheckCopy(d);
-  const current = d.reason === 'event_started' ? '' : `<p><a href="${esc(currentHref)}" rel="noreferrer">Go to the seller’s current page</a> (its prices and seats today, not the ones I quoted)</p>`;
+  // No onward link when the destination itself is in doubt, or the event has begun.
+  const current = d.reason === 'event_started' || d.reason === 'destination_mismatch' ? '' : `<p><a href="${esc(currentHref)}" rel="noreferrer">Go to the seller’s current page</a> (its prices and seats today, not the ones I quoted)</p>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title></head><body style="margin:0;padding:24px 16px;font:15px/1.6 Arial,sans-serif;color:#142438;background:#ffffff;"><main style="max-width:560px;margin:0 auto;"><h1 style="font-size:20px;line-height:1.3;margin:0 0 12px;">${esc(title)}</h1><p>${esc(body)}</p>${current}<p style="font-size:12px;color:#5b6675;">Ticket Guy</p></main></body></html>`;
 }

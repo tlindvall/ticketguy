@@ -326,7 +326,16 @@ export function concertBudget(text: string): { cents: number; basis: 'whole_part
     const sentence = t.slice(start, end < 0 ? undefined : x.index! + end);
     return !/\b(?:offer|option|listing|seller|section|row|quote|package|parking|VIP)\b/i.test(sentence);
   });
-  const found = own ?? party ?? null;
+  // "Two reserved seats together, $300 TOTAL including fees", "keep … $300 total including fees": a whole-party cap
+  // said in the sentence that describes their party (R2-CONCERT-BUDGET-01). Only with one price in it, and nothing
+  // that makes it a quote: no offer, listing, seller, seats in a section, or a "yesterday"/"today" observation.
+  const stated = own || party ? null : [...t.matchAll(/\$([\d,]+(?:\.\d{2})?)\s*(total|all-in|in total)\b(?=\s*(?:including|incl\.?|with|inc\.?)?\s*(?:all\s+)?(?:the\s+)?(?:fees|taxes|everything)?\b)/gi)].find((x) => {
+    const start = Math.max(t.lastIndexOf('.', x.index!), t.lastIndexOf('?', x.index!), t.lastIndexOf('!', x.index!), t.lastIndexOf(';', x.index!)) + 1;
+    const end = t.slice(x.index!).search(/[.!?;](?:\s|$)/);
+    const sentence = t.slice(start, end < 0 ? undefined : x.index! + end);
+    return (sentence.match(/\$\s?\d/g) ?? []).length === 1 && !/\b(?:offer|option|listing|listed|seller|section|row|quote|quoted|package|parking|VIP|yesterday|today|was|were|observations?|snapshots?)\b/i.test(sentence);
+  });
+  const found = own ?? party ?? stated ?? null;
   if (!found) return null;
   const basis = /each|per ticket/i.test(found[2]!) ? 'per_ticket' : /total|pair|both|all-in/i.test(found[2]!) ? 'whole_party' : null;
   return { cents: Math.round(Number(found[1]!.replace(/,/g, '')) * 100), basis };

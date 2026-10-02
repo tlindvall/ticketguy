@@ -116,8 +116,10 @@ function renderBody(
       const intro = known.length ? "Got it. Here's what I have:" : `Got it. I'm looking into ${String(v.eventLabel ?? 'your request')}.`;
       const next = "I'll look at how the tickets are trading and come back to you shortly. If anything above is off, just reply.";
       const country = v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '';
-      const paras = ['Hey,', known.length ? `${intro}\n${list(known)}` : intro, ...assumed, next, country].filter(Boolean);
-      const html = [para('Hey,'), para(intro), known.length ? `<ul style="margin:0 0 18px;padding-left:20px;">${known.map((k) => `<li style="margin:0 0 4px;">${esc(k)}</li>`).join('')}</ul>` : '', ...assumed.map(para), para(next), country ? para(country) : ''].filter(Boolean);
+      // The decisive fact, when there is one ("Constellation Room is excluded…"), comes before the summary, in bold.
+      const lead = v.lead ? String(v.lead) : '';
+      const paras = ['Hey,', lead, known.length ? `${intro}\n${list(known)}` : intro, ...assumed, next, country].filter(Boolean);
+      const html = [para('Hey,'), lead ? `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>` : '', para(intro), known.length ? `<ul style="margin:0 0 18px;padding-left:20px;">${known.map((k) => `<li style="margin:0 0 4px;">${esc(k)}</li>`).join('')}</ul>` : '', ...assumed.map(para), para(next), country ? para(country) : ''].filter(Boolean);
       return wrap(paras, html);
     }
     case 'clarification': {
