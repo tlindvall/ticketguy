@@ -112,7 +112,7 @@ export function HeroDemo({ address }: { address: string }) {
 
   return (
     <div className="hero-demo" role="region" aria-label="Example conversation, illustrative">
-      <p className="demo-label"><span>Example conversation</span> Illustrative, not a live offer</p>
+      <p className="demo-label"><span>Example conversation</span></p>
       <div className="inbox-strip" role="group" aria-label="Pick an example question">
         <span className="inbox-strip-bar"><EnvelopeIcon /> Pick an example</span>
         {EXAMPLES.map((e) => (
@@ -156,7 +156,6 @@ export function HeroDemo({ address }: { address: string }) {
             <div className="win-bar reply-titlebar">
               <span><ReplyIcon /> Re: {ex.subject}</span>
               {phase === 'reply' ? <span className="new-mail">New mail</span> : null}
-              <span className="reply-flag">Illustrative example — not a live offer</span>
             </div>
             {replied ? (
               <div className="hero-reply-body">

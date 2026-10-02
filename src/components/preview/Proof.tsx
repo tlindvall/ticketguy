@@ -1,7 +1,7 @@
 /**
  * Proof: one whole exchange, read top to bottom: the question, what the guy spotted in the listing, and the
  * call. It sits over the three duotone photos, which crossfade slowly behind it for atmosphere (pure CSS;
- * reduced motion holds the first). Illustrative and labelled so; swap in a real, anonymized thread when one
+ * reduced motion holds the first). Illustrative (labelled for screen readers); swap in a real, anonymized thread when one
  * is cleared for use.
  */
 // Each photo framed on its subject: the concert shot keeps the singer's face in view.
@@ -24,7 +24,7 @@ export function Proof({ mailto }: { mailto: string }) {
           <a className="btn-lime" href={mailto}>Email your ticket guy <span aria-hidden="true">›</span></a>
         </div>
         <article className="win proof-thread" aria-label="Illustrative example of an exchange, not a live offer">
-          <div className="win-bar reply-titlebar"><span>Re: Six of us for Morgan Wallen</span><span className="reply-flag">Illustrative example — not a live offer</span></div>
+          <div className="win-bar reply-titlebar"><span>Re: Six of us for Morgan Wallen</span></div>
           <div className="proof-msg proof-ask">
             <span className="proof-tag">01 · The question</span>
             <p className="proof-from"><span className="mono">From:</span> You</p>
