@@ -448,6 +448,7 @@ export class MarketTracker {
       const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
       await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings`);
+      await this.rememberListings(eventId, raw);
       return { at: this.now(), listings };
     } catch (e) {
       await this.finish(slot.id, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
@@ -468,6 +469,27 @@ export class MarketTracker {
     return { at: r.at, cheapestPerTicketCents: fits[0] ?? null, listings: fits.length };
   }
 
+  /**
+   * The listing numbers in a read we already paid for, under the event they were listed at: what lets a checkout link
+   * with only a listing number be placed later. Only the number and the event are kept. Never fails the read.
+   */
+  private async rememberListings(eventId: string, raw: Array<Record<string, unknown>>): Promise<void> {
+    const at = this.now();
+    const seen = new Map<string, { marketplace: string; listingId: string }>();
+    for (const l of raw) {
+      const m = toMarketListing({ ...l, active: true, price: l.price ?? 1, quantity: l.quantity ?? 1 });
+      if (m?.id && /^[\w-]{3,40}$/.test(m.id)) seen.set(`${m.marketplace ?? 'unknown'}|${m.id}`, { marketplace: m.marketplace ?? 'unknown', listingId: m.id });
+    }
+    const rows = [...seen.values()].map((r) => ({ ...r, eventId, firstSeenAt: at, lastSeenAt: at }));
+    try {
+      for (let k = 0; k < rows.length; k += 500) {
+        await this.db.insert(t.marketListingSightings).values(rows.slice(k, k + 500)).onConflictDoUpdate({ target: [t.marketListingSightings.marketplace, t.marketListingSightings.listingId, t.marketListingSightings.eventId], set: { lastSeenAt: at } });
+      }
+    } catch (e) {
+      await this.log('listing_sightings', eventId, 'error', 0, 0, e instanceof Error ? e.message.slice(0, 200) : String(e)).catch(() => undefined);
+    }
+  }
+
   private async groupsReadSince(eventId: string, since: Date): Promise<boolean> {
     const [r] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'listings'), eq(t.marketFetches.eventId, eventId), eq(t.marketFetches.status, 'success'), gte(t.marketFetches.at, since))).limit(1);
     return !!r;
@@ -481,6 +503,7 @@ export class MarketTracker {
     const listings = Array.isArray(r.listings) ? r.listings : [];
     const points = pointsFromListings(listings, sizes, this.now());
     await this.storePoints(ev, points);
+    await this.rememberListings(ev.e.id, listings);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}`);
     return points.length;
   }
