@@ -29,9 +29,10 @@ describe('TG-B03/B04: the budget is checked against the group total; a venue-wid
   it('A01: five under $600 total, floor $121.75 before fees six hours ago: already over, said with its age', () => {
     const p = buildPacket(args({ priorities: priorities(60000) }, ctx(12175)));
     const read = claim(p, 'C_READ');
-    expect(read).toContain('My read: your budget is $600 for five ($120 a ticket).');
     // What that price would come to for five, not a sellable five-seat offer; one sample doesn't prove the market.
-    expect(read).toContain('The cheapest listings with 5 or more tickets I saw (checked Sep 29, 2:00 PM EDT, about 6 hours ago) were $121.75 a ticket before fees; five at that price would be $608.75, over your budget before any fees.');
+    // The floor itself, with its age, is in the market lines above; the read doesn't repeat it (PW-EMAIL-FOCUS-01).
+    expect(read).toContain('My read: your budget is $600 for five ($120 a ticket); at that price, five come to $608.75 before fees, over it before any fees.');
+    expect(read).not.toContain('$121.75');
     expect(read).toContain('That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.');
     expect(read).not.toMatch(/fair|better deal|\$140|won’t cover/);
   });
@@ -39,12 +40,17 @@ describe('TG-B03/B04: the budget is checked against the group total; a venue-wid
     const p = buildPacket(args({ quantity: 2, priorities: priorities(18000) }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const read = claim(p, 'C_READ');
     // $10.22 of room for every remaining charge: never a standalone "under budget" (remediation review §3).
-    expect(read).toContain('two at that price would be $169.78, which leaves $10.22 of your $180 for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.');
+    expect(read).toContain('at that price, two come to $169.78 before fees, which leaves $10.22 of your $180 for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.');
+    expect(read).not.toContain('$84.89');
     expect(read).not.toMatch(/fair|\$98|under your/);
   });
   it('no budget: the lowest asking price seen, when and where, never a minimum for every seat (R3-B06)', () => {
-    const read = claim(buildPacket(args({}, ctx(12175))), 'C_READ');
-    expect(read).toContain('the lowest asking price I saw among listings with 5 or more tickets (checked Sep 29, 2:00 PM EDT, about 6 hours ago) was $121.75 a ticket before fees, $608.75 for five, anywhere in the venue. That’s where those listings started when I looked, on StubHub and Vivid Seats only, not what particular seats are worth; fees come on top, and it can move either way.');
+    const p = buildPacket(args({}, ctx(12175)));
+    const read = claim(p, 'C_READ');
+    // The floor, when and for which listings, is said once, in the market lines; the read adds no second copy.
+    expect(claim(p, 'C_MARKET')).toMatch(/started at \$121\.75 a ticket \(listed price, before fees\)/);
+    expect(claim(p, 'C_MARKET')).toMatch(/As of about 6 hours ago/);
+    expect(read).not.toContain('$121.75');
     expect(read).not.toMatch(/that or more|will cost/);
     expect(read).not.toMatch(/fair price/);
   });

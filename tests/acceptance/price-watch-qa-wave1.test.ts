@@ -259,7 +259,10 @@ describe('independent price watch QA contracts', () => {
     const {w,requestId}=await create(ASK+' '+constraint+'.');
     const audit=await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId,requestId),eq(t.auditLog.action,'watch.not_created')));
     await evidence(label,w,{requestId,constraint,audit,expectedReason:reason});expect(w).toBeUndefined();
-    expect(audit.map(a=>(a.diff as {reason:string}).reason)).toContain(`market_unverifiable:${reason}`);
+    // An entry rule with a time in it is answered by the late-entry reply first (PW-ENTRY-REPLY-02), which audits
+    // unverifiable:entry_rule; every other requirement reaches the watch gate.
+    const reasons=audit.map(a=>(a.diff as {reason:string}).reason);
+    expect(reason==='entry_rule'?reasons.some(r=>/^(?:market_)?unverifiable:entry_rule$/.test(r)):reasons.includes(`market_unverifiable:${reason}`)).toBe(true);
   });
   it.each([['en dash range','Only sections 101–105.'],['through','Sections 101 through 105 only.'],['comma list','Only sections 101, 102 or 110.'],['must be in','We must be in section 212.']])('PW-29 %s never creates a market watch',async(_l,constraint)=>{
     const {w,requestId}=await create(ASK+' '+constraint);

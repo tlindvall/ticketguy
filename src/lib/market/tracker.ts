@@ -82,8 +82,14 @@ export class MarketTracker {
     return this.deps.now?.() ?? new Date();
   }
 
-  private api(): SeatDataClient {
+  /**
+   * The client, capped at what's left of today's allowance: every attempt counts, so a retried 503 can't take the
+   * day past SEATDATA_DAILY_CALL_LIMIT (PW-CALL-BUDGET-01). Set again before each operation, from the logged total.
+   */
+  private async api(): Promise<SeatDataClient> {
     if (!this.client) this.client = new SeatDataClient(this.deps.env.SEATDATA_API_KEY!, { fetchImpl: this.deps.fetchImpl, sleep: this.deps.sleep });
+    const left = Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - (await this.callsToday()));
+    this.client.callCap = this.client.calls + left;
     return this.client;
   }
 
@@ -280,7 +286,7 @@ export class MarketTracker {
   /** Find the provider's id for our event: by Ticketmaster id, else by name, date and city; else ask them to add it. */
   private async match(tr: typeof t.trackedEvents.$inferSelect, ev: EventRow): Promise<string | null> {
     const now = this.now();
-    const api = this.api();
+    const api = await this.api();
     const before = api.calls;
     const [m] = await this.db.select({ id: t.eventSourceMappings.sourceEventId }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, ev.e.id), eq(t.eventSourceMappings.sourceId, 'ticketmaster')));
     const date = eventLocalDate(ev.e.localStartAt, ev.v.timezone);
@@ -312,7 +318,7 @@ export class MarketTracker {
   /** New snapshots since the last one we hold → our own market series. */
   private async poll(tr: typeof t.trackedEvents.$inferSelect & { providerEventId: string }, ev: EventRow): Promise<number> {
     const now = this.now();
-    const api = this.api();
+    const api = await this.api();
     const before = api.calls;
     // Listings for any group of three or more following the event; the read also puts it on SeatData's fast rescan.
     // A failed read is logged and the stats poll goes on: singles and pairs don't depend on it.
@@ -354,7 +360,7 @@ export class MarketTracker {
     const since = new Date(this.now().getTime() - 20 * 3_600_000);
     const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), inArray(t.marketFetches.kind, ['prioritize', 'listings']), eq(t.marketFetches.eventId, eventId), gte(t.marketFetches.at, since))).limit(1);
     if (recent) return false;
-    const api = this.api();
+    const api = await this.api();
     const before = api.calls;
     try {
       await api.eventSales(providerEventId, { limit: 1 });
@@ -386,7 +392,7 @@ export class MarketTracker {
     if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return null;
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || tr.state !== 'active' || !tr.providerEventId) return null;
-    const api = this.api();
+    const api = await this.api();
     const before = api.calls;
     try {
       const r = await api.listings(tr.providerEventId);
@@ -421,7 +427,7 @@ export class MarketTracker {
 
   /** Current listings → one point per group size (DECISION_LOG #45). One paid request. */
   private async readGroups(providerEventId: string, ev: EventRow, sizes: number[]): Promise<number> {
-    const api = this.api();
+    const api = await this.api();
     const before = api.calls;
     const r = await api.listings(providerEventId);
     const listings = Array.isArray(r.listings) ? r.listings : [];
@@ -472,7 +478,7 @@ export class MarketTracker {
     const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'history_search'), eq(t.marketFetches.detail, key), gte(t.marketFetches.at, new Date(now.getTime() - HISTORY_REFRESH_DAYS * 86_400_000)))).limit(1);
     if (recent) return;
     if ((await this.callsToday()) + HISTORY_EVENTS + 1 > this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return; // tomorrow
-    const api = this.api();
+    const api = await this.api();
     const before = api.calls;
     const today = eventLocalDate(now, ev.v.timezone);
     const r = await api.searchEvents({ event_name: ev.ent.name, venue_name: ev.v.name, historical: true, limit: 50 });

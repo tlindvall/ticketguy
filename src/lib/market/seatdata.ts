@@ -43,7 +43,7 @@ export type SeatDataSale = { source: 'sh' | 'vs' | string; listing_id: number | 
 
 type Page<T> = { data: T[]; has_more: boolean; next_cursor: string | null };
 
-export type SeatDataErrorType = 'authentication_error' | 'subscription_required' | 'invalid_request' | 'not_found' | 'payment_required' | 'rate_limit_error' | 'server_error' | 'network_error';
+export type SeatDataErrorType = 'authentication_error' | 'subscription_required' | 'invalid_request' | 'not_found' | 'payment_required' | 'rate_limit_error' | 'server_error' | 'network_error' | 'budget_exhausted';
 
 export class SeatDataError extends Error {
   constructor(
@@ -65,6 +65,11 @@ export class SeatDataClient {
   private readonly sleep: (ms: number) => Promise<void>;
   /** Every HTTP call made, for the daily budget and the usage log. */
   calls = 0;
+  /**
+   * No attempt, retries included, is made once `calls` reaches this (PW-CALL-BUDGET-01): the caller sets it from the
+   * day's remaining allowance. Null means uncapped (probes and scripts).
+   */
+  callCap: number | null = null;
 
   constructor(apiKey: string, opts: { fetchImpl?: typeof fetch; baseUrl?: string; maxRetries?: number; sleep?: (ms: number) => Promise<void> } = {}) {
     if (!/^[0-9a-f]{64}$/i.test(apiKey)) throw new SeatDataError('authentication_error', null, 'SeatData API key must be a 64-character hexadecimal string');
@@ -80,6 +85,7 @@ export class SeatDataClient {
     for (const [k, v] of Object.entries(q)) if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
     for (let attempt = 0; ; attempt++) {
       let res: Response;
+      if (this.callCap !== null && this.calls >= this.callCap) throw new SeatDataError('budget_exhausted', null, 'daily call allowance reached');
       this.calls += 1;
       try {
         res = await this.fetchImpl(url.toString(), { method, headers: { authorization: `Bearer ${this.key}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20_000) });
