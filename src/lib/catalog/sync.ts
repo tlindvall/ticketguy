@@ -28,6 +28,8 @@ export type SyncTrigger = 'interpret' | 'prewarm' | 'manual' | 'alert';
 
 export type SyncOutcome = {
   status: SourceStatus | 'skipped_fresh' | 'skipped_budget';
+  /** A full page: the provider may hold more in the window than came back. */
+  truncated?: boolean;
   eventsSeen: number;
   eventsUpserted: number;
   /** Canonical entity ids that matched the query keyword, for the caller to resolve against. */
@@ -347,8 +349,8 @@ export async function syncFromDiscovery(
   // A geo search is fresh per point and radius, the way a city search is fresh per city, and a state search per
   // state. No place at all is a national search, and only another national search stands in for it.
   const city = q.city ?? (q.geoPoint && q.radiusMiles ? `geo:${q.geoPoint}:${q.radiusMiles}mi` : q.stateCode ? `state:${q.stateCode.toUpperCase()}` : null);
-  const record = async (status: SyncOutcome['status'], eventCount: number) => {
-    await db.insert(t.catalogSyncs).values({ sourceId: DISCOVERY_SOURCE_ID, keywordNormalized: keyword, city, windowFrom: q.startDateTime ?? null, windowTo: q.endDateTime ?? null, status, eventCount, trigger: q.trigger, syncedAt: now });
+  const record = async (status: SyncOutcome['status'], eventCount: number, coveredTo: string | null = q.endDateTime ?? null) => {
+    await db.insert(t.catalogSyncs).values({ sourceId: DISCOVERY_SOURCE_ID, keywordNormalized: keyword, city, windowFrom: q.startDateTime ?? null, windowTo: coveredTo, status, eventCount, trigger: q.trigger, syncedAt: now });
   };
 
   if (!q.force && (await recentlySynced(db, keyword, city, { from: q.startDateTime ?? null, to: q.endDateTime ?? null }, now))) return { status: 'skipped_fresh', eventsSeen: 0, eventsUpserted: 0, entityIds: [] };
@@ -372,6 +374,12 @@ export async function syncFromDiscovery(
     upserted += 1;
     for (const id of r.entityIds) entityIds.add(id);
   }
-  await record('success', upserted);
-  return { status: 'success', eventsSeen: res.events.length, eventsUpserted: upserted, entityIds: [...entityIds] };
+  // A full page, sorted by date, stops where the page did, not where the window did: it covers up to its last event,
+  // and a later search past that date is asked again. Recording the whole window let a search that ran out of room
+  // on Oct 2 stand in for Oct 4, and Hamilton's Sunday matinee was "not scheduled" (Final Human QA R1-HUMAN-02).
+  const pageSize = q.size ?? 20;
+  const last = res.events.map((e) => e.startAt ?? (e.localDate ? `${e.localDate}T00:00:00Z` : null)).filter((x): x is string => !!x).sort().pop() ?? null;
+  const truncated = res.events.length >= pageSize;
+  await record('success', upserted, truncated && last ? last : q.endDateTime ?? null);
+  return { status: 'success', eventsSeen: res.events.length, eventsUpserted: upserted, entityIds: [...entityIds], ...(truncated ? { truncated: true } : {}) };
 }

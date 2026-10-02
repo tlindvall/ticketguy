@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findAlternatives, type MarketListing, matchLinkedListing, toMarketListing } from '@/lib/market/alternatives';
+import { SeatDataClient } from '@/lib/market/seatdata';
 
 const L = (priceDollars: number, quantity: number, section: string, row: string, zone: string): MarketListing => ({ priceCents: priceDollars * 100, quantity, section, row, zone });
 
@@ -48,5 +49,16 @@ describe('the listing a customer linked, found by its listing number', () => {
     expect(matchLinkedListing([at('111', 'stubhub')], { marketplace: 'stubhub', listingId: null })).toBeNull();
     expect(matchLinkedListing([at('111', null)], { marketplace: 'seatgeek', listingId: '111' })).toBeNull();
     expect(matchLinkedListing([at('112', 'stubhub')], { marketplace: 'stubhub', listingId: '111' })).toBeNull();
+  });
+});
+
+describe('SeatData listings by StubHub event id (SDK 1.2)', () => {
+  it('asks /api/v0.1.1/listings/get with event_id_sh, the number in a StubHub link', async () => {
+    const seen: string[] = [];
+    const api = new SeatDataClient('ab'.repeat(32), { fetchImpl: (async (u: string) => { seen.push(String(u)); return new Response(JSON.stringify({ has_refreshed: 1, listings: [] }), { status: 200 }); }) as unknown as typeof fetch, maxRetries: 0 });
+    await api.listingsByStubHubEvent('161564036');
+    const u = new URL(seen[0]!);
+    expect(u.pathname).toBe('/api/v0.1.1/listings/get');
+    expect(u.searchParams.get('event_id_sh')).toBe('161564036');
   });
 });

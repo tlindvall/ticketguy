@@ -62,11 +62,41 @@ describe('waiting on a person', () => {
     expect(holding[0]!.bodyText).toContain('AI-assisted ticket advice.');
     expect(await alertsFor(requestId)).toHaveLength(1);
 
-    // Another message on the same stuck request: a new revision alerts staff again, the customer is not re-told.
+    // Another message on the same stuck request alerts staff again, and the customer hears it reached the same
+    // person, once (Final Human QA R1-HUMAN-03: a follow-up after a hand-off went unanswered). A third that day
+    // still alerts staff but gets no third email.
     await c.ingestInbound(inbound({ text: 'Hello? Some tickets please', from: 'loop@customer.example', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
     await interpretAll(c);
-    expect(await holdingFor(requestId)).toHaveLength(1);
+    const ack = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).filter((s) => /Got your follow-up/.test(s.bodyText));
+    expect(ack).toHaveLength(1);
+    expect(ack[0]!.bodyText).toContain('Got your follow-up. It’s with the same person who has your first email, and they’ll answer both here in this thread.');
     expect((await alertsFor(requestId)).length).toBe(2);
+    await c.ingestInbound(inbound({ text: 'Anyone there?', from: 'loop@customer.example', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await interpretAll(c);
+    expect((await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).filter((s) => /Got your follow-up/.test(s.bodyText))).toHaveLength(1);
+    expect((await alertsFor(requestId)).length).toBe(3);
+  });
+
+  // Final Human QA R1-HUMAN-03 (live): research on a linked listing kept failing and was handed to a person; the
+  // customer's follow-up ("are prices dropping?") then failed the same way, and its hand-off was skipped because the
+  // request was already with a person. It now gets its own acknowledgment and alert; a replayed dead event doesn't.
+  it('a follow-up whose work also dead-letters, on a request already with a person, is acknowledged once', async () => {
+    const c = makeConcierge(h, { env });
+    const first = inbound({ text: 'Two Knicks tickets Oct 24, good deal?', from: 'dead-twice@customer.example' });
+    const r = (await c.ingestInbound(first)) as { requestId: string; messageId: string };
+    await interpretAll(c);
+    expect(await c.handOffFailedWork({ eventType: 'research.requested', payload: { requestId: r.requestId, revision: 1 }, error: 'raw Date parameter' })).toBe('handed_off');
+    expect(await holdingFor(r.requestId)).toHaveLength(1);
+    const second = inbound({ text: 'Ah ok. Can you at least tell me if prices are dropping for that game? We just need two seats together.', from: 'dead-twice@customer.example', inReplyTo: first.rfcMessageId, references: first.rfcMessageId });
+    const r2 = (await c.ingestInbound(second)) as { requestId: string; messageId: string };
+    expect(r2.requestId).toBe(r.requestId);
+    expect(await c.handOffFailedWork({ eventType: 'request.interpret', payload: { requestId: r.requestId, messageId: r2.messageId }, error: 'raw Date parameter' })).toBe('handed_off');
+    const ack = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId))).filter((s) => /Got your follow-up/.test(s.bodyText));
+    expect(ack).toHaveLength(1);
+    // The same dead event replayed: already answered.
+    expect(await c.handOffFailedWork({ eventType: 'request.interpret', payload: { requestId: r.requestId, messageId: r2.messageId }, error: 'raw Date parameter' })).toBe('already_handled');
+    // The first message, replayed: answered by the first hand-off.
+    expect(await c.handOffFailedWork({ eventType: 'request.interpret', payload: { requestId: r.requestId, messageId: r.messageId }, error: 'x' })).toBe('already_handled');
   });
 
   it('a message the model cannot read gets the same reply and alert', async () => {
