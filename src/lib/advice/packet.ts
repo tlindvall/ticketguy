@@ -109,7 +109,8 @@ export type BuildPacketArgs = {
    */
   market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; comparableLabel: string | null; visible: boolean } | null;
   /** A ticket-site link the customer sent (its marketplace name); we read the URL, never the page. */
-  link?: { marketplace: string } | null;
+  /** A marketplace link they sent: an event page (no listing of theirs on it) or one listing we can't open. */
+  link?: { marketplace: string; eventPage?: boolean } | null;
   /** The listing the customer showed us (screenshot or pasted text): what it displayed, never a verified offer. */
   subject?: SubjectListing | null;
   /** The event's own local date and start, to check the listing against. */
@@ -490,7 +491,13 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
     const party = q > 1 ? ` for ${countWord(q)}` : '';
     const groupFloor = floor * q;
     const where = isGroupBasis(m.basis) ? `listings with ${basisSize(m.basis!)} or more tickets` : m.basis === 'pair' ? 'listings for two together' : 'single tickets';
-    if (budget != null && groupFloor > budget) {
+    // The market section above already carries the floor and when it was seen: a watch answer or an event-page
+    // reply says what it means for them, not the same price again (PW-EMAIL-FOCUS-01).
+    const once = (!!a.watchStatus && !a.watchStatus.running) || !!a.link?.eventPage;
+    if (once && budget != null && groupFloor <= budget) parts.push(`${q > 1 ? `${countWord(q)} at the cheapest listed price would be ${formatUsd(groupFloor)}` : `The cheapest listed price is ${formatUsd(floor)}`} before fees, which leaves ${formatUsd(budget - groupFloor)} of your ${formatUsd(budget)} for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.`);
+    else if (once && budget == null) {
+      // Nothing to add to the figures above.
+    } else if (budget != null && groupFloor > budget) {
       // A floor times their number is what that price would come to, not a sellable offer for exactly them, and
       // one sampled floor over the cap doesn't prove the whole market is (remediation review §3).
       parts.push(`Your budget is ${formatUsd(budget)}${party}${q > 1 ? ` (${formatUsd(Math.floor(budget / q))} a ticket)` : ''}. The cheapest ${where} I saw${when} were ${formatUsd(floor)} a ticket before fees; ${q > 1 ? `${countWord(q)} at that price would be ${formatUsd(groupFloor)}` : 'that'}, over your budget before any fees. That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.`);
@@ -555,10 +562,16 @@ function readClaim(a: BuildPacketArgs, parts: string[], c: MarketContext, s: Mar
 function followUpQuestions(a: BuildPacketArgs): string[] {
   const out: string[] = [];
   const sub = a.subject ?? null;
+  // A watch they asked for that isn't running: what they'd need is the one thing to ask, not timing questions
+  // that belong to a buy-or-wait answer (PW-EMAIL-FOCUS-01).
+  const watchAsked = !!a.watchStatus && !a.watchStatus.running;
   if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2)) {
-    // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
+    // We never open marketplace pages, so a link tells us the event and nothing about the seats or price. The
+    // reply has already said so once when it's a listing; an event page has no listing to ask about.
     out.push(a.link
-      ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
+      ? a.link.eventPage
+        ? `Found seats you like on ${a.link.marketplace}? Send me the price and section (a screenshot works) and I’ll check them.`
+        : 'Could you send a screenshot of that listing (price, section, row and delivery date), or tell me the price and section?'
       : 'Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.');
   }
   // A price we had to read as per ticket is asked about, because the answer changes the whole comparison.
@@ -569,10 +582,11 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   // Timing questions only when timing is the open question: not over a delivery or offer question they asked,
   // whose own deadline (a noon departure) is already the one that matters (retest R2-B04).
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
-  const timingMatters = !askedOther && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
+  const timingMatters = !askedOther && !watchAsked && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
   if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
   if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
-  if (askBudget) out.push('What’s the most you’d want to pay per ticket?');
+  // The all-in total for the party is what a watch would need (CL-07), so that is what's asked.
+  if (askBudget) out.push(watchAsked ? `What’s the most you’d pay in total for ${a.quantity === 1 ? 'the ticket' : countWord(a.quantity)}, fees included? Then I can tell you where the market sits against it.` : 'What’s the most you’d want to pay per ticket?');
   return out.slice(0, 3);
 }
 
@@ -1171,7 +1185,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_LINK_UNREAD',
       kind: 'coverage',
-      text: `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
+      // An event page names the event and no seats of theirs: it isn't "the listing you sent" (PW-EMAIL-FOCUS-01).
+      text: a.link.eventPage
+        ? `You sent the ${a.link.marketplace} event page rather than a particular listing, so there are no seats or price of yours to check yet. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}.`
+        : `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
       values: { marketplace: a.link.marketplace },
       scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],

@@ -235,7 +235,8 @@ export class FixtureExtractor implements Extractor {
     let intent: RequestExtraction['intent'] = 'new_search';
     if (optOut) intent = 'marketing_opt_out';
     else if (/\b(delete|erase|remove) (all )?(of )?my (data|information|account)\b/i.test(t)) intent = 'delete_data';
-    else if (/\b(stop|cancel) (the |my )?(watch|monitoring|alerts?|looking)\b/i.test(t)) intent = 'cancel_watch';
+    // "Cancel only any price watch in this request" is a stop too (PW-MULTI-INTENT-01).
+    else if (/\b(stop|cancel) (only )?(the |my |any |this |all )?(price |market )?(watch(es)?|monitoring|alerts?|looking)\b/i.test(t)) intent = 'cancel_watch';
     else if (/\b(keep (looking|watching|an eye)|watch (it|this|for)|let me know if|alert me|notify me|please watch|monitor(ing)? (it|this|prices?)|email me (only )?when)\b/i.test(t)) intent = 'watch_request';
     // "Let me know when it goes on sale" is about the event, not its price: no watch, no budget needed.
     const notify = lexiconNotifyAsked(t);

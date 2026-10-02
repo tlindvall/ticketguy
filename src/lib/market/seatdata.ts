@@ -43,7 +43,7 @@ export type SeatDataSale = { source: 'sh' | 'vs' | string; listing_id: number | 
 
 type Page<T> = { data: T[]; has_more: boolean; next_cursor: string | null };
 
-export type SeatDataErrorType = 'authentication_error' | 'subscription_required' | 'invalid_request' | 'not_found' | 'payment_required' | 'rate_limit_error' | 'server_error' | 'network_error';
+export type SeatDataErrorType = 'authentication_error' | 'subscription_required' | 'invalid_request' | 'not_found' | 'payment_required' | 'rate_limit_error' | 'server_error' | 'network_error' | 'budget_exhausted';
 
 export class SeatDataError extends Error {
   constructor(
@@ -65,6 +65,12 @@ export class SeatDataClient {
   private readonly sleep: (ms: number) => Promise<void>;
   /** Every HTTP call made, for the daily budget and the usage log. */
   calls = 0;
+  /**
+   * HTTP attempts still allowed, retries included (PW-CALL-BUDGET-01): the caller sets it from what is left of the
+   * day's allowance before a read, so a 503 retried twice never spends three calls of a one-call allowance.
+   * Infinity when nothing bounds it.
+   */
+  attemptsAllowed = Infinity;
 
   constructor(apiKey: string, opts: { fetchImpl?: typeof fetch; baseUrl?: string; maxRetries?: number; sleep?: (ms: number) => Promise<void> } = {}) {
     if (!/^[0-9a-f]{64}$/i.test(apiKey)) throw new SeatDataError('authentication_error', null, 'SeatData API key must be a 64-character hexadecimal string');
@@ -79,19 +85,21 @@ export class SeatDataClient {
     const url = new URL(this.base + path);
     for (const [k, v] of Object.entries(q)) if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
     for (let attempt = 0; ; attempt++) {
+      if (this.attemptsAllowed <= 0) throw new SeatDataError('budget_exhausted', null, 'daily call allowance used up');
       let res: Response;
       this.calls += 1;
+      this.attemptsAllowed -= 1;
       try {
         res = await this.fetchImpl(url.toString(), { method, headers: { authorization: `Bearer ${this.key}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20_000) });
       } catch (e) {
-        if (retrySafe && attempt < this.maxRetries) {
+        if (retrySafe && attempt < this.maxRetries && this.attemptsAllowed > 0) {
           await this.sleep(500 * 2 ** attempt);
           continue;
         }
         throw new SeatDataError('network_error', null, e instanceof Error ? e.name : 'network error');
       }
       if (res.ok) return (await res.json()) as T;
-      if (retrySafe && RETRY_STATUS.has(res.status) && attempt < this.maxRetries) {
+      if (retrySafe && RETRY_STATUS.has(res.status) && attempt < this.maxRetries && this.attemptsAllowed > 0) {
         const after = Number(res.headers.get('retry-after'));
         await this.sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : 500 * 2 ** attempt);
         continue;

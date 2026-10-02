@@ -196,7 +196,9 @@ describe('resale market tracking', () => {
     expect(body).toContain('My read: ');
     expect(body).toContain('- Lowest asking price for two together, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
-    expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
+    // Said once, above; the question doesn't say it again (PW-EMAIL-FOCUS-01).
+    expect(body).toContain('- Could you send a screenshot of that listing (price, section, row and delivery date), or tell me the price and section?');
+    expect(body.match(/I can’t open StubHub listings myself/g)).toHaveLength(1);
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
 

@@ -87,6 +87,43 @@ export class MarketTracker {
     return this.client;
   }
 
+  /** The client, allowed only what is left of today's call allowance (retries included) plus any calls already reserved. */
+  private async allowed(reserved = 0): Promise<SeatDataClient> {
+    const api = this.api();
+    api.attemptsAllowed = Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - (await this.callsToday())) + reserved;
+    return api;
+  }
+
+  /**
+   * One call of today's allowance, taken before the read is made (PW-CALL-BUDGET-01): the row is written in the
+   * same statement that checks the day's total, so two watches evaluated at once can't both spend the last call.
+   * Null when nothing is left, recorded as a skipped read so the gap is visible.
+   */
+  private async reserve(kind: string, eventId: string | null): Promise<{ id: string; attempts: number } | null> {
+    const now = this.now();
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const limit = this.deps.env.SEATDATA_DAILY_CALL_LIMIT;
+    const r = await this.db.execute(sql`insert into market_fetches (provider, kind, event_id, status, calls, points, detail, at)
+      select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${now}
+      where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day}) < ${limit}
+      returning id`);
+    const rows = (Array.isArray(r) ? r : (r as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
+    const id = rows[0]?.id;
+    if (!id) {
+      await this.log(kind, eventId, 'skipped_budget', 0);
+      return null;
+    }
+    this.loggedCalls += 1;
+    // The reserved call plus whatever is still free: a retry only when the allowance has room for it.
+    const attempts = Math.max(1, limit - (await this.callsToday()) + 1);
+    return { id, attempts };
+  }
+
+  private async finish(id: string, status: string, calls: number, points = 0, detail: string | null = null) {
+    this.loggedCalls += calls - 1;
+    await this.db.update(t.marketFetches).set({ status, calls, points, detail: detail?.slice(0, 300) ?? null }).where(eq(t.marketFetches.id, id));
+  }
+
   async callsToday(): Promise<number> {
     const now = this.now();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -94,7 +131,14 @@ export class MarketTracker {
     return r?.n ?? 0;
   }
 
+  /** HTTP attempts already written to the fetch log, so an error path records only the ones that aren't (CO-01). */
+  private loggedCalls = 0;
+  private unlogged(): number {
+    return Math.max(0, (this.client?.calls ?? 0) - this.loggedCalls);
+  }
+
   private async log(kind: string, eventId: string | null, status: string, calls: number, points = 0, detail: string | null = null) {
+    this.loggedCalls += calls;
     await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 300) ?? null, at: this.now() });
   }
 
@@ -220,7 +264,7 @@ export class MarketTracker {
       } catch (e) {
         const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
         await this.db.update(t.trackedEvents).set({ lastError: msg.slice(0, 300), nextPollAt: new Date(now.getTime() + 60 * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
-        await this.log('stats', tr.eventId, 'error', 1, 0, msg);
+        await this.log('stats', tr.eventId, 'error', this.unlogged(), 0, msg);
         if (e instanceof SeatDataError && (e.type === 'authentication_error' || e.type === 'subscription_required' || e.type === 'payment_required')) break; // the account itself is the problem
       }
     }
@@ -258,7 +302,7 @@ export class MarketTracker {
         return { refreshed: true };
       } catch (e) {
         const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
-        await this.log('listings', eventId, 'error', 1, 0, msg);
+        await this.log('listings', eventId, 'error', this.unlogged(), 0, msg);
         return { refreshed: false, reason: msg };
       }
     }
@@ -272,7 +316,7 @@ export class MarketTracker {
       return { refreshed: true };
     } catch (e) {
       const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
-      await this.log('stats', eventId, 'error', 1, 0, msg);
+      await this.log('stats', eventId, 'error', this.unlogged(), 0, msg);
       return { refreshed: false, reason: msg };
     }
   }
@@ -280,7 +324,7 @@ export class MarketTracker {
   /** Find the provider's id for our event: by Ticketmaster id, else by name, date and city; else ask them to add it. */
   private async match(tr: typeof t.trackedEvents.$inferSelect, ev: EventRow): Promise<string | null> {
     const now = this.now();
-    const api = this.api();
+    const api = await this.allowed();
     const before = api.calls;
     const [m] = await this.db.select({ id: t.eventSourceMappings.sourceEventId }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, ev.e.id), eq(t.eventSourceMappings.sourceId, 'ticketmaster')));
     const date = eventLocalDate(ev.e.localStartAt, ev.v.timezone);
@@ -312,7 +356,7 @@ export class MarketTracker {
   /** New snapshots since the last one we hold → our own market series. */
   private async poll(tr: typeof t.trackedEvents.$inferSelect & { providerEventId: string }, ev: EventRow): Promise<number> {
     const now = this.now();
-    const api = this.api();
+    const api = await this.allowed();
     const before = api.calls;
     // Listings for any group of three or more following the event; the read also puts it on SeatData's fast rescan.
     // A failed read is logged and the stats poll goes on: singles and pairs don't depend on it.
@@ -323,7 +367,7 @@ export class MarketTracker {
         await this.readGroups(tr.providerEventId, ev, sizes);
         groupsRead = true;
       } catch (e) {
-        await this.log('listings', ev.e.id, 'error', 1, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+        await this.log('listings', ev.e.id, 'error', this.unlogged(), 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       }
     }
     const prompted = groupsRead || (await this.prioritize(tr.providerEventId, ev.e.id));
@@ -354,7 +398,7 @@ export class MarketTracker {
     const since = new Date(this.now().getTime() - 20 * 3_600_000);
     const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), inArray(t.marketFetches.kind, ['prioritize', 'listings']), eq(t.marketFetches.eventId, eventId), gte(t.marketFetches.at, since))).limit(1);
     if (recent) return false;
-    const api = this.api();
+    const api = await this.allowed();
     const before = api.calls;
     try {
       await api.eventSales(providerEventId, { limit: 1 });
@@ -383,20 +427,23 @@ export class MarketTracker {
    */
   async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare'): Promise<{ at: Date; listings: MarketListing[] } | null> {
     if (await this.blocked()) return null;
-    if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return null;
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || tr.state !== 'active' || !tr.providerEventId) return null;
+    // The call is taken from the allowance before it is made, and the attempts (retries included) can't exceed it.
+    const slot = await this.reserve(kind, eventId);
+    if (!slot) return null;
     const api = this.api();
+    api.attemptsAllowed = slot.attempts;
     const before = api.calls;
     try {
       const r = await api.listings(tr.providerEventId);
       const raw = Array.isArray(r.listings) ? r.listings : [];
       const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
-      await this.log(kind, eventId, 'success', api.calls - before, listings.length, `${raw.length} listings`);
+      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings`);
       return { at: this.now(), listings };
     } catch (e) {
-      await this.log(kind, eventId, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+      await this.finish(slot.id, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       return null;
     }
   }
@@ -421,7 +468,7 @@ export class MarketTracker {
 
   /** Current listings → one point per group size (DECISION_LOG #45). One paid request. */
   private async readGroups(providerEventId: string, ev: EventRow, sizes: number[]): Promise<number> {
-    const api = this.api();
+    const api = await this.allowed();
     const before = api.calls;
     const r = await api.listings(providerEventId);
     const listings = Array.isArray(r.listings) ? r.listings : [];
@@ -472,7 +519,7 @@ export class MarketTracker {
     const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'history_search'), eq(t.marketFetches.detail, key), gte(t.marketFetches.at, new Date(now.getTime() - HISTORY_REFRESH_DAYS * 86_400_000)))).limit(1);
     if (recent) return;
     if ((await this.callsToday()) + HISTORY_EVENTS + 1 > this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return; // tomorrow
-    const api = this.api();
+    const api = await this.allowed();
     const before = api.calls;
     const today = eventLocalDate(now, ev.v.timezone);
     const r = await api.searchEvents({ event_name: ev.ent.name, venue_name: ev.v.name, historical: true, limit: 50 });
