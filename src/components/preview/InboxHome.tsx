@@ -128,20 +128,26 @@ export function InboxHome({ state, address, preview = false }: Props) {
         <EventTypes />
 
         <section className="catch wrap" aria-labelledby="catch-title">
-          <div className="section-head">
-            <h2 id="catch-title">Cheap for a reason?</h2>
-            <p>The catches, checked before you pay.</p>
+          <div className="catch-copy">
+            <p className="catch-kicker">Cheap for a reason?</p>
+            <h2 id="catch-title">Cheap seats usually have a catch. <mark>I find it before you pay.</mark></h2>
+            <ul className="catch-checks" aria-label="What I check">
+              <li><span className="catch-num" aria-hidden="true">01</span><b>View</b> Limited, obstructed or side-on</li>
+              <li><span className="catch-num" aria-hidden="true">02</span><b>Delivery</b> When the tickets actually reach you</li>
+              <li><span className="catch-num" aria-hidden="true">03</span><b>Fees</b> What the price leaves out</li>
+            </ul>
+            <a className="btn-lime" href={mailto('These seats look cheap. What’s the catch?', 'Ticket link or screenshot:\nWhat you’re unsure about (optional):\n')}>Check a listing <span aria-hidden="true">›</span></a>
           </div>
           <article className="catch-mail" aria-label="Illustrative example of a reply that spots a catch, not a live offer">
             <div className="reply-titlebar"><span>Re: These seats look cheap. What’s the catch?</span><span className="reply-flag">Illustrative example — not a live offer</span></div>
             <p className="catch-asked"><span className="mono">You asked:</span> Two in Section 112 for $95 each. Seems low?</p>
             <div className="catch-body">
-              <p className="catch-call">Two things I’d check before buying.</p>
+              <p className="catch-call">Two catches on this one.</p>
               <ul className="catch-list">
                 <li><span className="catch-label">View</span> The listing says limited view.</li>
                 <li><span className="catch-label">Delivery</span> The listing says delivery the day before the show.</li>
               </ul>
-              <p className="catch-next">At $95 each, that’s <strong>$190 for two, before any fees not shown</strong>. If you want a clear view or need the tickets before travelling, I’d compare another option first.</p>
+              <p className="catch-next"><strong>$190 for two, before any fees not shown.</strong> If you want a clear view or need the tickets before travelling, I’d compare another option first.</p>
             </div>
           </article>
         </section>

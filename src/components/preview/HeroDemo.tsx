@@ -162,7 +162,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
                 <circle cx={lx} cy={ly} r="5" className="hr-dot" />
               </svg>
             </div>
-            <p className="hr-line hr-punch">Asking prices are trending down. <span>That’s market context, not proof five together will get cheaper. I’d compare group listings before a buy-or-wait call.</span></p>
+            <p className="hr-line hr-punch"><em className="hr-verdict">My call: hold off</em>Prices are trending down. <span>Down 12% this week in the upper level. Reply any time and I’ll check again.</span></p>
             <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
           </div>
         ) : (

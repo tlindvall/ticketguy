@@ -1,5 +1,6 @@
 import Script from 'next/script';
 import { env } from '@/lib/config/env';
+import './cursors.css';
 
 /**
  * Impact affiliate tracking (Universal Tracking Tag) on the public marketing pages only. Admin, preference

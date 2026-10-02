@@ -50,19 +50,28 @@
 .tgx .tgx-header nav { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; font-size: 15px; }
 .tgx .tgx-header nav a:not(.link) { text-decoration: none; }
 .tgx .tgx-header nav a:not(.link):hover { text-decoration: underline; text-underline-offset: 3px; }
-.tgx .status { border: 1px solid var(--ink); border-radius: 4px; padding: 4px 10px; font: 600 13px/1.4 var(--sans); }
+.tgx .status { border: 2px solid var(--ink); border-radius: 4px; padding: 3px 10px; background: linear-gradient(180deg, #fff, var(--paper) 60%, #e9ebee); font: 700 13px/1.4 var(--sans); box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 rgba(20, 36, 56, .18), 0 2px 0 var(--ink); }
 
 /* A second example: a reply that spots the catch */
-.tgx .catch { padding-block: clamp(40px, 6vw, 72px); border-top: 1px solid var(--line); }
-.tgx .catch-mail { max-width: 760px; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .07); }
-.tgx .catch-asked { margin: 0 18px; padding-block: 12px; border-bottom: 1px solid var(--desk-soft); font-size: 16px; }
-.tgx .catch-asked .mono { margin-right: 8px; color: var(--muted); font-size: 14px; }
+.tgx .catch { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(32px, 5vw, 80px); align-items: center; padding-block: clamp(56px, 8vw, 112px); border-top: 1px solid var(--line); }
+.tgx .catch-kicker { margin-bottom: 14px; font-size: 15px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
+.tgx .catch h2 { font-size: clamp(30px, 3.4vw, 46px); line-height: 1.05; font-weight: 800; letter-spacing: -.045em; }
+.tgx .catch h2 mark { display: inline; padding: 0 .08em; background: linear-gradient(transparent 58%, var(--lime) 58%); color: inherit; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.tgx .catch-checks { display: grid; margin: 28px 0 30px; padding: 0; list-style: none; border-top: 1px solid var(--ink); }
+.tgx .catch-checks li { display: grid; grid-template-columns: 40px 96px 1fr; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 17px; color: var(--muted); }
+.tgx .catch-checks b { color: var(--ink); font-weight: 800; }
+.tgx .catch-num { font: 13px var(--mono); color: var(--muted); }
+.tgx .catch-mail { background: var(--paper); border: 1px solid var(--ink); box-shadow: 8px 8px 0 rgba(20, 36, 56, .14); }
+.tgx .catch-asked { margin: 0 18px; padding-block: 12px; border-bottom: 1px solid var(--desk-soft); font-size: 15px; color: var(--muted); }
+.tgx .catch-asked .mono { margin-right: 8px; font-size: 13px; }
 .tgx .catch-body { padding: 18px 18px 22px; }
-.tgx .catch-call { font-size: clamp(26px, 2.6vw, 34px); line-height: 1.1; font-weight: 800; letter-spacing: -.035em; }
+.tgx .catch-call { font-size: clamp(22px, 2vw, 28px); line-height: 1.1; font-weight: 800; letter-spacing: -.035em; }
 .tgx .catch-list { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
-.tgx .catch-list li { padding: 10px 14px; background: #f3f9d6; border-left: 3px solid var(--ink); font-size: 17px; line-height: 1.4; }
-.tgx .catch-label { display: inline-block; min-width: 76px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
-.tgx .catch-next { margin-top: 14px; font-size: 17px; line-height: 1.5; font-weight: 600; }
+.tgx .catch-list li { padding: 10px 14px; background: #f3f9d6; border-left: 3px solid var(--ink); font-size: 16px; line-height: 1.4; }
+.tgx .catch-label { display: inline-block; min-width: 82px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.tgx .catch-next { margin-top: 14px; font-size: 16px; line-height: 1.5; color: var(--muted); }
+.tgx .catch-next strong { color: var(--ink); }
+@media (max-width: 900px) { .tgx .catch { grid-template-columns: 1fr; } .tgx .catch-checks li { grid-template-columns: 34px 84px 1fr; font-size: 16px; } }
 
 /* Hero: the promise and the one real composer, side by side on desktop */
 .tgx .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: start; gap: clamp(28px, 4vw, 64px); padding-block: clamp(32px, 5vw, 64px) clamp(40px, 6vw, 72px); }
@@ -115,9 +124,11 @@
 /* The punchline: the call the whole demonstration lands on */
 .tgx .hr-punch { margin: 14px -6px 0; padding: 16px 18px 18px; background: var(--lime); border: 1px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); font-size: clamp(26px, 2.5vw, 34px); line-height: 1.02; font-weight: 800; letter-spacing: -.035em; animation-delay: 1.9s; animation-duration: .55s; }
 .tgx .hr-link { margin-top: 12px; font-size: 15px; animation-delay: 3.1s; }
+.tgx .hr-verdict { display: block; width: fit-content; margin-bottom: 10px; padding: 4px 10px 5px; border-radius: 3px; background: var(--ink); color: var(--lime); font: 800 13px/1.2 var(--sans); font-style: normal; letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 2px 0 rgba(0, 0, 0, .25); }
 .tgx .hr-punch span { display: block; margin-top: 8px; font-size: .54em; line-height: 1.4; letter-spacing: -.01em; font-weight: 600; color: var(--ink); }
-.tgx .hero-replay { position: absolute; right: 12px; bottom: 10px; border: 0; padding: 2px; background: none; color: var(--link-strong); font: 13px var(--sans); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.tgx .btn-lime.is-pressed { box-shadow: inset -1px -1px 0 rgba(255, 255, 255, .6), inset 1px 1px 0 rgba(20, 36, 56, .3); transform: translate(1px, 1px); background: #cdea57; }
+.tgx .hero-replay { position: absolute; right: 12px; bottom: 10px; padding: 3px 10px; border: 2px solid var(--ink); border-radius: 4px; background: linear-gradient(180deg, #fff, var(--paper) 60%, #e9ebee); color: var(--ink); font: 700 12px/1.3 var(--sans); cursor: pointer; box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 rgba(20, 36, 56, .18), 0 2px 0 var(--ink); transform: translateY(-2px); transition: transform .08s ease, box-shadow .08s ease; }
+.tgx .hero-replay::before { content: "↻ "; }
+.tgx .hero-replay:active { transform: none; box-shadow: inset 1px 1px 0 rgba(20, 36, 56, .25), 0 0 0 var(--ink); }
 /* Old-school pointer: a 1-bit arrow that moves in steps */
 .tgx .hero-cursor { position: absolute; left: 0; top: 0; z-index: 5; width: 22px; height: 34px; pointer-events: none; transition: transform .7s steps(9, end); filter: drop-shadow(2px 2px 0 rgba(20, 36, 56, .2)); }
 .tgx .hero-cursor.is-down { width: 21px; height: 32px; }
@@ -230,12 +241,17 @@
 .tgx .compose-copy { border: 0; padding: 4px 2px; background: none; color: var(--link-strong); font: 14px var(--sans); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 
 /* Buttons: flat colour, one pixel of bevel */
-.tgx .btn-lime, .tgx .btn-plain { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--ink); border-radius: 3px; color: var(--ink); font-family: var(--sans); font-weight: 700; text-decoration: none; cursor: pointer; box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .7), inset -1px -1px 0 rgba(20, 36, 56, .28), 2px 2px 0 rgba(20, 36, 56, .12); }
-.tgx .btn-lime { background: var(--lime); padding: 11px 20px; font-size: 18px; }
-.tgx .btn-plain { background: var(--paper); }
+/* Buttons: an old keycap. Bevelled face (light top-left, shade bottom-right), a solid ink base underneath, and a
+   press that sinks the face onto the base. The chevron sits in its own little ink key. */
+.tgx .btn-lime, .tgx .btn-plain { --base: 4px; position: relative; display: inline-flex; align-items: center; gap: 12px; border: 2px solid var(--ink); border-radius: 4px; color: var(--ink); font-family: var(--sans); font-weight: 800; letter-spacing: -.01em; text-decoration: none; text-shadow: 0 1px 0 rgba(255, 255, 255, .55); cursor: pointer; transform: translateY(calc(var(--base) * -1)); box-shadow: inset 2px 2px 0 rgba(255, 255, 255, .75), inset -2px -2px 0 rgba(20, 36, 56, .22), 0 var(--base) 0 var(--ink), 0 calc(var(--base) + 5px) 10px rgba(20, 36, 56, .18); transition: transform .08s ease, box-shadow .08s ease, background-color .12s ease; }
+.tgx .btn-lime { background: linear-gradient(180deg, #e9fb9e 0%, var(--lime) 45%, #c4e24c 100%); padding: 11px 12px 11px 20px; font-size: 18px; }
+.tgx .btn-plain { background: linear-gradient(180deg, #fff 0%, var(--paper) 60%, #e9ebee 100%); }
 .tgx .btn-small { padding: 7px 14px; font-size: 16px; font-weight: 600; }
-.tgx .btn-lime:hover { background: #cdea57; }
-.tgx .btn-lime:active, .tgx .btn-plain:active { box-shadow: inset -1px -1px 0 rgba(255, 255, 255, .6), inset 1px 1px 0 rgba(20, 36, 56, .3); transform: translate(1px, 1px); }
+.tgx .btn-lime > span[aria-hidden] { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 3px; background: var(--ink); color: var(--lime); font-size: 18px; line-height: 1; text-shadow: none; box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .22), inset -1px -1px 0 rgba(0, 0, 0, .4); transition: transform .12s ease; }
+.tgx .btn-lime:hover { transform: translateY(calc(var(--base) * -1 - 1px)); box-shadow: inset 2px 2px 0 rgba(255, 255, 255, .8), inset -2px -2px 0 rgba(20, 36, 56, .22), 0 calc(var(--base) + 1px) 0 var(--ink), 0 calc(var(--base) + 8px) 14px rgba(20, 36, 56, .2); }
+.tgx .btn-lime:hover > span[aria-hidden] { transform: translateX(2px); }
+.tgx .btn-lime:active, .tgx .btn-plain:active, .tgx .btn-lime.is-pressed { transform: none; background: linear-gradient(180deg, #c4e24c 0%, #cfee5c 100%); box-shadow: inset 2px 2px 0 rgba(20, 36, 56, .28), inset -1px -1px 0 rgba(255, 255, 255, .5), 0 0 0 var(--ink); }
+.tgx .btn-lime:focus-visible, .tgx .btn-plain:focus-visible { outline: 2px dashed var(--ink); outline-offset: 5px; }
 
 /* Three things to ask: categories on the left, a full-height scene with its email on the right */
 .tgx .asks { --bleed: calc((100vw - min(100vw - var(--gutter) * 2, var(--max))) / 2); display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: clamp(28px, 4vw, 64px); align-items: stretch; padding-block: clamp(48px, 7vw, 96px); border-top: 1px solid var(--line); }
@@ -305,7 +321,7 @@
 .tgx .step3:nth-child(2) p { color: rgba(247, 244, 236, .78); }
 .tgx .step3-demo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 18px; font-size: 14px; }
 .tgx .step3-demo .mono { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-.tgx .step3-send { position: relative; padding: 6px 14px; border: 1px solid var(--ink); border-radius: 3px; background: var(--lime); font-weight: 700; box-shadow: inset 1px 1px 0 rgba(255,255,255,.7), inset -1px -1px 0 rgba(20,36,56,.28), 2px 2px 0 rgba(20,36,56,.12); }
+.tgx .step3-send { position: relative; top: -3px; padding: 6px 14px; border: 2px solid var(--ink); border-radius: 4px; background: linear-gradient(180deg, #e9fb9e 0%, var(--lime) 45%, #c4e24c 100%); font-weight: 800; text-shadow: 0 1px 0 rgba(255, 255, 255, .55); box-shadow: inset 2px 2px 0 rgba(255, 255, 255, .75), inset -2px -2px 0 rgba(20, 36, 56, .22), 0 3px 0 var(--ink), 0 7px 8px rgba(20, 36, 56, .16); }
 .tgx .step3-click { position: absolute; right: -6px; bottom: -18px; width: 15px; height: 23px; }
 .tgx .step3-call { display: inline-block; padding: 6px 12px; background: var(--lime); color: var(--ink); font-weight: 800; font-size: 17px; letter-spacing: -.02em; }
 .tgx .step3-arrow { position: absolute; z-index: 3; right: -46px; top: 50%; width: 28px; height: 44px; transform: translateY(-50%) rotate(135deg); filter: drop-shadow(2px 2px 0 rgba(20,36,56,.2)); }
