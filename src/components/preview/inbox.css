@@ -318,7 +318,7 @@
 /* Proof: one whole exchange over three duotone photos crossfading slowly behind it */
 .tgx .proof { position: relative; overflow: hidden; padding-block: clamp(56px, 8vw, 112px); background: var(--ink); color: var(--cream); }
 .tgx .proof-photos, .tgx .proof-photos span { position: absolute; inset: 0; }
-.tgx .proof-photos span { background: center 30% / cover no-repeat; opacity: 0; animation: tgx-slides 21s ease-in-out infinite; }
+.tgx .proof-photos span { background-size: cover; background-repeat: no-repeat; opacity: 0; animation: tgx-slides 21s ease-in-out infinite; }
 .tgx .proof-photos span:nth-child(2) { animation-delay: 7s; }
 .tgx .proof-photos span:nth-child(3) { animation-delay: 14s; }
 @keyframes tgx-slides { 0% { opacity: 0; transform: scale(1.08); } 8%, 33% { opacity: 1; } 41%, 100% { opacity: 0; transform: scale(1); } }

@@ -4,13 +4,18 @@
  * reduced motion holds the first). Illustrative and labelled so; swap in a real, anonymized thread when one
  * is cleared for use.
  */
-const PHOTOS = ['/brand/asks/sports.webp', '/brand/asks/concert-stage.webp', '/brand/asks/catch-rink.webp'];
+// Each photo framed on its subject: the concert shot keeps the singer's face in view.
+const PHOTOS = [
+  { src: '/brand/asks/sports.webp', pos: 'center 30%' },
+  { src: '/brand/asks/concert-stage.webp', pos: 'center 6%' },
+  { src: '/brand/asks/catch-rink.webp', pos: 'center 40%' },
+];
 
 export function Proof({ mailto }: { mailto: string }) {
   return (
     <section className="proof" aria-labelledby="proof-title">
       <div className="proof-photos" aria-hidden="true">
-        {PHOTOS.map((src) => <span key={src} style={{ backgroundImage: `url(${src})` }} />)}
+        {PHOTOS.map((p) => <span key={p.src} style={{ backgroundImage: `url(${p.src})`, backgroundPosition: p.pos }} />)}
       </div>
       <div className="wrap proof-grid">
         <div className="proof-copy">
