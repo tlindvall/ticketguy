@@ -14,11 +14,6 @@ export type EventConstraints = {
   venueTerms: string[] | null;
   /** Venues they ruled out ("No Prudential Center or UBS Arena"): never a venue to search, always one to drop (TGQA-R8 S04). */
   excludedVenues: string[];
-  /**
-   * Venues they'd like but don't require ("Prefer Elsewhere or Nowadays, but another Brooklyn venue is fine"): they
-   * rank a pick, they never filter one (R2-CONCERT-PREFERENCE-01). "Elsewhere only" is a venue term, not this.
-   */
-  preferredVenues: string[];
   homeOnly: boolean;
   after: TimeBound | null;
   before: TimeBound | null;
@@ -37,7 +32,7 @@ export type EventConstraints = {
   next: boolean;
 };
 
-export const NO_CONSTRAINTS: EventConstraints = { venueTerms: null, excludedVenues: [], preferredVenues: [], homeOnly: false, after: null, before: null, exactTime: null, notTimes: [], partOfDay: null, weekdays: null, notWeekdays: [], window: null, next: false };
+export const NO_CONSTRAINTS: EventConstraints = { venueTerms: null, excludedVenues: [], homeOnly: false, after: null, before: null, exactTime: null, notTimes: [], partOfDay: null, weekdays: null, notWeekdays: [], window: null, next: false };
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const DAY_RE = '(sun|mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?)(?:day)?s?';
@@ -183,7 +178,7 @@ function windowIn(t: string, receivedAt: Date, timeZone: string): EventConstrain
 }
 
 export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedAt: Date; timeZone: string; venues: Array<{ name: string; aliases: string[] }> }): EventConstraints {
-  const out: EventConstraints = { ...NO_CONSTRAINTS, excludedVenues: [], preferredVenues: [], notTimes: [], notWeekdays: [] };
+  const out: EventConstraints = { ...NO_CONSTRAINTS, notTimes: [], notWeekdays: [] };
   // Each venue once, by its catalog name, however they wrote it ("MSG", "Madison Square Garden").
   const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const venues = ctx.venues.map((v0) => {
@@ -195,8 +190,7 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     const t = unglue(raw).replace(/[’‘]/g, "'").replace(/\s+/g, ' ');
     const lower = t.toLowerCase();
     // A venue named as where the event is, not where they eat or stay ("dinner near MSG" is not a venue rule).
-    // Ruled out, not asked for: "No Prudential Center or UBS Arena", "Prudential Center and UBS Arena are EXCLUDED",
-    // "Skip Constellation Room and Orange County entirely", "leave out X" (NW-02-SKIP).
+    // Ruled out, not asked for: "No Prudential Center or UBS Arena", "Prudential Center and UBS Arena are EXCLUDED".
     const excluded = new Set<string>();
     // Only venues the message names at all: the catalog has thousands.
     const mentioned = venues.filter((v) => v.names.some((n) => lower.includes(n)));
@@ -204,24 +198,22 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     for (const v of mentioned) {
       for (const n of v.names) {
         const listed = `(?:the\\s+)?(?:${any})(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*`;
-        const before = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at|skip|skipping|leave out|leaving out|drop|rule out|don't include|do not include|don't want|do not want)\\s+(?:at\\s+|in\\s+)?(?=${listed})(?:[^.;!?]*?)(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i');
+        const before = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at|skip|skipping|leave out|leaving out|don'?t include|do not include|drop|rule out|ruling out|cross off)\\s+(?:at\\s+|in\\s+)?(?=${listed})(?:[^.;!?]*?)(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i');
         const after = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*\\s+(?:are|is)\\s+(?:excluded|not (?:permitted|allowed|ok|okay|wanted|an option)|ruled out|out|off the table)`, 'i');
         // A correction about where it is rules it out too: "Constellation Room is in Santa Ana, not Los Angeles",
         // "X isn't in LA" (Research 1 NW-02). Without the "not", "X is in Santa Ana, which is fine" asks for it.
         const corrected = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])\\s+(?:is|'s|are)\\s+(?:actually\\s+|really\\s+)?(?:in|located in)\\s+[^.;!?]{1,40}?,?\\s+not\\s+(?:in\\s+)?\\w|(?<![\\w-])${nameRe(n)}(?![\\w-])\\s+(?:isn't|is not|aren't|are not)\\s+(?:actually\\s+|really\\s+)?(?:in|located in)\\b`, 'i');
         const m = before.exec(lower);
         if (corrected.test(lower)) excluded.add(v.canonical);
-        if ((m && new RegExp(`^(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at|skip|skipping|leave out|leaving out|drop|rule out|don't include|do not include|don't want|do not want)\\s+(?:at\\s+|in\\s+)?${listed}$`, 'i').test(m[0])) || after.test(lower)) excluded.add(v.canonical);
+        if ((m && new RegExp(`^(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at|skip|skipping|leave out|leaving out|don'?t include|do not include|drop|rule out|ruling out|cross off)\\s+(?:at\\s+|in\\s+)?${listed}$`, 'i').test(m[0])) || after.test(lower)) excluded.add(v.canonical);
       }
     }
-    const named = [...new Set(mentioned.filter((v) => !excluded.has(v.canonical) && v.names.some((n) => new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${nameRe(n)}`, 'i').test(lower))).map((v) => v.canonical))];
-    // Ruled out stays ruled out for the thread; only naming it again as wanted, later, lets it back in (NW-02-SKIP).
-    out.excludedVenues = [...new Set([...out.excludedVenues.filter((x) => !named.includes(x)), ...excluded])];
-    // A preference, or permission for other venues, said in the same message makes the venues it names preferences.
-    // "only" keeps them a rule.
-    const soft = !/\bonly\b|\bjust\b(?=\s+(?:at|in)\b)|\bmust be\b/i.test(lower) && /\b(?:prefer(?:ably|red|ence)?|ideally|if possible|would be nice|would love|happy with)\b|\b(?:another|other|any|a similar|similar)\s+(?:\w+\s+){0,2}(?:venues?|clubs?|places?|rooms?|spots?)\s+(?:is|are|would be|works?)\s+(?:also\s+)?(?:fine|ok|okay|good|great)\b|\bor (?:a |another )?similar\b|\bor anywhere\b/i.test(lower);
-    if (named.length && soft) out.preferredVenues = [...new Set([...out.preferredVenues, ...named])];
-    else if (named.length) out.venueTerms = named;
+    if (excluded.size) out.excludedVenues = [...excluded];
+    // A venue they'd like, not one they insist on: "Prefer Elsewhere or Nowadays, but another Brooklyn venue is
+    // fine" is where to start, never a fence around the search (R2-CONCERT-PREFERENCE-01). "Only at Elsewhere" is.
+    const soft = new Set(mentioned.filter((v) => v.names.some((n) => lower.split(/[.;!?]/).some((s0) => s0.includes(n) && /\b(?:prefer(?:ably|red)?|ideally|if possible|such as|something like|or (?:a |another |any )?(?:similar|other)|(?:another|any other|other) [\w ]{0,20}(?:venue|club|place|room)s? (?:is|are|would be) (?:fine|ok|okay|good))\b/.test(s0) && !/\bonly\b/.test(s0)))).map((v) => v.canonical));
+    const named = [...new Set(mentioned.filter((v) => !excluded.has(v.canonical) && !soft.has(v.canonical) && v.names.some((n) => new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${nameRe(n)}`, 'i').test(lower))).map((v) => v.canonical))];
+    if (named.length) out.venueTerms = named;
     if (out.venueTerms) out.venueTerms = out.venueTerms.filter((n) => !out.excludedVenues.includes(n));
     if (out.venueTerms && !out.venueTerms.length) out.venueTerms = null;
     if (/\bhome\s+(?:game|match|fixture|date|opener|games|matches)\b|\bnot\s+(?:an?\s+)?away\b|\bsubstitute an away\b|\bhome\s+only\b/i.test(t)) out.homeOnly = true;
@@ -290,24 +282,6 @@ export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boo
   else if (c.notWeekdays.includes(at.weekday)) why.push(`it's on a ${DAYS[at.weekday]!.replace(/^./, (x) => x.toUpperCase())}, which you ruled out`);
   if (c.window && (at.date < c.window.from || at.date > c.window.to)) why.push('it falls outside the dates you gave');
   return why;
-}
-
-/**
- * Places they ruled out by name, lower-cased: "Nashville only, not Franklin", "not Anaheim or Santa Ana", "No Franklin
- * or events outside Nashville" (R2-CONCERT-GEO-01). A town inside a metro's radius is still out when they say so; a
- * venue's own city is compared against these. Names are capitalised words, so "not checked" is never a place.
- */
-export function excludedPlaces(messages: string[]): string[] {
-  // Words, not sentences: "not Franklin. Six seats" is Franklin. "St." is the one abbreviation kept.
-  const NAME = "(?:St\\.\\s+)?[A-Z][\\w'-]*(?:\\s+[A-Z][\\w'-]*)*";
-  const out = new Set<string>();
-  for (const raw of messages) {
-    const t = raw.replace(/[’‘]/g, "'").replace(/\s+/g, ' ');
-    for (const m of t.matchAll(new RegExp(`\\b(?:[Nn]ot|[Nn]o|[Ee]xcluding|[Ee]xcept|[Ss]kip|[Aa]void|[Ww]ithout|[Nn]othing in)\\s+(?:in\\s+)?(${NAME}(?:\\s*(?:,|or|and|nor)\\s+${NAME})*)`, 'g'))) {
-      for (const p of m[1]!.split(/\s*(?:,|\bor\b|\band\b|\bnor\b)\s*/)) if (p) out.add(p.toLowerCase());
-    }
-  }
-  return [...out];
 }
 
 export function displayVenue(term: string): string {

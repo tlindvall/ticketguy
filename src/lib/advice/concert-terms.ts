@@ -320,22 +320,15 @@ export function concertBudget(text: string): { cents: number; basis: 'whole_part
     ?? /\b(?:we have|our budget is|(?:one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2}) (?:people|adults),)\s*\$([\d,]+(?:\.\d{2})?)\s*(TOTAL|each|per ticket)?/i.exec(t);
   // "Two reserved seats together, $300 total for both including fees": a cap said as a total for the party, in a
   // sentence that names no offer, listing or seat of one (Research 1, LA). A quoted price is never this shape's job.
-  const party = own ? null : [...t.matchAll(/\$([\d,]+(?:\.\d{2})?)\s*(total|all-in|in total)\s+for\s+(?:both|the two of us|the pair|all\s+(?:of us|\w+)|us|two|2|three|four)\b/gi)].find((x) => {
+  // So is "$300 TOTAL including fees" with no "for both" (R2-CONCERT-BUDGET-01: "Two reserved seats together, $300
+  // TOTAL including fees" was dropped, so the cap went missing from the reply and the checks).
+  const party = own ? null : [...t.matchAll(/\$([\d,]+(?:\.\d{2})?)\s*(total|all-in|in total)\s+(?:for\s+(?:both|the two of us|the pair|all\s+(?:of us|\w+)|us|two|2|three|four|five|six)\b|(?:including|incl\.?|with)\s+(?:all\s+)?(?:the\s+)?fees\b)/gi)].find((x) => {
     const start = Math.max(t.lastIndexOf('.', x.index!), t.lastIndexOf('?', x.index!), t.lastIndexOf('!', x.index!)) + 1;
     const end = t.slice(x.index!).search(/[.!?](?:\s|$)/);
     const sentence = t.slice(start, end < 0 ? undefined : x.index! + end);
     return !/\b(?:offer|option|listing|seller|section|row|quote|package|parking|VIP)\b/i.test(sentence);
   });
-  // "Two reserved seats together, $300 TOTAL including fees", "keep … $300 total including fees": a whole-party cap
-  // said in the sentence that describes their party (R2-CONCERT-BUDGET-01). Only with one price in it, and nothing
-  // that makes it a quote: no offer, listing, seller, seats in a section, or a "yesterday"/"today" observation.
-  const stated = own || party ? null : [...t.matchAll(/\$([\d,]+(?:\.\d{2})?)\s*(total|all-in|in total)\b(?=\s*(?:including|incl\.?|with|inc\.?)?\s*(?:all\s+)?(?:the\s+)?(?:fees|taxes|everything)?\b)/gi)].find((x) => {
-    const start = Math.max(t.lastIndexOf('.', x.index!), t.lastIndexOf('?', x.index!), t.lastIndexOf('!', x.index!), t.lastIndexOf(';', x.index!)) + 1;
-    const end = t.slice(x.index!).search(/[.!?;](?:\s|$)/);
-    const sentence = t.slice(start, end < 0 ? undefined : x.index! + end);
-    return (sentence.match(/\$\s?\d/g) ?? []).length === 1 && !/\b(?:offer|option|listing|listed|seller|section|row|quote|quoted|package|parking|VIP|yesterday|today|was|were|observations?|snapshots?)\b/i.test(sentence);
-  });
-  const found = own ?? party ?? stated ?? null;
+  const found = own ?? party ?? null;
   if (!found) return null;
   const basis = /each|per ticket/i.test(found[2]!) ? 'per_ticket' : /total|pair|both|all-in/i.test(found[2]!) ? 'whole_party' : null;
   return { cents: Math.round(Number(found[1]!.replace(/,/g, '')) * 100), basis };

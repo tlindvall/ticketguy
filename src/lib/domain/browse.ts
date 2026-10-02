@@ -293,27 +293,3 @@ export function BROWSE_ASK_TEST(text: string): boolean {
 export function categoryHintFrom(text: string): CategoryHint | null {
   return lexiconCategory(text);
 }
-
-/**
- * A listing title as a person would write it (R2-EMAIL-HIERARCHY-01): an all-caps title in title case, stray spaces
- * before punctuation gone, and a long multi-act bill without its parenthetical blurbs ("Dead Man's Party (Tribute to
- * Oingo Boingo + Danny Elfman), Echoes of Pompeii (Pink Floyd Tribute)" → "Dead Man's Party and Echoes of Pompeii
- * (tribute acts)"). What it is stays said: a tribute stays a tribute.
- */
-export function readableTitle(name: string): string {
-  let t = name.replace(/\s+/g, ' ').replace(/\s+([,.;:!?])/g, '$1').trim();
-  if (/[A-Z]{4}/.test(t) && t === t.toUpperCase()) t = t.toLowerCase().replace(/(^|[\s(/&-])([a-z])/g, (_m, a: string, b: string) => a + b.toUpperCase());
-  if (t.length > 60) {
-    const tribute = /\(([^)]*\btribute\b[^)]*)\)/i.test(t);
-    const bare = t.replace(/\s*\([^)]*\)/g, '').replace(/\s+,/g, ',').trim();
-    const acts = bare.split(/\s*,\s*/).filter(Boolean);
-    const joined = acts.length > 1 ? `${acts.slice(0, -1).join(', ')} and ${acts.at(-1)}` : bare;
-    if (joined.length >= 8) t = `${joined}${tribute ? ` (tribute ${acts.length > 1 ? 'acts' : 'act'})` : ''}`;
-  }
-  return t;
-}
-
-/** A tribute or cover act, by what its own listing says. */
-export function isTributeAct(e: { name: string; genre: string | null }): boolean {
-  return /\btribute\b/i.test(e.genre ?? '') || /\btribute\b|\bthe music of\b|\bsalute to\b|\bcover band\b/i.test(e.name);
-}
