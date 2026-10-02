@@ -36,7 +36,7 @@ import { adapterFacts, capability, coveredSourceIds, gate as policyGate, loadEve
 import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolveServicePolicy, type Operation, type OutsideIntent } from '@/lib/domain/service-depth';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
-import { findAlternatives } from '@/lib/market/alternatives';
+import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
 import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
@@ -2504,7 +2504,19 @@ export class Concierge {
     const read: SubjectListing | null = judged ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
     // What they typed about that listing since it was read wins over the read: "the image says $72 per ticket
     // BEFORE fees, plus $48 for the whole order … delivery by 6pm" (live A11-F1 repeated the old summary).
-    const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read, changes: [] as string[], matches: false };
+    // The link they sent is acknowledged by name. Its page is never fetched; a listing link is looked up by its
+    // listing number in the resale feed we're licensed for, and found or not, never guessed (R-LINK-READ).
+    const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
+    const tracker = new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch });
+    let around: Awaited<ReturnType<MarketTracker['currentListings']>> = null;
+    let linked: SubjectListing | null = null;
+    if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && licence.allows('tracking') && trackingOk && uses.display) {
+      around = await tracker.currentListings(event.id);
+      const m = around ? matchLinkedListing(around.listings, sentLink) : null;
+      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0 } });
+      if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.at);
+    }
+    const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read ?? linked, changes: [] as string[], matches: false };
     const shown = corrected.fields;
     // One price for the listing: a total that carries fees on top of a before-fees ticket price is compared as its
     // all-in share per ticket, with the breakdown kept (live A11: $72 + $48 / 3 = $88 each).
@@ -2520,10 +2532,9 @@ export class Concierge {
     // Travelling to it (a flight, a drive in) makes waiting riskier than the market shows.
     const travelling = TRAVELLING.test(saidInThread);
     // The market around the listing they showed us: cheaper seats for their group, from one fresh listings read.
-    const around = shown?.perTicketCents != null && licence.allows('tracking') && trackingOk ? await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).currentListings(event.id) : null;
+    // The same read when the link was looked up; one paid call, not two.
+    if (!around && shown?.perTicketCents != null && licence.allows('tracking') && trackingOk) around = await tracker.currentListings(event.id);
     const marketAround = around && shown?.perTicketCents != null ? findAlternatives(around.listings, { perTicketCents: shown.perTicketCents, feeBasis: shown.feeBasis, section: shown.section, row: shown.row }, quantity) : null;
-    // The link they sent is acknowledged by name; its listing's price is behind the marketplace, so it is asked for.
-    const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
     if (brief.intent === 'watch_request') {
@@ -3547,6 +3558,22 @@ export function acknowledgementLine(x: RequestExtraction): string {
 export function marketAlertFresh(m: { observedAt: string }, now: Date): boolean {
   const age = now.getTime() - new Date(m.observedAt).getTime();
   return age >= 0 && age <= MARKET_ALERT_MAX_AGE_MINUTES * 60_000;
+}
+
+/**
+ * The listing they linked, as the resale feed has it: a listed price per ticket before fees, its section and row.
+ * A listing with enough tickets is taken as one for their party (whether it splits to exactly that many isn't in
+ * the feed); one with fewer says how many it has, so the shortfall is named.
+ */
+export function linkedSubject(m: MarketListing, seller: string, quantity: number, at: Date): SubjectListing {
+  return {
+    seller, eventName: null, eventDate: null, eventTime: null, venue: null, city: null,
+    quantity: m.quantity < quantity ? m.quantity : quantity,
+    priceText: null, perTicketCents: m.priceCents, wholePartyCents: null, priceBasis: 'per_ticket', feeBasis: 'before_fees',
+    section: m.section, row: m.row, seatNumbers: null, seatsTogether: null, restrictions: [], restrictionCodes: [],
+    deliveryText: null, deliveryBy: null, includedBenefits: [], unreadable: [],
+    source: 'link_match', observedAt: at, confidence: 'high',
+  };
 }
 
 export function eventLabel(e: { name: string; localStartAt: Date; doorsAt?: Date | null }, v: { name: string; city: string | null; timezone: string }): string {

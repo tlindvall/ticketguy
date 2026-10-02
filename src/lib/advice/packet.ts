@@ -183,7 +183,8 @@ export type BuildPacketArgs = {
   seatingPreference?: string | null;
 };
 
-export type SubjectListing = ListingFields & { source: 'screenshot' | 'listing_text'; observedAt: Date; confidence: 'high' | 'medium' | 'low' | null };
+/** `link_match`: the listing they linked, found by its listing number in the resale feed (never fetched from the marketplace). */
+export type SubjectListing = ListingFields & { source: 'screenshot' | 'listing_text' | 'link_match'; observedAt: Date; confidence: 'high' | 'medium' | 'low' | null };
 
 const shortDate = (iso: string) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${iso}T12:00:00Z`));
 /** "seats 7 to 10" for a run of four or more, otherwise "seats 7, 8 and 9". */
@@ -200,9 +201,9 @@ function subjectClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
   if (sub.quantity) parts.push(`${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}`);
   const where = [sub.section ? `section ${sub.section}` : null, sub.row ? `row ${sub.row}` : null, sub.seatNumbers ? `seat${sub.seatNumbers.length === 1 ? '' : 's'} ${listJoin(sub.seatNumbers)}` : null].filter(Boolean);
   const bits = [parts.join(''), where.length ? `in ${where.join(', ')}` : null, sub.seller ? `on ${sub.seller}` : null, sub.wholePartyCents ? `for ${formatUsd(sub.wholePartyCents)} in total${sub.feeBasis === 'all_in' || (sub.perTicketCents !== null && sub.wholePartyCents > sub.perTicketCents * (sub.quantity ?? a.quantity) + 50) ? ' including fees' : ''}` : null, sub.deliveryText && DELIVERY_TIME.test(sub.deliveryText) ? `with delivery: ${sub.deliveryText.replace(/\.$/, '')}` : sub.deliveryBy ? `delivered by ${shortDate(sub.deliveryBy)}` : sub.deliveryText ? `with delivery: ${sub.deliveryText}` : null].filter(Boolean);
-  const what = sub.source === 'screenshot' ? 'screenshot' : 'listing you pasted';
+  const what = sub.source === 'screenshot' ? 'screenshot' : sub.source === 'link_match' ? 'listing you linked' : 'listing you pasted';
   // The price line (C_QUOTE) says when it was captured; without one, this does.
-  const caveat = a.quote ? '' : ` That’s what it showed when you ${sub.source === 'screenshot' ? 'took it' : 'copied it'}; I haven’t checked the seats are still there.`;
+  const caveat = a.quote ? '' : sub.source === 'link_match' ? ' That’s what the resale data showed for it when I checked; I haven’t checked the seats are still there.' : ` That’s what it showed when you ${sub.source === 'screenshot' ? 'took it' : 'copied it'}; I haven’t checked the seats are still there.`;
   return {
     id: 'C_SUBJECT',
     kind: 'subject_listing',
@@ -254,7 +255,7 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
   const out: string[] = [];
   // What's missing is a fact about what we were given, not about the listing: a detail left out of an email
   // may well be on the seller's page (TG-B08). A screenshot is closer to the page, and still only a crop of it.
-  const missing = (what: string) => (sub.source === 'screenshot' ? `The screenshot doesn’t show ${what}` : `You haven’t included ${what}`);
+  const missing = (what: string) => (sub.source === 'screenshot' ? `The screenshot doesn’t show ${what}` : sub.source === 'link_match' ? `The resale data for it doesn’t show ${what}` : `You haven’t included ${what}`);
   const wrong = identityMismatch(a, sub);
   const noun = a.eventNoun ?? 'game or show';
   if (wrong.artist) out.push(`The listing is for ${sub.eventName}, not ${wrong.artist}. Make sure it’s the right ${noun}.`);
@@ -389,7 +390,7 @@ function alternativesClaim(a: BuildPacketArgs, alt: AlternativesResult): ClaimRe
     const scopeText = scope === 'same_section' ? 'in your section' : alt.zone ? `also in the ${alt.zone}` : 'in the same area';
     const subTotal = a.subject?.feeBasis === 'all_in' && a.subject.perTicketCents !== null ? a.subject.perTicketCents * q : null;
     const threshold = subTotal !== null ? ` (cheaper than yours only if its fees come to less than ${formatUsd(subTotal - listing.priceCents * q)} in total)` : '';
-    return `${where || 'a listing'} at ${formatUsd(listing.priceCents)} a ticket before fees (about ${formatUsd(listing.priceCents * q)} for ${q === 1 ? 'one' : `all ${qw}`}), ${scopeText}${threshold}`;
+    return `${where || 'a listing'} at ${formatUsd(listing.priceCents)} a ticket before fees (about ${formatUsd(listing.priceCents * q)} for ${q === 1 ? 'one' : q === 2 ? 'both' : `all ${qw}`}), ${scopeText}${threshold}`;
   });
   const text = lines.length
     ? `Cheaper listings for ${q} or more together that I can see: ${lines.join('; and ')}. These are StubHub and Vivid Seats prices before fees, without a link, so search for them there.${a.subject?.feeBasis === 'before_fees' ? '' : ' Your price includes fees (or may), so after fees these may not be cheaper: compare the checkout totals.'} They aren’t your seats, and I haven’t checked they’re still for sale.`
@@ -434,7 +435,7 @@ export type QuotedPrice = {
   perTicketCents: number;
   /** They gave a number without saying per ticket or total; it was read as per ticket. */
   assumedPerTicket: boolean;
-  source?: 'customer_reported' | 'listing_text' | 'screenshot';
+  source?: 'customer_reported' | 'listing_text' | 'screenshot' | 'link_match';
   feeBasis?: 'all_in' | 'before_fees' | 'unknown';
   /**
    * The listing's own breakdown when its total carries fees on top of a before-fees ticket price ("$72 each +
@@ -457,6 +458,8 @@ function quoteLead(q: QuotedPrice): string {
   const fees = q.feeBasis === 'all_in' ? ' including fees' : q.feeBasis === 'before_fees' ? ' before fees' : '';
   const per = q.assumedPerTicket ? ' (I’ve taken that as per ticket)' : ' a ticket';
   if (q.source === 'screenshot') return `The screenshot you sent shows ${formatUsd(q.perTicketCents)}${per}${fees}${on}. That’s what the listing showed when you took it; I haven’t checked that the seats are still there.`;
+  // Found by its listing number in the resale feed: a listed price before fees, said as that (R-LINK-READ).
+  if (q.source === 'link_match') return `I found the listing you linked in the resale data I have, by its listing number: ${formatUsd(q.perTicketCents)}${per}${fees}${on}. Fees are added at checkout, and I haven’t checked that the seats are still there.`;
   if (q.source === 'listing_text') return `The listing you pasted shows ${formatUsd(q.perTicketCents)}${per}${fees}${on}. That’s what it said when you copied it; I haven’t checked that the seats are still there.`;
   return `You mentioned ${formatUsd(q.perTicketCents)}${per}${fees}.`;
 }
