@@ -17,7 +17,7 @@ import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReference
 import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
-import { fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
+import { chooseShownOffer, fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
@@ -38,12 +38,12 @@ import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, typ
 import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
-import { syncFromDiscovery, NON_ADMISSION_SUBTYPES, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
+import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
-import { breaks, displayVenue, eventConstraints, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
+import { breaks, displayVenue, eventConstraints, localStart, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
 import { eventChangedSince } from '@/lib/domain/event-lifecycle';
 export { eventChangedSince };
 import { checkedAt, joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
@@ -1681,7 +1681,7 @@ export class Concierge {
       const inWindow = rows.filter(({ e, v }) => {
         if (!inMarket(v, market)) return false;
 
-        if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return false;
+        if (isNonAdmission(e)) return false;
         if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
         const d = eventLocalDate(e.localStartAt, v.timezone);
         if (d < w.from || d > w.to) return false;
@@ -1951,7 +1951,7 @@ export class Concierge {
         if (homeMk) return inMarket(v, homeMk) ? (entity?.homeVenueId ? null : true) : false;
         return entity?.homeVenueId ? false : null;
       };
-      let cands = rows.filter(({ e }) => !e.subtype || !NON_ADMISSION_SUBTYPES.includes(e.subtype)); // parking and packages are not "tickets to the game"
+      let cands = rows.filter(({ e }) => !isNonAdmission(e)); // parking and packages are not "tickets to the game"
       if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
       // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else.
       if (opponent) cands = cands.filter(({ e }) => isAgainst(e.name, opponent));
@@ -2106,7 +2106,7 @@ export class Concierge {
       for (const entity of await this.matchEntities(name)) {
         const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(60);
         for (const { e, v } of rows) {
-          if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) continue;
+          if (isNonAdmission(e)) continue;
           if (v.country !== 'US' || inMarket(v, mk)) continue;
           const day = eventLocalDate(e.localStartAt, v.timezone);
           if (x.resolvedLocalDate && day !== x.resolvedLocalDate) continue;
@@ -2531,7 +2531,10 @@ export class Concierge {
     const evFields = ev ? (ev.fields as unknown as ListingFields) : null;
     // With two or more of their offers, the comparison is the answer: a single-listing read of the same email
     // mixes their fields (A's price and access with B's seat) and contradicts it (post-#54 QA, R3-B01).
-    const read: SubjectListing | null = judged ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    const asRead: SubjectListing | null = judged ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    // A results page with several rows: the one in the area they asked for ("we'd rather be on the floor"), or the
+    // row whose price they quote, is the listing being checked (live Oct 2: three rows read as one merged section).
+    const read = asRead ? chooseShownOffer(asRead, `${brief.seatingPreference ?? ''}\n${saidInThread}`, quotedFromText(said) ?? brief.quotedPriceCents) : null;
     // What they typed about that listing since it was read wins over the read: "the image says $72 per ticket
     // BEFORE fees, plus $48 for the whole order … delivery by 6pm" (live A11-F1 repeated the old summary).
     // The link they sent is acknowledged by name. Its page is never fetched; a listing link is looked up by its
@@ -2604,7 +2607,11 @@ export class Concierge {
     const [opponent] = shown && event.opponentEntityId ? await this.db.select().from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
     const performers = [ent, opponent].filter((x): x is NonNullable<typeof x> => !!x);
     const eventIdentity = shown ? { names: [...performers.flatMap((x) => [x.name, ...x.aliases]), event.name], nicknames: performers.filter((x) => x.kind === 'team').map((x) => teamNickname(x.name)), venueNames: [venue.name, ...venue.aliases], city: venue.city } : null;
-    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), eventParts: eventLabelParts(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // The page's own "Doors: 8PM Show: 9PM" when the start we hold is the doors time (live Oct 2: jigitz said 8pm, the show was 9).
+    const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+    const startMins = localStart(event.localStartAt, venue.timezone).minutes;
+    const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
+    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];
@@ -3296,8 +3303,10 @@ export function reSubject(original: string | null, fallback: string): string {
 /** A possible match offered back to the customer: enough to ask the one question that separates them. */
 export type EventCandidate = { id: string; label: string; entityName: string; league: string | null; name: string; venueName: string; isHome: boolean | null; when: string; at?: string };
 
-function candidateFrom(entity: { name: string; league: string | null }, e: { id: string; name: string; localStartAt: Date; isHome: boolean | null }, v: { name: string; timezone: string }, label: string): EventCandidate {
+function candidateFrom(entity: { name: string; league: string | null }, e: { id: string; name: string; localStartAt: Date; isHome: boolean | null; subtype?: string | null }, v: { name: string; timezone: string }, label: string): EventCandidate {
   const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt);
+  // A time the provider never gave is not a time: the stored noon is a placeholder (live Oct 2: "Thu, Oct 8 at 12pm").
+  if (e.subtype === 'time_tba') return { id: e.id, label, entityName: entity.name, league: entity.league, name: e.name, venueName: v.name, isHome: e.isHome, when };
   const at = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(e.localStartAt).replace(':00', '').replace(/\s?([AP])M/, (_m, x: string) => `${x.toLowerCase()}m`);
   return { id: e.id, label, entityName: entity.name, league: entity.league, name: e.name, venueName: v.name, isHome: e.isHome, when, at };
 }
@@ -3879,6 +3888,13 @@ function excludedBy(k: Exclusion, e: { name: string; genre: string | null; categ
  * Their typed corrections to a listing we read earlier: a fee basis for the same ticket price, a per-order fee,
  * the total, a delivery time. Each change is said back in the reply, and nothing else in the read is touched.
  */
+/** "The screenshot says $107.33 each": a per-ticket price they read off what they sent; never a budget. */
+export function quotedFromText(text: string): number | null {
+  const t = flat(text).replace(/\b(?:budget|cap|max(?:imum)?|up to|under|no more than|spend|afford)\b[^.?!$]{0,30}\$\s?\d[\d,]*(?:\.\d{2})?/gi, ' ');
+  const m = /\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket|\/ticket|ea\b)/i.exec(t);
+  return m ? Math.round(Number(m[1]!.replace(/,/g, '')) * 100) : null;
+}
+
 export function correctListing(fields: SubjectListing, text: string): { fields: SubjectListing; changes: string[]; matches?: boolean } {
   const t = flat(text);
   const out: SubjectListing = { ...fields };
@@ -3909,6 +3925,20 @@ export function correctListing(fields: SubjectListing, text: string): { fields: 
       out.perTicketCents = cents(each[1]!);
       out.feeBasis = /\bbase\b|before fees|plus (?:a\s+)?\$/i.test(t) ? 'before_fees' : /including|incl\.?\s+fees|all[- ]in/i.test(t.slice(each.index, each.index + 60)) ? 'all_in' : 'unknown';
       changes.push(`${formatUsd(out.perTicketCents)} a ticket${out.feeBasis === 'before_fees' ? ' before fees' : out.feeBasis === 'all_in' ? ' including fees' : ''}`);
+    }
+  }
+  // A price the read couldn't see, given in their words ("The screenshot says $107.33 each including fees"): filled in,
+  // not a correction of anything we said.
+  if (fields.perTicketCents === null && out.perTicketCents === null) {
+    const given = quotedFromText(t);
+    if (given !== null) {
+      out.perTicketCents = given;
+      out.priceBasis = 'per_ticket';
+      if (out.quantity) out.wholePartyCents = given * out.quantity;
+      const near = t.slice(Math.max(0, t.indexOf('$')), t.indexOf('$') + 80);
+      if (/\b(?:including|incl\.?|with)\s+(?:all\s+)?fees\b|\ball[- ]in\b/i.test(near)) out.feeBasis = 'all_in';
+      else if (/\b(?:before|plus|excluding)\s+fees\b/i.test(near)) out.feeBasis = 'before_fees';
+      if (/\bbefore tax(?:es)?\b/i.test(near)) out.beforeTaxes = true;
     }
   }
   const per = out.perTicketCents;
@@ -4151,7 +4181,7 @@ const ONE_OFFER_ALONE = /\b(?:ignore|set aside|forget|drop|disregard|on its own|
 const ASKS_ABOUT_OFFERS = /\b(?:offers?|options?|listings?|sellers?|prices? I (?:pasted|gave|sent)|(?:change|changes) (?:your|the) pick|which (?:one|is cheaper|fits|costs less)|the totals?)\b/i;
 
 /** "Better to buy now or wait?", "do you have price history showing prices falling?", "trending down or up". */
-const TREND_ASKED = /\b(?:price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
+const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
 /** "Please don't set up any alerts". */
 const NO_ALERTS = /\b(?:don'?t|do not|no need to)\s+set(?:\s+up)?\s+(?:any\s+)?(?:alerts?|a watch|watches)\b|\bno alerts?\b/i;
 /** "Will you email me when tickets go on sale, or should I check myself?" */

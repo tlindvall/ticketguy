@@ -7,6 +7,21 @@ import { z } from 'zod';
  * show stays null; nothing is inferred or filled in.
  */
 
+const LISTING_TYPE = z.enum(['resale', 'primary', 'unknown']);
+const ADMISSION = z.enum(['standing', 'seated', 'unknown']);
+/** One priced row on a results page: its own name, price and labels, as shown. */
+const SHOWN_OFFER = z
+  .object({
+    /** The row's own name as shown: "GA Ticket Price Tier 2: While Supplies Last", "Balcony: Standing Room Only". */
+    label: z.string().max(120),
+    priceDollars: z.number().positive().max(100000).nullable(),
+    priceBasis: z.enum(['per_ticket', 'whole_party', 'unknown']),
+    feeBasis: z.enum(['all_in', 'before_fees', 'unknown']),
+    listingType: LISTING_TYPE,
+    admission: ADMISSION,
+  })
+  .strict();
+
 /** What the model returns. Prices are the page's own numbers in dollars, converted to cents on our side. */
 export const LISTING_SCHEMA = z
   .object({
@@ -45,6 +60,17 @@ export const LISTING_SCHEMA = z
     confidence: z.enum(['high', 'medium', 'low']),
     /** What couldn't be read, briefly: "price cut off", "row blurred". */
     unreadable: z.array(z.string().max(120)).max(8),
+    /** "Verified Resale Ticket" is resale and "Standard Ticket" is the seller's own (primary) stock, as the page labels it. */
+    listingType: LISTING_TYPE.nullable().default(null),
+    /** Standing room or general admission (no assigned seat), or assigned seats, as the page says. */
+    admission: ADMISSION.nullable().default(null),
+    /** True when the page says its prices are before taxes ("Prices include fees (before taxes)"). */
+    beforeTaxes: z.boolean().nullable().default(null),
+    /** Doors and show times when the page states them separately ("Doors: 8PM Show: 9PM"), 24-hour HH:MM. */
+    doorsTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
+    showTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
+    /** Every priced row a results page shows, one entry each and never merged (live Oct 2: three rows became "Balcony; General Admission Floor"). Empty for a single listing. */
+    offers: z.array(SHOWN_OFFER).max(12).default([]),
   })
   .strict();
 /** The read as given: `eventTime` may be absent in reads made before it existed. */
@@ -79,7 +105,19 @@ export type ListingFields = {
   deliveryBy: string | null;
   includedBenefits: string[];
   unreadable: string[];
+  /** Resale or the seller's own stock, as the page labels it; null when it doesn't say (reads made before this existed). */
+  listingType?: 'resale' | 'primary' | 'unknown' | null;
+  admission?: 'standing' | 'seated' | 'unknown' | null;
+  beforeTaxes?: boolean | null;
+  doorsTime?: string | null;
+  showTime?: string | null;
+  /** Each priced row a results page showed, in cents; the fields above describe one of them once a row is chosen. */
+  offers?: ShownOffer[];
+  /** Why that row: the area they asked for ("floor"), or null when it is just the cheapest shown. */
+  chosenFor?: string | null;
 };
+
+export type ShownOffer = { label: string; perTicketCents: number | null; priceBasis: 'per_ticket' | 'whole_party' | 'unknown'; feeBasis: 'all_in' | 'before_fees' | 'unknown'; listingType: 'resale' | 'primary' | 'unknown'; admission: 'standing' | 'seated' | 'unknown' };
 
 const cents = (d: number | null) => (d == null ? null : Math.round(d * 100));
 
@@ -135,13 +173,72 @@ export function fieldsFromRead(r: ListingRead): ListingFields {
     deliveryBy: r.deliveryBy,
     includedBenefits: r.includedBenefits,
     unreadable: r.unreadable,
+    listingType: r.listingType ?? null,
+    admission: r.admission ?? (standingWords([r.section, ...r.restrictions]) ? 'standing' : null),
+    beforeTaxes: r.beforeTaxes ?? null,
+    doorsTime: r.doorsTime ?? null,
+    showTime: r.showTime ?? null,
+    offers: (r.offers ?? []).map((o) => ({ label: o.label, perTicketCents: o.priceBasis === 'whole_party' && q ? Math.round(o.priceDollars! * 100 / q) : cents(o.priceDollars), priceBasis: o.priceBasis, feeBasis: o.feeBasis, listingType: o.listingType, admission: o.admission === 'unknown' && standingWords([o.label]) ? 'standing' : o.admission })),
+  };
+}
+
+/** "Standing Room Only", "General Admission", "GA Floor": no assigned seat to number or sit together in. */
+export function standingWords(xs: Array<string | null | undefined>): boolean {
+  return xs.some((x) => !!x && /\b(?:standing(?: room)?(?: only)?|general admission|GA(?: floor| pit| ticket)?|SRO)\b/i.test(x) && !/\breserved\b/i.test(x));
+}
+
+/** The area words a buyer and a page share. "GA" and "general admission" are the floor unless the row names another area. */
+// Not "lower", "upper" or "box": "a lower price" and "box office" aren't areas.
+const AREAS = ['floor', 'pit', 'balcony', 'mezzanine', 'orchestra', 'loge', 'lawn', 'terrace'] as const;
+export function areaOf(label: string): string | null {
+  const l = label.toLowerCase();
+  const named = AREAS.find((w) => new RegExp(`\\b${w}\\b`).test(l));
+  if (named) return named === 'pit' ? 'floor' : named;
+  return /\b(?:ga|general admission)\b/.test(l) ? 'floor' : null;
+}
+
+/**
+ * One row of a results page, chosen for the buyer: the cheapest in the area they asked for ("we'd rather be on the
+ * floor"), or the cheapest shown when they named none, or the row whose price they quote. The read's fields then
+ * describe that row, and the other rows stay listed. A screenshot is what the page showed, not stock held.
+ */
+export function chooseShownOffer<T extends ListingFields>(f: T, wanted: string, quotedCents: number | null = null): T {
+  const rows = (f.offers ?? []).filter((o) => o.perTicketCents !== null);
+  const said = wanted.toLowerCase();
+  const area = AREAS.find((w) => new RegExp(`\\b${w}\\b`).test(said)) ?? (/\b(?:ga|general admission)\b/.test(said) ? 'floor' : null);
+  const want = area === 'pit' ? 'floor' : area;
+  if (!rows.length) {
+    // An older read that ran rows together ("Balcony; General Admission Floor"): the part in their area, when one is.
+    const parts = (f.section ?? '').split(/\s*;\s*/).filter(Boolean);
+    const mine = want && parts.length > 1 ? parts.find((x) => areaOf(x) === want) : undefined;
+    return mine ? { ...f, section: mine } : f;
+  }
+  const byQuote = quotedCents !== null ? rows.find((o) => o.perTicketCents === quotedCents) : undefined;
+  const inArea = want ? rows.filter((o) => areaOf(o.label) === want) : [];
+  const pick = byQuote ?? (inArea.length ? inArea : rows).slice().sort((x, y) => x.perTicketCents! - y.perTicketCents!)[0]!;
+  const q = f.quantity;
+  return {
+    ...f,
+    section: pick.label,
+    row: null,
+    seatNumbers: null,
+    priceText: null,
+    perTicketCents: pick.perTicketCents,
+    wholePartyCents: q ? pick.perTicketCents! * q : null,
+    priceBasis: pick.priceBasis === 'whole_party' ? 'per_ticket' : pick.priceBasis,
+    feeBasis: pick.feeBasis === 'unknown' ? f.feeBasis : pick.feeBasis,
+    listingType: pick.listingType,
+    admission: pick.admission,
+    seatsTogether: pick.admission === 'standing' ? null : f.seatsTogether,
+    offers: f.offers,
+    chosenFor: want && areaOf(pick.label) === want ? want : null,
   };
 }
 
 /** Whether the read is a listing we can use: a listing or checkout page, nothing sensitive, and a price or seats on it. */
 export function usableListing(r: ListingRead): boolean {
   if (r.sensitiveContent || r.kind === 'payment_or_id' || r.kind === 'purchased_ticket' || r.kind === 'unrelated') return false;
-  return r.priceDollars !== null || r.totalDollars !== null || r.section !== null;
+  return r.priceDollars !== null || r.totalDollars !== null || r.section !== null || (r.offers ?? []).some((o) => o.priceDollars !== null);
 }
 
 /**

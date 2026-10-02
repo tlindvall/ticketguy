@@ -111,6 +111,10 @@ export function subtypeFor(e: { name: string; timeTba: boolean }): string | null
   if (/\b(vip|package|packages|suite|suites|hospitality|premium (?:experience|seating|seats?|access)|club (?:seats?|seating|access|level)|pinstripe pass|fan pack|meet\s*(&|and)\s*greet)\b/.test(n)) return 'package';
   // NFL listings sell the right to buy (seat licences), season plans and tailgates alongside the game itself.
   if (/\b(psls?|personal seat licen[cs]es?|season tickets?|season (?:ticket )?plans?|tailgates?|tailgating)\b/.test(n)) return 'package';
+  // A bundle of dated shows sold as one ("2-Day Ticket (10/8/26 & 10/10/26) Cannot Split By Day") is not a performance and
+  // carries no show time of its own (live Oct 2: it was offered as a noon Metallica show). A festival's own day or
+  // weekend pass is its admission, so only a bundle that names its shows' dates, or says it can't be split, is set aside.
+  if (/\bcannot split\b|\bcan'?t (?:be )?split\b/.test(n) || (/\b(?:[2-9]|two|three|four|multi)[- ]day (?:ticket|pass|package|bundle)s?\b/.test(n) && /\(\s*\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s*(?:&|and|,)/.test(n))) return 'package';
   if (/\bpreseason\b/.test(n)) return 'preseason';
   if (/\b(playoff|playoffs|postseason)\b/.test(n)) return 'playoffs';
   if (e.timeTba) return 'time_tba';
@@ -145,6 +149,16 @@ export function isNonGameName(name: string): boolean {
 
 /** Subtypes that are never what a customer means by "tickets to the game". */
 export const NON_ADMISSION_SUBTYPES: readonly string[] = ['parking', 'package'];
+
+/**
+ * Whether an event row is an add-on rather than an admission: its stored subtype, or its name read again, so a row
+ * synced before a pattern existed (a pass stored as time_tba) is set aside without waiting for its next sync.
+ */
+export function isNonAdmission(e: { name: string; subtype: string | null }): boolean {
+  if (e.subtype && NON_ADMISSION_SUBTYPES.includes(e.subtype)) return true;
+  const now = subtypeFor({ name: e.name, timeTba: false });
+  return !!now && NON_ADMISSION_SUBTYPES.includes(now);
+}
 
 export function statusFor(code: string): string {
   if (code === 'cancelled' || code === 'canceled') return 'cancelled';

@@ -101,6 +101,11 @@ function parsePartyQuantity(t: string): { value: number | null; quote: string | 
   return Number.isFinite(v) && v > 0 ? { value: (withFriends ? v + 1 : v) + plus, quote: after ? m[0] + after[0] : m[0] } : { value: null, quote: null };
 }
 
+/** "$1,000" is a thousand dollars and "$45,50" is $45.50: a comma before three digits groups thousands (live Oct 2: "more than $1,000 for both" was read as $1). */
+function dollarsIn(s: string): number {
+  return Number(/^\d{1,3}(?:,\d{3})+(?:\.\d{2})?$/.test(s) ? s.replace(/,/g, '') : s.replace(',', '.'));
+}
+
 function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | 'whole_party' | null; quote: string | null } {
   // "under 3 bills all in" is $300.
   const bills = /\b(?:under|up to|max(?:imum)?|about|around)?\s*(\d|one|two|three|four|five|six|seven|eight|nine|ten)\s+bills?\b\s*(all[- ]in|total|each|apiece)?/i.exec(t);
@@ -108,22 +113,22 @@ function parseBudget(t: string): { cents: number | null; basis: 'per_ticket' | '
     const n = NUM_WORDS[bills[1]!.toLowerCase()] ?? Number(bills[1]);
     return { cents: n * 10_000, basis: /each|apiece/i.test(bills[2] ?? '') ? 'per_ticket' : bills[2] ? 'whole_party' : null, quote: bills[0].trim() };
   }
-  const AMOUNT = /(?:under|below|max(?:imum)?|budget(?: is| of)?|up to|no more than|around|about|<|≤)?\s*\$\s?(\d{1,5}(?:[.,]\d{2})?)\s*(?:is\s+|are\s+)?(total|all[- ]in|for (?:all|both|everyone|the (?:two|three|four|five|six|group|pair)|the (?:whole |entire )?(?:order|lot|block|party|group))|combined|altogether|each|per (?:ticket|person|seat)|a (?:ticket|seat|person)|apiece|pp)?/i;
+  const AMOUNT = /(?:under|below|max(?:imum)?|budget(?: is| of)?|up to|no more than|around|about|<|≤)?\s*\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\d{1,5}(?:[.,]\d{2})?)\s*(?:is\s+|are\s+)?(total|all[- ]in|for (?:all|both|everyone|the (?:two|three|four|five|six|group|pair)|the (?:whole |entire )?(?:order|lot|block|party|group))|combined|altogether|each|per (?:ticket|person|seat)|a (?:ticket|seat|person)|apiece|pp)?/i;
   // An amount they call a budget or cap beats the first price in the message: "Offer A is $190 TOTAL… Budget $230
   // TOTAL" is a $230 budget (TGQA-R8 17). Otherwise the first amount, as before.
   const worded = /\b(?:budget|cap|spend(?: up to)?|max(?:imum)?|no more than|at most|up to|under)\b(?:\s+(?:is|of|to|stays|now|still|remains|was))*\s*(?:\$|\bat\s+\$)/i.exec(t);
   const inWorded = worded ? AMOUNT.exec(t.slice(worded.index)) : null;
   // "$100 total cap", "$300 all-in budget": the amount said before the word that makes it the cap, which a
   // smaller line item earlier in the message ("two $9 items") must not displace (R1-A03).
-  const before = inWorded ? null : /\$\s?(\d{1,5}(?:[.,]\d{2})?)\s+(?:(total|all[- ]in|whole[- ]night|overall|combined)\s+)?(?:budget|cap|limit|max(?:imum)?)\b/i.exec(t);
+  const before = inWorded ? null : /\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\d{1,5}(?:[.,]\d{2})?)\s+(?:(total|all[- ]in|whole[- ]night|overall|combined)\s+)?(?:budget|cap|limit|max(?:imum)?)\b/i.exec(t);
   if (before) {
-    const cents = Math.round(Number(before[1]!.replace(',', '.')) * 100);
+    const cents = Math.round(dollarsIn(before[1]!) * 100);
     return { cents, basis: before[2] ? 'whole_party' : null, quote: before[0] };
   }
   const m = inWorded ?? AMOUNT.exec(t);
   const at = inWorded ? worded!.index + inWorded.index : m?.index ?? 0;
   if (!m) return { cents: null, basis: null, quote: null };
-  const cents = Math.round(Number(m[1]!.replace(',', '.')) * 100);
+  const cents = Math.round(dollarsIn(m[1]!) * 100);
   const q = (m[2] ?? '').toLowerCase();
   let basis: 'per_ticket' | 'whole_party' | null = null;
   if (/total|all|combined|altogether|for/.test(q)) basis = 'whole_party';

@@ -214,7 +214,8 @@ function renderBody(
       const opening = v.opening ? String(v.opening) : '';
       const rest = unverified.length
         ? ` is on general sale on ${seller}. I haven’t seen its seats or prices${opening ? '.' : ', so I can’t tell you yet whether any fit what you need.'}`
-        : ` is still on general sale on ${seller}, and that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
+        // An open sale is the sale window, not stock: the page can say sold out while the catalog says on sale (live Oct 2).
+        : ` is still on general sale on ${seller}. I can’t see whether it has seats left, but if it does, that's where I'd buy${n ? ` your ${n} tickets` : ''}.`;
       // Asked again whether we've checked: the answer is no, first, in plain words.
       const recheckLine = v.recheck && unverified.length ? `No, I haven't checked any of these: I can't see ${seller}'s seats, their prices or their access from here.` : '';
       const lead = `${title}${where ? ` (${where})` : ''}${rest}`;

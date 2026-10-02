@@ -74,8 +74,8 @@ describe('advice email layout: a same-day game with only a listing count', () =>
 
   it('the official sale is the opening, said once, with its link at the end; no model filler', () => {
     const body = rec!.bodyText;
-    expect(body).toContain('5 tickets\n\nIt’s on general sale on Ticketmaster, and that’s where I’d buy.\n\nThe resale market when I last checked:');
-    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>It’s on general sale on Ticketmaster, and that’s where I’d buy.</strong></p>');
+    expect(body).toContain('5 tickets\n\nIt’s on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that’s where I’d buy.\n\nThe resale market when I last checked:');
+    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>It’s on general sale on Ticketmaster.</strong> I can’t see whether it has seats left, but if it does, that’s where I’d buy.</p>');
     expect(body.match(/Ticketmaster/g)).toHaveLength(2);
     expect(body.trim().endsWith('Buy on Ticketmaster: https://www.ticketmaster.com/x/event/TMRW1')).toBe(true);
     expect(body).not.toMatch(/Here’s what I can tell you|place I’d start/);

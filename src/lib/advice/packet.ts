@@ -8,7 +8,7 @@ import type { BenchmarkResult } from './benchmark';
 import type { TrendResult } from './trend';
 import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
-import type { ListingFields } from '@/lib/ai/listing-evidence';
+import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
 import type { AlternativesResult } from '@/lib/market/alternatives';
 
 /**
@@ -195,8 +195,51 @@ const seatList = (xs: string[]) => {
 };
 const listJoin = (xs: string[]) => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
+const qtyWord = (n: number) => (n === 1 ? 'one' : n === 2 ? 'two' : QTY_WORDS_LOWER[n] ?? String(n));
+const kindOf = (t: SubjectListing['listingType'], seller: string | null) => (t === 'resale' ? 'a resale ticket' : t === 'primary' ? `${seller ?? 'the seller'}’s own ticket (not resale)` : null);
+
+/**
+ * The row picked from a results page, said first with what the party pays: "The floor option in your screenshot is
+ * “GA Ticket Price Tier 2”, a resale ticket, at $107.33 a ticket including fees, before taxes: $214.66 for two."
+ * Null for a single listing. A screenshot is what the page showed, not tickets held.
+ */
+export function shownRowLead(a: BuildPacketArgs, sub: SubjectListing): string | null {
+  if (!sub.offers || sub.offers.length < 2 || sub.perTicketCents == null) return null;
+  const n = sub.quantity ?? a.quantity;
+  const kind = kindOf(sub.listingType, sub.seller);
+  const fees = sub.feeBasis === 'all_in' ? ' including fees' : sub.feeBasis === 'before_fees' ? ' before fees' : '';
+  const tax = sub.beforeTaxes ? `${fees ? ',' : ''} before taxes` : '';
+  const which = sub.chosenFor ? `The ${sub.chosenFor} option in your screenshot` : 'The cheapest option in your screenshot';
+  return `${which} is “${sub.section}”${kind ? `, ${kind},` : ''} at ${formatUsd(sub.perTicketCents)} a ticket${fees}${tax}: ${formatUsd(sub.perTicketCents * n)} for ${qtyWord(n)}.`;
+}
+
+/** The rows of a results page other than the one chosen: "Balcony: Standing Room Only at $100.17 (resale) and $104.00 (Ticketmaster’s own ticket)". */
+function otherRows(sub: SubjectListing): string | null {
+  const picked = (sub.offers ?? []).findIndex((o) => o.label === sub.section && o.perTicketCents === sub.perTicketCents);
+  const rest = (sub.offers ?? []).filter((o, k) => k !== picked && o.perTicketCents !== null);
+  if (!rest.length) return null;
+  const tag = (o: NonNullable<SubjectListing['offers']>[number]) => (o.listingType === 'resale' ? ' (resale)' : o.listingType === 'primary' ? ` (${sub.seller ?? 'the seller'}’s own ticket)` : '');
+  const groups = new Map<string, string[]>();
+  for (const o of rest) groups.set(o.label, [...(groups.get(o.label) ?? []), `${formatUsd(o.perTicketCents!)} a ticket${tag(o)}`]);
+  return listJoin([...groups].map(([label, prices]) => `${label} at ${listJoin(prices)}`));
+}
+
 /** "The listing shows 2 tickets in section 212, row D, seats 5 and 6, on StubHub, for $490 in total, delivered by Oct 3." */
 function subjectClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
+  if (shownRowLead(a, sub)) {
+    const others = otherRows(sub);
+    return {
+      id: 'C_SUBJECT',
+      kind: 'subject_listing',
+      text: `${others ? `It also shows ${others}. ` : ''}That’s what the page showed when you took the screenshot; I haven’t checked those tickets are still there.`,
+      values: { quantity: sub.quantity, wholePartyCents: sub.wholePartyCents, section: sub.section, row: null, source: sub.source, rows: sub.offers!.length },
+      scope: { quantity: sub.quantity, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() },
+      evidenceIds: [],
+      methodVersion: 'listing-1.1',
+      limitations: ['customer_supplied_evidence', 'not_a_verified_offer', 'availability_not_checked', 'authenticity_not_checked'],
+      customerVisible: true,
+    };
+  }
   const parts: string[] = [];
   if (sub.quantity) parts.push(`${sub.quantity} ticket${sub.quantity === 1 ? '' : 's'}`);
   const where = [sub.section ? `section ${sub.section}` : null, sub.row ? `row ${sub.row}` : null, sub.seatNumbers ? `seat${sub.seatNumbers.length === 1 ? '' : 's'} ${listJoin(sub.seatNumbers)}` : null].filter(Boolean);
@@ -267,7 +310,9 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
   const totalHasFees = sub.wholePartyCents != null && sub.perTicketCents != null && sub.wholePartyCents > sub.perTicketCents * (sub.quantity ?? q) + 50;
   if (budget != null && sub.wholePartyCents != null && sub.wholePartyCents > budget) out.push(`At ${formatUsd(sub.wholePartyCents)} in total${sub.feeBasis === 'before_fees' && !totalHasFees ? ' before fees' : totalHasFees || sub.feeBasis === 'all_in' ? ' including fees' : ''}, it’s over your ${formatUsd(budget)} budget.`);
   if (sub.restrictionCodes.includes('accessible_seating') && !a.accessibilityRequired) out.push('These are accessible seats (wheelchair or companion spaces), meant for people who need them. If you don’t, pick other seats.');
-  if (q > 1 && (sub.quantity ?? q) > 1) {
+  // Standing room has no seats to number or sit together in (live Oct 2: "seat numbers" and "together" checks on GA floor tickets).
+  const standing = sub.admission === 'standing';
+  if (q > 1 && (sub.quantity ?? q) > 1 && !standing) {
     if (sub.seatsTogether === false) out.push('It says the seats may not be together.');
     else if (sub.seatsTogether === null) out.push(`${missing('whether the seats are together')}. Check the listing before you buy if that matters.`);
   }
@@ -295,11 +340,15 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
   }
   else if (!sub.deliveryBy && !sub.deliveryText) out.push(`${missing('when the tickets will be delivered')}. Check the listing’s delivery date before you buy.`);
   if (sub.restrictionCodes.includes('obstructed_view')) out.push('It notes a limited or obstructed view.');
-  if (sub.section && !sub.seatNumbers) out.push(`${missing('seat numbers')}. Check the listing if you want to know exactly where you’ll sit.`);
-  const otherNotes = sub.restrictions.filter((r) => restrictionIsOther(r));
+  if (sub.section && !sub.seatNumbers && !standing) out.push(`${missing('seat numbers')}. Check the listing if you want to know exactly where you’ll sit.`);
+  // The page's own notes, minus what's said already (standing room) and boilerplate every page carries.
+  const otherNotes = sub.restrictions.filter((r) => restrictionIsOther(r) && !(standing && /\bstanding\b/i.test(r)) && !/\bsubject to change\b/i.test(r) && !(sub.section && sub.section.toLowerCase().includes(r.toLowerCase()))).map((r) => r.replace(/[.\s]+$/, ''));
   if (otherNotes.length) out.push(`It also notes: ${listJoin(otherNotes.slice(0, 3))}.`);
   if (sub.includedBenefits.length) out.push(`It lists extras (${listJoin(sub.includedBenefits.slice(0, 3))}). Resale sellers can’t always pass those on, so confirm they’re included.`);
-  if (sub.unreadable.length || sub.confidence === 'low') out.push(`I couldn’t read everything${sub.unreadable.length ? ` (${listJoin(sub.unreadable.slice(0, 2))})` : ''}, so check those details yourself.`);
+  // What was cut off matters only when it bears on what they asked: rows below the fold of a results page they didn't
+  // ask about, and an accessibility note when they need no access, aren't worth a line (live Oct 2).
+  const unread = sub.unreadable.filter((u) => !/\b(?:additional|more|other) (?:results|listings|rows)\b|\bbelow the visible\b/i.test(u) && !(!a.accessibilityRequired && /\baccessib/i.test(u)));
+  if (unread.length || (sub.confidence === 'low' && !sub.unreadable.length)) out.push(`I couldn’t read everything${unread.length ? ` (${listJoin(unread.slice(0, 2))})` : ''}, so check those details yourself.`);
   return out.slice(0, 5);
 }
 
@@ -376,6 +425,9 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
     text = 'I can’t compare its price with the market yet, so the details below are what to check before you pay.';
     code = 'no_market';
   }
+  // The row they'd buy and what the party pays come first; what we can or can't compare it with follows.
+  const lead = shownRowLead(a, sub);
+  if (lead) text = `${lead} ${code === 'no_market' ? 'I can’t compare it with the wider resale market yet.' : text}`;
   return { id: 'C_VERDICT', kind: 'verdict', text, values: { code }, scope: { quantity: q, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.0', limitations: ['no_authenticity_or_delivery_guarantee'], customerVisible: true };
 }
 
@@ -1013,6 +1065,30 @@ function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headl
   };
 }
 
+/**
+ * Asked "buy those or wait?" about tickets they showed us, with no trend to go on: a conditional view from what we do
+ * know (their price and total, their area, how soon it is, the cheaper rows on the same page), never a forecast or a
+ * claim the tickets are still there (live Oct 2: "Would you buy those or wait until later today?" went unanswered).
+ */
+function buyOrWaitView(a: BuildPacketArgs): { lead: string; after: string } | null {
+  const sub = a.subject;
+  if (!sub || sub.perTicketCents == null) return null;
+  const n = sub.quantity ?? a.quantity;
+  const total = sub.perTicketCents * n;
+  const budget = a.priorities.budgetTotalCents;
+  if (budget != null && total > budget) return { lead: '', after: ` At ${formatUsd(total)} for ${qtyWord(n)} it’s over your ${formatUsd(budget)}, so I wouldn’t buy these as they are.` };
+  const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: a.timeZone ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  const today = !!a.eventLocalDate && day(a.observedAt) === a.eventLocalDate;
+  const basis = [sub.feeBasis === 'all_in' ? 'with fees' : sub.feeBasis === 'before_fees' ? 'before fees' : null, sub.beforeTaxes ? 'before taxes' : null].filter(Boolean).join(' and ');
+  const area = sub.chosenFor;
+  const cheaper = area ? (sub.offers ?? []).filter((o) => o.perTicketCents !== null && o.perTicketCents < sub.perTicketCents! && areaOf(o.label) !== area).sort((x, y) => x.perTicketCents! - y.perTicketCents!)[0] : undefined;
+  const otherArea = cheaper ? areaOf(cheaper.label) : null;
+  return {
+    lead: `If ${formatUsd(total)} for ${qtyWord(n)}${basis ? ` (${basis})` : ''} works for you${area ? ` and the ${area} is what you want` : ''}, I’d buy rather than wait.`,
+    after: `${today ? ' It’s tonight, so waiting also risks the tickets you found going.' : ''}${cheaper ? ` If ${otherArea ? `the ${otherArea}` : 'another area'} would do, “${cheaper.label}” at ${formatUsd(cheaper.perTicketCents!)} a ticket on the same page is ${formatUsd((sub.perTicketCents - cheaper.perTicketCents!) * n)} less for ${qtyWord(n)}.` : ''}`,
+  };
+}
+
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A before-fees listing is not "cheaper" than an all-in price just by being lower: its fees are still to come.
   // One within a normal fee margin is noise to hunt for, not an alternative (live R05-F1: $207.62 before fees
@@ -1045,7 +1121,15 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
           markup: `That’s well above the face value Ticketmaster lists (${range}). That alone doesn’t make it a bad price: resale follows demand, so what matters is what comparable seats cost now.${noMarket}`,
         }[quoteVerdict(a.quote.perTicketCents, face)]
       : a.official
-        ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. But if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
+        ? a.subject?.listingType === 'resale'
+          // The page said resale: a resale price is never face value, whoever hosts it (live Oct 2: a Verified Resale
+          // floor ticket on Ticketmaster was called "face value, not a resale markup").
+          ? `It’s marked as resale, so ${formatUsd(a.quote.perTicketCents)} is a resale price, not face value, and ${a.official.seller} doesn’t publish a face-value range for this show to set it against.`
+          : a.subject?.listingType === 'primary'
+            ? `It’s ${a.official.seller}’s own ticket, not resale, so there’s no resale markup in it${a.quote.feeBasis === 'all_in' ? '; with fees included it’s more than the face value, which isn’t published for this show' : ''}.`
+            : a.quote.feeBasis === 'all_in'
+              ? `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. If it’s ${a.official.seller}’s own ticket rather than resale, there’s no resale markup in it, though with fees included it’s more than face value.`
+              : `Ticketmaster doesn’t publish a price range for this show, so I can’t size that against face value. But if ${formatUsd(a.quote.perTicketCents)} is ${a.official.seller}’s own price, it’s face value, not a resale markup.`
         : a.best || marketShown
           ? '' // the verified option or the resale figures below are the comparison
           : a.subject
@@ -1054,13 +1138,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_QUOTE',
       kind: 'quoted_price',
-      text: [quoteLead(a.quote), verdictText].filter(Boolean).join(' '),
+      // The chosen row's lead already says the price; this keeps only what it means against face value.
+      text: [a.subject && shownRowLead(a, a.subject) ? null : quoteLead(a.quote), verdictText].filter(Boolean).join(' '),
       values: { perTicketCents: a.quote.perTicketCents, faceMinCents: face?.minCents ?? null, faceMaxCents: face?.maxCents ?? null, source: a.quote.source ?? 'customer_reported', feeBasis: a.quote.feeBasis ?? 'unknown' },
       scope: { quantity: q, seatZone: null, feeBasis: 'face_value_before_fees', observedAt: a.quote.seenAt?.toISOString() ?? obs },
       evidenceIds: [],
       methodVersion: 'quote-2.0',
       limitations: ['face_value_is_before_fees', 'not_a_verified_offer', 'face_value_is_context_not_value'],
-      customerVisible: true,
+      customerVisible: !(a.subject && shownRowLead(a, a.subject)) || !!verdictText,
     });
   } else if (a.faceValue) {
     claims.push({
@@ -1094,8 +1179,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       // So is a watch they asked for: they want to wait for a price, so "that's where I'd buy" would answer a
       // question they didn't ask, and the link stays an event page (PW-EMAIL-FOCUS-01, L01).
       text: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
-        ? `It’s also on general sale on ${a.official.seller}. I haven’t seen those seats or their prices, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
-        : a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}, and that’s where I’d buy.`,
+        // An open sale is the sale window, not stock: the official page can say sold out while the catalog still says
+        // on sale (live Oct 2, Metallica at Sphere), so it is never said as seats being there.
+        ? `${a.official.seller} also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
+        : a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy.`,
       values: { seller: a.official.seller },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -1459,11 +1546,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   if (a.trendAsked) {
     const trendClaim = claims.find((c) => c.id === 'C_TREND' && c.customerVisible);
     const thin = claims.find((c) => c.id === 'C_NOTREND');
-    const seats = `${q === 1 ? 'one seat' : `${countWord(q)} seats together`}`;
+    const sub = a.subject;
+    const standing = sub?.admission === 'standing';
+    const seats = standing ? `${countWord(q).toLowerCase()} ${sub?.chosenFor ? `${sub.chosenFor} ` : ''}tickets` : `${q === 1 ? 'one seat' : `${countWord(q)} seats together`}`;
     const risk = a.trendAsked.riskOk ? ' You’re willing to risk missing out, but that alone doesn’t show that waiting will save money.' : '';
+    const view = trendClaim ? null : buyOrWaitView(a);
     const text = trendClaim
       ? `On buy or wait: ${trendClaim.text}${risk}`
-      : `I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}`;
+      : `${view?.lead ? `${view.lead} ` : ''}I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}${view?.after ?? ''}`;
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
     claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim ? 1 : 0 }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: trendClaim ? [] : ['insufficient_history'], customerVisible: true });
   }

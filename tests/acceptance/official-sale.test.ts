@@ -64,7 +64,7 @@ describe('still on general sale: point at the official sale', () => {
     expect(await researchQueued(requestId)).toBe(0);
     const [send] = await sendsFor(requestId);
     expect(send!.messageClass).toBe('acknowledgment'); // no prices, so no review gate
-    expect(send!.bodyText).toContain("Metro Testers vs. Boston (Fri, Oct 30 at 7:30pm at Test Garden) is still on general sale on Ticketmaster, and that's where I'd buy your 4 tickets.");
+    expect(send!.bodyText).toContain("Metro Testers vs. Boston (Fri, Oct 30 at 7:30pm at Test Garden) is still on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that's where I'd buy your 4 tickets.");
     expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: ${URL_OPEN}`);
     expect(send!.bodyText).toContain('Games that aren\'t sold out often go for less on resale. Want me to compare? Just reply "compare".');
     expect(send!.bodyText).not.toMatch(/\$\d/); // never a price
@@ -150,7 +150,7 @@ describe('still on general sale: point at the official sale', () => {
     const body = rec!.bodyText;
     expect(body).toContain('You mentioned $106 (I’ve taken that as per ticket). That’s a little above the face value Ticketmaster lists ($55 to $95 a ticket before fees); fees alone can add that much, so it may be close to the original price all-in.');
     // No resale in the email, so no "unless a resale seat is cheaper" hedge.
-    expect(body).toContain('It’s on general sale on Ticketmaster, and that’s where I’d buy.');
+    expect(body).toContain('It’s on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that’s where I’d buy.');
     expect(body).not.toContain('unless a resale seat');
     expect(body).toContain(`Buy on Ticketmaster: ${URL_OPEN}`);
     for (const noise of ['not integrated', 'packet', 'check primary', 'marketplaces directly', 'Sources checked']) expect(body, noise).not.toContain(noise);

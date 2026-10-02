@@ -327,7 +327,8 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
     consider_alternative: 'Nothing qualifying fits inside your budget; the alternative below is the closest we verified.',
     insufficient_evidence: 'Here’s what I can tell you so far.',
   };
-  const link = visible.find((c) => c.id === 'C_VERDICT') ?? visible.find((c) => c.id === 'C_LINK');
+  // Their buy-or-wait question is answered first, as in the drafted email.
+  const link = visible.find((c) => c.id === 'C_TREND_ANSWER') ?? visible.find((c) => c.id === 'C_VERDICT') ?? visible.find((c) => c.id === 'C_LINK');
   // Their offers compared: the answer is the comparison's first line, not a generic lead.
   const answer = visible.find((c) => c.id === 'C_OFFERS');
   const rest = visible.filter((c) => c !== link).map((c) => (c.id === 'C_CATCHES' ? { ...c, text: `${CATCHES_LEAD}\n${c.text.split('\n').map((i) => `- ${i}`).join('\n')}` } : c.items?.length ? { ...c, text: c.items.map((i) => `- ${i}`).join('\n') } : c));
