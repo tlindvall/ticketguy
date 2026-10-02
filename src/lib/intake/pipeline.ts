@@ -2200,8 +2200,14 @@ export class Concierge {
     // The screenshot's start time is the performance they are looking at, unless they typed a different one.
     if (c.exactTime === null && !c.after && !c.partOfDay) {
       const [ev] = await this.db.select({ fields: t.listingEvidence.fields }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false))).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
-      const time = (ev?.fields as { eventTime?: string | null } | null)?.eventTime;
-      if (time && /^\d{2}:\d{2}$/.test(time)) c.exactTime = Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+      const f = ev?.fields as { eventTime?: string | null; doorsTime?: string | null; showTime?: string | null } | null;
+      const mins = (x: string | null | undefined) => (x && /^\d{2}:\d{2}$/.test(x) ? Number(x.slice(0, 2)) * 60 + Number(x.slice(3)) : null);
+      const time = mins(f?.eventTime);
+      if (time !== null) c.exactTime = time;
+      // Ticketmaster's page heads with the doors time ("Fri, Oct 2, 8:00 PM", then "Doors: 8PM Show: 9PM"), and the
+      // catalog holds the show at 9pm once synced with its doors, or at 8pm before: either is the show in the screenshot.
+      const also = [mins(f?.doorsTime), mins(f?.showTime)].filter((x): x is number => x !== null);
+      if (time !== null && also.length === 2 && also.includes(time)) c.exactTimeAlso = also;
     }
     const linkedEventIds = ticketLinksIn(x.submittedUrls).map((l) => l.eventId).filter((id): id is string => !!id);
     return { ...c, linkedEventIds };

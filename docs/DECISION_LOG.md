@@ -1202,3 +1202,23 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Removed from that reply:** the separate "I can't open StubHub listings" question, the budget question, "I can't see live resale listings", and the model's closer.
 - **Ticketmaster's open sale under a resale link** is a price to compare against ("check its total for two there against the one you found"), not "that's where I'd buy".
 - **Checkout links.** A StubHub checkout link (`ID=<session>|<listingId>|<qty>|0`) gives the listing and the quantity. `scripts/probe-seatdata-link.ts` also takes an event link with no listing; it prints rows to open and compare.
+
+## 70. Listings are read on v0.1.1; a doors-time heading is the same show; what #91 left in the jigitz and Rangers replies
+
+**Why.** The deployed fix verification (Oct 2) found the selected StubHub listing still unread (FV-R1-01). The jigitz screenshot replies are fixed in #91; their first reply still ended with filler, and their follow-up kept a source line for a market section it no longer showed (FV-R2-03). The old Rangers thread got a requirement line about seats we were never shown (FV-R1-03). And a Ticketmaster page heads with the doors time, so once the catalog stores the show time (#88), a screenshot of the right show was ruled out.
+
+**What.**
+- **Listings path.** `listings()` now calls `/api/v0.1.1/listings/get`, the path SDK 1.2 uses, the same one the StubHub event-id read already used. The v0.1 path is the one every live read went through, and it likely explains both the unread link and group prices never appearing. That is not proven until the probe or a live reply shows rows.
+- **Doors and show.** A screenshot that shows "Doors: 8PM Show: 9PM" is that performance at either time, so a catalog that holds it at 9pm (synced with doors) or at 8pm (before) both match. A typed time still rules.
+- **Results page from the official seller's own page.** The open-sale line ("Ticketmaster also lists it as on general sale…") goes; its link stays as the last line. Rows from another seller keep the comparison. "I haven't found a verified alternative…" goes too: the other rows are the alternatives.
+- **Buy-or-wait follow-up on rows.** The "Those figures are StubHub and Vivid Seats…" line goes with the market section it describes.
+- **Listing link.** No "I haven't been able to check this against any seats yet" line under a listing link: the one ask for its price and seats covers it.
+- **`scripts/probe-discovery.ts`** is read-only, for FV-R1-02 (Hamilton). For a keyword, city and day, it prints:
+  - what the catalog holds;
+  - the recent syncs and the windows they recorded;
+  - the intake's discovery audits;
+  - one live Discovery call, asked as the intake asks, with which events are and aren't in the catalog.
+
+  It upserts nothing and records no sync.
+
+**Not done.** Hamilton's cause stays unknown until the probe runs against production. The selected StubHub listing is still unproven until SeatData returns rows for it.

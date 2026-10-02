@@ -25,7 +25,7 @@ describe('a paid read reserves its call before it is made', () => {
   let status = 503;
   const fetchImpl = (async (input: string) => {
     const url = new URL(input);
-    if (url.pathname === '/api/v0.1/listings/get') {
+    if (url.pathname === '/api/v0.1.1/listings/get') {
       reads += 1;
       return status === 200 ? new Response(JSON.stringify({ has_refreshed: true, listings: [] }), { status: 200 }) : new Response('{}', { status });
     }

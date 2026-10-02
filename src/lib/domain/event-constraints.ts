@@ -19,6 +19,8 @@ export type EventConstraints = {
   before: TimeBound | null;
   /** "the 7pm show", "the screenshot says 7pm": that performance. Minutes after midnight, local. */
   exactTime: number | null;
+  /** The same performance's other stated time: a page that shows "Doors: 8PM Show: 9PM" is that show at either. */
+  exactTimeAlso?: number[];
   /** Start times they ruled out ("not 4pm", "not the 1pm matinee"). */
   notTimes: number[];
   partOfDay: 'evening' | 'matinee' | null;
@@ -272,7 +274,7 @@ export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boo
   // Away is away whatever the catalog says: a synced "Knicks v 76ers" in Philadelphia is marked home (TGQA-R8 S03), so
   // the team's own market decides when it is known.
   if (c.homeOnly && opts.team && (e.isHome === false || opts.atHome === false) && !why.length) why.push(`it's an away game${v.city ? `, in ${v.city}` : ''}`);
-  if (c.exactTime !== null && at.minutes !== c.exactTime) why.push(`it starts at ${timeLabel(at.minutes)}, not ${timeLabel(c.exactTime)}`);
+  if (c.exactTime !== null && at.minutes !== c.exactTime && !c.exactTimeAlso?.includes(at.minutes)) why.push(`it starts at ${timeLabel(at.minutes)}, not ${timeLabel(c.exactTime)}`);
   if (c.notTimes.includes(at.minutes)) why.push(`it starts at ${timeLabel(at.minutes)}, which you ruled out`);
   if (c.after && (c.after.strict ? at.minutes <= c.after.minutes : at.minutes < c.after.minutes)) why.push(`it starts at ${timeLabel(at.minutes)}, and you asked for ${c.after.strict ? 'after' : 'no earlier than'} ${timeLabel(c.after.minutes)}`);
   if (c.before && (c.before.strict ? at.minutes >= c.before.minutes : at.minutes > c.before.minutes)) why.push(`it starts at ${timeLabel(at.minutes)}, later than you want`);

@@ -66,7 +66,7 @@ describe('resale market tracking', () => {
       const base = 80 + (Number(m[1]) - 900) * 10;
       return json({ event_id: Number(m[1]), data: statsFor(new Date(start.getTime() - 40 * 24 * H), 40 * 24, base, base, base + 20, base + 20), has_more: false, next_cursor: null });
     }
-    if (url.pathname === '/api/v0.1/listings/get' && url.searchParams.get('event_id') === '777') return groupListings();
+    if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id') === '777') return groupListings();
     // A game SeatData has under its StubHub event id only (no Ticketmaster match): SDK 1.2 `event_id_sh`.
     if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id_sh') === '161999000') return json({ has_refreshed: 1, listings: [
       { active: true, listing_id: 7001, source: 'sh', price: 88, quantity: 4, section: '224', row: '9' },
@@ -313,7 +313,7 @@ describe('resale market tracking', () => {
     const requestId = await ask(c, '5 Testers tickets Oct 30 together — is resale cheaper?', 'five@customer.example');
     await c.research({ requestId, revision: 1 });
     // The stats were fresh, but the group had never been read: one listings call, nothing else.
-    expect(calls).toEqual(['/api/v0.1/listings/get?event_id']);
+    expect(calls).toEqual(['/api/v0.1.1/listings/get?event_id']);
     const group = await h.db.select().from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, GAME), eq(t.marketSnapshots.basketKey, marketBasketKey(GAME, 'group:5', null))));
     expect(group).toHaveLength(1);
     expect(group[0]).toMatchObject({ quantity: 5, cheapestEligibleTotalCents: 14000, eligibleOptionCount: 2, feeBasis: 'listed_price' });
