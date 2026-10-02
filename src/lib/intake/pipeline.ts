@@ -2604,7 +2604,10 @@ export class Concierge {
     let around: Awaited<ReturnType<MarketTracker['currentListings']>> = null;
     let linked: SubjectListing | null = null;
     let linkMarket: Parameters<typeof buildPacket>[0]['linkMarket'] = null;
-    if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && licence.allows('tracking') && trackingOk && uses.display) {
+    const linkGates = [!licence.allows('tracking') && `licence_${licence.status}`, !trackingOk && 'service_depth_no_market_tracking', !uses.display && 'licence_no_display'].filter((g): g is string => !!g);
+    // A listing link not looked up says which gate stopped it; silence here left the live Rangers reply untraceable (PD-R1-01).
+    if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && linkGates.length) await audit(this.db, { actor: 'system', action: 'listing.link_skipped', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, gates: linkGates } });
+    if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && !linkGates.length) {
       around = await tracker.currentListings(event.id, 'listings_compare', sentLink.marketplace === 'stubhub' ? sentLink.eventId : null);
       const m = around ? matchLinkedListing(around.listings, sentLink) : null;
       await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0 } });
@@ -3513,7 +3516,7 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean; cheaper: boolean } {
   const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
@@ -3535,7 +3538,9 @@ export function questionsAsked(text: string): { deliveryRisk: boolean; accessibl
   const worth = /\b(?:worth (?:it|the (?:price|money|cost))|good (?:deal|price|value|buy)|fair price|over ?priced|should (?:i|we) (?:buy|get|grab|take) (?:them|these|it|those))\b/i.test(t);
   // "How much cheaper is it?", "what is the price difference?": the saving is asked for by name (live F01).
   const difference = /\b(?:price |cost )?difference\b|\bhow much (?:cheaper|less|more|pricier)\b|\bhow much (?:do|would) (?:i|we) save\b/i.test(t);
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference };
+  // "Can you find a cheaper pair for the same game?": other seats wanted, not a verdict on theirs (PD-R1-02).
+  const cheaper = /\b(?:find|get|see|any|anything|something|look for)\b[^.?!]{0,30}\bcheaper\b|\bcheaper (?:pair|seats?|tickets?|options?|ones?|listings?)\b/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference, cheaper };
 }
 
 /**
@@ -4248,7 +4253,7 @@ const ONE_OFFER_ALONE = /\b(?:ignore|set aside|forget|drop|disregard|on its own|
 const ASKS_ABOUT_OFFERS = /\b(?:offers?|options?|listings?|sellers?|prices? I (?:pasted|gave|sent)|(?:change|changes) (?:your|the) pick|which (?:one|is cheaper|fits|costs less)|the totals?)\b/i;
 
 /** "Better to buy now or wait?", "do you have price history showing prices falling?", "trending down or up". */
-const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
+export const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
 /** "Please don't set up any alerts". */
 const NO_ALERTS = /\b(?:don'?t|do not|no need to)\s+set(?:\s+up)?\s+(?:any\s+)?(?:alerts?|a watch|watches)\b|\bno alerts?\b/i;
 /** "Will you email me when tickets go on sale, or should I check myself?" */

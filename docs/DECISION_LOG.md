@@ -1235,3 +1235,24 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Fallback.** An exact name with no event that fits no longer ends the search; the rest are tried.
 
 **Not certain.** This is the bug that matches the live symptom, and both new tests fail without the fix. The production catalog hasn't been read to confirm it holds ten or more such names. `scripts/probe-discovery.ts` shows it.
+
+## 72. A misread name isn't another show; a follow-up's own questions are answered; skipped reads say why
+
+**Why.** The post-deploy QA of #92 (Oct 2, build b31b3fc) found four problems:
+- **PD-R2-01.** The later jigitz screenshot was read as "jיגitz", a name mixing Latin and Hebrew letters. The reply then advised against the very show it showed: "it's for jיגitz, not jigitz".
+- **PD-R1-02.** The Rangers follow-up asked for a cheaper pair and whether prices were rising or falling. It got the first reply's ask again and neither answer. The trend pattern missed "are prices generally going down", and nothing read "find a cheaper pair".
+- **PD-R2-02.** The first reply to a results page still carried a 21-hour-old, venue-wide market block, plus "I couldn't read everything (Only 3 of the 7 results are visible.)".
+- **PD-R1-01.** The selected listing link was never read, and nothing recorded why.
+
+**What.**
+- **Identity.** A listing's name in two alphabets at once is a misread. So is a one- or two-letter slip on the event's own date at its own venue. A different name in full still raises "make sure it's the right show".
+- **Follow-up questions.**
+  - "Are prices … going down", "is the price going up" now count as asking about the trend, and get the trend answer.
+  - "Find a cheaper pair" is read as its own question. With no listings to look through, the reply says it can't look for one, and makes one ask: any pair they find, or the one they picked.
+- **Results page.** A venue-wide market with no zone isn't shown under a screenshot's rows, first reply or follow-up; the page's own rows are the comparison. "Only N of M results are visible" is how much of the page they captured, not a misread, so it no longer prompts "check those details yourself".
+- **Diagnostics.**
+  - A listing link the pipeline doesn't look up is audited as `listing.link_skipped`, with the gate that stopped it: licence, service depth, or display rights.
+  - A listings read the tracker skips writes a `skipped` row: no key, licence, untracked event, no StubHub id.
+  - `scripts/probe-request.ts <request id>` prints one request's links, listing audits, tracking row, 48 hours of SeatData reads, and licence state. It shows no message text and makes no provider call.
+
+**Not done.** Why the Rangers listing wasn't read is still unknown until `probe-request` runs on the production request. Hamilton is #71, which this QA didn't test.

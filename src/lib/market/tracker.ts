@@ -418,12 +418,20 @@ export class MarketTracker {
    * is used for this answer and never stored. Wheelchair, companion, parking and suite listings are left out.
    */
   async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<{ at: Date; listings: MarketListing[] } | null> {
-    if (await this.blocked()) return null;
+    // Every read that doesn't happen says why, so a reply with no market can be traced to its cause (PD-R1-01).
+    const why = await this.blocked();
+    if (why) {
+      await this.log(kind, eventId, 'skipped', 0, 0, why).catch(() => undefined);
+      return null;
+    }
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     // Not matched to SeatData through Ticketmaster, but the customer's StubHub link names StubHub's own event id, which
     // SeatData reads directly (SDK 1.2 `event_id_sh`): the Rangers link had no market at all without it (live Oct 2).
     const bySh = !(tr && tr.state === 'active' && tr.providerEventId) && !!stubHubEventId && /^\d{4,15}$/.test(stubHubEventId);
-    if (!bySh && (!tr || tr.state !== 'active' || !tr.providerEventId)) return null;
+    if (!bySh && (!tr || tr.state !== 'active' || !tr.providerEventId)) {
+      await this.log(kind, eventId, 'skipped', 0, 0, tr ? `tracked_${tr.state}${tr.providerEventId ? '' : '_no_provider_id'}` : 'not_tracked_no_stubhub_id').catch(() => undefined);
+      return null;
+    }
     // The call is taken from the allowance before it is made; the attempts, retries included, can't exceed it.
     // A reservation that fails is no read, never an error for the reply that asked (R1-HUMAN-01).
     const slot = await this.reserve(kind, eventId).catch(async (e) => {
