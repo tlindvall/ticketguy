@@ -197,6 +197,22 @@ export type DiscoveredEvent = {
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
+/** "Doors: 8PM Show: 9PM" in the provider's notes, as 24-hour times; null unless both are stated. */
+export function doorsAndShow(text: string | null | undefined): { doors: string; show: string } | null {
+  if (!text) return null;
+  const t = (re: RegExp) => {
+    const m = re.exec(text);
+    if (!m) return null;
+    let h = Number(m[1]) % 12;
+    if (/p/i.test(m[3]!)) h += 12;
+    return `${String(h).padStart(2, '0')}:${m[2] ?? '00'}`;
+  };
+  const doors = t(/\bdoors?(?:\s+open)?\s*(?::|at)?\s*(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?/i);
+  const show = t(/\b(?:show|showtime|performance|music|set)(?:\s+starts?)?\s*(?::|at)?\s*(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?/i);
+  return doors && show && show > doors ? { doors, show } : null;
+}
+const minutesIn = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
 /**
  * The standard-ticket face-value range in USD, when the provider publishes one. Kept to judge a price a
  * customer quotes; it is never shown as something to buy at (A12).
@@ -250,14 +266,21 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
       return { providerId: aid, name: aname, url: str(a.url), segment: nameOf(ac.segment), genre: nameOf(ac.genre), subGenre: nameOf(ac.subGenre), links: attractionLinks(a) };
     })
     .filter((a): a is DiscoveredAttraction => a !== null);
+  // Some venues give the doors time as the event's start and the show time only in the notes ("Doors: 8PM Show: 9PM",
+  // live Oct 2 jigitz): the start is the show, and doors is doors, when the notes say so and the start is the doors time.
+  const listedDoors = str((dates as { doorsTimes?: { dateTime?: unknown } }).doorsTimes?.dateTime);
+  const noted = listedDoors ? null : doorsAndShow([str(e.pleaseNote), str(e.info)].filter(Boolean).join(' '));
+  const startAt = str(start.dateTime);
+  const localTime = str(start.localTime);
+  const shift = noted && startAt && localTime?.slice(0, 5) === noted.doors ? (minutesIn(noted.show) - minutesIn(noted.doors)) * 60_000 : 0;
   return {
     providerEventId: id,
     name,
     url,
-    startAt: str(start.dateTime),
+    startAt: shift ? new Date(new Date(startAt!).getTime() + shift).toISOString() : startAt,
     localDate: str(start.localDate),
-    localTime: str(start.localTime),
-    doorsAt: str((dates as { doorsTimes?: { dateTime?: unknown } }).doorsTimes?.dateTime),
+    localTime: shift ? `${noted!.show}:00` : localTime,
+    doorsAt: shift ? new Date(startAt!).toISOString() : listedDoors,
     timeTba: start.timeTBA === true || start.noSpecificTime === true,
     timezone: str(dates.timezone) ?? venue?.timezone ?? null,
     statusCode: (str(dates.status?.code) ?? 'unknown').toLowerCase(),
