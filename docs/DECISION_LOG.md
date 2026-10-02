@@ -1161,3 +1161,17 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Questions.** The seats question asks for the price, section and row (a screenshot works), never a link. The budget question asks for the total with fees, as the watch question already does.
 
 **Tests.** `tests/acceptance/email-layout-0102.test.ts` replays that email's shape. The header assertions in the R6, R8 and market-tracking replays are updated to the two-line form.
+
+## 67. A listing link is looked up by its listing number in the resale feed, never fetched
+
+**Why.** A live reply to a StubHub listing link (Rangers vs. Islanders, Oct 6) said "I can't open StubHub listings myself" and gave the venue-wide floor instead. We do hold that listing. SeatData's current-listings read for the event carries each listing's price, section and row, and research was already making that read for cheaper alternatives. It was just dropping the listing number.
+
+**What.**
+- A StubHub or Vivid Seats link with a listing id is looked up in one current-listings read. The read happens only where the licence allows tracking and customer display, and only when there's no screenshot or pasted listing.
+- **A match** needs the same number, plus the same marketplace when the feed names one. When the feed names no marketplace, the number must be the only one of its kind. A near match is never used: no guess from the section, row or price.
+- **On a match**, the listing becomes the subject (`source: 'link_match'`). Its listed price before fees, section and row are said as found in resale data. The catches name what the feed doesn't carry: delivery, seat numbers, and whether the seats are together. Cheaper alternatives come from the same read, so it costs one paid call, not two.
+- **With no match**, the reply is the same as before.
+- Each attempt is audited as `listing.link_matched` or `listing.link_unmatched`.
+- The marketplace page itself is still never fetched (#47). StubHub's terms and its bot protection make a scraper both against the rules and brittle.
+
+**Not verified.** Whether SeatData's `listing_id` is StubHub's own listing number. The item shape is undocumented, and the tests use a stand-in feed. The audit rows will show the live match rate. If it is near zero, the ids are different and this path stays silent.

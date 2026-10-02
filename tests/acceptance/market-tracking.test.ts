@@ -35,7 +35,7 @@ describe('resale market tracking', () => {
   let groupListings = () => new Response(JSON.stringify({ has_refreshed: true, listings: [
     { active: true, listing_id: 1, price: 95, quantity: 2, quantity_start: 2, row: '10', section: '101', zone: 'Lower Bowl' },
     { active: true, listing_id: 2, price: 140, quantity: 6, quantity_start: 8, row: '4', section: '210', zone: 'Upper' },
-    { active: true, listing_id: 3, price: 155, quantity: 5, quantity_start: 5, row: '2', section: '112', zone: 'Lower Bowl' },
+    { active: true, listing_id: 6189203345, price: 155, quantity: 5, quantity_start: 5, row: '2', section: '112', zone: 'Lower Bowl' },
     { active: true, listing_id: 4, price: 120, quantity: 4, quantity_start: 4, row: '8', section: '215', zone: 'Upper' },
     { active: false, listing_id: 5, price: 60, quantity: 8, quantity_start: 8, row: '1', section: '220', zone: 'Upper' },
   ] }), { status: 200 });
@@ -230,6 +230,27 @@ describe('resale market tracking', () => {
     expect(body).not.toContain('fair price');
     expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
     expect(body).not.toMatch(/send me the (link|listing)/i);
+  });
+
+  // Live (Oct 1): a StubHub listing link got "I can't open StubHub listings myself" and the venue floor. Its
+  // listing number is in the resale feed we're licensed for, so it's looked up there: the price, section and row
+  // of the very listing they sent, said as a listed price before fees, never fetched from StubHub.
+  it('a StubHub listing link is found in the resale feed by its listing number and answered as that listing', async () => {
+    const c = concierge();
+    const link = 'https://www.stubhub.com/metro-testers-new-york-tickets-10-30-2026/event/555/?quantity=2&listingId=6189203345';
+    const requestId = await ask(c, link, 'link-match@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const body = rec!.bodyText;
+    expect(body).toContain('I found the listing you linked in the resale data I have, by its listing number: $155 a ticket before fees on StubHub. Fees are added at checkout, and I haven’t checked that the seats are still there.');
+    expect(body).toContain('section 112, row 2');
+    expect(body).not.toMatch(/can’t open StubHub|send a screenshot/);
+    // The feed doesn't carry seat numbers, adjacency or delivery: said as gaps in the data, not in what they sent.
+    expect(body).toContain('- The resale data for it doesn’t show when the tickets will be delivered.');
+    // Cheaper listings for the pair, from the same read: one paid call, not two.
+    expect(body).toContain('section 101, row 10 at $95 a ticket before fees (about $190 for both)');
+    const [a] = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, requestId), eq(t.auditLog.action, 'listing.link_matched')));
+    expect(a).toBeTruthy();
   });
 
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {
