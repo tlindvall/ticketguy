@@ -115,7 +115,7 @@ describe('Research 1 discovery: hard dates, exclusions and a finished decision',
   describe('R2-EMAIL-POLICY-01: the late-entry reply names the night, and checks the other night for the music', () => {
     it('another house night that Saturday is named; the link says which night and room', async () => {
       const [, second] = await converse(['Dusky at Elsewhere in Brooklyn on Friday Oct 2. Two tickets. We won’t get there until midnight. Is that OK?', 'Is midnight entry verified? And did you check Saturday Oct 3 too?']);
-      expect(second!.text).toContain('Here’s the listing for Dusky - 21+ at Elsewhere, Fri, Oct 2 at 10:30pm:');
+      expect(second!.text).toContain('Here’s the event page for Dusky - 21+ at Elsewhere, Fri, Oct 2 at 10:30pm:');
       expect(second!.text).toContain('I checked Sat, Oct 3 too: no Dusky that night, but there’s Night Shift: Deep House at Brooklyn Basement, Sat, Oct 3 at 11pm, also listed as house.');
       expect(second!.text).toContain('Nothing I have states Elsewhere’s last entry for that night.');
     });

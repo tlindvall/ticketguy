@@ -92,7 +92,7 @@ describe('Research 1: useful advice and email responses', () => {
         'You didn’t answer: is midnight entry verified? And did you check Saturday Oct 3 too?',
       ]);
       for (const r of [first!, second!]) {
-        expect(r.text.split('\n\n')[1]).toMatch(/^Midnight entry is unverified\. The 10:30pm start on the listing doesn’t tell us the latest entry time/);
+        expect(r.text.split('\n\n')[1]).toMatch(/^Midnight entry is unverified\. The 10:30pm start on the event page doesn’t tell us the latest entry time/);
         expect(r.html).toContain('<strong>Midnight entry is unverified.</strong>');
         expect(r.text).not.toMatch(/that's where I'd buy|where I’d buy|Want me to compare/);
         expect(r.text).toContain('https://www.ticketmaster.com/event/Z7r9jZ1A7PU4M');
@@ -104,7 +104,7 @@ describe('Research 1: useful advice and email responses', () => {
       // The other night is checked for the kind of music, not only the act, and the link names night and room
       // (Research 2 link/email review, R2-EMAIL-POLICY-01).
       expect(second!.text).toContain('I checked Sat, Oct 3 too: I don’t have Dusky or another house night in Brooklyn on file then');
-      expect(second!.text).toContain('Here’s the listing for Dusky at Elsewhere, Fri, Oct 2 at 10:30pm:');
+      expect(second!.text).toContain('Here’s the event page for Dusky at Elsewhere, Fri, Oct 2 at 10:30pm:');
       expect(second!.text).toContain('Nothing I have states Elsewhere’s last entry for that night.');
       expect(second!.text).not.toMatch(/own page or box office/);
       writing(second!, { first: false });

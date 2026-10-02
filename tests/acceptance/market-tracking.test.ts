@@ -150,11 +150,13 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).not.toContain('SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     // Where the market starts, never a "fair price" from a venue-wide floor (TG-B04), and whether to hurry.
-    expect(rec!.bodyText).toContain('My read: the lowest asking price I saw among listings for two together (checked Sep 22, 11:00 AM EDT) was $130 a ticket before fees, $260 for two, anywhere in the venue. That’s where those listings started when I looked, on StubHub and Vivid Seats only, not what particular seats are worth');
+    // The floor is said once, in the market lines with when it was seen; the read doesn't repeat it (PW-EMAIL-FOCUS-01).
+    expect(rec!.bodyText.match(/\$130 a ticket before fees/g)).toHaveLength(1);
+    expect(rec!.bodyText).toMatch(/My read: prices have been easing/);
     expect(rec!.bodyText).not.toMatch(/fair price|better deal/);
     // Prices are easing, but nobody has said when they must decide or whether they can risk missing it, so the
     // email says the evidence doesn't settle waiting, and asks exactly that.
-    expect(rec!.bodyText).toContain('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
+    expect(rec!.bodyText).toContain('prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
     expect(rec!.bodyText).not.toContain('no need to rush');
     // And it ends with the questions that would change the answer, not a request for things already sent.
     expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.\n- When do you need to have tickets sorted by?\n- Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
@@ -196,9 +198,7 @@ describe('resale market tracking', () => {
     expect(body).toContain('My read: ');
     expect(body).toContain('- Lowest asking price for two together, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
-    // Said once, above; the question doesn't say it again (PW-EMAIL-FOCUS-01).
-    expect(body).toContain('- Could you send a screenshot of that listing (price, section, row and delivery date), or tell me the price and section?');
-    expect(body.match(/I can’t open StubHub listings myself/g)).toHaveLength(1);
+    expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
 

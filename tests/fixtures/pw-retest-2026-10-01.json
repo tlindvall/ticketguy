@@ -1,0 +1,17 @@
+{
+ "source": "Ticket Guy price watch retest, 2026-10-01 23:26 UTC, deployed a80744b: scenario-plan.json postTemplate.text and L0x-follow.json text, verbatim",
+ "conversations": {
+  "L01": [
+   "Hey Ticket Guy, please watch Kacey Musgraves at Moody Center ATX in Austin on October 7, 2026 for two tickets together. Alert me if the price comes down. https://www.ticketmaster.com/kacey-musgraves-middle-of-nowhere-tour-austin-texas-10-07-2026/event/3A006498F97064FD",
+   "Cancel only any price watch for this request. Please confirm whether there was a watch running. Keep other requests and marketing preferences unchanged. I do not want you to create or restart a watch."
+  ],
+  "L02": [
+   "Please watch Kacey Musgraves at Moody Center ATX in Austin on October 7, 2026: 2 tickets together, $500 total including fees. Only sections 101 through 105; other sections will not work. Alert me when you find them. https://www.ticketmaster.com/kacey-musgraves-middle-of-nowhere-tour-austin-texas-10-07-2026/event/3A006498F97064FD",
+   "Cancel only any price watch for this request. Please confirm whether there was a watch running. Keep other requests and marketing preferences unchanged. I do not want you to create or restart a watch."
+  ],
+  "L03": [
+   "Please watch Kacey Musgraves at Moody Center ATX in Austin on October 7, 2026: 2 tickets, $500 total including fees. I can only arrive after the show starts; late entry must be allowed. Do not suggest a ticket unless that entry rule is confirmed. Alert me when you find them. https://www.ticketmaster.com/kacey-musgraves-middle-of-nowhere-tour-austin-texas-10-07-2026/event/3A006498F97064FD",
+   "My main question was late entry: I can only arrive after the show starts and entry then must be allowed. Have you verified that for this event? If not, say so and give the official venue policy or a verified contact route. Cancel only any price watch in this request; do not start or restart one."
+  ]
+ }
+}

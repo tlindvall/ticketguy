@@ -109,7 +109,7 @@ export type BuildPacketArgs = {
    */
   market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; comparableLabel: string | null; visible: boolean } | null;
   /** A ticket-site link the customer sent (its marketplace name); we read the URL, never the page. */
-  /** A marketplace link they sent: an event page (no listing of theirs on it) or one listing we can't open. */
+  /** A ticket-site link they sent; `eventPage` when it names the event, not one listing (no listing id). */
   link?: { marketplace: string; eventPage?: boolean } | null;
   /** The listing the customer showed us (screenshot or pasted text): what it displayed, never a verified offer. */
   subject?: SubjectListing | null;
@@ -166,7 +166,7 @@ export type BuildPacketArgs = {
   /** Offers from earlier in the thread they've told us to ignore: the one left is judged alone (R05-F1). */
   offersSetAside?: string[];
   /** `market`: a SeatData watch, on listed resale prices with a fee allowance, not a seller's verified totals (DECISION_LOG #62). */
-  watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false } | null;
+  watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false; reason?: string | null } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
   /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
@@ -482,30 +482,19 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
   // The floor is the cheapest listing anywhere in the venue, before fees: where the market starts, never what
   // particular seats are worth (TG-B04). What the customer can afford is a separate question, answered against
   // their whole-party budget with the fee basis said, never by calling a floor-plus-markup "fair" (TG-B03).
+  // The market lines above already give that floor, when it was seen and for which listings; the read says only
+  // what they don't, how it sits against their budget, and never repeats the price (PW-EMAIL-FOCUS-01).
   if (!a.quote) {
     const budget = a.priorities.budgetTotalCents;
-    const ageHours = Math.round((a.observedAt.getTime() - c.current.at.getTime()) / 3_600_000);
-    // Every floor carries when it was seen, and never reads as a minimum for the whole market (post-#54 QA,
-    // R3-B06): it is the lowest asking price in the sources we read, at that time, for that group size.
-    const when = ` (checked ${checkedAt(c.current.at, a.timeZone)}${ageHours >= MARKET_RECENT_HOURS ? `, about ${ageHours} hours ago` : ''})`;
-    const party = q > 1 ? ` for ${countWord(q)}` : '';
     const groupFloor = floor * q;
-    const where = isGroupBasis(m.basis) ? `listings with ${basisSize(m.basis!)} or more tickets` : m.basis === 'pair' ? 'listings for two together' : 'single tickets';
-    // The market section above already carries the floor and when it was seen: a watch answer or an event-page
-    // reply says what it means for them, not the same price again (PW-EMAIL-FOCUS-01).
-    const once = (!!a.watchStatus && !a.watchStatus.running) || !!a.link?.eventPage;
-    if (once && budget != null && groupFloor <= budget) parts.push(`${q > 1 ? `${countWord(q)} at the cheapest listed price would be ${formatUsd(groupFloor)}` : `The cheapest listed price is ${formatUsd(floor)}`} before fees, which leaves ${formatUsd(budget - groupFloor)} of your ${formatUsd(budget)} for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.`);
-    else if (once && budget == null) {
-      // Nothing to add to the figures above.
-    } else if (budget != null && groupFloor > budget) {
+    const atThat = q > 1 ? `at that price, ${countWord(q)} come to ${formatUsd(groupFloor)} before fees` : `at that price, it’s ${formatUsd(groupFloor)} before fees`;
+    if (budget != null && groupFloor > budget) {
       // A floor times their number is what that price would come to, not a sellable offer for exactly them, and
       // one sampled floor over the cap doesn't prove the whole market is (remediation review §3).
-      parts.push(`Your budget is ${formatUsd(budget)}${party}${q > 1 ? ` (${formatUsd(Math.floor(budget / q))} a ticket)` : ''}. The cheapest ${where} I saw${when} were ${formatUsd(floor)} a ticket before fees; ${q > 1 ? `${countWord(q)} at that price would be ${formatUsd(groupFloor)}` : 'that'}, over your budget before any fees. That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.`);
+      const party = q > 1 ? ` for ${countWord(q)} (${formatUsd(Math.floor(budget / q))} a ticket)` : '';
+      parts.push(`your budget is ${formatUsd(budget)}${party}; ${atThat}, over it before any fees. That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.`);
     } else if (budget != null) {
-      const room = budget - groupFloor;
-      parts.push(`The cheapest ${where} I saw${when} were ${formatUsd(floor)} a ticket before fees; ${q > 1 ? `${countWord(q)} at that price would be ${formatUsd(groupFloor)}` : 'that'}, which leaves ${formatUsd(room)} of your ${formatUsd(budget)} for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.`);
-    } else {
-      parts.push(`The lowest asking price I saw among ${where}${when} was ${formatUsd(floor)} a ticket before fees${q > 1 ? `, ${formatUsd(groupFloor)}${party}` : ''}, anywhere in the venue. That’s where those listings started when I looked, on StubHub and Vivid Seats only, not what particular seats are worth; fees come on top, and it can move either way.`);
+      parts.push(`${atThat}, which leaves ${formatUsd(budget - groupFloor)} of your ${formatUsd(budget)} for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.`);
     }
   }
   const s = m.supply;
@@ -558,20 +547,40 @@ function readClaim(a: BuildPacketArgs, parts: string[], c: MarketContext, s: Mar
   };
 }
 
+/**
+ * Why no watch is running, in their terms, from the reason recorded when it wasn't created (PW-EMAIL-FOCUS-01): a
+ * requirement no alert could honour is said as that, a missing budget as what's needed, anything else plainly.
+ */
+function notWatchingLine(reason: string | null, quantity: number): string {
+  const blocker: Record<string, string> = {
+    sections: 'the sections you need',
+    accessible_seating: 'accessible seating',
+    delivery_deadline: 'when the tickets would be delivered',
+    age_rule: 'the venue’s age policy for your group',
+    entry_rule: 'the venue’s entry policy',
+  };
+  const code = reason?.replace(/^(?:market_)?unverifiable:/, '') ?? null;
+  if (reason && /unverifiable:/.test(reason) && code && blocker[code]) return `I haven’t set up a price watch for this: the resale listing data I can watch doesn’t show ${blocker[code]}, so an alert couldn’t tell you whether seats meet it. Nothing is being monitored.`;
+  if (reason === 'no_budget') return `I haven’t set up a price watch yet: I need the most you’d pay in total for ${quantity === 1 ? 'the ticket' : quantity === 2 ? 'both' : `all ${quantity}`}, fees included, to know what to watch for.`;
+  return 'I can’t watch prices for you yet, so nothing is being monitored for this request and no alert will come. Reply any time and I’ll check again.';
+}
+
 /** At most three questions, each one something that would change the answer and that we don't know yet. */
 function followUpQuestions(a: BuildPacketArgs): string[] {
+  // A watch they asked for gets one next step, the one that unblocks it: the budget when that's what's missing,
+  // otherwise seats of theirs to check (PW-EMAIL-FOCUS-01: screenshot, deadline and risk all asked at once).
+  if (a.watchStatus && !a.quote && !a.subject && !(a.textOffers && a.textOffers.length >= 2)) {
+    const all = a.quantity === 1 ? 'the ticket' : a.quantity === 2 ? 'both' : `all ${a.quantity}`;
+    if (a.priorities.budgetTotalCents === null) return [`What’s the most you’d pay in total for ${all}, fees included?`];
+    if (!a.best) return [a.link && !a.link.eventPage ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?` : 'Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them against what you need.'];
+    return [];
+  }
   const out: string[] = [];
   const sub = a.subject ?? null;
-  // A watch they asked for that isn't running: what they'd need is the one thing to ask, not timing questions
-  // that belong to a buy-or-wait answer (PW-EMAIL-FOCUS-01).
-  const watchAsked = !!a.watchStatus && !a.watchStatus.running;
   if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2)) {
-    // We never open marketplace pages, so a link tells us the event and nothing about the seats or price. The
-    // reply has already said so once when it's a listing; an event page has no listing to ask about.
-    out.push(a.link
-      ? a.link.eventPage
-        ? `Found seats you like on ${a.link.marketplace}? Send me the price and section (a screenshot works) and I’ll check them.`
-        : 'Could you send a screenshot of that listing (price, section, row and delivery date), or tell me the price and section?'
+    // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
+    out.push(a.link && !a.link.eventPage
+      ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
       : 'Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.');
   }
   // A price we had to read as per ticket is asked about, because the answer changes the whole comparison.
@@ -582,11 +591,10 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   // Timing questions only when timing is the open question: not over a delivery or offer question they asked,
   // whose own deadline (a noon departure) is already the one that matters (retest R2-B04).
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
-  const timingMatters = !askedOther && !watchAsked && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
+  const timingMatters = !askedOther && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
   if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
   if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
-  // The all-in total for the party is what a watch would need (CL-07), so that is what's asked.
-  if (askBudget) out.push(watchAsked ? `What’s the most you’d pay in total for ${a.quantity === 1 ? 'the ticket' : countWord(a.quantity)}, fees included? Then I can tell you where the market sits against it.` : 'What’s the most you’d want to pay per ticket?');
+  if (askBudget) out.push('What’s the most you’d want to pay per ticket?');
   return out.slice(0, 3);
 }
 
@@ -1026,7 +1034,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       // "Unless resale is cheaper" only when there is resale in the email to be cheaper; otherwise it reads as a hedge we can't back.
       // The sale being open says nothing about seats: with a budget, access needs or a seat preference, it's a
       // place to look, not a recommendation (TG-B01).
-      text: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference
+      // So is a watch they asked for: they want to wait for a price, so "that's where I'd buy" would answer a
+      // question they didn't ask, and the link stays an event page (PW-EMAIL-FOCUS-01, L01).
+      text: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
         ? `It’s also on general sale on ${a.official.seller}. I haven’t seen those seats or their prices, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
         : a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}, which is where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}, and that’s where I’d buy.`,
       values: { seller: a.official.seller },
@@ -1036,7 +1046,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: ['sale_window_not_inventory'],
       customerVisible: true,
       url: a.official.url,
-      linkLabel: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference ? `Event page on ${a.official.seller}` : `Buy on ${a.official.seller}`,
+      linkLabel: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus ? `Event page on ${a.official.seller}` : `Buy on ${a.official.seller}`,
     });
   }
 
@@ -1181,14 +1191,12 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   }
   // A link to one listing we can't open: said first, so the market figures after it aren't read as that
   // listing's (post-#54 QA, L01).
-  if (a.link && !a.subject && !a.quote && !a.best) {
+  // An event page names the event, which is how it was matched; there's no listing in it to have missed.
+  if (a.link && !a.link.eventPage && !a.subject && !a.quote && !a.best) {
     claims.push({
       id: 'C_LINK_UNREAD',
       kind: 'coverage',
-      // An event page names the event and no seats of theirs: it isn't "the listing you sent" (PW-EMAIL-FOCUS-01).
-      text: a.link.eventPage
-        ? `You sent the ${a.link.marketplace} event page rather than a particular listing, so there are no seats or price of yours to check yet. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}.`
-        : `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
+      text: `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
       values: { marketplace: a.link.marketplace },
       scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -1320,7 +1328,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
         ? `Your market-price watch is on. I haven’t verified a set of ${w.quantity} seats together you can buy. I’ll email you a heads-up if resale listings with ${w.quantity} or more tickets come to ${formatUsd(w.targetTotalCents)} or less in total, using an assumed ${w.market.feeAllowancePct}% for fees (checkout fees can be higher). The heads-up comes from listing prices, so it won’t have a link to the seats or a promise that they’re together or sold as exactly ${w.quantity}. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
         : w.running
         ? `I’m watching this for you: ${w.quantity} tickets${w.togetherRequired ? ' together' : ''}, and I’ll email you if I find them for ${formatUsd(w.targetTotalCents)} or less in total, including fees. The watch ends ${checkedAt(w.expiresAt, a.timeZone)}. Reply “stop” any time to end it.`
-        : 'I can’t watch prices for you yet, so nothing is being monitored for this request and no alert will come. Reply any time and I’ll check again.',
+        : notWatchingLine(w.reason ?? null, a.quantity),
       values: w.running ? { running: 1, quantity: w.quantity, targetTotalCents: w.targetTotalCents, expiresAt: w.expiresAt.toISOString() } : { running: 0 },
       scope: { quantity: w.running ? w.quantity : q, seatZone: null, feeBasis: w.running ? (w.market ? 'listed_price' : 'verified_total') : null, observedAt: obs },
       evidenceIds: [],

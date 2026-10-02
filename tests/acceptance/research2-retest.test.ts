@@ -123,7 +123,7 @@ describe('Research2 retest: age, exclusions, preferences, budget and the decisio
       expect(first!.html).toContain('<strong>Dusky is out: it’s listed as 21+, and your friend is 20.</strong>');
       expect(first!.text).not.toContain('D000105');
       expect(first!.text).not.toMatch(/listing for Dusky|Dusky - 21\+ at Elsewhere/);
-      expect(first!.text).toContain('Here’s the listing for Night Shift: Deep House at Brooklyn Basement, Sat, Oct 3 at 11pm');
+      expect(first!.text).toContain('Here’s the event page for Night Shift: Deep House at Brooklyn Basement, Sat, Oct 3 at 11pm');
       expect(first!.text).toContain('Midnight entry is unverified.');
       expect(first!.text).toContain('Minimum age is unknown: the listing doesn’t state one, and nothing I have does. Confirm it admits a 20-year-old before buying.');
       expect(first!.brief).toMatchObject({ quantity: 2, budgetCents: 12000, budgetBasis: 'whole_party' });

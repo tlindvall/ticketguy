@@ -57,7 +57,9 @@ describe('the advice email reads at a glance', () => {
     if (!r.ok) return;
     const parts = r.textBody.split('\n\n');
     expect(parts[1]).toBe('Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24 · 5 tickets');
-    expect(parts[2]).toMatch(/^My read: the lowest asking price I saw among listings for two together \(checked [^)]+\) was \$130 a ticket before fees, \$650 for five, anywhere in the venue/);
+    // The read gives the judgment; the floor is in the market lines, said once (PW-EMAIL-FOCUS-01).
+    expect(parts[2]).toMatch(/^My read: /);
+    expect(parts[2]).not.toContain('$130');
     expect(parts[3]).toBe('The resale market when I last checked:');
     expect(parts[4]!.split('\n').every((l) => l.startsWith('- '))).toBe(true);
     expect(r.textBody).toContain('- These cover every seat in the venue, so they don’t reflect your preference (“no obstructed views”).');
