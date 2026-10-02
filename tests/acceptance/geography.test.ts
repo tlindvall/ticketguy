@@ -93,7 +93,7 @@ describe('not playing where they asked: the nearest shows elsewhere', () => {
     await interpretAll(h, c);
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     const body = sends.find((s) => s.messageClass === 'clarification')!.bodyText;
-    expect(body).toContain('Metallica isn’t playing in Chicago, and the nearest shows are a trip away.');
+    expect(body).toContain('Metallica isn’t playing in Chicago, and the nearest shows I can find are a trip away.');
     expect(body).toMatch(/Philadelphia \(about [\d,]+ miles from Chicago\)/);
     expect(body).not.toContain('Seattle'); // three nearest to Chicago: the east coast shows, not the west
   });

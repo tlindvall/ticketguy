@@ -158,7 +158,7 @@ export type BuildPacketArgs = {
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
-  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null } | null;
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
@@ -577,7 +577,8 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   }
   const out: string[] = [];
   const sub = a.subject ?? null;
-  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2)) {
+  // "Are they worth it?" has already asked for the price and section in its answer.
+  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2) && !(a.link && a.asks?.worth)) {
     // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link && !a.link.eventPage
       ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
@@ -1176,11 +1177,15 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // "Are they worth it?" about a link we can't open is answered as that question, first: what decides it, what the
+  // market says for their number, and the one thing that gets a straight answer (RP-01).
+  const worthAsked = !!a.link && !!a.asks?.worth && !a.quote && !a.subject && !a.best;
   if (a.link) {
+    const tickets = a.quantity > 1 ? `${countWord(a.quantity)} tickets` : 'one ticket';
     claims.push({
       id: 'C_LINK',
       kind: 'customer_link',
-      text: `Going by the ${a.link.marketplace} link you sent, here’s what I have for ${a.quantity > 1 ? `${countWord(a.quantity)} tickets` : 'one ticket'} to ${a.eventLabel}.`,
+      text: `Going by the ${a.link.marketplace} link you sent, here’s what I have for ${tickets} to ${a.eventLabel}.`,
       values: { marketplace: a.link.marketplace },
       scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -1192,11 +1197,16 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A link to one listing we can't open: said first, so the market figures after it aren't read as that
   // listing's (post-#54 QA, L01).
   // An event page names the event, which is how it was matched; there's no listing in it to have missed.
-  if (a.link && !a.link.eventPage && !a.subject && !a.quote && !a.best) {
+  // The answer to "are they worth it?" takes this place, so it opens the reply ahead of the market figures.
+  const floor = a.market?.visible && a.market.context?.current ? a.market.context.current.priceCents : null;
+  const worth = worthAsked && a.link
+    ? `Whether they’re worth it comes down to what they cost, and I can’t see that: I can’t open ${a.link.marketplace} listings myself, so I don’t know the price or section of the ones you sent.${floor !== null ? ` For ${a.quantity > 1 ? countWord(a.quantity) : 'one'}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${countWord(a.quantity)})` : ''}. If yours are near that for ordinary seats, they’re in line with the market; well above it, there’s cheaper on the same site.` : ''} Send me the price and section (a screenshot works) and I’ll give you a straight answer.`
+    : null;
+  if (a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worth)) {
     claims.push({
       id: 'C_LINK_UNREAD',
       kind: 'coverage',
-      text: `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
+      text: worth ?? `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
       values: { marketplace: a.link.marketplace },
       scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],

@@ -1057,7 +1057,7 @@ export class Concierge {
       const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
-      const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows are a trip away.'}` : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows I can find are a trip away.'}` : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
@@ -1077,7 +1077,7 @@ export class Concierge {
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -2096,14 +2096,17 @@ export class Concierge {
       return (reachable.length ? reachable : sorted).slice(0, 3);
     };
     const local = await load();
-    if (local.length) return local;
+    // What's on file is only the answer when something within reach is on it: a far show cached from an earlier
+    // lookup (Las Vegas) must not stand in for a closer one the provider knows (Hartford, for New York).
+    const withinReach = (shows: NearbyShow[]) => shows.some((s) => s.miles !== null && s.miles <= NEARBY_TRAVEL_MILES);
+    if (local.length && withinReach(local)) return local;
     const discovery = await this.discoveryAvailability();
-    if (!discovery) return [];
+    if (!discovery) return local;
     // "Soon" names no window; a tour stop a few months out, with its date, beats "couldn't find one".
     const win = this.discoveryWindow(x, ctx, 180);
-    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: name, city: null, size: 50, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
+    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: name, city: null, size: 100, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: name.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win, scope: 'national_fallback' } });
-    return sync.status === 'success' || sync.status === 'skipped_fresh' ? load() : [];
+    return sync.status === 'success' || sync.status === 'skipped_fresh' ? load() : local;
   }
 
   /**
@@ -3396,7 +3399,7 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean } {
   const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
@@ -3413,7 +3416,10 @@ export function questionsAsked(text: string): { deliveryRisk: boolean; accessibl
   // larger or smaller?" (live A11-F1): arithmetic on their numbers, answered without any market data.
   const gap = /\bgap\b[^?]{0,80}\b(?:larger|bigger|wider|smaller|narrower)\b/i.test(t) ? /\b(?:another|other|a second|a different|second)\s+(?:offer|listing|seller|price)\b[^.?]{0,40}?\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket)?\s*(before fees|plus fees|excluding fees|including (?:all )?fees|all[- ]in)?/i.exec(t) : null;
   const gapAgainst = gap ? { perTicketCents: Math.round(Number(gap[1]!.replace(/,/g, '')) * 100), beforeFees: /before|plus|excluding/i.test(gap[2] ?? '') } : null;
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst };
+  // "Are they worth it?", "is this a good deal?" about tickets they've picked: answered as that question, never
+  // with market figures alone (live, Oct 1 2026: a StubHub link we can't open).
+  const worth = /\b(?:worth (?:it|the (?:price|money|cost))|good (?:deal|price|value|buy)|fair price|over ?priced|should (?:i|we) (?:buy|get|grab|take) (?:them|these|it|those))\b/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth };
 }
 
 /**
@@ -3524,6 +3530,21 @@ export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtract
 }
 
 const QTY_WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+
+/**
+ * A follow-up that corrects us or asks why we missed something ("they are playing in CT. why would you not suggest
+ * that?", "why didn't you tell me about the CT show before suggesting Las Vegas?") is owned first, in one line, and
+ * never answered with "Got it." as if it were a new request (live, Oct 1 2026: Metallica). The answer follows it.
+ */
+export function ownedMiss(latestText: string): string | null {
+  const t = flat(latestText).replace(/[’‘]/g, "'");
+  const asked = /\bwhy (?:didn't|did not|wouldn't|would|did|do) you (?:not )?(?:tell|mention|say|suggest|show|include|offer|find|list)\b|\byou (?:missed|never (?:mentioned|suggested|showed)|didn't (?:mention|suggest|include|find|show|tell))\b/i.test(t);
+  const corrected = /\bthey(?:'re| are) (?:playing|performing|on) (?:in|at)\b|\bthere(?:'s| is) (?:a|one) (?:show|date|game) (?:in|at)\b|\bwhat about (?:the )?(?:show|date|game|one) (?:in|at)\b/i.test(t);
+  if (!asked && !corrected) return null;
+  return asked && /\bbefore\b|\binstead\b|\bfurther\b|\bfar\b/i.test(t)
+    ? 'You’re right, I missed that, and I should have checked the whole tour before suggesting anything further away. Here’s what I have now.'
+    : 'You’re right, I missed that. Here’s what I have now.';
+}
 
 /** One sentence playing back the request — "Two Rangers tickets next week, up to $200 total—got it." */
 export function acknowledgementLine(x: RequestExtraction): string {

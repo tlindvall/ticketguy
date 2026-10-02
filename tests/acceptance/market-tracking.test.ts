@@ -163,6 +163,34 @@ describe('resale market tracking', () => {
     expect(rec!.bodyHtml).toContain('<ul');
   });
 
+  // Live, Oct 1 2026: "I like the tickets I sent. are they worth it?" about a StubHub link got the market summary
+  // and no answer. The question is answered first: what decides it, where the market sits for their number, and
+  // the one thing (price and section) that gets a straight call.
+  it('"are they worth it?" about a link we can’t open is answered as that question, first', async () => {
+    const c = concierge();
+    const first = inbound({ text: 'https://www.stubhub.com/metro-testers-new-york-tickets-10-30-2026/event/555/?quantity=2&listingId=777', from: 'worth@customer.example', subject: 'Testers' });
+    const r = (await c.ingestInbound(first)) as { requestId: string };
+    const run = async () => {
+      for (const ev of (await leaseDueOutbox(h.db, { limit: 50, now })).filter((e) => e.eventType === 'request.interpret')) {
+        const p = ev.payload as Record<string, string>;
+        await c.interpret({ messageId: p.messageId!, requestId: p.requestId! });
+        await markDispatched(h.db, ev.id, ev.leaseToken, now);
+      }
+    };
+    await run();
+    await c.research({ requestId: r.requestId, revision: 1 });
+    await c.ingestInbound(inbound({ text: 'I like the tickets I sent. are they worth it?', from: 'worth@customer.example', subject: 'Re: Testers', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await run();
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+    await c.research({ requestId: r.requestId, revision: req!.currentRevision });
+    const recs = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
+    const body = recs.at(-1)!.bodyText;
+    const lead = body.split('\n\n')[2]!;
+    expect(lead).toBe('Whether they’re worth it comes down to what they cost, and I can’t see that: I can’t open StubHub listings myself, so I don’t know the price or section of the ones you sent. For two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two). If yours are near that for ordinary seats, they’re in line with the market; well above it, there’s cheaper on the same site. Send me the price and section (a screenshot works) and I’ll give you a straight answer.');
+    expect(body.match(/I can’t open StubHub listings myself/g)).toHaveLength(1);
+    expect(body).not.toContain('Going by the StubHub link you sent');
+  });
+
   // A price under the cheapest resale listing used to read "a good price if it's genuine". It is a reason to
   // look closer, and a price well above it is not a bargain; neither is a verified offer.
   it('a price the customer asks about is set against the resale floor without calling it a deal', async () => {
