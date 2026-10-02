@@ -55,6 +55,12 @@ export type AdvicePacket = {
   followUps?: string[];
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
   headline?: string;
+  /**
+   * The same line in two parts for the email's header: the event as its title, then where, when, the party and
+   * the budget in a lighter line under it. Run together in bold it wrapped into a block (live Red Wings email).
+   */
+  headlineTitle?: string;
+  headlineDetails?: string;
   evidenceExpiresAt: string | null;
   /** The occurrence this advice was written for; approval and send check the event still has it (R2-LIFECYCLE-01). */
   eventStartAt?: string | null;
@@ -78,6 +84,8 @@ export type BuildPacketArgs = {
   revision: number;
   quantity: number;
   eventLabel: string; // "New York Rangers vs ... — Madison Square Garden, Oct 3 7:00 PM ET"
+  /** The label's parts (`eventLabelParts`): the event, where it is, and when. */
+  eventParts?: { title: string; where: string; when: string };
   best: Evaluated | null;
   alternatives: Evaluated[]; // up to 2, different seat class or clearly labeled
   entryReference: Evaluated | null; // single-seat reference if verified
@@ -463,6 +471,8 @@ export function checkedAt(d: Date, timeZone = 'America/New_York'): string {
 
 const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const countWord = (n: number) => COUNT_WORDS[n] ?? String(n);
+/** 1,928, not 1928. */
+const count = (n: number) => n.toLocaleString('en-US');
 
 /**
  * What the market figures mean for this customer, in one or two plain sentences: what a fair price is for
@@ -581,7 +591,7 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
     // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link && !a.link.eventPage
       ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
-      : 'Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.');
+      : 'Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them.');
   }
   // A price we had to read as per ticket is asked about, because the answer changes the whole comparison.
   if (a.quote?.assumedPerTicket && a.quantity > 1 && (a.quote.source === 'screenshot' || a.quote.source === 'listing_text')) out.push(`Is ${formatUsd(a.quote.perTicketCents)} the price per ticket, or for all ${a.quantity}?`);
@@ -594,7 +604,9 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   const timingMatters = !askedOther && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
   if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
   if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
-  if (askBudget) out.push('What’s the most you’d want to pay per ticket?');
+  // A total with fees, as the watch asks and as every comparison is made: "per ticket" for five left the fees
+  // and the arithmetic to them (live Red Wings email).
+  if (askBudget) out.push(`What’s the most you’d pay in total for ${a.quantity === 1 ? 'the ticket' : a.quantity === 2 ? 'both' : `all ${a.quantity}`}, fees included?`);
   return out.slice(0, 3);
 }
 
@@ -614,9 +626,9 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const common = { evidenceIds: [], methodVersion: c?.methodVersion ?? 'market-1.0', customerVisible: m.visible };
   const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
   const size = m.basis ? basisSize(m.basis) : q;
-  const moved = (s: MarketContext['supply']) => s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? `, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${s.before} over the last ${s.hours} hours` : '';
+  const moved = (s: MarketContext['supply']) => s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? `, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${count(s.before)} over the last ${s.hours} hours` : '';
   const supplyText = (s: MarketContext['supply']) =>
-    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${s.now} listing${s.now === 1 ? ' has' : 's have'} ${group} or more tickets${moved(s)}.` : ` About ${s.now} listing${s.now === 1 ? ' is' : 's are'} up${moved(s)}.`;
+    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${count(s.now)} listing${s.now === 1 ? ' has' : 's have'} ${group} or more tickets${moved(s)}.` : ` About ${count(s.now)} listing${s.now === 1 ? ' is' : 's are'} up${moved(s)}.`;
   // A group's series starts at the first listings read, so its current floor is worth saying before there is a trend.
   const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
   if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
@@ -634,7 +646,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       items: [
         `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' for two together' : ''}, checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
         ...(m.supply.now !== null
-          ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${m.supply.now} resale listings in all${moved(m.supply)}.`]
+          ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${count(m.supply.now)} resale listings in all${moved(m.supply)}.`]
           : []),
         ...(a.seatingPreference ? [wholeVenue(a.seatingPreference ?? null).trim()] : []),
       ],
@@ -673,7 +685,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     out.push({
       id: 'C_MARKET',
       kind: 'market_supply',
-      text: `There are about ${m.supply.now} resale listings for this ${a.eventNoun ?? 'game'}${m.supply.before !== null && m.supply.hours !== null && m.supply.trend !== 'stable' && m.supply.trend !== 'unknown' ? `, ${m.supply.trend === 'shrinking' ? 'down' : 'up'} from ${m.supply.before} over the last ${m.supply.hours} hours` : ''}. That counts all listings, not blocks of ${q} seats together.`,
+      text: `There are about ${count(m.supply.now)} resale listings for this ${a.eventNoun ?? 'game'}${moved(m.supply)}. That counts all listings, not blocks of ${q} seats together.`,
       values: { listings: m.supply.now, listingsBefore: m.supply.before, trend: m.supply.trend },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       limitations: ['all_listings_not_group_blocks'],
@@ -954,6 +966,39 @@ export function quoteVerdict(perTicketCents: number, face: { minCents: number; m
   if (perTicketCents <= face.maxCents) return 'within';
   if (perTicketCents <= Math.round(face.maxCents * 1.35)) return 'fees';
   return 'markup';
+}
+
+/**
+ * "Tonight" or "Today" for a game later the same local day: the one timing fact a same-day buyer needs up top. Not
+ * "in about 3 hours", which goes stale while a draft waits for review; a day word stays true until the start.
+ */
+export function sameDay(start: Date | null | undefined, now: Date, tz: string | undefined): 'Tonight' | 'Today' | null {
+  if (!start || !tz || start.getTime() <= now.getTime()) return null;
+  const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  if (day(start) !== day(now)) return null;
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hourCycle: 'h23' }).format(start));
+  return hour >= 17 ? 'Tonight' : 'Today';
+}
+
+/**
+ * The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1). A "budget"
+ * that is just the price they showed us ($210 each, four tickets) is not said back as one. "From the StubHub link
+ * you sent" only for a listing: an event page told us the game and nothing else, and the line said so for no reason.
+ */
+function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headlineTitle' | 'headlineDetails'> {
+  const budget = a.priorities.budgetTotalCents;
+  const party = a.quantity === 1 ? '1 ticket' : `${a.quantity} tickets`;
+  const brief = [
+    party,
+    ...(budget != null && budget !== (a.quote ? a.quote.perTicketCents * a.quantity : null) && budget !== (a.subject?.wholePartyCents ?? null) && !(a.textOffers ?? []).some((o) => (o.totalCents ?? (o.perTicketCents ?? -1) * a.quantity) === budget) ? [`up to ${formatUsd(budget)} in total`] : []),
+    ...(a.link && !a.link.eventPage ? [`from the ${a.link.marketplace} link you sent`] : []),
+  ];
+  const soon = sameDay(a.eventStartAt, a.observedAt, a.timeZone);
+  const parts = a.eventParts;
+  return {
+    headline: [a.eventLabel, ...brief].join(' · '),
+    ...(parts ? { headlineTitle: parts.title, headlineDetails: [parts.where, soon ? `${soon}, ${parts.when}` : parts.when, ...brief].join(' · ') } : {}),
+  };
 }
 
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
@@ -1358,7 +1403,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     kind: 'coverage',
     text: noMarket
       ? marketShown
-        ? `Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked, and they can move quickly.`
+        ? market.some((c) => c.customerVisible && c.kind === 'market_price')
+          ? `Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked, and they can move quickly.`
+          // Only a count is shown: calling it "resale prices" described numbers the email doesn't have (live Red Wings email).
+          : `That count is from StubHub and Vivid Seats. It isn’t seats I’ve checked, and it can move quickly.`
         : `I can’t see live resale listings for this ${a.eventNoun ?? 'event'} yet, so this doesn’t compare other sellers’ prices.`
       : `Checked: ${a.sourcesChecked.join(', ')}.${failed.length ? ` Couldn’t reach: ${failed.join(', ')}.` : ''} Prices can change before checkout.`,
     values: { checked: a.sourcesChecked.length, unavailable: unavailable.length },
@@ -1482,7 +1530,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     followUps: a.synthetic || a.asks?.parking || comparing ? [] : followUpQuestions(a),
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
-    headline: `${a.eventLabel} · ${a.quantity === 1 ? '1 ticket' : `${a.quantity} tickets`}${a.priorities.budgetTotalCents != null && a.priorities.budgetTotalCents !== (a.quote ? a.quote.perTicketCents * a.quantity : null) && a.priorities.budgetTotalCents !== (a.subject?.wholePartyCents ?? null) && !(a.textOffers ?? []).some((o) => (o.totalCents ?? (o.perTicketCents ?? -1) * a.quantity) === a.priorities.budgetTotalCents) ? ` · up to ${formatUsd(a.priorities.budgetTotalCents)} in total` : ''}${a.link ? ` · from the ${a.link.marketplace} link you sent` : ''}`,
+    ...headlineFor(a),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,

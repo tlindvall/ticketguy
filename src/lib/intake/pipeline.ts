@@ -2563,7 +2563,7 @@ export class Concierge {
     const [opponent] = shown && event.opponentEntityId ? await this.db.select().from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
     const performers = [ent, opponent].filter((x): x is NonNullable<typeof x> => !!x);
     const eventIdentity = shown ? { names: [...performers.flatMap((x) => [x.name, ...x.aliases]), event.name], nicknames: performers.filter((x) => x.kind === 'team').map((x) => teamNickname(x.name)), venueNames: [venue.name, ...venue.aliases], city: venue.city } : null;
-    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), eventParts: eventLabelParts(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];
@@ -3550,11 +3550,17 @@ export function marketAlertFresh(m: { observedAt: string }, now: Date): boolean 
 }
 
 export function eventLabel(e: { name: string; localStartAt: Date; doorsAt?: Date | null }, v: { name: string; city: string | null; timezone: string }): string {
+  const p = eventLabelParts(e, v);
+  return `${p.title} at ${p.where}, ${p.when}`;
+}
+
+/** The event, where it is ("Little Caesars Arena, Detroit") and when, with doors when we know them. */
+export function eventLabelParts(e: { name: string; localStartAt: Date; doorsAt?: Date | null }, v: { name: string; city: string | null; timezone: string }): { title: string; where: string; when: string } {
   const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
   // Doors and the show are different times, and neither is inferred from the other (live A04-F1: "8pm" was doors).
   const at = (d: Date) => new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(d);
   const doors = e.doorsAt ? (e.doorsAt.getTime() < e.localStartAt.getTime() ? ` (doors ${at(e.doorsAt)})` : e.doorsAt.getTime() === e.localStartAt.getTime() ? ' (that’s when doors open; the show starts later)' : '') : '';
-  return `${e.name} at ${v.name}${v.city ? `, ${v.city}` : ''}, ${when}${doors}`;
+  return { title: e.name, where: `${v.name}${v.city ? `, ${v.city}` : ''}`, when: `${when}${doors}` };
 }
 
 /**
