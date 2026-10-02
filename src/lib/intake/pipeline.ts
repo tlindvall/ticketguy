@@ -1927,21 +1927,35 @@ export class Concierge {
    * "rangers". More than one hit is a real ambiguity (two teams share the nickname), not a bug.
    */
   private async matchEntities(performerOrTeam: string): Promise<Array<typeof t.entities.$inferSelect>> {
+    const [first, rest] = await this.entityTiers(performerOrTeam);
+    return first ?? rest ?? [];
+  }
+
+  /**
+   * Catalog entities for a name, in the order to try them: exact names and nicknames ("rangers" is the New York and
+   * the Texas Rangers, not also "New York Rangers Alumni"), then the rest. In the rest, a name that starts with
+   * the word ("Hamilton (NY)") comes before one that merely contains it ("Anthony Hamilton"), and one with
+   * something scheduled before one without. Ten names in alphabetical order used to be all that was looked at, and
+   * "Hamilton" is a surname: a dozen artists sorted ahead of the show and it was never seen (Oct 2 live).
+   */
+  private async entityTiers(performerOrTeam: string): Promise<Array<Array<typeof t.entities.$inferSelect>>> {
     const kw = performerOrTeam.trim().toLowerCase();
     if (!kw) return [];
     const like = `%${kw}%`;
+    const now = this.now().toISOString();
     const rows = await this.db
-      .select()
+      .select({ entity: t.entities, upcoming: sql<boolean>`exists (select 1 from ${t.events} where ${t.events.primaryEntityId} = ${t.entities.id} and ${t.events.status} = 'scheduled' and ${t.events.localStartAt} >= ${now}::timestamptz)` })
       .from(t.entities)
       .where(sql`lower(${t.entities.name}) = ${kw}
         or exists (select 1 from jsonb_array_elements_text(${t.entities.aliases}) a where lower(a) = ${kw})
         or lower(${t.entities.name}) like ${like}`)
-      .orderBy(asc(t.entities.name))
-      .limit(10);
-    // An exact name or nickname beats a name that merely contains the word: "rangers" is the New York and the
-    // Texas Rangers, not also "New York Rangers Alumni". Containment is the fallback when nothing is exact.
-    const exact = rows.filter((r) => r.name.toLowerCase() === kw || (r.aliases ?? []).some((a) => a.toLowerCase() === kw));
-    return exact.length ? exact : rows;
+      .limit(200);
+    const isExact = (r: (typeof rows)[number]) => r.entity.name.toLowerCase() === kw || (r.entity.aliases ?? []).some((a) => a.toLowerCase() === kw);
+    const startsWith = (r: (typeof rows)[number]) => r.entity.name.toLowerCase().startsWith(kw) && !/^[a-z0-9]/.test(r.entity.name.toLowerCase().slice(kw.length));
+    const rank = (r: (typeof rows)[number]) => (startsWith(r) ? 0 : 2) + (r.upcoming ? 0 : 1);
+    const exact = rows.filter(isExact).sort((a, b) => a.entity.name.localeCompare(b.entity.name)).map((r) => r.entity);
+    const rest = rows.filter((r) => !isExact(r)).sort((a, b) => rank(a) - rank(b) || a.entity.name.localeCompare(b.entity.name)).slice(0, 10).map((r) => r.entity);
+    return [exact, rest].filter((x) => x.length);
   }
 
   async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null, depth = 0): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
@@ -2049,17 +2063,19 @@ export class Concierge {
     let perEntity: Array<{ entity: typeof t.entities.$inferSelect; cands: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }> }> = [];
     let sawEntity = false;
     for (const attempt of attempts) {
-      const entities = await this.matchEntities(attempt.name);
-      if (!entities.length) continue;
-      sawEntity = true;
-      perEntity = [];
-      for (const entity of entities) {
-        const loaded = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
-        // Home as the team's market says, not as a synced name implied: rows written before the sync learned this are
-        // read the same way (TGQA-R8 S03), so "home game at Xfinity Mobile Arena?" is never asked.
-        const homeMk = entity.kind === 'team' ? teamHomeMarket(entity.name) : null;
-        const rows = homeMk ? loaded.map((r) => (r.e.isHome !== false && entity.homeVenueId !== r.v.id && !inMarket(r.v, homeMk) ? { ...r, e: { ...r.e, isHome: false } } : r)) : loaded;
-        perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team', attempt.opponent, entity) });
+      // Exact names first; the rest only when no exact name has an event that fits.
+      for (const entities of await this.entityTiers(attempt.name)) {
+        sawEntity = true;
+        perEntity = [];
+        for (const entity of entities) {
+          const loaded = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+          // Home as the team's market says, not as a synced name implied: rows written before the sync learned this are
+          // read the same way (TGQA-R8 S03), so "home game at Xfinity Mobile Arena?" is never asked.
+          const homeMk = entity.kind === 'team' ? teamHomeMarket(entity.name) : null;
+          const rows = homeMk ? loaded.map((r) => (r.e.isHome !== false && entity.homeVenueId !== r.v.id && !inMarket(r.v, homeMk) ? { ...r, e: { ...r.e, isHome: false } } : r)) : loaded;
+          perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team', attempt.opponent, entity) });
+        }
+        if (perEntity.some((p) => p.cands.length > 0)) break;
       }
       if (perEntity.some((p) => p.cands.length > 0)) break;
     }
