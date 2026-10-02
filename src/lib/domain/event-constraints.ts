@@ -125,10 +125,10 @@ function weekdaysIn(t: string): { weekdays: number[] | null; notWeekdays: number
   // Friday called a weekend match (TGQA-R8 S04).
   if (/\b(?:this|next|the|that|a)\s+weekend\b|\bover the weekend\b/i.test(t)) return { weekdays: [6, 0], notWeekdays };
   if (/\bweekdays?\s+only\b|\bnot\s+(?:on\s+)?(?:a\s+|the\s+)?weekends?\b/i.test(t)) return { weekdays: [1, 2, 3, 4, 5], notWeekdays };
-  // "Saturday October 3 ONLY", "any Friday": that day of the week.
-  const only = new RegExp(`\\b${DAY_RE}\\b[^.?!]{0,30}?\\bonly\\b|\\bonly\\s+(?:on\\s+)?${DAY_RE}\\b|\\bany\\s+${DAY_RE}\\b`, 'i').exec(t);
+  // "Saturday October 3 ONLY", "any Friday", "Saturday works better", "let's do Saturday": that day of the week.
+  const only = new RegExp(`\\b${DAY_RE}\\b[^.?!]{0,30}?\\bonly\\b|\\bonly\\s+(?:on\\s+)?${DAY_RE}\\b|\\bany\\s+${DAY_RE}\\b|\\b${DAY_RE}\\s+(?:works|is|would be|suits)\\s+(?:better|best|fine|good|easier|us)\\b|\\b(?:let'?s do|make it|go with|do)\\s+${DAY_RE}\\b(?!\\s+\\d)|\\b${DAY_RE}\\s+then\\b`, 'i').exec(t);
   if (only) {
-    const w = (only[1] ?? only[2] ?? only[3])!;
+    const w = only.slice(1).find((x) => !!x)!;
     return { weekdays: [dayIndex(w)], notWeekdays };
   }
   return { weekdays: null, notWeekdays };
@@ -211,7 +211,7 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     if (excluded.size) out.excludedVenues = [...excluded];
     // A venue they'd like, not one they insist on: "Prefer Elsewhere or Nowadays, but another Brooklyn venue is
     // fine" is where to start, never a fence around the search (R2-CONCERT-PREFERENCE-01). "Only at Elsewhere" is.
-    const soft = new Set(mentioned.filter((v) => v.names.some((n) => lower.split(/[.;!?]/).some((s0) => s0.includes(n) && /\b(?:prefer(?:ably|red)?|ideally|if possible|such as|something like|or (?:a |another |any )?(?:similar|other)|(?:another|any other|other) [\w ]{0,20}(?:venue|club|place|room)s? (?:is|are|would be) (?:fine|ok|okay|good))\b/.test(s0) && !/\bonly\b/.test(s0)))).map((v) => v.canonical));
+    const soft = new Set(mentioned.filter((v) => v.names.some((n) => lower.split(/[.;!?]/).some((s0) => s0.includes(n) && /\b(?:prefer(?:ably|red|ences?)?|ideally|if possible|such as|something like|not (?:a )?requirements?|or (?:a |another |any )?(?:similar|other)|(?:another|any other|other) [\w ]{0,20}(?:venue|club|place|room)s? (?:is|are|would be) (?:fine|ok|okay|good))\b/.test(s0) && !/\bonly\b/.test(s0)))).map((v) => v.canonical));
     const named = [...new Set(mentioned.filter((v) => !excluded.has(v.canonical) && !soft.has(v.canonical) && v.names.some((n) => new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${nameRe(n)}`, 'i').test(lower))).map((v) => v.canonical))];
     if (named.length) out.venueTerms = named;
     if (out.venueTerms) out.venueTerms = out.venueTerms.filter((n) => !out.excludedVenues.includes(n));

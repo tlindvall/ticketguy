@@ -301,7 +301,8 @@ export function offersInText(text: string, venueTz = 'America/New_York', minimum
       tier: TIER.exec(seg)?.[0]?.toLowerCase().replace(/^the /, '') ?? null,
       together: /\bnot together\b|\bnot (?:adjacent|next to each other|side by side)\b|\bdifferent rows\b|\bsplit (?:up|across)\b|\b(?:separate|scattered|single)\s+(?:singles|seats)\b|\bsingles\b|\bscattered\b|\b(?:two|2|adjacent)\s+(?:adjacent\s+)?pairs\b/i.test(seg) ? false : /\b(?:together|adjacent)\b/i.test(seg) ? true : null,
       pairs: /\b(?:two|2)\s+(?:adjacent\s+)?pairs\b|\bin (?:adjacent )?pairs\b/i.test(seg),
-      section: /\bsection\s+([A-Za-z0-9]+)\b/i.exec(seg)?.[1] ?? null,
+      // "same section and together" names no section (live F01 printed "section and").
+      section: /\bsection\s+(?!(?:and|or|the|as|is|with|to|row|row|but|too)\b)([A-Za-z0-9]+)\b/i.exec(seg)?.[1] ?? null,
       row: /\brow\s+([A-Za-z0-9]+)\b/i.exec(seg)?.[1] ?? null,
       deliveryStated: !!shared || DELIVERY.test(seg),
       deliveryMinutes: own ? toVenueMinutes(own.minutes, own.zone, venueTz) : null,

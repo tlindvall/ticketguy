@@ -592,10 +592,12 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   // Timing questions only when timing is the open question: not over a delivery or offer question they asked,
   // whose own deadline (a noon departure) is already the one that matters (retest R2-B04).
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
-  const timingMatters = !askedOther && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
+  // Judging an offer they've picked is one question; the buy-or-wait questions can wait for its price (live R07).
+  const timingMatters = !askedOther && !(a.link && a.asks?.worth) && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
   if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
   if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
-  if (askBudget) out.push('What’s the most you’d want to pay per ticket?');
+  // Judging an offer they've already picked needs its price, not a budget (live R07).
+  if (askBudget && !(a.link && a.asks?.worth)) out.push('What’s the most you’d want to pay per ticket?');
   return out.slice(0, 3);
 }
 
@@ -621,7 +623,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   // A group's series starts at the first listings read, so its current floor is worth saying before there is a trend.
   const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
   if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
-    const what = m.basis === 'pair' ? 'for two tickets together' : group !== null ? `with ${group} or more tickets` : 'for a single ticket';
+    const what = m.basis === 'pair' ? 'with two or more tickets' : group !== null ? `with ${group} or more tickets` : 'for a single ticket';
     // "Currently" only when the figure is recent; otherwise its age, so a day-old floor isn't passed off as now.
     const ageHours = Math.round((a.observedAt.getTime() - c.current.at.getTime()) / 3_600_000);
     const lead = ageHours < MARKET_RECENT_HOURS ? `Resale listings ${what} currently start at` : `As of about ${ageHours} hours ago, resale listings ${what} started at`;
@@ -633,7 +635,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       kind: 'market_price',
       text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${wholeVenue(a.seatingPreference ?? null)}`,
       items: [
-        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' for two together' : ''}, checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
+        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' with two or more tickets' : ''}, checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
         ...(m.supply.now !== null
           ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${m.supply.now} resale listings in all${moved(m.supply)}.`]
           : []),
@@ -648,7 +650,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       out.push({
         id: 'C_MARKET_TYPICAL',
         kind: 'market_benchmark',
-        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price for two together' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)} to ${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
+        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price with two or more tickets' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)} to ${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
         values: { events: c.typical.events, p25Cents: c.typical.p25Cents, medianCents: c.typical.medianCents, p75Cents: c.typical.p75Cents },
         scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: obs },
         limitations: ['listed_prices_before_fees', 'comparable_games_same_venue'],
@@ -848,6 +850,12 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefo
       ? `Looking at ${best.o.name} on its own, with nothing from ${setAside} applied: it meets what you asked for, at ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`
       : `${Name(best.o)} ${open.length ? 'is the straightforward choice if you’d rather skip another checkout' : fits.length > 1 ? 'wins this one' : 'is the one that meets what you asked for'}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`;
     const bits: string[] = [];
+    // The saving against the other offer is said whichever way the other fell: "$60 less than Offer A" answers
+    // "what is the price difference?" even when Offer A is over the cap (live F01).
+    if (!alone && fits.length === 1) {
+      const rival = rows.filter((r) => r !== best && r.tot && r.tot.cents > best.tot!.cents).sort((x, y) => x.tot!.cents - y.tot!.cents)[0];
+      if (rival) bits.push(`That’s ${formatUsd(rival.tot!.cents - best.tot!.cents)} less than ${Name(rival.o)}.`);
+    }
     if (terms.concertAdmission && fits.length === 1) for (const r of rows.filter((r) => r !== best)) {
       // Admission only when it's excluded: an unknown one is "confirm first", not a reason to skip.
       const unusable = r.why.find((w) => ['availability', 'day', 'transfer', 'view', 'short'].includes(w.kind) || (w.kind === 'admission' && r.o.admission === 'excluded'));
@@ -1199,8 +1207,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // An event page names the event, which is how it was matched; there's no listing in it to have missed.
   // The answer to "are they worth it?" takes this place, so it opens the reply ahead of the market figures.
   const floor = a.market?.visible && a.market.context?.current ? a.market.context.current.priceCents : null;
+  const ctxAge = a.market?.context?.current ? Math.round((a.observedAt.getTime() - a.market.context.current.at.getTime()) / 3_600_000) : null;
+  const moving = a.market?.context?.direction === 'down' ? 'easing' : a.market?.context?.direction === 'up' ? 'climbing' : 'about where it was a few days ago';
   const worth = worthAsked && a.link
-    ? `Whether they’re worth it comes down to what they cost, and I can’t see that: I can’t open ${a.link.marketplace} listings myself, so I don’t know the price or section of the ones you sent.${floor !== null ? ` For ${a.quantity > 1 ? countWord(a.quantity) : 'one'}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${countWord(a.quantity)})` : ''}. If yours are near that for ordinary seats, they’re in line with the market; well above it, there’s cheaper on the same site.` : ''} Send me the price and section (a screenshot works) and I’ll give you a straight answer.`
+    ? `Whether they’re worth it comes down to what they cost, and I can’t see that: I can’t open ${a.link.marketplace} listings myself, so I don’t know the price or section of the ones you sent.${floor !== null ? ` For ${a.quantity > 1 ? countWord(a.quantity) : 'one'}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${countWord(a.quantity)})` : ''}, from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}; that’s context, not enough on its own to say buy now or hold off.` : ''} Send me a screenshot showing the price with fees and the section and row, and I’ll give you a straight answer.`
     : null;
   if (a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worth)) {
     claims.push({

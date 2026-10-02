@@ -1050,7 +1050,10 @@ export class Concierge {
         : null;
       // One ask per missing thing: the event question already covers its date and place (TGQA-R8 S08).
       const coveredByEvent = (k: string) => k.startsWith('date_') || k.startsWith('event_') || k === 'performer_ambiguous';
-      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
+      // "The best tickets" names no goal: best view, best value or lowest price is the question that decides the
+      // answer, asked beside the event and party (live F06; master CL-05).
+      const bestAsk = /\bbest (?:tickets?|seats?)\b/i.test(flat(latestText)) && !/\b(?:view|value|cheap(?:est)?|lowest|price|closest|front|sightline)\b/i.test(flat(latestText)) ? 'Are you after the best view, the best value, or the lowest price?' : null;
+      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(bestAsk ? [bestAsk] : []), ...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       // Asked once, on the first reply in the thread, not on every follow-up (Research 1).
@@ -1627,6 +1630,13 @@ export class Concierge {
     const noLater = bounded || (!laterOk && !assumedWindow && nights);
     win ??= { from: today, to: day(today, 13) };
     if (win.from < today) win = { from: today, to: win.to };
+    // "Saturday works better" after "Friday Oct 2 or Saturday Oct 3": the window is that day of the window, so the
+    // reply names the night they chose, not the pair (live F03).
+    if (rules.weekdays?.length === 1 && Date.parse(win.to) - Date.parse(win.from) <= 7 * 86_400_000) {
+      const days: string[] = [];
+      for (let d = win.from; d <= win.to; d = day(d, 1)) if (new Date(`${d}T12:00:00Z`).getUTCDay() === rules.weekdays[0]) days.push(d);
+      if (days.length) win = { from: days[0]!, to: days.at(-1)! };
+    }
 
     // The borough they named and the kind of music narrow the list; either is dropped, and the reply says so,
     // when nothing on file fits it.
@@ -1728,6 +1738,23 @@ export class Concierge {
     // it is shown as the one option, and only the number is asked.
     // One show with many dates is not one match: which night is still theirs to pick.
     const single = !more && !after && events.length === 1 && !runOf.get(events[0]!.e.id)?.moreDates && genreKept && areaKept;
+    // A follow-up that asks us to choose is a decision, not another menu ("Which remaining option would you pick?
+    // Don't ask me the genre or dates again", live F02/F04): the closest candidate goes on to research as the pick,
+    // with its reason and the others named, so the checks they asked for are run rather than offered again.
+    const chooseNow = !single && !more && !after && revision > 1 && events.length > 1 && merged.quantity !== null && genreKept && areaKept && ASKED_CHOICE.test(flat(threadMsgs.at(-1) ?? '').replace(/[’‘]/g, "'"));
+    if (chooseNow) {
+      const score = (x: (typeof events)[number]) => genreFitScore(x.e.genre, merged.genreHint);
+      const ordered = [...events].sort((a, b) => score(b) - score(a) || a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
+      const top = ordered[0]!;
+      const clear = score(top) > Math.max(...ordered.slice(1).map(score));
+      const when = (x: (typeof events)[number]) => new Intl.DateTimeFormat('en-US', { timeZone: x.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(x.e.localStartAt);
+      const others = ordered.slice(1, 3).map((x) => `${readableTitle(x.e.name)} at ${x.v.name} (${when(x)})`);
+      const why = clear ? `it’s listed as ${(top.e.genre ?? '').split(' / ')[1] ?? 'the closest kind'}, the closest to what you asked for` : 'on what’s listed they’re equally close, so I’ve started with the earliest';
+      const pending = unverifiedRequirements(merged, threadText);
+      const note = `You asked me to pick, so I’ve gone with ${readableTitle(top.e.name)} at ${top.v.name}, ${when(top)}: ${why}.${others.length ? ` The other${others.length > 1 ? 's' : ''} I had: ${others.join('; ')}. Say the word and I’ll switch.` : ''}${pending.length ? ` Not checked yet: ${joinRequirements(pending.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}; I’m checking now.` : ''}`;
+      const ageFirst = within.ageOut[0];
+      return { lead: ageFirst ? `${withoutAgeTag(ageFirst.e.name)} is out: ${ageRuledOut(ageFirst.e.name, ageLimits)}.` : null, pick: top, note };
+    }
     if (single && merged.quantity !== null) {
       const only = events[0]!;
       // What we found, not a claim about everything on in the city (live G02: "the only show in Manhattan").
@@ -1800,12 +1827,12 @@ export class Concierge {
     const unchecked = answer && toCheck.length && !(genre && !events.length) && !broadened ? `Not checked yet for any of these: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
     // "Tell me which you'd choose": named only when one is plainly closer on what's on file; otherwise the checks
     // decide, and the reply says so rather than picking at random (R1-DISCOVERY-CLOSURE-01).
-    const askedChoice = /\bwhich (?:one |option |event |show )?(?:you'?d|would you|you would) (?:pick|choose|go for|recommend)\b|\btell me which you'?d\b|\bwhich (?:one|option|event|show) would you (?:pick|choose)\b|\bchoose (?:for us|one for us)\b|\b(?:what|which) would you (?:pick|choose)\b|\bwhich event could work\b/i.test(flat(threadText).replace(/[’‘]/g, "'"));
+    const askedChoice = ASKED_CHOICE.test(flat(threadText).replace(/[’‘]/g, "'"));
     const fit = shown.map((x) => genreFitScore(x.e.genre, merged.genreHint));
     const choice = askedChoice && shown.length > 1 && toCheck.length
       ? fit[0]! > Math.max(...fit.slice(1)) ? `If I start with one, it’s ${shown[0]!.e.name}: it’s listed as ${(shown[0]!.e.genre ?? '').split(' / ')[1] ?? genreAsked}, the closest to what you asked for. That’s where I’d begin, not a reason to buy before the checks.` : 'On what’s listed they’re equally close, so the checks will decide between them.'
       : null;
-    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${cityCore && v.city && !inCityCore(v, market) ? ` (${v.city})` : ''}`);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${v.city && ((cityCore && !inCityCore(v, market)) || (strictCore && v.city.toLowerCase() !== market.label.toLowerCase())) ? ` (${v.city})` : ''}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && (genreKept || bounded) ? genre.label : browseLabel(merged.categoryHint);
     const place = areaUsed?.label ?? market.label;
@@ -3801,6 +3828,9 @@ export function exclusionsIn(text: string): Exclusion[] {
     if (/\btribute/i.test(clause)) out.add('tribute');
     if (/\b(?:kids?|kids'|children'?s?|family|families|all[- ]ages)\b/i.test(clause)) out.add('kids');
   }
+  // "A mainstream pop concert", "original artist events": the act itself, not someone playing its songs (live F02:
+  // a tribute night was picked as the closest mainstream pop).
+  if (/\bmainstream\b|\boriginal (?:artists?|acts?|bands?)\b|\bheadline (?:act|artist|show)\b/i.test(t)) out.add('tribute');
   return [...out];
 }
 function excludedBy(k: Exclusion, e: { name: string; genre: string | null; category: string }): boolean {
@@ -4038,6 +4068,8 @@ const GENRE_SUBS: Record<string, string[]> = { country: ['americana', 'bluegrass
 /** The customer said other kinds of music are fine: a named genre with nothing on may widen to everything else. */
 const BROADEN_OK = /\b(?:or anything(?: else)?|anything (?:else )?(?:is |would be )?(?:fine|good|ok|okay)|open to (?:other|anything)|other (?:genres|kinds of music|styles) (?:are |would be )?(?:fine|ok|okay)|doesn'?t have to be|not fussy|any genre)\b/i;
 /** How many shows they asked for: "one or two real options" is two, "a couple" two, "one show" one. */
+/** "Which would you choose?", "which remaining option would you pick?", "choose for us": they want a pick made. */
+const ASKED_CHOICE = /\bwhich (?:one |option |event |show |remaining option |remaining one )?(?:you'?d|would you|you would) (?:pick|choose|go for|recommend)\b|\btell me which you'?d\b|\bwhich (?:one|option|event|show) would you (?:pick|choose)\b|\bchoose (?:for us|one for us)\b|\b(?:what|which) would you (?:pick|choose)\b|\bwhich event could work\b/i;
 function requestedCount(text: string): number | null {
   // Up to two describing words before the thing: "one or two official event links", "one or two original artist
   // events", "one or two usable official options" (R2-EMAIL-HIERARCHY-01: these got three).
