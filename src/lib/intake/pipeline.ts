@@ -125,7 +125,9 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | 
   if (reason === 'no_performer') return null; // nothing was named; the questions carry it
   if (reason === 'unknown_performer') return `We don't have ${who ?? 'that performer or team'} in our event list yet, so we haven't looked at any prices.`;
   // This one is earned: the official listings were actually queried for this name and window.
-  if (reason === 'discovery_no_results') return `We checked the official listings and couldn't find a scheduled ${who ?? 'matching'} event${where}${when}, so we haven't looked at prices yet.`;
+  // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
+  // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
+  if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} performance` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
 
@@ -1456,9 +1458,12 @@ export class Concierge {
     if (!['request.interpret', 'research.requested'].includes(a.eventType)) return 'not_customer_work';
     const requestId = String(a.payload.requestId ?? '');
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, requestId));
-    if (!req || ['closed', 'manual_attention', 'recommendation_sent', 'unsupported'].includes(req.state)) return 'already_handled';
-    const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
+    if (!req || ['closed', 'recommendation_sent', 'unsupported'].includes(req.state)) return 'already_handled';
     const msgId = typeof a.payload.messageId === 'string' ? a.payload.messageId : null;
+    // Already with a person: a newer message of theirs still gets its own acknowledgment and alert, so a follow-up
+    // is never silently swallowed (Final Human QA R1-HUMAN-03: "are prices dropping?" went unanswered).
+    if (req.state === 'manual_attention' && !(await this.unacknowledgedFollowUp(req.id, msgId))) return 'already_handled';
+    const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
     const [msg] = msgId
       ? await this.db.select().from(t.messages).where(eq(t.messages.id, msgId))
       : await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
@@ -1467,16 +1472,34 @@ export class Concierge {
     return 'handed_off';
   }
 
+  /** A message of theirs that no hand-off reply has answered yet (neither the first one nor one keyed to it). */
+  private async unacknowledgedFollowUp(requestId: string, messageId: string | null): Promise<boolean> {
+    if (!messageId) return false;
+    if (!/^[0-9a-f-]{36}$/i.test(messageId)) return false;
+    const [m] = await this.db.select({ at: t.messages.createdAt }).from(t.messages).where(eq(t.messages.id, messageId));
+    if (!m) return false;
+    const held = await this.db.select({ key: t.sendIntents.dedupeKey, at: t.sendIntents.createdAt }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, requestId), sql`${t.sendIntents.dedupeKey} like ${`holding:${requestId}%`}`));
+    // Answered by a reply keyed to it, or by the first hand-off when the message came in before that was written.
+    return !held.some((h) => h.key === `holding:${requestId}:${messageId}` || (!!m && h.key === `holding:${requestId}` && h.at.getTime() >= m.at.getTime()));
+  }
+
   private async parkForStaff(a: { req: typeof t.requests.$inferSelect; revision: number; reason: string; contact: typeof t.contacts.$inferSelect; msg: typeof t.messages.$inferSelect }): Promise<void> {
     const { req, revision, reason, contact, msg } = a;
     await this.transition(req.id, 'manual_attention', reason.slice(0, 500));
-    await this.queueSend({
+    // The first hand-off says a person has it. A later message parked behind it gets its own short reply (that the
+    // same person has both), keyed to that message, and its own alert, so staff know they wrote again.
+    const held = await this.db.select({ key: t.sendIntents.dedupeKey, at: t.sendIntents.createdAt }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, req.id), sql`${t.sendIntents.dedupeKey} like ${`holding:${req.id}%`}`));
+    const first = held.find((x) => x.key === `holding:${req.id}`);
+    const followUp = !!first && first.at.getTime() < msg.createdAt.getTime();
+    // One "got your follow-up" a day at most: every message still alerts staff, but five emails don't get five replies.
+    const ackedToday = held.some((x) => x.key !== `holding:${req.id}` && x.at.getTime() > this.now().getTime() - 86_400_000);
+    if (!(followUp && ackedToday)) await this.queueSend({
       messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
-      subject: reSubject(msg.subject, 'A person is picking this up'), template: 'holding', vars: { hours: staffedHoursLabel(this.env) },
+      subject: reSubject(msg.subject, 'A person is picking this up'), template: 'holding', vars: { hours: staffedHoursLabel(this.env), followUp },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
-      dedupeKey: `holding:${req.id}`,
+      dedupeKey: followUp ? `holding:${req.id}:${msg.id}` : `holding:${req.id}`,
     });
-    await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${req.id}:${revision}`, entityId: req.id, payload: { requestId: req.id, revision }, now: this.now() });
+    await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: followUp ? `staff_alert:${req.id}:${revision}:${msg.id}` : `staff_alert:${req.id}:${revision}`, entityId: req.id, payload: { requestId: req.id, revision }, now: this.now() });
   }
 
   /**
@@ -2261,10 +2284,19 @@ export class Concierge {
     // A named metro is searched by its centre and radius ("LA" finds Inglewood); a town by name; none, nationally.
     const mk = marketFor(x.city, x.state);
     const where = mk && mk.lat !== null && mk.lng !== null ? { geoPoint: geohash(mk.lat, mk.lng), radiusMiles: mk.radiusMiles } : stateOnly(x) ? { city: null, stateCode: stateOnly(x) } : { city: x.city };
-    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword, ...where, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now() });
+    // A page of 100, as the other catalog searches ask: 20, sorted by date, ran out before a Sunday matinee (R1-HUMAN-02).
+    const ask = (force: boolean) => syncFromDiscovery(this.db, discovery.adapter, { keyword, ...where, startDateTime: win.start, endDateTime: win.end, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now(), force });
+    const sync = await ask(false);
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
     if (sync.status !== 'success' && sync.status !== 'skipped_fresh') return local; // provider trouble: say what we have, not what we could not check
-    const again = await this.resolveEvent(x, ctx.home, ctx.rules);
+    let again = await this.resolveEvent(x, ctx.home, ctx.rules);
+    // "Recently searched" is no proof the date was in what came back: a miss on a cached search asks once more,
+    // fresh, before anyone is told the event isn't on (R1-HUMAN-02). It's one call, inside the daily limit.
+    if (sync.status === 'skipped_fresh' && again.kind === 'no_match' && again.reason !== 'no_performer') {
+      const fresh = await ask(true);
+      await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: fresh.status, eventsSeen: fresh.eventsSeen, eventsUpserted: fresh.eventsUpserted, window: win, retry: 'after_cached_miss' } });
+      if (fresh.status === 'success') again = await this.resolveEvent(x, ctx.home, ctx.rules);
+    }
     if (again.kind === 'no_match' && again.reason === 'constraint_conflict') return again;
     if (again.kind === 'no_match' && again.reason !== 'no_performer') return { kind: 'no_match', reason: 'discovery_no_results' };
     return again;
@@ -2500,7 +2532,13 @@ export class Concierge {
     const uses = marketUses(licence, this.env);
     let market: Awaited<ReturnType<typeof marketForGroup>> | null = null;
     if (licence.allows('tracking') && trackingOk && historyOk) {
-      await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).refreshEvent(event.id);
+      // A supplier read that fails costs this reply its market lines, never the reply (R1-HUMAN-01: a throwing
+      // read sent a linked listing to a person four retries later, and its follow-up after it).
+      try {
+        await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).refreshEvent(event.id);
+      } catch (e) {
+        await audit(this.db, { actor: 'system', action: 'market.read_failed', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { step: 'refresh', error: (e instanceof Error ? e.message : String(e)).slice(0, 200) } });
+      }
       market = await marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now });
     }
     const marketSignal = market && uses.advice ? { basisMatchesGroup: !!market.context && market.context.adequacy === 'sufficient', direction: market.context?.direction ?? 'insufficient', supply: market.supplyScope === 'group' && market.supply.trend === 'unknown' ? market.single.supply.trend : market.supply.trend } : null;

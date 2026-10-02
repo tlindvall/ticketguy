@@ -140,6 +140,15 @@ export class SeatDataClient {
     return this.request('GET', '/api/v0.1/listings/get', { event_id: eventId });
   }
 
+  /**
+   * Current listings of an event named by its StubHub event id (the number in a StubHub link's /event/ path). SDK 1.2
+   * documents this as `GET /api/v0.1.1/listings/get?event_id_sh=`: "every stored row of the event, active and
+   * inactive". The item shape is still undocumented; callers treat every field as optional.
+   */
+  listingsByStubHubEvent(eventIdSh: number | string): Promise<{ listings?: Array<Record<string, unknown>>; has_refreshed?: number; last_refresh_timestamp?: number | null } & Record<string, unknown>> {
+    return this.request('GET', '/api/v0.1.1/listings/get', { event_id_sh: eventIdSh });
+  }
+
   /** Asks SeatData to start tracking an event it does not have. Not idempotent, so never retried. */
   requestEvent(searchQuery: string): Promise<Record<string, unknown>> {
     return this.request('POST', '/api/v0.4/events/event-request-add', {}, { search_query: searchQuery }, false);

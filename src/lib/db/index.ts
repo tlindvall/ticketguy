@@ -48,6 +48,15 @@ export async function openDatabase(opts: { databaseUrl?: string; pgliteDataDir?:
   }
   const client = dataDir && dataDir !== ':memory:' ? new PGlite(dataDir) : new PGlite();
   await client.waitReady;
+  // Production's postgres.js driver rejects a JavaScript Date bound as a raw parameter (a value interpolated into
+  // `sql`...``, which no column type converts), while PGlite accepts it. That gap shipped a research crash
+  // (`reserve()` in the market tracker, Final Human QA 2026-10-02): every listings read failed in production and
+  // passed every test. The embedded database refuses the same thing, so the suite catches it.
+  const query = client.query.bind(client);
+  client.query = ((text: string, params?: unknown[], options?: unknown) => {
+    if (params?.some((p) => p instanceof Date)) throw new Error(`raw Date parameter in: ${text.slice(0, 120)} (pass toISOString() with ::timestamptz; postgres.js rejects a Date)`);
+    return query(text, params, options as never);
+  }) as typeof client.query;
   const db = drizzlePglite(client, { schema }) as unknown as Db;
   return { db, driver: 'pglite', close: () => client.close() };
 }

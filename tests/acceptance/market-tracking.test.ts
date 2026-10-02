@@ -253,6 +253,33 @@ describe('resale market tracking', () => {
     expect(a).toBeTruthy();
   });
 
+  // Final Human QA (Oct 2, live): this exact message and link went to a person after four failed research runs:
+  // the call reservation bound a Date into raw SQL, which production's driver rejects (the test database now does
+  // too). Both ways it ends now: the linked listing found by its number, or one screenshot asked for, never a crash.
+  it('R1-HUMAN-01: the exact Rangers listing link and question are answered, matched or not, without a crash', async () => {
+    const c = concierge();
+    const text = 'Hey, looking at these for Tuesday. Is this a good deal for two or should I hold off?';
+    const link = (id: string) => `https://www.stubhub.com/metro-testers-new-york-tickets-10-30-2026/event/161564036/?backUrl=%2Fnew-york-rangers-tickets%2Fgrouping%2F50025006&lt=40.671&lg=-73.894&quantity=2&listingId=${id}`;
+    const unmatched = await ask(c, `${text}\n\n${link('14251313815')}`, 'r1-human-01a@customer.example');
+    await c.research({ requestId: unmatched, revision: 1 });
+    const [u] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, unmatched));
+    expect(u!.bodyText).toContain('Send me a screenshot showing the price with fees and the section and row, and I’ll give you a straight answer.');
+    expect((await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, unmatched), eq(t.auditLog.action, 'listing.link_unmatched')))).length).toBe(1);
+    const matched = await ask(c, `${text}\n\n${link('6189203345')}`, 'r1-human-01b@customer.example');
+    await c.research({ requestId: matched, revision: 1 });
+    const [m] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, matched));
+    expect(m!.bodyText).toContain('by its listing number: $155 a ticket before fees on StubHub');
+    for (const id of [unmatched, matched]) expect((await h.db.select().from(t.requests).where(eq(t.requests.id, id)))[0]!.state).not.toBe('manual_attention');
+  });
+
+  it('R1-HUMAN-01: a resale read that fails costs the reply its market lines, never the reply', async () => {
+    const broken = new Concierge({ db: h.db, env: env(), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: null, marketFetch: (async () => { throw new Error('ECONNRESET'); }) as unknown as typeof fetch });
+    const requestId = await ask(broken, '2 Testers tickets Oct 30, is $100 a good deal?', 'r1-human-01c@customer.example');
+    await expect(broken.research({ requestId, revision: 1 })).resolves.toBeTruthy();
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    expect(rec!.bodyText).toContain('$100');
+  });
+
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {
     const c = concierge();
     calls.length = 0;

@@ -243,10 +243,12 @@ function renderBody(
     case 'holding': {
       // Sent when only a person can move the request. It says what happened and where the answer will come, and
       // promises no time and no result: office hours are not a response time (post-#56 writing review).
-      const paras = [
-        'Hey,',
-        'I couldn’t finish this one automatically, so it needs a manual check. I’ve passed it to the team, and the answer will come in this thread.',
-      ];
+      // A follow-up parked behind it is told the same person has both, so it never goes unanswered (R1-HUMAN-03).
+      // When people check is said as that, not as a promised reply time (Final Human QA R1-HUMAN-01).
+      const hours = v.hours ? ` The team checks these ${String(v.hours)}.` : '';
+      const paras = v.followUp
+        ? ['Hey,', `Got your follow-up. It’s with the same person who has your first email, and they’ll answer both here in this thread.${hours}`]
+        : ['Hey,', `I couldn’t finish this one automatically, so it needs a manual check. I’ve passed it to the team, and the answer will come in this thread.${hours}`];
       return wrap(paras, paras.map(para));
     }
     case 'follow_up': {

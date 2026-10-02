@@ -111,7 +111,7 @@ describe('a reply that moves the place: "They are playing in Connecticut"', () =
     const r = (await c.ingestInbound(first)) as { requestId: string };
     await interpretAll(h, c);
     const [ask] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
-    expect(ask!.bodyText).toContain('couldn\'t find a scheduled Metallica event in New York');
+    expect(ask!.bodyText).toContain('I searched Ticketmaster\'s listings and couldn\'t find a Metallica performance in New York');
 
     await c.ingestInbound(inbound({ text: 'They are playing in connecticut.', from, subject: 'Re: Metallica', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
     await interpretAll(h, c);

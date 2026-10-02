@@ -113,9 +113,11 @@ export class MarketTracker {
     const now = this.now();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const limit = this.deps.env.SEATDATA_DAILY_CALL_LIMIT;
+    // ISO strings, cast: postgres.js rejects a Date bound into raw SQL, and that made every listings read throw in
+    // production while the embedded test database accepted it (Final Human QA 2026-10-02, R1-HUMAN-01).
     const r = await this.db.execute(sql`insert into market_fetches (provider, kind, event_id, status, calls, points, detail, at)
-      select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${now}
-      where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day}) < ${limit}
+      select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${now.toISOString()}::timestamptz
+      where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day.toISOString()}::timestamptz) < ${limit}
       returning id`);
     const rows = (Array.isArray(r) ? r : (r as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
     const id = rows[0]?.id;
@@ -420,7 +422,11 @@ export class MarketTracker {
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || tr.state !== 'active' || !tr.providerEventId) return null;
     // The call is taken from the allowance before it is made; the attempts, retries included, can't exceed it.
-    const slot = await this.reserve(kind, eventId);
+    // A reservation that fails is no read, never an error for the reply that asked (R1-HUMAN-01).
+    const slot = await this.reserve(kind, eventId).catch(async (e) => {
+      await this.log(kind, eventId, 'error', 0, 0, `reserve: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`).catch(() => undefined);
+      return null;
+    });
     if (!slot) return null;
     const api = await this.api();
     api.callCap = api.calls + slot.attempts;

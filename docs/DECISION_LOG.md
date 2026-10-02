@@ -1175,3 +1175,18 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - The marketplace page itself is still never fetched (#47). StubHub's terms and its bot protection make a scraper both against the rules and brittle.
 
 **Not verified.** Whether SeatData's `listing_id` is StubHub's own listing number. The item shape is undocumented, and the tests use a stand-in feed. The audit rows will show the live match rate. If it is near zero, the ids are different and this path stays silent.
+
+## 68. Raw SQL never binds a Date; a hand-off answers follow-ups; a full Discovery page isn't a whole window
+
+**Why.** The Final Human QA (`docs/qa/FINAL_HUMAN_QA_2026-10-02.md`) found three problems:
+- A real StubHub listing link went to "manual check". The cause was a raw-SQL `Date` parameter that production's driver rejects and the embedded test database accepts, so every SeatData listings read in production was crashing.
+- The follow-up to that request got no reply.
+- Hamilton was "not scheduled" after a search whose page had likely run out.
+
+**What.**
+- **Raw SQL.** A value interpolated into raw SQL is an ISO string cast to its type, never a `Date`. The embedded test database rejects a raw `Date`, as production's driver does.
+- **Market reads.** A failed market read costs the reply its market lines, never the reply.
+- **Hand-offs.** A message on a request already with a person gets one short acknowledgment (at most one a day) and a staff alert. The holding reply says when the team checks.
+- **Discovery.** A full page records only the dates it reached. Event lookup asks for 100 results. A cached miss is re-asked once. "Not found" is said as what we searched.
+
+**Not decided here.** Whether SeatData's listing ids are StubHub's. `scripts/probe-seatdata-link.ts` answers that with one paid read. The concert items (screenshot rows, passes, standing room, buy-or-wait) are in #88.
