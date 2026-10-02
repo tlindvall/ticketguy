@@ -3426,7 +3426,7 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean } {
   const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
@@ -3446,7 +3446,9 @@ export function questionsAsked(text: string): { deliveryRisk: boolean; accessibl
   // "Are they worth it?", "is this a good deal?" about tickets they've picked: answered as that question, never
   // with market figures alone (live, Oct 1 2026: a StubHub link we can't open).
   const worth = /\b(?:worth (?:it|the (?:price|money|cost))|good (?:deal|price|value|buy)|fair price|over ?priced|should (?:i|we) (?:buy|get|grab|take) (?:them|these|it|those))\b/i.test(t);
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth };
+  // "How much cheaper is it?", "what is the price difference?": the saving is asked for by name (live F01).
+  const difference = /\b(?:price |cost )?difference\b|\bhow much (?:cheaper|less|more|pricier)\b|\bhow much (?:do|would) (?:i|we) save\b/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference };
 }
 
 /**

@@ -158,7 +158,7 @@ export type BuildPacketArgs = {
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
-  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean } | null;
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
@@ -850,12 +850,6 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefo
       ? `Looking at ${best.o.name} on its own, with nothing from ${setAside} applied: it meets what you asked for, at ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`
       : `${Name(best.o)} ${open.length ? 'is the straightforward choice if you’d rather skip another checkout' : fits.length > 1 ? 'wins this one' : 'is the one that meets what you asked for'}: ${formatUsd(best.tot!.cents)} for ${ticketsWord(best.tot!.tickets)}, fees included.`;
     const bits: string[] = [];
-    // The saving against the other offer is said whichever way the other fell: "$60 less than Offer A" answers
-    // "what is the price difference?" even when Offer A is over the cap (live F01).
-    if (!alone && fits.length === 1) {
-      const rival = rows.filter((r) => r !== best && r.tot && r.tot.cents > best.tot!.cents).sort((x, y) => x.tot!.cents - y.tot!.cents)[0];
-      if (rival) bits.push(`That’s ${formatUsd(rival.tot!.cents - best.tot!.cents)} less than ${Name(rival.o)}.`);
-    }
     if (terms.concertAdmission && fits.length === 1) for (const r of rows.filter((r) => r !== best)) {
       // Admission only when it's excluded: an unknown one is "confirm first", not a reason to skip.
       const unusable = r.why.find((w) => ['availability', 'day', 'transfer', 'view', 'short'].includes(w.kind) || (w.kind === 'admission' && r.o.admission === 'excluded'));
@@ -870,6 +864,12 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefo
     const others = named ? [] : [...fits].sort(byTotal).filter((r) => r !== best);
     if (others.length >= 2) bits.push(`That’s ${others.slice(0, 3).map((o) => vs(best, o)).join(' and ')}.`);
     else if (against) bits.push(`That’s ${vs(best, against)}.`);
+    // The saving is still said when the only other offer fell out for its price ("$60 less than Offer A" answers
+    // "what is the price difference?" even with Offer A over the cap, live F01).
+    else if (!alone && !named && a.asks?.difference) {
+      const rival = rows.filter((r) => r !== best && r.tot && r.tot.cents > best.tot!.cents).sort((x, y) => x.tot!.cents - y.tot!.cents)[0];
+      if (rival) bits.push(`That’s ${vs(best, rival)}.`);
+    }
     // With a break-even to state, the threshold goes right beside the pick; budget left over would crowd it.
     if (budget !== null && best.tot!.cents <= budget && !open.length) bits.push(best.tot!.cents === budget ? `It’s exactly your ${formatUsd(budget)} budget.` : `It leaves ${formatUsd(budget - best.tot!.cents)} of your ${formatUsd(budget)} budget.`);
     // An offer whose fees aren't known yet: the fee that would make it cheaper, not a guess at its fees.
