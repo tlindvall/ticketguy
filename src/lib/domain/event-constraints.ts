@@ -198,18 +198,21 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     for (const v of mentioned) {
       for (const n of v.names) {
         const listed = `(?:the\\s+)?(?:${any})(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*`;
-        const before = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at)\\s+(?:at\\s+|in\\s+)?(?=${listed})(?:[^.;!?]*?)(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i');
+        const before = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at|skip|skipping|leave out|leaving out|don'?t include|do not include|drop|rule out|ruling out|cross off)\\s+(?:at\\s+|in\\s+)?(?=${listed})(?:[^.;!?]*?)(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i');
         const after = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])(?:\\s*(?:,|or|and|nor|/)\\s*(?:the\\s+)?(?:${any}))*\\s+(?:are|is)\\s+(?:excluded|not (?:permitted|allowed|ok|okay|wanted|an option)|ruled out|out|off the table)`, 'i');
         // A correction about where it is rules it out too: "Constellation Room is in Santa Ana, not Los Angeles",
         // "X isn't in LA" (Research 1 NW-02). Without the "not", "X is in Santa Ana, which is fine" asks for it.
         const corrected = new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])\\s+(?:is|'s|are)\\s+(?:actually\\s+|really\\s+)?(?:in|located in)\\s+[^.;!?]{1,40}?,?\\s+not\\s+(?:in\\s+)?\\w|(?<![\\w-])${nameRe(n)}(?![\\w-])\\s+(?:isn't|is not|aren't|are not)\\s+(?:actually\\s+|really\\s+)?(?:in|located in)\\b`, 'i');
         const m = before.exec(lower);
         if (corrected.test(lower)) excluded.add(v.canonical);
-        if ((m && new RegExp(`^(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at)\\s+(?:at\\s+|in\\s+)?${listed}$`, 'i').test(m[0])) || after.test(lower)) excluded.add(v.canonical);
+        if ((m && new RegExp(`^(?:no|not|excluding|exclude|except|without|other than|never|avoid|nothing at|skip|skipping|leave out|leaving out|don'?t include|do not include|drop|rule out|ruling out|cross off)\\s+(?:at\\s+|in\\s+)?${listed}$`, 'i').test(m[0])) || after.test(lower)) excluded.add(v.canonical);
       }
     }
     if (excluded.size) out.excludedVenues = [...excluded];
-    const named = [...new Set(mentioned.filter((v) => !excluded.has(v.canonical) && v.names.some((n) => new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${nameRe(n)}`, 'i').test(lower))).map((v) => v.canonical))];
+    // A venue they'd like, not one they insist on: "Prefer Elsewhere or Nowadays, but another Brooklyn venue is
+    // fine" is where to start, never a fence around the search (R2-CONCERT-PREFERENCE-01). "Only at Elsewhere" is.
+    const soft = new Set(mentioned.filter((v) => v.names.some((n) => lower.split(/[.;!?]/).some((s0) => s0.includes(n) && /\b(?:prefer(?:ably|red)?|ideally|if possible|such as|something like|or (?:a |another |any )?(?:similar|other)|(?:another|any other|other) [\w ]{0,20}(?:venue|club|place|room)s? (?:is|are|would be) (?:fine|ok|okay|good))\b/.test(s0) && !/\bonly\b/.test(s0)))).map((v) => v.canonical));
+    const named = [...new Set(mentioned.filter((v) => !excluded.has(v.canonical) && !soft.has(v.canonical) && v.names.some((n) => new RegExp(`(?<![\\w-])${nameRe(n)}(?![\\w-])`, 'i').test(lower) && !new RegExp(`\\b(?:near|by|around|walk (?:of|from)|close to)\\s+(?:the\\s+)?${nameRe(n)}`, 'i').test(lower))).map((v) => v.canonical))];
     if (named.length) out.venueTerms = named;
     if (out.venueTerms) out.venueTerms = out.venueTerms.filter((n) => !out.excludedVenues.includes(n));
     if (out.venueTerms && !out.venueTerms.length) out.venueTerms = null;

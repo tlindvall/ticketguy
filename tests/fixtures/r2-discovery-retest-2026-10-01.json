@@ -1,0 +1,17 @@
+{
+ "source": "Ticket Guy discovery/link retest 2026-10-01 23:34 UTC, deployed a80744b: cases/*.json sent[].text, verbatim",
+ "conversations": {
+  "C01": [
+   "Two adults want a mainstream pop concert in Los Angeles on Friday October 9 or Saturday October 10, 2026. Los Angeles only, not Anaheim or Santa Ana. Two reserved seats together, $300 TOTAL including fees. Give one or two official event links and tell me which you would choose. Separate what is verified about seats, adjacency and the total from what is unknown.",
+   "Skip Constellation Room and Orange County entirely. Saturday October 10 only now. Keep two reserved seats together and $300 total including fees. Which option would you choose, and are reserved seats, seats together and the all-in total verified?"
+  ],
+  "C02": [
+   "House or minimal techno in Brooklyn on Friday October 2 or Saturday October 3, 2026. Prefer Elsewhere or Nowadays, but another Brooklyn venue is fine. I am 24 and my friend is 20, so no 21+ nights. We arrive at midnight. Two tickets, $120 TOTAL including fees. Give one or two usable official options and tell me which you would choose. Do not assume age eligibility or midnight entry.",
+   "Saturday October 3 only. We still cannot go to a 21+ event and arrive at midnight. Keep Brooklyn, two tickets and $120 total. Which event could work, and what have you verified about minimum age, late entry and total price? Give the relevant official source beside each fact, or say it is unknown."
+  ],
+  "C03": [
+   "Six adults want country or Americana in Nashville, Tennessee, on Friday October 2 or Saturday October 3, 2026. Nashville only, not Franklin. Six seats together, $600 TOTAL including fees. No cover bands or country-themed bars. Give one or two original artist events, official links, and which you would choose for us.",
+   "Saturday October 3 only now. No Franklin or events outside Nashville. Keep six seats together and $600 total including fees. Which option would you choose? Are the artist, venue, reserved seats, six together and all-in total verified, or not yet checked?"
+  ]
+ }
+}

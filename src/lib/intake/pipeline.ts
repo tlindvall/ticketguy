@@ -779,11 +779,13 @@ export class Concierge {
     // instead of asking which event, how many tickets and which date.
     let picked: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
     let pickNote: string | null = null;
+    let pickLead: string | null = null;
     if (isBrowseRequest(merged)) {
       const b = await this.browse({ req, msg, contact: contact!, merged, revision, more: extraction.wantsMore === true && req.browseShown.length > 0 });
       if (!('pick' in b)) return b;
       picked = b.pick;
       pickNote = b.note;
+      pickLead = b.lead ?? null;
     }
 
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
@@ -956,8 +958,18 @@ export class Concierge {
         // (PW-ENTRY-01), rather than left to assume this route is watching.
         const noWatch = merged.intent === 'watch_request' && !(quoted && allows) ? `I haven’t set up a price watch for this: listings don’t show whether a ticket admits people arriving ${arriveAt}, so an alert couldn’t tell you a ticket works for you.` : null;
         if (noWatch) await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: 'unverifiable:entry_rule' } });
-        const text = ['Hey,', `${lead} ${why}${owned}`, link, ...(altDateNote ? [altDateNote] : []), `${step} ${where}`.trim(), ...(noWatch ? [noWatch] : [])].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the event page for <a href="${esc(url)}">${esc(occurrence)}</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`, ...(noWatch ? [`<p style="margin:0 0 18px;">${esc(noWatch)}</p>`] : [])].join('\n');
+        // With an age rule in the group, its status for this night is said, as unknown when nothing states it; and
+        // their cap, when they gave one, is said as not yet checked against a total (R2-CONCERT-AGE-01, C02).
+        const limits = partyAgeLimits(threadTexts);
+        const listedAge = listedMinAge(resolution.event.name);
+        const ageLine = (limits.youngest !== null && limits.youngest < 21) || limits.refused !== null
+          ? listedAge === null ? `Minimum age: unknown. The event page doesn’t list one, and nothing I have states ${resolution.venue.name}’s age policy for that night, so check it before you buy.` : null
+          : null;
+        const capTotal = wholePartyBudgetCents(merged.budgetCents, merged.budgetBasis, merged.quantity);
+        const totalLine = capTotal !== null && merged.quantity ? `The total for ${countWordLower(merged.quantity)} isn’t checked yet; your limit is ${formatUsd(capTotal)} including fees.` : null;
+        // A listing ruled out for their group comes first, as the decisive fact (R2-CONCERT-AGE-01).
+        const text = ['Hey,', ...(pickLead ? [pickLead] : []), `${lead} ${why}${owned}`, link, ...(altDateNote ? [altDateNote] : []), `${step} ${where}`.trim(), ...(ageLine ? [ageLine] : []), ...(totalLine ? [totalLine] : []), ...(noWatch ? [noWatch] : [])].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', ...(pickLead ? [`<p style="margin:0 0 18px;"><strong>${esc(pickLead)}</strong></p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the event page for <a href="${esc(url)}">${esc(occurrence)}</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`, ...(ageLine ? [`<p style="margin:0 0 18px;">${esc(ageLine)}</p>`] : []), ...(totalLine ? [`<p style="margin:0 0 18px;">${esc(totalLine)}</p>`] : []), ...(noWatch ? [`<p style="margin:0 0 18px;">${esc(noWatch)}</p>`] : [])].join('\n');
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Late entry'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `entry:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'late_entry_unverified');
         return { state: 'referred', revision, extraction: merged };
@@ -1171,7 +1183,7 @@ export class Concierge {
       const ent = ents.find((x) => x.id === e.primaryEntityId);
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
       const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Tickets', url: tickets.url }] : [])];
-      return { line: lines[i]!, title: e.name, reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
+      return { line: lines[i]!, title: readableTitle(e.name), reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
     });
   }
 
@@ -1536,7 +1548,7 @@ export class Concierge {
    * named (the next two weeks when none was, and the reply says so). The request waits for the customer to
    * pick one; their reply names it, and the ordinary resolution takes over from there.
    */
-  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string }> {
+  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string; lead?: string | null }> {
     const { req, msg, contact, revision } = a;
     let merged = a.merged;
     const more = a.more === true;
@@ -1627,6 +1639,7 @@ export class Concierge {
     const discovery = await this.discoveryAvailability();
     const threadText = threadMsgs.join('\n');
     const ruledOut = exclusionsIn(threadText);
+    const ageLimits = partyAgeLimits(threadMsgs);
     const startsAt = { after: rules.after?.minutes ?? null, before: rules.before?.minutes ?? null };
     const broadenOk = BROADEN_OK.test(flat(threadText));
     const cityCore = market.lat !== null && market.lng !== null && market.radiusMiles > CITY_CORE_MILES && !!merged.city && merged.city.toLowerCase() === market.label.toLowerCase() && !METRO_WIDE.test(flat(threadText));
@@ -1684,13 +1697,17 @@ export class Concierge {
       const placed = strictCore || core.length >= 2 ? core : placedAll;
       // What they ruled out ("no pop concerts, tribute acts or kids' events") goes before any ranking, so an
       // excluded show is never one of the picks (post-#54 QA, R3-B07).
-      const allowed = ruledOut.length ? placed.filter(({ e }) => !ruledOut.some((k) => excludedBy(k, e))) : placed;
+      // A city they ruled out stays out wherever the metro reaches (R2-CONCERT-GEO-01), and a listing's own age rule
+      // that rules out someone in the group is out before anything is offered or linked (R2-CONCERT-AGE-01).
+      const cityOut = citiesRuledOut(threadMsgs, placed.map(({ v }) => v.city ?? ''), [merged.city ?? '', market.label]);
+      const ageOut = placed.filter(({ e }) => ageRuledOut(e.name, ageLimits) !== null && (!genre || genreMatches(genre, e.genre)));
+      const allowed = placed.filter(({ e, v }) => !(ruledOut.length && ruledOut.some((k) => excludedBy(k, e))) && !(v.city && cityOut.has(v.city.toLowerCase())) && ageRuledOut(e.name, ageLimits) === null);
       const ofGenre = genre ? allowed.filter(({ e }) => genreMatches(genre, e.genre)) : allowed;
       const genreKept = !genre || ofGenre.length > 0;
       // Bounded by venue or dates, a kind of music with nothing on is "none found", not everything else instead (TGQA-R6 19).
       // No match for the kind of music they asked for is an answer, not a reason to send other genres (Research 1,
       // Austin: rock and pop came back after "country or Americana"). Only their own "anything else is fine" widens it.
-      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, events: genreKept ? ofGenre : bounded || !broadenOk ? [] : allowed };
+      return { providerChecked, all, placed, areaKept, areaUsed, genreKept, ageOut, events: genreKept ? ofGenre : bounded || !broadenOk ? [] : allowed };
     };
     // Nothing in the window is not a dead end: a team that plays at home every other week, or a quiet week,
     // gets the next few after it (six weeks on), said as such.
@@ -1725,9 +1742,10 @@ export class Concierge {
       const latestFlat = flat(threadMsgs.at(-1) ?? '');
       const leftOut = [...rules.excludedVenues.filter((x) => latestFlat.toLowerCase().includes(x)).map(displayVenue), ...(market.id === 'los-angeles' && OUTER_LA_RULED_OUT.test(latestFlat) ? ['Orange County'] : [])];
       const pending = unverifiedRequirements(merged, threadText);
-      const told = `${leftOut.length ? `I've left out ${leftOut.length > 1 ? `${leftOut.slice(0, -1).join(', ')} and ${leftOut.at(-1)}` : leftOut[0]}. ` : ''}`;
+      const ageFirst = within.ageOut[0];
+      const told = `${ageFirst ? `${withoutAgeTag(ageFirst.e.name)} is out: ${ageRuledOut(ageFirst.e.name, ageLimits)}. ` : ''}${leftOut.length ? `I've left out ${leftOut.length > 1 ? `${leftOut.slice(0, -1).join(', ')} and ${leftOut.at(-1)}` : leftOut[0]}. ` : ''}`;
       const unchecked = pending.length ? ` Not checked yet: ${joinRequirements(pending.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : '';
-      return { pick: only, note: ageNeed(threadText) ? `${told}This is one ${evening}option: ${found}. ${startsAt.after !== null || startsAt.before !== null ? 'The time fits; ' : ''}I haven't confirmed it works for your group yet, so the checks it still needs are below.` : `${told}It's ${found}, so I've gone ahead with it.${unchecked} Tell me if you had something else in mind.` };
+      return { lead: ageFirst ? `${withoutAgeTag(ageFirst.e.name)} is out: ${ageRuledOut(ageFirst.e.name, ageLimits)}.` : null, pick: only, note: ageNeed(threadText) ? `${told}This is one ${evening}option: ${found}. ${startsAt.after !== null || startsAt.before !== null ? 'The time fits; ' : ''}I haven't confirmed it works for your group yet, so the checks it still needs are below.` : `${told}It's ${found}, so I've gone ahead with it.${unchecked} Tell me if you had something else in mind.` };
     }
     await recordVersion();
     // What the customer asked, answered before the list (Research 1): a correction acknowledged once, the genre
@@ -1759,7 +1777,10 @@ export class Concierge {
     const broadened = !!genre && !genreKept && events.length > 0 && broadenOk;
     // The fence they set (a venue, a start time) is part of what wasn't found: "at MSG or Barclays", "after 7pm".
     const fenceText = `${rules.venueTerms ? ` at ${rules.venueTerms.map((n) => (n.length <= 4 ? n.toUpperCase() : n.replace(/\b\w/g, (c) => c.toUpperCase()))).join(' or ')}` : ''}${rules.after ? ` starting ${rules.after.strict ? 'after' : 'at or after'} ${timeLabel(rules.after.minutes)}` : ''}`;
-    const answer = genre && !events.length
+    // The decisive known fact first: "Dusky is out: it's listed as 21+, and your friend is 20." (R2-CONCERT-AGE-01)
+    const ageOutFirst = within.ageOut[0];
+    const ageNote = ageOutFirst ? `${withoutAgeTag(ageOutFirst.e.name)} is out: ${ageRuledOut(ageOutFirst.e.name, ageLimits)}.` : null;
+    const answer0 = genre && !events.length
       ? `I don’t have a verified ${genreAsked} option to recommend in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}${fenceText}.`
       : broadened
         ? `I don’t have a ${genreAsked} show in ${areaUsed?.label ?? market.label} for ${spanLabel(win.from, win.to)}, so since you said anything else is fine, here’s what is on.`
@@ -1767,6 +1788,7 @@ export class Concierge {
         // One short status in bold; the requirements, each named, follow it in plain text (R2-EMAIL-HIERARCHY-01).
         ? `I haven’t verified a match for ${win && total !== null ? 'your dates and budget' : 'what you need'} yet.`
         : null;
+    const answer = ageNote ? (answer0 ? `${ageNote} ${answer0}` : ageNote) : answer0;
     // Three picks that fit best, on different days where possible, each with why it fits and where to go next.
     const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
     // As many as they asked for ("give me one or two real options"), never more than three (R2-EMAIL-HIERARCHY-01).
@@ -1778,12 +1800,12 @@ export class Concierge {
     const unchecked = answer && toCheck.length && !(genre && !events.length) && !broadened ? `Not checked yet for any of these: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
     // "Tell me which you'd choose": named only when one is plainly closer on what's on file; otherwise the checks
     // decide, and the reply says so rather than picking at random (R1-DISCOVERY-CLOSURE-01).
-    const askedChoice = /\bwhich (?:one )?(?:you'?d|would you) (?:pick|choose|go for|recommend)\b|\btell me which you'?d\b/i.test(flat(threadText).replace(/[’‘]/g, "'"));
+    const askedChoice = /\bwhich (?:one |option |event |show )?(?:you'?d|would you|you would) (?:pick|choose|go for|recommend)\b|\btell me which you'?d\b|\bwhich (?:one|option|event|show) would you (?:pick|choose)\b|\bchoose (?:for us|one for us)\b|\b(?:what|which) would you (?:pick|choose)\b|\bwhich event could work\b/i.test(flat(threadText).replace(/[’‘]/g, "'"));
     const fit = shown.map((x) => genreFitScore(x.e.genre, merged.genreHint));
     const choice = askedChoice && shown.length > 1 && toCheck.length
       ? fit[0]! > Math.max(...fit.slice(1)) ? `If I start with one, it’s ${shown[0]!.e.name}: it’s listed as ${(shown[0]!.e.genre ?? '').split(' / ')[1] ?? genreAsked}, the closest to what you asked for. That’s where I’d begin, not a reason to buy before the checks.` : 'On what’s listed they’re equally close, so the checks will decide between them.'
       : null;
-    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${e.name} at ${v.name}${cityCore && v.city && !inCityCore(v, market) ? ` (${v.city})` : ''}`);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${cityCore && v.city && !inCityCore(v, market) ? ` (${v.city})` : ''}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && (genreKept || bounded) ? genre.label : browseLabel(merged.categoryHint);
     const place = areaUsed?.label ?? market.label;
@@ -1831,7 +1853,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { answer, corrections: [...corrections, ...(unchecked ? [unchecked] : []), ...(choice ? [choice] : [])], pickNext: toCheck.length && options.length && !single ? (broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : `Tell me which one, and I’ll check ${listAnd([...new Set(toCheck.map(shortRequirement))])}.`) : null, headline: answer && !events.length ? '' : headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length || asked ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate, countryCheck: !contact.countryConfirmed && count === 1 && revision === 1, ra },
+      vars: { answer, corrections: [...corrections, ...(unchecked ? [unchecked] : []), ...(choice ? [choice] : [])], pickNext: toCheck.length && options.length && !single ? (choice && fit[0]! > Math.max(...fit.slice(1)) ? `Want me to check ${listAnd([...new Set(toCheck.map(shortRequirement))])} for ${readableTitle(shown[0]!.e.name)}? Reply and I will, or name the other one.` : broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : `Tell me which one, and I’ll check ${listAnd([...new Set(toCheck.map(shortRequirement))])}.`) : null, headline: answer && !events.length ? '' : headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length || asked ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate ?? (genre && !events.length && (merged.dateExpression || merged.resolvedLocalDate) ? `That’s everything I have on file for ${genreAsked} in ${place} that night. If the night or the area can change, tell me what and I’ll look again.`.replace(' that night', win.from === win.to ? ' that night' : ' those nights') : null), countryCheck: !contact.countryConfirmed && count === 1 && revision === 1, ra },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };
@@ -3661,6 +3683,94 @@ const TRAVELLING = /\b(fly(ing)? in|flight|flying (in|out|to)|travel(l)?ing (in|
 /** Told when a screenshot showed a barcode, card or ID: we deleted it and used nothing from it. */
 type Exclusion = 'pop' | 'tribute' | 'kids';
 /** Kinds of show they ruled out, from a "no …" / "not …" / "without …" clause. */
+/**
+ * Cities they ruled out, among the cities these venues are actually in (R2-CONCERT-GEO-01): "Nashville only, not
+ * Franklin", "No Franklin", "not Anaheim or Santa Ana", "don't want to travel to Franklin". The city they're searching
+ * is never one of them ("I'm not in Nashville until Friday"), only a real venue city can be, and a later "Franklin
+ * is fine" lets it back in. Latest message wins.
+ */
+export function citiesRuledOut(messagesOldestFirst: string[], cities: string[], searched: string[]): Set<string> {
+  const out = new Set<string>();
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const home = new Set(searched.map((x) => x.toLowerCase()));
+  const candidates = [...new Set(cities.map((c) => c.toLowerCase()))].filter((c) => c && !home.has(c));
+  for (const raw of messagesOldestFirst) {
+    const t = flat(raw).replace(/[’‘]/g, "'");
+    for (const c of candidates) {
+      const C = esc(c);
+      const no = new RegExp(`\\b(?:no|not|excluding|exclude|except|without|avoid|skip|leave out|don'?t include|nothing in|not in|(?:don'?t|do not|won'?t) (?:want to )?(?:travel|go|drive|head) (?:out )?to)\\s+(?:in\\s+|to\\s+|at\\s+)?(?:the\\s+)?(?:[a-z][\\w ]{0,30}?\\s*(?:,|\\bor\\b|\\band\\b|\\bnor\\b)\\s*)?${C}\\b(?!\\s+(?:until|till|yet|right now|today|this week))`, 'i');
+      const yes = new RegExp(`\\b${C}\\s+(?:is|would be|works|'s)\\s+(?:also\\s+|now\\s+)?(?:fine|ok|okay|good|allowed|great)\\b|\\b${C}\\s+works\\b`, 'i');
+      if (yes.test(t)) out.delete(c);
+      else if (no.test(t)) out.add(c);
+    }
+  }
+  return out;
+}
+
+/** The minimum age a listing states in its own title ("Dusky - 21+", "Fox N' Vead (18 and Over)"); never a guess from the venue. */
+export function listedMinAge(name: string): number | null {
+  const m = /\b(21|18)\s*\+|\b(21|18)\s*(?:and|&)\s*(?:over|up|older)\b|\bages?\s+(21|18)\s*(?:\+|and up|and over)/i.exec(name);
+  return m ? Number(m[1] ?? m[2] ?? m[3]) : null;
+}
+
+/**
+ * The youngest in their group and who that is, from their own words ("I am 24 and my friend is 20"), and an age
+ * rule they set themselves ("so no 21+ nights", "we cannot go to a 21+ event"). Null when they said neither.
+ */
+export function partyAgeLimits(messages: string[]): { youngest: number | null; who: string | null; refused: number | null } {
+  let youngest: number | null = null;
+  let who: string | null = null;
+  let refused: number | null = null;
+  for (const raw of messages) {
+    const t = flat(raw).replace(/[’‘]/g, "'");
+    const people = [...t.matchAll(/\b(?:(I(?: am|'m))|(?:my|our)\s+(friend|partner|wife|husband|brother|sister|son|daughter|cousin|girlfriend|boyfriend|mate|buddy|plus[- ]one|niece|nephew)(?:\s+is|,)|(?:he|she|they)\s+(?:is|are))\s+(\d{1,2})\b(?!\s*(?:%|\$|tickets?|seats?|people|pm|am|:|th|st|nd|rd))/gi)];
+    for (const m of people) {
+      const age = Number(m[3]);
+      if (age < 5 || age > 99) continue;
+      if (youngest === null || age < youngest) { youngest = age; who = m[1] ? 'you' : `your ${m[2]!.toLowerCase()}`; }
+    }
+    for (const m of t.matchAll(/(\d{1,2})[- ]year[- ]olds?\b/gi)) {
+      const age = Number(m[1]);
+      if (youngest === null || age < youngest) { youngest = age; who = 'one of you'; }
+    }
+    const r = /\b(?:no|not|can(?:no|')?t (?:go to|do|attend|get into)(?: an?| any)?|nothing)\s+(21|18)\s*\+/i.exec(t) ?? /\bunder (21|18)\b/i.exec(t);
+    if (r) refused = Number(r[1]);
+  }
+  return { youngest, who, refused };
+}
+
+/** Why a listing's own age rule rules it out for this group, or null when it doesn't (R2-CONCERT-AGE-01). */
+export function ageRuledOut(eventName: string, limits: ReturnType<typeof partyAgeLimits>): string | null {
+  const min = listedMinAge(eventName);
+  if (min === null) return null;
+  if (limits.youngest !== null && limits.youngest < min) return `it’s listed as ${min}+, and ${limits.who === 'you' ? 'you’re' : `${limits.who} is`} ${limits.youngest}`;
+  if (limits.refused !== null && limits.refused <= min) return `it’s listed as ${min}+, which you’ve ruled out`;
+  return null;
+}
+
+/**
+ * A provider title as a person would write it in an email (R2-EMAIL-HIERARCHY-01): "BACKSTAGE NASHVILLE! DAYTIME
+ * HIT SONGWRITERS SHOW featuring Marv Green , Clint Daniels , …" is "Backstage Nashville! Daytime Hit Songwriters
+ * Show"; the full billing stays on the event page the link opens. Short mixed-case titles are left as they are.
+ */
+export function readableTitle(name: string): string {
+  let x = name.replace(/\s+,/g, ',').replace(/\s{2,}/g, ' ').trim();
+  // The long guest list after "featuring" belongs to the page, not the line.
+  const feat = /\s+(?:featuring|feat\.?|ft\.?|with special guests?)\s+/i.exec(x);
+  if (feat && feat.index > 8) x = x.slice(0, feat.index).trim();
+  const letters = x.replace(/[^A-Za-z]/g, '');
+  if (letters.length > 8 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.8) {
+    const small = new Set(['a', 'an', 'and', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'vs', 'with']);
+    x = x.toLowerCase().replace(/[a-z][a-z'’]*/g, (w, i: number) => (i > 0 && small.has(w) ? w : w[0]!.toUpperCase() + w.slice(1)));
+  }
+  return x;
+}
+
+/** A listing's name without its age tag, for saying it back: "Dusky - 21+" is "Dusky". */
+export function withoutAgeTag(name: string): string {
+  return name.replace(/\s*[-–(]\s*(?:21|18)\s*(?:\+|and over|& over|and up)\s*\)?\s*$/i, '').trim();
+}
+
 export function exclusionsIn(text: string): Exclusion[] {
   const out = new Set<Exclusion>();
   const t = text.replace(/[’‘]/g, "'");
@@ -3908,7 +4018,9 @@ const GENRE_SUBS: Record<string, string[]> = { country: ['americana', 'bluegrass
 const BROADEN_OK = /\b(?:or anything(?: else)?|anything (?:else )?(?:is |would be )?(?:fine|good|ok|okay)|open to (?:other|anything)|other (?:genres|kinds of music|styles) (?:are |would be )?(?:fine|ok|okay)|doesn'?t have to be|not fussy|any genre)\b/i;
 /** How many shows they asked for: "one or two real options" is two, "a couple" two, "one show" one. */
 function requestedCount(text: string): number | null {
-  const m = /\b(one or two|1 or 2|a couple(?: of)?|two or three|2 or 3|one|two|three|1|2|3)\s+(?:real\s+|suitable\s+|good\s+|solid\s+|great\s+)?(?:options?|shows?|choices?|picks?|concerts?|events?|ideas?)\b/i.exec(text);
+  // Up to two describing words before the thing: "one or two official event links", "one or two original artist
+  // events", "one or two usable official options" (R2-EMAIL-HIERARCHY-01: these got three).
+  const m = /\b(one or two|1 or 2|a couple(?: of)?|two or three|2 or 3|one|two|three|1|2|3)\s+(?:(?:real|suitable|good|solid|great|usable|official|original|actual|specific|concrete|artist|event|ticket)\s+){0,3}(?:options?|shows?|choices?|picks?|concerts?|events?|ideas?|links?|listings?|artists?|nights?|gigs?)\b/i.exec(text);
   if (!m) return null;
   const w = m[1]!.toLowerCase();
   return /three|3$/.test(w) ? 3 : /two|2|couple/.test(w) ? 2 : 1;
