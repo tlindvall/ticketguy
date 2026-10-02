@@ -5,7 +5,7 @@ import { HeroDemo } from './HeroDemo';
 import { TrustSection } from './TrustSection';
 import { PixelCursor } from './PixelCursor';
 import { Proof } from './Proof';
-import { AddressBook, vcardHref } from './AddressBook';
+import { AddressBook } from './AddressBook';
 import { CopyAddress } from './CopyAddress';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
@@ -66,21 +66,18 @@ export function InboxHome({ state, address, preview = false }: Props) {
         <section className="hero wrap" aria-labelledby="hero-title">
           <div className="hero-copy">
             <h1 id="hero-title">You’ve finally got a ticket guy.</h1>
-            <p className="hero-lede">Found tickets? Get a second opinion before you buy.</p>
-            <p className="hero-focus">Independent ticket advice for concerts and major sports across the US.</p>
+            <p className="hero-lede">Send a ticket link or screenshot. I’ll help you decide.</p>
             <div className="hero-cta">
               <a className="btn-lime btn-big" href={mailto(general)}>{cta} <span aria-hidden="true">›</span></a>
               <CopyAddress address={address} />
             </div>
-            <p className="mono-note hero-note">Free. No app. Just email <a href={mailto(general)}>{address}</a>.</p>
-            <p className="hero-alt">Don’t have tickets in mind? <a href={mailto('Looking for tickets', 'Artist, team or event:\nCity or venue, and date:\nHow many tickets (optional):\n')}>Tell me what you’re looking for ›</a></p>
-            <p className="hero-save"><a href={vcardHref(address)} download="ticket-guy.vcf"><span className="abook-icon" aria-hidden="true" />Save your ticket guy to your contacts</a></p>
+            <p className="hero-note">Free. No app. Just email.</p>
           </div>
           <HeroDemo address={address} />
         </section>
 
 
-        <Proof mailto={mailto(general)} />
+        <Proof />
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>
@@ -91,7 +88,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
                 <div className="step3-bar"><EnvelopeIcon /> New message</div>
                 <div className="step3-body">
                   <h3>Send what you’re looking at.</h3>
-                  <p>A link, a screenshot or a few words about the event and what matters to you.</p>
+                  <p>A link or a screenshot. No tickets in mind yet? Just tell me what you’re looking for.</p>
                   <div className="step3-demo">
                     <span className="mono">To: {address}</span>
                     <span className="step3-send">Send ›<PixelCursor className="step3-click" /></span>
