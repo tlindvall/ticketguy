@@ -1,39 +1,36 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CopyAddress } from './CopyAddress';
-import { PaperclipIcon } from './icons';
+import { EXAMPLES, EXAMPLE_EVENT, type ExampleKey } from './examples';
+import { GuyMark, type GuyMood } from './GuyMark';
+import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import { PixelCursor } from './PixelCursor';
 
 /**
- * The hero: the one real "New message" window, playing its own demonstration once. A second-opinion request
- * types itself (a SeatGeek link, a screenshot attached, the group), a pixel cursor presses the button, and the
- * illustrative reply works from what the listing says, with the market trend labelled as context. It judges that listing: whether it meets the request, the group total with fees, the market, the call
- * and when not to follow it, and the seller link. Everything
- * stays real: the fields are editable and the button opens the visitor's email app with exactly that text
- * (nothing reaches us until they press send there). Touching the composer stops the demonstration and
- * hands it over. Visitors who ask for reduced motion get the finished state at once.
+ * The hero: the one real "New message" window and its illustrative reply. Above it sits a little inbox of three
+ * subject lines; picking one plays that exchange (the request types itself, a pixel cursor presses the button,
+ * the reply lands with a "New mail" flash and the ticket guy pops up over the window). The questions section
+ * further down can ask for an example too (EXAMPLE_EVENT). Everything stays real: the fields are editable and
+ * the button opens the visitor's email app with exactly that text. Touching the composer stops the
+ * demonstration and hands it over. Reduced motion shows the finished state at once.
  */
-const SUBJECT = 'Is this a good deal?';
-const LINK = 'seatgeek.com/new-york-knicks-tickets/11-4-2026…';
-const ASK = '\nFive of us, want to sit together.';
-const BODY = LINK + ASK;
-
-// Illustrative: upper-level asking prices over 30 days, up to a peak and then down (aggregate, not a group basket).
-const SERIES = [146, 145, 147, 144, 146, 145, 147, 146, 148, 147, 150, 149, 152, 155, 158, 161, 165, 168, 170, 169, 166, 162, 158, 153, 149, 145, 141, 137, 134, 130];
-
 type Phase = 'idle' | 'subject' | 'body' | 'attach' | 'ask' | 'cursor' | 'press' | 'checking' | 'reply' | 'done';
 
 export function HeroDemo({ address, cta }: { address: string; cta: string }) {
+  const [current, setCurrent] = useState<ExampleKey>('wait');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [guy, setGuy] = useState<GuyMood | null>(null);
   // The reply overlaps the composer once it lands; touching the composer brings the composer back to the front.
   const [composeFront, setComposeFront] = useState(false);
   const timers = useRef<number[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const handedOver = useRef(false);
+  const reduced = useRef(false);
+  const ex = EXAMPLES.find((e) => e.key === current)!;
 
   const clear = () => {
     timers.current.forEach((id) => window.clearTimeout(id));
@@ -41,30 +38,32 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   };
   const at = (ms: number, fn: () => void) => { timers.current.push(window.setTimeout(fn, ms)); };
 
-  const finish = useCallback(() => {
+  const finish = useCallback((key: ExampleKey) => {
     clear();
-    setSubject((s) => s || SUBJECT);
-    setBody((b) => b || BODY);
-    setCursor(null);
-    setPhase('done');
+    const e = EXAMPLES.find((x) => x.key === key)!;
+    setSubject(e.subject); setBody(e.link + e.ask); setCursor(null); setPhase('done'); setGuy('idle');
   }, []);
 
-  const play = useCallback(() => {
+  const play = useCallback((key: ExampleKey, quick = false) => {
     clear();
+    const e = EXAMPLES.find((x) => x.key === key)!;
     handedOver.current = false;
-    setSubject(''); setBody(''); setCursor(null); setPhase('idle'); setComposeFront(false);
-    let t = 700;
+    setCurrent(key);
+    if (reduced.current) { setComposeFront(false); finish(key); return; }
+    const k = quick ? 0.55 : 1;
+    setSubject(''); setBody(''); setCursor(null); setPhase('idle'); setComposeFront(false); setGuy(null);
+    let t = quick ? 250 : 700;
     at(t, () => setPhase('subject'));
-    for (let i = 1; i <= SUBJECT.length; i++) at(t + i * 55, () => setSubject(SUBJECT.slice(0, i)));
-    t += SUBJECT.length * 55 + 350;
+    for (let i = 1; i <= e.subject.length; i++) at(t + i * 55 * k, () => setSubject(e.subject.slice(0, i)));
+    t += e.subject.length * 55 * k + 300 * k;
     at(t, () => setPhase('body'));
-    for (let i = 1; i <= LINK.length; i++) at(t + i * 22, () => setBody(LINK.slice(0, i)));
-    t += LINK.length * 22 + 300;
+    for (let i = 1; i <= e.link.length; i++) at(t + i * 20 * k, () => setBody(e.link.slice(0, i)));
+    t += e.link.length * 20 * k + 260 * k;
     at(t, () => setPhase('attach'));
-    t += 700;
+    t += 600 * k;
     at(t, () => setPhase('ask'));
-    for (let i = 1; i <= ASK.length; i++) at(t + i * 34, () => setBody(LINK + ASK.slice(0, i)));
-    t += ASK.length * 34 + 500;
+    for (let i = 1; i <= e.ask.length; i++) at(t + i * 32 * k, () => setBody(e.link + e.ask.slice(0, i)));
+    t += e.ask.length * 32 * k + 450 * k;
     at(t, () => {
       const w = wrap.current?.getBoundingClientRect();
       const b = button.current?.getBoundingClientRect();
@@ -78,30 +77,35 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
     at(t, () => setPhase('press'));
     t += 260;
     at(t, () => setPhase('checking'));
-    t += 1300;
-    at(t, () => { setCursor(null); setPhase('reply'); });
-    t += 4000;
-    at(t, () => setPhase('done'));
-  }, []);
+    t += 1200;
+    at(t, () => { setCursor(null); setPhase('reply'); setGuy('smile'); });
+    t += 1700;
+    at(t, () => setGuy('idle'));
+    t += 2300;
+    at(t, () => { setPhase('done'); setGuy('wink'); });
+    t += 450;
+    at(t, () => setGuy('idle'));
+  }, [finish]);
 
   useEffect(() => {
-    let reduced = false;
     try {
-      reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      reduced.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     } catch {
       // No matchMedia: play as normal.
     }
     // Start on the next tick, not inside the effect body (no cascading render on mount).
-    const start = window.setTimeout(() => (reduced ? finish() : play()), 0);
-    return () => { window.clearTimeout(start); clear(); };
-  }, [finish, play]);
+    const start = window.setTimeout(() => play('wait'), 0);
+    const onAsk = (e: Event) => play((e as CustomEvent<ExampleKey>).detail, true);
+    window.addEventListener(EXAMPLE_EVENT, onAsk);
+    return () => { window.clearTimeout(start); clear(); window.removeEventListener(EXAMPLE_EVENT, onAsk); };
+  }, [play]);
 
-  // The visitor takes over: stop the film, keep whatever is in the fields (filling any still empty).
+  // The visitor takes over: stop the film and finish this example's fields so they can edit and send it.
   const takeOver = () => {
     setComposeFront(true);
     if (handedOver.current || phase === 'done') return;
     handedOver.current = true;
-    finish();
+    finish(current);
   };
 
   const href = `mailto:${address}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -110,71 +114,98 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const replied = phase === 'reply' || phase === 'done';
 
   const W = 320, H = 64, P = 6;
-  const lo = Math.min(...SERIES), hi = Math.max(...SERIES);
-  const pts = SERIES.map((v, i) => `${(P + (i / (SERIES.length - 1)) * (W - 2 * P)).toFixed(1)},${(P + (1 - (v - lo) / (hi - lo)) * (H - 2 * P)).toFixed(1)}`);
-  const line = pts.join(' ');
-  const [lx, ly] = pts[pts.length - 1]!.split(',');
+  const series = ex.market?.series;
+  let line = '', lx = '0', ly = '0';
+  if (series) {
+    const lo = Math.min(...series), hi = Math.max(...series);
+    const pts = series.map((v, i) => `${(P + (i / (series.length - 1)) * (W - 2 * P)).toFixed(1)},${(P + (1 - (v - lo) / (hi - lo)) * (H - 2 * P)).toFixed(1)}`);
+    line = pts.join(' ');
+    [lx, ly] = pts[pts.length - 1]!.split(',') as [string, string];
+  }
 
   return (
-    <div className={`hero-demo${composeFront ? ' compose-front' : ''}`} ref={wrap}>
-      <form className="compose" aria-label="Write to your ticket guy" onSubmit={(e) => { e.preventDefault(); window.location.href = href; }} onPointerDown={takeOver} onFocus={takeOver}>
-        <div className="compose-titlebar">New message</div>
-        <div className="compose-row">
-          <span className="compose-label">To:</span>
-          <a className="compose-to" href={`mailto:${address}`}>{address}</a>
-        </div>
-        <label className="compose-row">
-          <span className="compose-label">Subject:</span>
-          <input className="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={140} placeholder={phase === 'done' ? 'Is this a good deal?' : ''} />
-        </label>
-        <label className="compose-body-wrap">
-          <span className="sr-only">Message</span>
-          <textarea className="compose-body" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={2000} placeholder={phase === 'done' ? 'Paste your ticket link and tell me how many you need.' : ''} />
-          {attached ? (
-            <span className="compose-file" aria-label="Attached: seatgeek-section-414.png">
-              <span className="compose-file-thumb" aria-hidden="true"><i /><i /><i /></span>
-              <span className="mono">seatgeek-section-414.png</span>
-            </span>
-          ) : null}
-        </label>
-        <div className="compose-footer">
-          <span className="compose-attach"><PaperclipIcon /><span>Opens your email app. You send it from there.</span></span>
-          <CopyAddress address={address} />
-          <button type="submit" ref={button} className={`btn-lime${phase === 'press' ? ' is-pressed' : ''}`}>{cta} <span aria-hidden="true">›</span></button>
-        </div>
-      </form>
+    <div className="hero-demo">
+      <div className="inbox-strip" role="group" aria-label="Pick an example question">
+        <span className="inbox-strip-bar"><EnvelopeIcon /> Try asking</span>
+        {EXAMPLES.map((e) => (
+          <button key={e.key} type="button" className={`inbox-row${e.key === current ? ' is-on' : ''}`} aria-pressed={e.key === current} onClick={() => play(e.key, true)}>
+            <span className="mono">Subject:</span> {e.subject}
+          </button>
+        ))}
+      </div>
 
-      <article className={`hero-reply${showReply ? ' is-shown' : ''}${replied ? ' is-replied' : ''}`} aria-label="Illustrative example of a reply, not a live offer" aria-hidden={!showReply}>
-        <div className="reply-titlebar"><span>Re: Is this a good deal?</span><span className="reply-flag">Illustrative example — not a live offer</span></div>
-        {replied ? (
-          <div className="hero-reply-body">
-            <p className="hr-line hr-1 hr-event">Bulls at Knicks · Wed, Nov 4 · Madison Square Garden</p>
-            <p className="hr-line hr-1 hr-says">The listing says:</p>
-            <ul className="hr-line hr-1 hr-facts">
-              <li><span className="hr-ok" aria-hidden="true">·</span><span><strong>5 tickets</strong>, Section 414, Row 3</span><span className="hr-tag">Seat numbers not shown</span></li>
-              <li><span className="hr-ok" aria-hidden="true">·</span><span><strong>$1,605 for five</strong>, fees included</span><span className="hr-tag">$321 each</span></li>
-              <li><span className="hr-ok" aria-hidden="true">·</span><span><strong>Mobile tickets</strong>, delivered by Nov 2</span><span className="hr-tag">2 days before</span></li>
-            </ul>
-            <div className="hr-line hr-2 hr-found">
-              <p>Asking prices in the upper level <span className="hr-trend">▼ 12% this week</span></p>
-              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Asking prices in the upper level over the last 30 days: up to a peak, now falling">
-                <polyline points={line} className="hr-path" pathLength={1} />
-                <circle cx={lx} cy={ly} r="5" className="hr-dot" />
-              </svg>
-            </div>
-            <p className="hr-line hr-punch"><em className="hr-verdict">My call: hold off</em>Prices are trending down. <span>Down 12% this week in the upper level. Reply any time and I’ll check again.</span></p>
-            <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
+      <div className={`hero-stack${composeFront ? ' compose-front' : ''}`} ref={wrap}>
+        <form className="compose win" aria-label="Write to your ticket guy" onSubmit={(e) => { e.preventDefault(); window.location.href = href; }} onPointerDown={takeOver} onFocus={takeOver}>
+          <div className="win-bar"><EnvelopeIcon /> New message</div>
+          <div className="compose-row">
+            <span className="compose-label">To:</span>
+            <a className="compose-to" href={`mailto:${address}`}>{address}</a>
           </div>
-        ) : (
-          <p className="hero-reply-checking">Reading your listing and screenshot<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
-        )}
-        {phase === 'done' ? <button type="button" className="hero-replay" onClick={play}>Replay</button> : null}
-        {replied ? <button type="button" className="hero-reply-close" onClick={() => setComposeFront(true)} aria-label="Back to the message">×</button> : null}
-      </article>
+          <label className="compose-row">
+            <span className="compose-label">Subject:</span>
+            <input className="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={140} placeholder={phase === 'done' ? ex.subject : ''} />
+          </label>
+          <label className="compose-body-wrap">
+            <span className="sr-only">Message</span>
+            <textarea className="compose-body" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={2000} placeholder={phase === 'done' ? 'Paste your ticket link and tell me how many you need.' : ''} />
+            {attached ? (
+              <span className="compose-file" aria-label={`Attached: ${ex.file}`}>
+                <span className="compose-file-thumb" aria-hidden="true"><i /><i /><i /></span>
+                <PaperclipIcon />
+                <span className="mono">{ex.file}</span>
+              </span>
+            ) : null}
+          </label>
+          <div className="compose-footer">
+            <span className="compose-attach"><PaperclipIcon /><span>Opens your email app. You send it from there.</span></span>
+            <CopyAddress address={address} />
+            <button type="submit" ref={button} className={`btn-lime${phase === 'press' ? ' is-pressed' : ''}`}>{cta} <span aria-hidden="true">›</span></button>
+          </div>
+        </form>
 
-      {cursor ? (
-        <PixelCursor className={`hero-cursor${phase === 'press' ? ' is-down' : ''}`} style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} />
-      ) : null}
+        <div className={`hero-reply-wrap${showReply ? ' is-shown' : ''}`}>
+          <span className={`hero-guy${guy ? ' is-up' : ''}`} aria-hidden="true"><GuyMark mood={guy ?? 'idle'} /></span>
+          <article key={current} className={`hero-reply win${replied ? ' is-replied' : ''}`} aria-label="Illustrative example of a reply, not a live offer" aria-hidden={!showReply}>
+            <div className="win-bar reply-titlebar">
+              <span><ReplyIcon /> Re: {ex.subject}</span>
+              {phase === 'reply' ? <span className="new-mail">New mail</span> : null}
+              <span className="reply-flag">Illustrative example — not a live offer</span>
+            </div>
+            {replied ? (
+              <div className="hero-reply-body">
+                <p className="hr-line hr-1 hr-event">{ex.event}</p>
+                <p className="hr-line hr-1 hr-says">The listing says:</p>
+                <ul className="hr-line hr-1 hr-facts">
+                  {ex.facts.map((f) => (
+                    <li key={f.strong} className={f.flag ? 'is-flag' : undefined}><span className="hr-ok" aria-hidden="true">{f.flag ? '!' : '·'}</span><span><strong>{f.strong}</strong>{f.rest}</span><span className="hr-tag">{f.tag}</span></li>
+                  ))}
+                </ul>
+                {ex.market ? (
+                  <div className="hr-line hr-2 hr-found">
+                    <p>{ex.market.label} <span className="hr-trend">{ex.market.value}</span></p>
+                    {series ? (
+                      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Asking prices over the last 30 days: up to a peak, now falling">
+                        <polyline points={line} className="hr-path" pathLength={1} />
+                        <circle cx={lx} cy={ly} r="5" className="hr-dot" />
+                      </svg>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="hr-line hr-punch"><em className="hr-verdict">{ex.verdict}</em>{ex.call} <span>{ex.note}</span></p>
+                <p className="hr-line hr-link"><span className="link">View the seller’s listing ↗</span></p>
+              </div>
+            ) : (
+              <p className="hero-reply-checking">Reading your listing and screenshot<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></p>
+            )}
+            {phase === 'done' ? <button type="button" className="hero-replay" onClick={() => play(current, true)}>Replay</button> : null}
+            {replied ? <button type="button" className="hero-reply-close" onClick={() => setComposeFront(true)} aria-label="Back to the message">×</button> : null}
+          </article>
+        </div>
+
+        {cursor ? (
+          <PixelCursor className={`hero-cursor${phase === 'press' ? ' is-down' : ''}`} style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} />
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -4,9 +4,9 @@ import { SvgLibrary } from '@/components/public/Landing';
 import { HeroDemo } from './HeroDemo';
 import { TrustSection } from './TrustSection';
 import { PixelCursor } from './PixelCursor';
-import { FloatingGuy } from './FloatingGuy';
-import { EventTypes } from './EventTypes';
-import { AskTabs } from './AskTabs';
+import { Questions } from './Questions';
+import { AddressBook, vcardHref } from './AddressBook';
+import { CopyAddress } from './CopyAddress';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import './inbox.css';
 
@@ -19,9 +19,9 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and the reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + focus + composer (with its labelled example reply) → three things to ask (AskTabs) → how it works →
- * your side of the market (principles; the source map is on /sources) → coverage (concerts and major sports) →
- * a catch-check example → FAQ → closing. Claims follow the service-depth policy: no unmeasured reply times, examples
+ * Order: promise + composer (three example questions play their labelled replies) → three questions to ask →
+ * how it works → your side of the market (principles; the source map is on /sources) → FAQ → closing with the
+ * address-book card. Claims follow the service-depth policy: no unmeasured reply times, examples
  * labelled, market data described as context, listing facts attributed to the listing.
  *
  */
@@ -30,14 +30,12 @@ type Props = { state: LaunchState; address: string; preview?: boolean };
 
 
 const FAQ: Array<{ q: string; a: string }> = [
-  { q: 'What does it cost?', a: 'Nothing. Ticket Guy is free. Some seller links pay us a commission if you buy, but that never decides what we recommend.' },
+  { q: 'What does it cost?', a: 'Nothing. Ticket Guy is free. With some sellers we’re an affiliate: if you buy through our link, the seller pays us a commission. That never decides what we recommend.' },
   { q: 'What happens after I email?', a: 'Replies arrive in the same email thread. If a detail is missing, we ask first. Reply any time to follow up. Emailing us doesn’t sign you up for anything else.' },
-  { q: 'Which events can you help with?', a: 'Concerts and major sports are our main focus. For other US events, send the details and we’ll tell you how much we can help. The depth of help depends on the event and the information available.' },
-  { q: 'Can you tell me whether to buy now or wait?', a: 'When useful, comparable price history is available, I’ll explain how prices are moving and what that means for your plans. A fall in the cheapest single-ticket price doesn’t necessarily help a group that needs to sit together. If there isn’t enough evidence, I’ll say so.' },
-  { q: 'Where do you cover?', a: 'US events. Send the city, venue or event link; market data and listing coverage vary by event.' },
-  { q: 'Who replies?', a: 'Ticket Guy is an AI ticket assistant overseen by our team. It uses your request, the information you send and available event and market data to give you a useful answer. If something hasn’t been verified, the reply says so.' },
-  { q: 'How do you make money?', a: 'Ticket Guy is always free for you. With some ticket sellers we’re an affiliate: if you buy through our link, the seller pays us a commission. It never decides what we recommend.' },
-  { q: 'Can you guarantee the lowest price, or that tickets are valid?', a: 'No. I tell you what to check: the total with fees, where the seats are and when the tickets arrive. You buy from the seller, and the seller is responsible for the tickets, delivery and refunds.' },
+  { q: 'Which events can you help with?', a: 'Concerts and major sports across the US are our focus. For other US events, send the details and we’ll tell you how much we can help.' },
+  { q: 'Can you tell me whether to buy now or wait?', a: 'When there’s enough comparable price history, yes: how prices are moving and what I’d do. A fall in the cheapest single ticket doesn’t always help a group that wants to sit together, and if the evidence is thin, I’ll say so.' },
+  { q: 'Who replies?', a: 'Ticket Guy is an AI ticket assistant overseen by our team. It works from your request, what the listing says and available market data. If something hasn’t been verified, the reply says so.' },
+  { q: 'Can you guarantee the price, or that tickets are valid?', a: 'No. I read what the listing says and tell you what to confirm: the total with fees, where the seats are and when the tickets arrive. You buy from the seller, and the seller is responsible for the tickets, delivery and refunds.' },
 ];
 
 export function InboxHome({ state, address, preview = false }: Props) {
@@ -72,12 +70,13 @@ export function InboxHome({ state, address, preview = false }: Props) {
             <p className="hero-focus">Independent ticket advice for concerts and major sports across the US.</p>
             <p className="mono-note hero-note">Free. No app. Just email.</p>
             <p className="hero-alt">Don’t have tickets in mind? <a href={mailto('Looking for tickets', 'Artist, team or event:\nCity or venue, and date:\nHow many tickets (optional):\n')}>Tell me what you’re looking for ›</a></p>
+            <p className="hero-save"><a href={vcardHref(address)} download="ticket-guy.vcf"><span className="abook-icon" aria-hidden="true" />Save your ticket guy to your contacts</a></p>
           </div>
           <HeroDemo address={address} cta={cta} />
         </section>
 
 
-        <AskTabs address={address} />
+        <Questions address={address} />
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>
@@ -125,33 +124,6 @@ export function InboxHome({ state, address, preview = false }: Props) {
 
         <TrustSection />
 
-        <EventTypes />
-
-        <section className="catch wrap" aria-labelledby="catch-title">
-          <div className="catch-copy">
-            <p className="catch-kicker">Cheap for a reason?</p>
-            <h2 id="catch-title">Cheap seats usually have a catch. <mark>I find it before you pay.</mark></h2>
-            <ul className="catch-checks" aria-label="What I check">
-              <li><span className="catch-num" aria-hidden="true">01</span><b>View</b> Limited, obstructed or side-on</li>
-              <li><span className="catch-num" aria-hidden="true">02</span><b>Delivery</b> When the tickets actually reach you</li>
-              <li><span className="catch-num" aria-hidden="true">03</span><b>Fees</b> What the price leaves out</li>
-            </ul>
-            <a className="btn-lime" href={mailto('These seats look cheap. What’s the catch?', 'Ticket link or screenshot:\nWhat you’re unsure about (optional):\n')}>Check a listing <span aria-hidden="true">›</span></a>
-          </div>
-          <article className="catch-mail" aria-label="Illustrative example of a reply that spots a catch, not a live offer">
-            <div className="reply-titlebar"><span>Re: These seats look cheap. What’s the catch?</span><span className="reply-flag">Illustrative example — not a live offer</span></div>
-            <p className="catch-asked"><span className="mono">You asked:</span> Two in Section 112 for $95 each. Seems low?</p>
-            <div className="catch-body">
-              <p className="catch-call">Two catches on this one.</p>
-              <ul className="catch-list">
-                <li><span className="catch-label">View</span> The listing says limited view.</li>
-                <li><span className="catch-label">Delivery</span> The listing says delivery the day before the show.</li>
-              </ul>
-              <p className="catch-next"><strong>$190 for two, before any fees not shown.</strong> If you want a clear view or need the tickets before travelling, I’d compare another option first.</p>
-            </div>
-          </article>
-        </section>
-
         <section id="faq" className="faq wrap" aria-labelledby="faq-title">
           <h2 id="faq-title">Before you send.</h2>
           <div className="faq-list">
@@ -165,15 +137,16 @@ export function InboxHome({ state, address, preview = false }: Props) {
         </section>
 
         <section className="closing" aria-labelledby="closing-title">
-          <div className="wrap">
-            <h2 id="closing-title">{live ? 'Already looking at tickets? Send them over.' : 'Before you buy, ask your guy.'}</h2>
-            <a className="closing-address" href={mailto(general)}>{address}</a>
-            <p>{live ? 'Free. Replies arrive in the same email thread.' : 'Email for early access.'}</p>
+          <div className="wrap closing-grid">
+            <div>
+              <h2 id="closing-title">{live ? 'Already looking at tickets? Send them over.' : 'Before you buy, ask your guy.'}</h2>
+              <a className="closing-address" href={mailto(general)}>{address}</a>
+              <p>{live ? 'Free. Replies arrive in the same email thread.' : 'Email for early access.'} <CopyAddress address={address} className="closing-copy" /></p>
+            </div>
+            <AddressBook address={address} />
           </div>
         </section>
       </main>
-
-      <FloatingGuy />
 
       <footer className="tgx-footer wrap">
         <p>Prices and availability can change.</p>

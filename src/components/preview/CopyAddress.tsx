@@ -11,14 +11,14 @@ export function CopyAddress({ address, className = 'compose-copy', label = 'Copy
     try {
       await navigator.clipboard.writeText(address);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      setTimeout(() => setCopied(false), 2800);
     } catch {
       window.prompt('Copy the address:', address);
     }
   };
   return (
-    <button type="button" className={className} onClick={copy} aria-live="polite">
-      {copied ? 'Address copied' : label}
+    <button type="button" className={`${className}${copied ? ' is-copied' : ''}`} onClick={copy} aria-live="polite">
+      {copied ? 'Copied. Your guy’s one paste away.' : label}
     </button>
   );
 }

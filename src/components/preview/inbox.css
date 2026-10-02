@@ -53,31 +53,13 @@
 .tgx .status { border: 2px solid var(--ink); border-radius: 4px; padding: 3px 10px; background: linear-gradient(180deg, #fff, var(--paper) 60%, #e9ebee); font: 700 13px/1.4 var(--sans); box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 rgba(20, 36, 56, .18), 0 2px 0 var(--ink); }
 
 /* A second example: a reply that spots the catch */
-.tgx .catch { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(32px, 5vw, 80px); align-items: center; padding-block: clamp(56px, 8vw, 112px); border-top: 1px solid var(--line); }
-.tgx .catch-kicker { margin-bottom: 14px; font-size: 15px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
-.tgx .catch h2 { font-size: clamp(30px, 3.4vw, 46px); line-height: 1.05; font-weight: 800; letter-spacing: -.045em; }
-.tgx .catch h2 mark { display: inline; padding: 0 .08em; background: linear-gradient(transparent 58%, var(--lime) 58%); color: inherit; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-.tgx .catch-checks { display: grid; margin: 28px 0 30px; padding: 0; list-style: none; border-top: 1px solid var(--ink); }
-.tgx .catch-checks li { display: grid; grid-template-columns: 40px 96px 1fr; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 17px; color: var(--muted); }
-.tgx .catch-checks b { color: var(--ink); font-weight: 800; }
-.tgx .catch-num { font: 13px var(--mono); color: var(--muted); }
-.tgx .catch-mail { background: var(--paper); border: 1px solid var(--ink); box-shadow: 8px 8px 0 rgba(20, 36, 56, .14); }
-.tgx .catch-asked { margin: 0 18px; padding-block: 12px; border-bottom: 1px solid var(--desk-soft); font-size: 15px; color: var(--muted); }
-.tgx .catch-asked .mono { margin-right: 8px; font-size: 13px; }
-.tgx .catch-body { padding: 18px 18px 22px; }
-.tgx .catch-call { font-size: clamp(22px, 2vw, 28px); line-height: 1.1; font-weight: 800; letter-spacing: -.035em; }
-.tgx .catch-list { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
-.tgx .catch-list li { padding: 10px 14px; background: #f3f9d6; border-left: 3px solid var(--ink); font-size: 16px; line-height: 1.4; }
-.tgx .catch-label { display: inline-block; min-width: 82px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
-.tgx .catch-next { margin-top: 14px; font-size: 16px; line-height: 1.5; color: var(--muted); }
-.tgx .catch-next strong { color: var(--ink); }
-@media (max-width: 900px) { .tgx .catch { grid-template-columns: 1fr; } .tgx .catch-checks li { grid-template-columns: 34px 84px 1fr; font-size: 16px; } }
 
 /* Hero: the promise and the one real composer, side by side on desktop */
-.tgx .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: start; gap: clamp(28px, 4vw, 64px); padding-block: clamp(32px, 5vw, 64px) clamp(40px, 6vw, 72px); }
+.tgx .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: start; gap: clamp(28px, 4vw, 64px); padding-block: clamp(20px, 2.4vw, 32px) clamp(40px, 6vw, 72px); }
 .tgx .hero h1 { max-width: 13ch; font-size: clamp(44px, 5.5vw, 84px); line-height: .94; font-weight: 800; letter-spacing: -.05em; text-wrap: balance; }
 .tgx .hero-lede { margin-top: clamp(16px, 2vw, 26px); max-width: 26ch; font-size: clamp(21px, 2.1vw, 30px); line-height: 1.2; font-weight: 700; letter-spacing: -.02em; text-wrap: balance; }
 .tgx .hero-demo { position: relative; }
+.tgx .hero-stack { position: relative; }
 .tgx .mono-note { margin-top: 18px; font: 15px/1.5 var(--sans); color: var(--muted); }
 .tgx .hero-copy { padding-top: clamp(0px, 4vw, 56px); }
 .tgx .hero-focus { margin-top: 14px; max-width: 36ch; font-size: 18px; line-height: 1.4; font-weight: 600; color: var(--muted); }
@@ -86,10 +68,11 @@
 .tgx .hero-alt a { color: var(--link-strong); font-weight: 600; text-underline-offset: 3px; }
 
 /* Hero demonstration: the reply window cascades under the composer; its space is reserved, so nothing shifts */
-.tgx .hero-reply { position: relative; z-index: 2; margin: -330px 0 0 48px; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .09); min-height: 200px; opacity: 0; transform: translateY(14px); transition: opacity .35s ease, transform .35s ease; }
-.tgx .hero-reply.is-shown { opacity: 1; transform: none; }
+.tgx .hero-reply-wrap { position: relative; z-index: 2; margin: -330px 0 0 48px; opacity: 0; transform: translateY(14px); transition: opacity .35s ease, transform .35s ease; }
+.tgx .hero-reply-wrap.is-shown { opacity: 1; transform: none; }
+.tgx .hero-reply { position: relative; z-index: 1; min-height: 200px; }
 .tgx .compose-front .compose { z-index: 3; }
-.tgx .compose-front .hero-reply { z-index: 1; }
+.tgx .compose-front .hero-reply-wrap { z-index: 1; }
 .tgx .hero-reply-close { position: absolute; right: 10px; top: 6px; border: 0; padding: 0 4px; background: none; color: var(--cream); font: 18px/1 var(--sans); cursor: pointer; opacity: .8; }
 .tgx .hero-reply-close:hover, .tgx .hero-reply-close:focus-visible { opacity: 1; }
 .tgx .compose-front .hero-reply-close { display: none; }
@@ -182,17 +165,11 @@
 }
 
 /* Reply window chrome, shared by the hero reply */
-.tgx .reply-titlebar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 7px 14px; background: var(--ink); color: var(--cream); font: 14px/1.4 var(--mono); letter-spacing: .02em; }
+.tgx .reply-titlebar { flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; }
+.tgx .reply-titlebar > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
 .tgx .reply-flag { color: var(--lime); letter-spacing: .06em; text-transform: uppercase; font-size: 12px; }
 
 /* Coverage: concerts and major sports on a navy band, a short static list */
-.tgx .ticker { padding-block: clamp(40px, 6vw, 72px); background: var(--ink); color: var(--cream); }
-.tgx .ticker h2 { font-size: clamp(30px, 4.4vw, 56px); line-height: 1.02; font-weight: 800; letter-spacing: -.045em; text-wrap: balance; }
-.tgx .cover-list { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 0; padding: 0; list-style: none; }
-.tgx .cover-list + .cover-list { margin-top: 12px; }
-.tgx .cover-list li { padding: 10px 18px; border: 1px solid rgba(247, 244, 236, .4); border-radius: 999px; font-size: clamp(16px, 1.6vw, 21px); font-weight: 800; letter-spacing: -.02em; }
-.tgx .cover-list.is-music li { border-color: var(--lime); color: var(--lime); }
-.tgx .cover-more { margin-top: 22px; font-size: 17px; color: rgba(247, 244, 236, .82); }
 
 /* Your side of the ticket market (homepage) */
 .tgx .trust { padding-block: clamp(40px, 6vw, 72px); border-top: 1px solid var(--line); }
@@ -228,8 +205,7 @@
 .tgx .faq details p { max-width: 64ch; padding: 0 2px 18px; font-size: 17px; line-height: 1.55; color: var(--muted); }
 
 /* Compose window */
-.tgx .compose { position: relative; z-index: 1; background: var(--paper); border: 1px solid #8e98a6; box-shadow: 6px 6px 0 rgba(20, 36, 56, .07); }
-.tgx .compose-titlebar { padding: 7px 14px; background: var(--ink); color: var(--cream); font: 14px/1.4 var(--mono); letter-spacing: .02em; }
+.tgx .compose { position: relative; z-index: 1; }
 .tgx .compose-row { display: flex; align-items: baseline; gap: 12px; margin-inline: 18px; padding-block: 11px; border-bottom: 1px solid var(--desk-soft); font: 15px/1.4 var(--mono); }
 .tgx .compose-label { flex: 0 0 76px; color: var(--muted); }
 .tgx .compose-to { color: var(--link); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
@@ -254,52 +230,8 @@
 .tgx .btn-lime:focus-visible, .tgx .btn-plain:focus-visible { outline: 2px dashed var(--ink); outline-offset: 5px; }
 
 /* Three things to ask: categories on the left, a full-height scene with its email on the right */
-.tgx .asks { --bleed: calc((100vw - min(100vw - var(--gutter) * 2, var(--max))) / 2); display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: clamp(28px, 4vw, 64px); padding-block: clamp(48px, 7vw, 96px) 0; border-top: 1px solid var(--line); }
-.tgx .asks-left { padding-bottom: 10vh; }
-.tgx .asks-kicker { position: sticky; top: 0; z-index: 1; padding-block: 18px 12px; background: var(--cream); font-size: 15px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
 /* Each ask is a screen of scroll; the one in the middle is lit, the others recede. */
-.tgx .asks-step { display: flex; flex-direction: column; justify-content: center; min-height: 82vh; padding-block: 40px; border-top: 1px solid var(--line); opacity: .28; transform: translateY(10px); transition: opacity .5s ease, transform .5s ease; }
-.tgx .asks-step.is-active { opacity: 1; transform: none; }
-.tgx .asks-count { font: 13px var(--mono); color: var(--muted); }
-.tgx .asks-label { margin: 8px 0 14px; font: 800 clamp(40px, 5vw, 68px)/.95 var(--sans); letter-spacing: -.045em; }
-.tgx .asks-line { max-width: 44ch; font-size: 19px; line-height: 1.5; color: var(--muted); }
-.tgx .asks-step .btn-lime { align-self: flex-start; margin-top: 24px; }
-.tgx .asks-points { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
-.tgx .asks-points li { position: relative; padding-left: 26px; font-size: 16px; line-height: 1.45; color: var(--ink); }
-.tgx .asks-points li::before { content: "✓"; position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 18px; height: 18px; background: var(--lime); border: 1px solid var(--ink); font-size: 11px; font-weight: 800; }
-.tgx .asks-media { display: none; }
 /* The stage: sticky, full height of the screen, bleeding to the right edge. */
-.tgx .asks-stage { position: sticky; top: 0; height: 100vh; height: 100svh; margin-right: calc(var(--bleed) * -1); overflow: hidden; background: var(--ink); }
-.tgx .asks-scene { position: absolute; inset: 0; opacity: 0; transition: opacity .7s ease; }
-.tgx .asks-scene.is-on { opacity: 1; }
-.tgx .asks-scene img { object-fit: cover; object-position: 50% 25%; transform: scale(1.06); transition: transform 1.6s cubic-bezier(.2, .7, .2, 1); }
-.tgx .asks-scene.is-on img { transform: none; }
-.tgx .asks-inset { position: absolute; top: 9%; right: 7%; width: 42%; border: 1px solid var(--ink); background: var(--paper); box-shadow: 5px 5px 0 rgba(20, 36, 56, .25); }
-.tgx .asks-inset img { position: static !important; display: block; width: 100%; height: auto; transform: none !important; }
-.tgx .asks-mail { position: absolute; left: 7%; bottom: 9%; width: min(56%, 460px); display: block; background: var(--paper); border: 1px solid var(--ink); box-shadow: 6px 6px 0 rgba(20, 36, 56, .25); color: var(--ink); text-decoration: none; transform: translateY(24px); opacity: 0; transition: transform .6s cubic-bezier(.2, .7, .2, 1) .15s, opacity .4s ease .15s; }
-.tgx .asks-scene.is-on .asks-mail { transform: none; opacity: 1; }
-.tgx .asks-mail-bar { display: block; padding: 7px 14px; background: var(--ink); color: var(--cream); font: 13px/1.4 var(--mono); }
-.tgx .asks-mail-row { display: block; margin: 0 18px; padding: 10px 0; border-bottom: 1px solid var(--desk-soft); font-size: 14px; }
-.tgx .asks-mail-row .mono, .tgx .asks-mail-subject .mono { color: var(--muted); font-size: 13px; }
-.tgx .asks-mail-subject { display: block; padding: 12px 18px 18px; }
-.tgx .asks-mail-subject .mono { display: block; margin-bottom: 4px; }
-.tgx .asks-mail-line { display: block; font-size: clamp(18px, 1.7vw, 24px); line-height: 1.05; font-weight: 800; letter-spacing: -.035em; }
-.tgx .asks-dots { position: absolute; right: 28px; top: 50%; display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; transform: translateY(-50%); }
-.tgx .asks-dots li { width: 10px; height: 10px; border: 2px solid var(--cream); background: transparent; transition: background-color .3s ease, transform .3s ease; }
-.tgx .asks-dots li.is-on { background: var(--lime); border-color: var(--lime); transform: scale(1.25); }
-@media (max-width: 900px) {
-  .tgx .asks { grid-template-columns: 1fr; padding-bottom: clamp(32px, 6vw, 56px); }
-  .tgx .asks-stage { display: none; }
-  .tgx .asks-kicker { position: static; }
-  .tgx .asks-left { padding-bottom: 0; }
-  .tgx .asks-step { min-height: 0; opacity: 1; transform: none; padding-block: 28px; }
-  .tgx .asks-media { position: relative; display: block; order: 10; margin: 24px calc(var(--gutter) * -1) 0; aspect-ratio: 4 / 5; overflow: hidden; background: var(--ink); }
-  .tgx .asks-media img { object-fit: cover; object-position: 50% 25%; }
-  .tgx .asks-media .asks-mail { opacity: 1; transform: none; width: auto; right: 6%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .tgx .asks-step, .tgx .asks-scene, .tgx .asks-scene img, .tgx .asks-mail, .tgx .asks-dots li { transition: none; transform: none; }
-}
 
 .tgx .section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; margin-bottom: 24px; }
 .tgx .section-head h2, .tgx .how h2 { font-size: clamp(26px, 3vw, 36px); font-weight: 800; letter-spacing: -.035em; }
@@ -318,8 +250,8 @@
 .tgx .steps3 { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 56px; margin-top: 40px; }
 .tgx .step3 { position: relative; }
 .tgx .step3-num { position: absolute; z-index: 2; left: -14px; top: -22px; display: grid; place-items: center; width: 52px; height: 52px; border: 2px solid var(--ink); border-radius: 50%; background: var(--lime); font-size: 28px; font-weight: 800; letter-spacing: -.04em; box-shadow: 3px 3px 0 var(--ink); }
-.tgx .step3-win { height: 100%; display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--ink); box-shadow: 6px 6px 0 rgba(20, 36, 56, .1); transition: transform .12s ease, box-shadow .12s ease; }
-.tgx .step3:hover .step3-win { transform: translate(-2px, -2px); box-shadow: 9px 9px 0 rgba(20, 36, 56, .14); }
+.tgx .step3-win { height: 100%; display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--ink); box-shadow: 5px 5px 0 var(--ink); transition: transform .12s ease, box-shadow .12s ease; }
+.tgx .step3:hover .step3-win { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 var(--ink); }
 .tgx .step3:nth-child(2) .step3-win { background: var(--ink); color: var(--cream); }
 .tgx .step3-bar { display: flex; align-items: center; gap: 8px; padding: 7px 14px 7px 48px; background: var(--ink); color: var(--cream); font: 13px/1.4 var(--mono); }
 .tgx .step3:nth-child(2) .step3-bar { background: var(--lime); color: var(--ink); }
@@ -345,35 +277,72 @@
 }
 
 /* The floating ticket guy: follows the visitor down the page, blinks, smiles, winks; says the line at the end */
-.tgx .tg-buddy { position: fixed; z-index: 40; right: clamp(12px, 2.4vw, 32px); bottom: clamp(12px, 2.4vw, 32px); display: flex; align-items: flex-end; gap: 10px; text-decoration: none; opacity: 0; transform: translateY(24px) scale(.8); pointer-events: none; transition: opacity .35s ease, transform .45s cubic-bezier(.34, 1.56, .64, 1); }
-.tgx .tg-buddy.is-shown { opacity: 1; transform: none; pointer-events: auto; }
-.tgx .tg-buddy.is-end { transform: scale(1.18); transform-origin: bottom right; }
-.tgx .tg-buddy-mark { width: 76px; height: 95px; overflow: visible; filter: drop-shadow(3px 3px 0 rgba(20, 36, 56, .18)); transition: transform .3s ease; transform-origin: 50% 100%; }
-.tgx .tg-buddy:hover .tg-buddy-mark, .tgx .tg-buddy:focus-visible .tg-buddy-mark { transform: translateY(-4px) rotate(-3deg); }
-.tgx .tg-buddy .eye { transform-box: fill-box; transform-origin: center; transition: transform .09s ease; }
-.tgx .tg-buddy .mood-blink .eye { transform: scaleY(.1); }
-.tgx .tg-buddy .is-wink .eye-r { transform: scaleY(0); }
-.tgx .tg-buddy .wink-lid, .tgx .tg-buddy .grin { opacity: 0; transition: opacity .12s ease; }
-.tgx .tg-buddy .is-wink .wink-lid { opacity: 1; }
-.tgx .tg-buddy .mood-smile .grin { opacity: 1; }
-.tgx .tg-buddy .mood-smile .mouth { opacity: 0; }
-.tgx .tg-buddy .mouth { transition: opacity .12s ease; }
-.tgx .tg-buddy .arm { transform-box: view-box; transform-origin: 93px 88px; }
-.tgx .tg-buddy .motion { opacity: .35; transition: opacity .2s ease; }
-.tgx .tg-buddy .mood-smile .arm { animation: tgx-wave .8s ease-in-out 2; }
-.tgx .tg-buddy .mood-smile .motion { opacity: 1; }
-.tgx .tg-buddy .mood-smile { animation: tgx-hop .5s ease; }
 @keyframes tgx-wave { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-14deg); } 65% { transform: rotate(8deg); } }
 @keyframes tgx-hop { 40% { transform: translateY(-6px); } }
-.tgx .tg-buddy-bubble { position: relative; margin-bottom: 72px; padding: 8px 14px; border: 2px solid var(--ink); border-radius: 12px 12px 2px 12px; background: var(--lime); color: var(--ink); font-size: 18px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; box-shadow: 3px 3px 0 var(--ink); opacity: 0; transform: translateY(8px) scale(.9); transform-origin: bottom right; transition: opacity .25s ease .15s, transform .35s cubic-bezier(.34, 1.56, .64, 1) .15s; }
-.tgx .tg-buddy.is-end .tg-buddy-bubble { opacity: 1; transform: none; }
-@media (max-width: 640px) {
-  .tgx .tg-buddy-mark { width: 56px; height: 70px; }
-  .tgx .tg-buddy-bubble { font-size: 15px; margin-bottom: 52px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .tgx .tg-buddy, .tgx .tg-buddy-bubble, .tgx .tg-buddy-mark, .tgx .tg-buddy .eye, .tgx .tg-buddy .grin, .tgx .tg-buddy .mouth { transition: none; }
-  .tgx .tg-buddy .arm, .tgx .tg-buddy .mood-smile { animation: none; }
+
+/* The signature: every email window on the page. Navy title bar with a pixel icon, monospace fields, a thin
+   ink border and a hard offset shadow. */
+.tgx .win { background: var(--paper); border: 1px solid var(--ink); box-shadow: 5px 5px 0 var(--ink); }
+.tgx .win-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--ink); color: var(--cream); font: 13px/1.4 var(--mono); letter-spacing: .02em; }
+.tgx .win-bar svg { flex: none; width: 14px; height: 14px; }
+.tgx .compose-file svg { width: 14px; height: 14px; color: var(--muted); }
+
+/* Hero inbox: three subject lines that play their example */
+.tgx .inbox-strip { display: grid; margin-bottom: 16px; background: var(--paper); border: 1px solid var(--ink); box-shadow: 5px 5px 0 var(--ink); }
+.tgx .inbox-strip-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--ink); color: var(--cream); font: 13px/1.4 var(--mono); }
+.tgx .inbox-strip-bar svg { width: 14px; height: 14px; }
+.tgx .inbox-row { display: flex; align-items: baseline; gap: 10px; padding: 7px 14px; border: 0; border-top: 1px solid var(--desk-soft); background: none; color: var(--ink); text-align: left; font: 700 16px/1.3 var(--sans); letter-spacing: -.01em; transition: background-color .12s ease; }
+.tgx .inbox-row:first-of-type { border-top: 0; }
+.tgx .inbox-row::before { content: ""; flex: none; align-self: center; width: 9px; height: 9px; border: 1px solid var(--ink); background: var(--paper); }
+.tgx .inbox-row .mono { font-weight: 400; font-size: 13px; color: var(--muted); }
+.tgx .inbox-row:hover { background: var(--desk-soft); }
+.tgx .inbox-row.is-on { background: #eef8c4; box-shadow: inset 4px 0 0 var(--ink); }
+.tgx .inbox-row.is-on::before { background: var(--lime); }
+
+/* The ticket guy, peeking over the reply window; he pops up when the reply lands */
+.tgx .hero-guy { position: absolute; z-index: 0; right: 56px; top: -66px; width: 64px; height: 80px; transform: translateY(50px); transition: transform .45s cubic-bezier(.3, 1.6, .5, 1); }
+.tgx .hero-guy.is-up { transform: none; }
+.tgx .hero-guy svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.tgx .guy-mark .eye { transform-box: fill-box; transform-origin: center; transition: transform .09s ease; }
+.tgx .guy-mark.mood-blink .eye { transform: scaleY(.1); }
+.tgx .guy-mark.is-wink .eye-r { transform: scaleY(0); }
+.tgx .guy-mark .wink-lid, .tgx .guy-mark .grin { opacity: 0; transition: opacity .12s ease; }
+.tgx .guy-mark.is-wink .wink-lid, .tgx .guy-mark.mood-smile .grin { opacity: 1; }
+.tgx .guy-mark .mouth { transition: opacity .12s ease; }
+.tgx .guy-mark.mood-smile .mouth { opacity: 0; }
+.tgx .guy-mark .arm { transform-box: view-box; transform-origin: 93px 88px; }
+.tgx .guy-mark .motion { opacity: .35; transition: opacity .2s ease; }
+.tgx .guy-mark.mood-smile .motion { opacity: 1; }
+.tgx .guy-mark.mood-smile .arm { animation: tgx-wave .8s ease-in-out 2; }
+/* New mail: a brief flash in the reply's title bar */
+.tgx .new-mail { padding: 1px 8px; background: var(--lime); color: var(--ink); font: 800 11px/1.5 var(--sans); letter-spacing: .08em; text-transform: uppercase; animation: tgx-flash .35s steps(1) 3; }
+@keyframes tgx-flash { 50% { opacity: 0; } }
+.tgx .hr-facts li.is-flag .hr-ok { width: 16px; height: 16px; background: var(--ink); color: var(--lime); font-size: 12px; }
+.tgx .hr-facts li.is-flag .hr-tag { font-weight: 700; color: var(--ink); }
+.tgx .compose-copy.is-copied { color: var(--ink); font-weight: 700; text-decoration: none; }
+.tgx .compose-copy.is-copied::before { content: "✓ "; }
+.tgx .hero-save { margin-top: 10px; font-size: 15px; }
+.tgx .hero-save a { color: var(--link-strong); text-underline-offset: 3px; }
+
+/* Three questions: three small email windows over one duotone photo */
+.tgx .questions { --photo: clamp(300px, 32vw, 440px); padding-bottom: clamp(48px, 7vw, 96px); }
+.tgx .questions-photo { position: relative; height: var(--photo); overflow: hidden; background: var(--ink); }
+.tgx .questions-photo img { object-fit: cover; object-position: 50% 30%; }
+.tgx .questions-photo::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(20, 36, 56, .82), rgba(20, 36, 56, .2) 75%); }
+.tgx .questions .wrap { position: relative; margin-top: calc(var(--photo) * -1 + clamp(36px, 5vw, 64px)); }
+.tgx .questions h2 { max-width: 16ch; color: var(--cream); font-size: clamp(32px, 4.4vw, 58px); line-height: 1; font-weight: 800; letter-spacing: -.045em; }
+.tgx .questions-sub { margin-top: 12px; color: rgba(247, 244, 236, .88); font-size: 18px; font-weight: 600; }
+.tgx .questions-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; margin: clamp(28px, 4vw, 48px) 0 0; padding: 0; list-style: none; }
+.tgx .q-card { display: flex; flex-direction: column; }
+.tgx .q-subject { padding: 16px 18px 0; font-size: clamp(20px, 1.8vw, 25px); line-height: 1.1; font-weight: 800; letter-spacing: -.03em; }
+.tgx .q-subject .mono { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
+.tgx .q-blurb { padding: 10px 18px 0; font-size: 16px; line-height: 1.5; color: var(--muted); }
+.tgx .q-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-top: auto; padding: 22px 18px 20px; }
+.tgx .q-actions .btn-lime { padding: 9px 10px 9px 16px; font-size: 16px; }
+.tgx .q-actions .btn-lime > span[aria-hidden] { width: 22px; height: 22px; font-size: 15px; }
+.tgx .q-example { border: 0; padding: 0; background: none; color: var(--link-strong); font: 600 15px var(--sans); text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 900px) {
+  .tgx .questions-list { grid-template-columns: 1fr; max-width: 560px; }
 }
 
 /* Closing */
@@ -381,8 +350,23 @@
 .tgx .closing h2 { font-size: clamp(32px, 5.4vw, 68px); line-height: 1; font-weight: 800; letter-spacing: -.045em; text-wrap: balance; }
 .tgx .closing-address { display: inline-block; margin-top: 22px; color: var(--lime); font-size: clamp(22px, 3.4vw, 40px); font-weight: 700; letter-spacing: -.02em; text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 2px; overflow-wrap: anywhere; }
 .tgx .closing p { margin-top: 14px; font: 16px/1.5 var(--sans); color: rgba(247, 244, 236, .8); }
+.tgx .closing-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, .75fr); gap: clamp(32px, 5vw, 72px); align-items: center; }
+.tgx .closing-copy { margin-left: 4px; border: 0; padding: 0; background: none; color: var(--lime); font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+/* Address book: a little contact card to save */
+.tgx .abook { justify-self: end; width: 100%; max-width: 400px; color: var(--ink); box-shadow: 6px 6px 0 var(--lime); transform: rotate(-1.5deg); }
+.tgx .abook-entry { margin: 0; padding: 10px 18px 0; }
+.tgx .abook-entry div { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px dotted var(--desk); }
+.tgx .abook-entry dt { flex: 0 0 62px; font: 13px/1.6 var(--mono); color: var(--muted); }
+.tgx .abook-entry dd { margin: 0; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.tgx .abook-save { margin: 18px 18px 20px; }
+.tgx .abook-icon { display: inline-block; flex: none; width: 11px; height: 14px; margin-right: 6px; border: 2px solid currentColor; border-left-width: 4px; border-radius: 1px; vertical-align: -2px; }
+.tgx .win-bar .abook-icon { margin-right: 0; }
+@media (max-width: 900px) {
+  .tgx .closing-grid { grid-template-columns: 1fr; }
+  .tgx .abook { justify-self: start; }
+}
 
-.tgx .tgx-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; padding-block: 24px 210px; font-size: 14px; color: var(--muted); }
+.tgx .tgx-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; padding-block: 24px 40px; font-size: 14px; color: var(--muted); }
 .tgx .tgx-footer nav { display: flex; gap: 20px; }
 
 @media (max-width: 1080px) {
@@ -390,7 +374,7 @@
   .tgx .hero h1 { max-width: 12ch; }
 }
 @media (max-width: 900px) {
-  .tgx .hero-reply { margin-top: -240px; }
+  .tgx .hero-reply-wrap { margin-top: -240px; }
 }
 /* Phones: the same parts without the desktop dressing. No title bars; the address and the button stay in view. */
 @media (max-width: 640px) {
@@ -398,9 +382,6 @@
   .tgx .brand-mark { width: 46px; height: 35px; }
   .tgx .tgx-header nav { width: 100%; justify-content: space-between; gap: 8px 16px; font-size: 14px; }
   .tgx .nav-how { display: none; }
-  .tgx .compose { border-radius: 8px; overflow: hidden; }
-  .tgx .compose { box-shadow: none; }
-  .tgx .compose-titlebar { display: none; }
   .tgx .compose-row { margin-inline: 14px; }
   .tgx .compose-label { flex-basis: 64px; }
   .tgx .compose-body-wrap { padding: 12px 14px 14px; }
@@ -408,13 +389,16 @@
   .tgx .compose-footer { padding: 12px 14px; }
   .tgx .compose-footer .btn-lime { order: -1; width: 100%; justify-content: center; }
   .tgx .compose-attach { margin-right: auto; }
-  .tgx .hero-reply { margin: -14px 0 0 16px; }
+  .tgx .hero-reply-wrap { margin: -14px 0 0 16px; }
   .tgx .hr-facts li { display: grid; grid-template-columns: 14px 1fr; gap: 0 4px; }
   .tgx .hr-tag { grid-column: 2; margin-left: 0; }
   .tgx .hero-reply-close { display: none; }
+  .tgx .hero-guy { right: 10px; top: -50px; width: 48px; height: 60px; transform: translateY(38px); }
+  .tgx .hero-guy.is-up { transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tgx .hero-reply, .tgx .hr-line, .tgx .hr-path, .tgx .hr-dot, .tgx .hr-punch span { animation: none; transition: none; opacity: 1; transform: none; stroke-dashoffset: 0; background-size: 100% 100%; }
+  .tgx .hero-guy, .tgx .new-mail, .tgx .guy-mark .arm, .tgx .inbox-row { animation: none; transition: none; }
+  .tgx .hero-reply-wrap, .tgx .hr-line, .tgx .hr-path, .tgx .hr-dot, .tgx .hr-punch span { animation: none; transition: none; opacity: 1; transform: none; stroke-dashoffset: 0; background-size: 100% 100%; }
 }
 
 /* Signature preview */
