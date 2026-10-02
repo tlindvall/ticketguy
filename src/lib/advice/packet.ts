@@ -9,7 +9,7 @@ import type { TrendResult } from './trend';
 import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
 import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
-import type { AlternativesResult } from '@/lib/market/alternatives';
+import type { AlternativesResult, MarketListing } from '@/lib/market/alternatives';
 
 /**
  * Typed evidence packet (API_AND_DATA_CONTRACTS §10). Every fact the customer sees is a server-rendered
@@ -121,6 +121,9 @@ export type BuildPacketArgs = {
   link?: { marketplace: string; eventPage?: boolean } | null;
   /** The listing the customer showed us (screenshot or pasted text): what it displayed, never a verified offer. */
   subject?: SubjectListing | null;
+  /** Their listing link wasn't found by its number, but the same read priced the game for their party: the cheapest
+   * listing with enough tickets, and how many such listings there are. Listed prices before fees. */
+  linkMarket?: { cheapest: MarketListing; count: number; at: Date; marketplace: string } | null;
   /** The event's own local date and start, to check the listing against. */
   eventLocalDate?: string | null;
   /**
@@ -643,7 +646,9 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   const out: string[] = [];
   const sub = a.subject ?? null;
   // "Are they worth it?" has already asked for the price and section in its answer.
-  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2) && !(a.link && a.asks?.worth)) {
+  // A listing link's lead already makes the one ask (its price and section), so it isn't asked twice.
+  const listingLink = !!a.link && !a.link.eventPage;
+  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2) && !(a.link && a.asks?.worth) && !listingLink) {
     // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link && !a.link.eventPage
       ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
@@ -653,7 +658,8 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   if (a.quote?.assumedPerTicket && a.quantity > 1 && (a.quote.source === 'screenshot' || a.quote.source === 'listing_text')) out.push(`Is ${formatUsd(a.quote.perTicketCents)} the price per ticket, or for all ${a.quantity}?`);
   // Only what would change the answer: a budget when we're finding options, and the timing questions when the
   // market could make waiting worth it or the policy needs them.
-  const askBudget = a.priorities.budgetTotalCents === null && !a.quote && !sub && !(a.textOffers && a.textOffers.length >= 2);
+  // Not over a listing they picked: "is this a good deal?" is about that listing, not a budget we'd search with.
+  const askBudget = a.priorities.budgetTotalCents === null && !a.quote && !sub && !(a.textOffers && a.textOffers.length >= 2) && !listingLink;
   // Timing questions only when timing is the open question: not over a delivery or offer question they asked,
   // whose own deadline (a noon departure) is already the one that matters (retest R2-B04).
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
@@ -1178,7 +1184,11 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       // place to look, not a recommendation (TG-B01).
       // So is a watch they asked for: they want to wait for a price, so "that's where I'd buy" would answer a
       // question they didn't ask, and the link stays an event page (PW-EMAIL-FOCUS-01, L01).
-      text: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
+      // A resale listing they asked about: the box office is the thing to compare it with, not a different answer to
+      // their question (live Oct 2, Rangers: "that's where I'd buy" under "is this a good deal?").
+      text: a.link && !a.link.eventPage && a.link.marketplace !== a.official.seller
+        ? `${a.official.seller} also sells this ${a.eventNoun ?? 'game'} directly. I can’t see its seats or prices, so check its total for ${a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity)} there against the one you found.`
+        : a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
         // An open sale is the sale window, not stock: the official page can say sold out while the catalog still says
         // on sale (live Oct 2, Metallica at Sphere), so it is never said as seats being there.
         ? `${a.official.seller} also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
@@ -1190,7 +1200,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: ['sale_window_not_inventory'],
       customerVisible: true,
       url: a.official.url,
-      linkLabel: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus ? `Event page on ${a.official.seller}` : `Buy on ${a.official.seller}`,
+      linkLabel: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus || (a.link && !a.link.eventPage) ? `Event page on ${a.official.seller}` : `Buy on ${a.official.seller}`,
     });
   }
 
@@ -1344,14 +1354,26 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const floor = a.market?.visible && a.market.context?.current ? a.market.context.current.priceCents : null;
   const ctxAge = a.market?.context?.current ? Math.round((a.observedAt.getTime() - a.market.context.current.at.getTime()) / 3_600_000) : null;
   const moving = a.market?.context?.direction === 'down' ? 'easing' : a.market?.context?.direction === 'up' ? 'climbing' : 'about where it was a few days ago';
-  const worth = worthAsked && a.link
-    ? `Whether they’re worth it comes down to what they cost, and I can’t see that: I can’t open ${a.link.marketplace} listings myself, so I don’t know the price or section of the ones you sent.${floor !== null ? ` For ${a.quantity > 1 ? countWord(a.quantity) : 'one'}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${countWord(a.quantity)})` : ''}, from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}; that’s context, not enough on its own to say buy now or hold off.` : ''} Send me a screenshot showing the price with fees and the section and row, and I’ll give you a straight answer.`
+  // A listing link we couldn't find by its number: lead with what we do know (what the game costs for their party),
+  // then one short ask. Three "I can't" lines and a homework request was the whole reply (live Oct 2, Rangers).
+  const party = a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity);
+  const lm = a.linkMarket ?? null;
+  // The market block's floor when it's shown, so one email never gives two "cheapest" prices; the fresh listings
+  // read when there's no market at all (the Rangers link).
+  const priced = lm && floor === null
+    ? `For ${party}${a.quantity > 1 ? ' together' : ''}, ${lm.marketplace} listings for this ${a.eventNoun ?? 'game'} start at ${formatUsd(lm.cheapest.priceCents)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(lm.cheapest.priceCents * a.quantity)} for ${party})` : ''}${lm.cheapest.section ? `, in section ${lm.cheapest.section}${lm.cheapest.row ? `, row ${lm.cheapest.row}` : ''}` : ''}, when I checked just now. ${lm.count === 1 ? 'That’s the only listing' : `There are ${lm.count} listings`} with ${a.quantity > 1 ? `${party} or more tickets` : 'a ticket'}.`
+    : floor !== null
+      ? `For ${party}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${party})` : ''}, from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}. That’s where the market starts, not a verdict on yours.`
+      : null;
+  const askListing = a.link ? `${a.link.marketplace} doesn’t pass me the price of the listing you picked, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.` : '';
+  const worth = a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worthAsked)
+    ? `${priced ? `${priced} ` : ''}${askListing}`
     : null;
-  if (a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worth)) {
+  if (a.link && worth) {
     claims.push({
       id: 'C_LINK_UNREAD',
       kind: 'coverage',
-      text: worth ?? `I can’t open ${a.link.marketplace} listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for ${a.quantity === 1 ? 'one ticket' : `${countWord(a.quantity)} tickets`}, not that listing.`,
+      text: worth,
       values: { marketplace: a.link.marketplace },
       scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -1525,7 +1547,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     methodVersion: null,
     limitations: [],
     // With a listing we read and no market to set it against, its verdict already says so; once is enough.
-    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching)),
+    // Nor beside the listing-link line, which already says what we could and couldn't see (live Oct 2, Rangers).
+    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching || (a.link && !a.link.eventPage))),
   });
   if (a.policy.nextCheckpointAt) {
     claims.push({

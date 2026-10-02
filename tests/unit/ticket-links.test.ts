@@ -50,3 +50,13 @@ describe('Message-IDs from the provider', () => {
     expect(n.references).toBe('<root@mail.gmail.com> <abc@resend.dev>');
   });
 });
+
+describe('StubHub checkout links', () => {
+  it('read the listing and quantity from the checkout ID (session|listing|quantity|n), with no event id', () => {
+    const l = parseTicketLink('https://checkout.stubhub.com/secure/buy/checkout?ID=f6b361e1-a7a3-40d2-85d3-cd3983c62741%7c14171973095%7c2%7c0');
+    expect(l).toMatchObject({ marketplace: 'stubhub', listingId: '14171973095', quantity: 2, eventId: null });
+  });
+  it('an ID that is not in that shape is no listing', () => {
+    expect(parseTicketLink('https://checkout.stubhub.com/secure/buy/checkout?ID=abc')?.listingId).toBeNull();
+  });
+});

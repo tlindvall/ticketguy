@@ -63,8 +63,10 @@ export function parseTicketLink(raw: string): TicketLink | null {
   const params = new Map<string, string>();
   for (const [k, v] of u.searchParams) params.set(k.toLowerCase(), v);
   const qtyRaw = QTY_PARAMS.map((k) => params.get(k)).find((v) => v && /^\d{1,2}$/.test(v));
-  const quantity = qtyRaw && Number(qtyRaw) >= 1 && Number(qtyRaw) <= 20 ? Number(qtyRaw) : null;
-  const listingId = LISTING_PARAMS.map((k) => params.get(k)).find((v) => v && /^[\w-]{3,40}$/.test(v)) ?? null;
+  // A StubHub checkout link carries the listing and quantity in one ID: "<session>|<listingId>|<quantity>|<n>".
+  const checkout = marketplace === 'stubhub' && /^checkout\./.test(host) ? /^[\w-]+\|(\d{6,20})\|(\d{1,2})\|/.exec(params.get('id') ?? '') : null;
+  const quantity = qtyRaw && Number(qtyRaw) >= 1 && Number(qtyRaw) <= 20 ? Number(qtyRaw) : checkout && Number(checkout[2]) >= 1 && Number(checkout[2]) <= 20 ? Number(checkout[2]) : null;
+  const listingId = LISTING_PARAMS.map((k) => params.get(k)).find((v) => v && /^[\w-]{3,40}$/.test(v)) ?? checkout?.[1] ?? null;
   const eventId = /\/(?:event|production|events)\/([\w-]{3,40})(?:\/|$)/.exec(path)?.[1] ?? null;
 
   // The first path segment carries the names: "new-york-rangers-new-york-tickets-10-1-2026".
