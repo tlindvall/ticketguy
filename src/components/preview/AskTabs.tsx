@@ -1,12 +1,13 @@
 'use client';
 import Image from 'next/image';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /**
- * "Three things to ask your guy" as one feature panel: the categories on the left (the active one opens with
- * its line and a draft button; the others wait, greyed), and on the right a full-height scene for that
- * category with its email window on top: photos toned navy and lime so they read as one set; the catch tab
- * adds a small seat-map inset. Photos are owner-supplied. Each button opens a draft in the visitor's own email app.
+ * "Three things to ask your guy" as a scroll story: the three asks stack on the left and the page scrolls
+ * normally; on the right a sticky, full-bleed scene shows the ask nearest the middle of the screen and
+ * crossfades as the next one arrives (IntersectionObserver, no scroll-jacking). Photos are toned navy and lime
+ * so they read as one set; the catch adds a small seat-map inset. On phones each ask carries its own image.
+ * Photos are owner-supplied. Each button opens a draft in the visitor's own email app.
  */
 type Ask = { key: string; label: string; line: string; points: string[]; subject: string; lines: string[]; body: string; scene: 'concert' | 'sport' | 'catch' };
 
@@ -24,42 +25,59 @@ const IMAGES: Record<Ask['scene'], { src: string; alt: string; inset?: { src: st
 
 export function AskTabs({ address }: { address: string }) {
   const [active, setActive] = useState(0);
+  const steps = useRef<Array<HTMLElement | null>>([]);
   const mailto = (a: Ask) => `mailto:${address}?subject=${encodeURIComponent(a.subject)}&body=${encodeURIComponent(a.body)}`;
-  const a = ASKS[active]!;
-  const img = IMAGES[a.scene];
+
+  useEffect(() => {
+    // The ask crossing the middle band of the viewport is the one on show.
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) setActive(Number((e.target as HTMLElement).dataset.i));
+    }, { rootMargin: '-45% 0px -45% 0px' });
+    steps.current.forEach((el) => el && io.observe(el));
+    return () => io.disconnect();
+  }, []);
+
+  const mail = (a: Ask) => (
+    <a className="asks-mail" href={mailto(a)} aria-label={`Start an email: ${a.subject}`}>
+      <span className="asks-mail-bar">New message</span>
+      <span className="asks-mail-row"><span className="mono">To:</span> {address}</span>
+      <span className="asks-mail-subject"><span className="mono">Subject:</span>{a.lines.map((l) => <span key={l} className="asks-mail-line">{l}</span>)}</span>
+    </a>
+  );
+  const scene = (a: Ask, eager = false) => {
+    const img = IMAGES[a.scene];
+    return (
+      <>
+        <Image src={img.src} alt={img.alt} fill sizes="(max-width: 900px) 100vw, 60vw" priority={eager} style={img.pos ? { objectPosition: img.pos } : undefined} />
+        {img.inset ? (
+          <span className="asks-inset">
+            <Image src={img.inset.src} alt={img.inset.alt} width={640} height={407} sizes="(max-width: 900px) 60vw, 26vw" />
+          </span>
+        ) : null}
+      </>
+    );
+  };
+
   return (
     <section className="asks wrap" aria-labelledby="asks-title">
       <div className="asks-left">
         <p className="asks-kicker" id="asks-title">Three things to ask your guy</p>
-        <div className="asks-tabs" role="tablist" aria-label="What to ask">
-          {ASKS.map((x, i) => (
-            <div key={x.key} className={`asks-item${i === active ? ' is-active' : ''}`}>
-              <button type="button" role="tab" id={`ask-tab-${x.key}`} aria-selected={i === active} aria-controls="ask-panel" className="asks-tab" onClick={() => setActive(i)}>{x.label}</button>
-              {i === active ? (
-                <div className="asks-open">
-                  <p>{x.line}</p>
-                  <ul className="asks-points">{x.points.map((pt) => <li key={pt}>{pt}</li>)}</ul>
-                  <a className="btn-lime" href={mailto(x)}>Start an email <span aria-hidden="true">›</span></a>
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
+        {ASKS.map((x, i) => (
+          <article key={x.key} ref={(el) => { steps.current[i] = el; }} data-i={i} className={`asks-step${i === active ? ' is-active' : ''}`} aria-labelledby={`ask-${x.key}`}>
+            <span className="asks-count" aria-hidden="true">0{i + 1} / 0{ASKS.length}</span>
+            <h3 id={`ask-${x.key}`} className="asks-label">{x.label}</h3>
+            <p className="asks-line">{x.line}</p>
+            <ul className="asks-points">{x.points.map((pt) => <li key={pt}>{pt}</li>)}</ul>
+            <a className="btn-lime" href={mailto(x)}>Start an email <span aria-hidden="true">›</span></a>
+            <div className="asks-media" aria-hidden="true">{scene(x)}{mail(x)}</div>
+          </article>
+        ))}
       </div>
-      <div className="asks-panel" id="ask-panel" role="tabpanel" aria-labelledby={`ask-tab-${a.key}`}>
-        <div key={a.key} className="asks-scene">
-          <Image src={img.src} alt={img.alt} fill sizes="(max-width: 900px) 100vw, 55vw" style={img.pos ? { objectPosition: img.pos } : undefined} />
-        </div>
-        {img.inset ? (
-          <div key={`${a.key}-inset`} className="asks-inset">
-            <Image src={img.inset.src} alt={img.inset.alt} width={640} height={407} sizes="(max-width: 900px) 60vw, 26vw" />
-          </div>
-        ) : null}
-        <a key={`${a.key}-mail`} className="asks-mail" href={mailto(a)} aria-label={`Start an email: ${a.subject}`}>
-          <span className="asks-mail-bar">New message</span>
-          <span className="asks-mail-row"><span className="mono">To:</span> {address}</span>
-          <span className="asks-mail-subject"><span className="mono">Subject:</span>{a.lines.map((l) => <span key={l} className="asks-mail-line">{l}</span>)}</span>
-        </a>
+      <div className="asks-stage" aria-hidden="true">
+        {ASKS.map((x, i) => (
+          <div key={x.key} className={`asks-scene${i === active ? ' is-on' : ''}`}>{scene(x, i === 0)}{mail(x)}</div>
+        ))}
+        <ol className="asks-dots">{ASKS.map((x, i) => <li key={x.key} className={i === active ? 'is-on' : undefined} />)}</ol>
       </div>
     </section>
   );
