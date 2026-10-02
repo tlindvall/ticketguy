@@ -86,8 +86,9 @@ describe('FV-R2-02/03: the reply around the row, with the live market', () => {
     const text = body(args(subject(FRESH, C04)));
     expect(text).toContain('The floor option in your screenshot is “GA Ticket Price Tier 3: While Supplies Last”, a resale ticket, at $113.29 a ticket including fees, before taxes: $226.58 for two. That’s $18.58 more for two than the cheapest balcony option, “Balcony: Standing Room Only” at $104 a ticket.');
     expect(text).not.toMatch(/per ticket, or for all|\$31\.34/);
-    // The market stays, with its age beside it, below the row.
-    expect(text).toContain('about 19 hours ago');
+    // A venue-wide floor from hours ago isn't a comparison for rows on one page; the page's own rows are (post-deploy
+    // QA Oct 2, PD-R2-02: it padded the first reply).
+    expect(text).not.toMatch(/about 19 hours ago|resale market when I last checked|\$81\.95/);
   });
 
   it('C02 opening: one row, its total, the trade-off; the age-stamped market below; no basis question', () => {

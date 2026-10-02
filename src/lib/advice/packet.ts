@@ -169,7 +169,7 @@ export type BuildPacketArgs = {
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
-  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean } | null;
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
@@ -291,12 +291,34 @@ const cityKey = (x: string) => {
   return CITY_ALIASES[f] ?? f;
 };
 
+/** Letters from two writing systems in one word: Latin beside Hebrew, Cyrillic, Greek, Arabic or CJK. */
+function mixedScript(x: string): boolean {
+  const latin = /\p{Script=Latin}/u.test(x);
+  return latin && /[\p{Script=Hebrew}\p{Script=Cyrillic}\p{Script=Greek}\p{Script=Arabic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(x);
+}
+
+/** One or two letters off on a name of five or more ("jigits", "Hamiltn"): a reading slip, by edit distance. */
+function nearName(said: string, name: string): boolean {
+  const a = fold(said).replace(/\s+/g, '');
+  const b = fold(name).replace(/\s+/g, '');
+  if (a === b || Math.min(a.length, b.length) < 5) return a === b;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0]![j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i]![j] = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length]![b.length]! <= (b.length >= 10 ? 2 : 1);
+}
+
 /** Where the listing names a different performer, city or venue than the event (R2-IDENTITY-01); null when it doesn't. */
 function identityMismatch(a: BuildPacketArgs, sub: SubjectListing): { artist: string | null; city: string | null; venue: string | null } {
   const id = a.eventIdentity;
   if (!id) return { artist: null, city: null, venue: null };
-  const artist = sub.eventName && id.names.length && !sameName(sub.eventName, [...id.names, ...id.nicknames]) ? id.names[0]! : null;
   const venue = sub.venue && id.venueNames.length && !sameName(sub.venue, id.venueNames) ? id.venueNames[0]! : null;
+  // A name read in two alphabets at once ("jיגitz" for jigitz) is a misread, not another act; nor is a near miss
+  // ("jigits") on the event's own date at its own venue. Either would otherwise say "not jigitz" and advise against
+  // the very show in the screenshot (post-deploy QA Oct 2, PD-R2-01). A different name in full still counts.
+  const names = [...id.names, ...id.nicknames];
+  const misread = !!sub.eventName && (mixedScript(sub.eventName) || (!venue && !!sub.eventDate && sub.eventDate === a.eventLocalDate && names.some((n) => nearName(sub.eventName!, n))));
+  const artist = sub.eventName && id.names.length && !misread && !sameName(sub.eventName, names) ? id.names[0]! : null;
   // Not settled by a matching venue name: there's a Fillmore and a Paramount Theatre in many cities.
   const city = sub.city && id.city && cityKey(sub.city) !== cityKey(id.city) && !sameName(sub.city, [id.city]) ? id.city : null;
   return { artist, city, venue };
@@ -360,7 +382,8 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
   if (sub.includedBenefits.length) out.push(`It lists extras (${listJoin(sub.includedBenefits.slice(0, 3))}). Resale sellers can’t always pass those on, so confirm they’re included.`);
   // What was cut off matters only when it bears on what they asked: rows below the fold of a results page they didn't
   // ask about, and an accessibility note when they need no access, aren't worth a line (live Oct 2).
-  const unread = sub.unreadable.filter((u) => !/\b(?:additional|more|other) (?:results|listings|rows)\b|\bbelow the visible\b/i.test(u) && !(!a.accessibilityRequired && /\baccessib/i.test(u)));
+  // "Only 3 of the 7 results are visible" is how much of the page they captured, not a misread (post-deploy QA Oct 2).
+  const unread = sub.unreadable.filter((u) => !/\b(?:additional|more|other) (?:results|listings|rows)\b|\bbelow the visible\b|\b(?:results|listings|rows)\b[^.]{0,30}\b(?:visible|shown)\b|\bonly \d+ of (?:the )?\d+\b/i.test(u) && !(!a.accessibilityRequired && /\baccessib/i.test(u)));
   if (unread.length || (sub.confidence === 'low' && !sub.unreadable.length)) out.push(`I couldn’t read everything${unread.length ? ` (${listJoin(unread.slice(0, 2))})` : ''}, so check those details yourself.`);
   return out.slice(0, 5);
 }
@@ -1384,7 +1407,12 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     : floor !== null
       ? `For ${party}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${party})` : ''}, from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}. That’s where the market starts, not a verdict on yours.`
       : null;
-  const askListing = a.link ? `${a.link.marketplace} doesn’t pass me the price of the listing you picked, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.` : '';
+  // "Can you find a cheaper pair?" with no listings to look through: said so, and the one ask is for any pair they
+  // find, not the first reply's ask again with their question left unanswered (post-deploy QA Oct 2, PD-R1-02).
+  const noCheaper = a.link && a.asks?.cheaper && !priced ? `I can’t see resale listings for this ${a.eventNoun ?? 'game'} right now, so I can’t look for a cheaper pair myself. ` : '';
+  const askListing = !a.link ? '' : noCheaper
+    ? `${noCheaper}If you find one, or want me to check the one you picked, send its price for ${party} with fees and its section and row (a screenshot works), and I’ll compare.`
+    : `${a.link.marketplace} doesn’t pass me the price of the listing you picked, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
   const worth = a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worthAsked)
     ? `${priced ? `${priced} ` : ''}${askListing}`
     : null;
@@ -1539,9 +1567,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // reading it cost the answer its first line (post-#55 writing review, X01).
   const comparing = !!(a.textOffers && a.textOffers.length >= (a.offersSetAside?.length ? 1 : 2));
   const market = comparing ? [] : marketClaims(a, obs);
+  // A results page they sent: its own rows are the comparison. A venue-wide floor from hours ago, before fees, for any
+  // seat, isn't one, and it padded the answer to hundreds of words (post-deploy QA Oct 2, PD-R2-02). A market read
+  // for their area would be; there is none yet.
+  const rowsPage = !!a.subject && !!shownRowLead(a, a.subject);
+  if (rowsPage && !a.market?.context?.zone) for (const c of market) c.customerVisible = false;
   claims.push(...market);
   // Their own offers are the question; what the market floor leaves of their budget isn't (post-#54 QA).
-  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price') && !(a.textOffers && a.textOffers.length >= 2) ? marketRead(a) : null;
+  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price' && c.customerVisible) && !(a.textOffers && a.textOffers.length >= 2) ? marketRead(a) : null;
   if (read) claims.push(read);
   const marketShown = market.some((c) => c.customerVisible);
 
