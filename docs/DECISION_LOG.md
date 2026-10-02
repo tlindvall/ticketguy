@@ -1143,3 +1143,21 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Buy links.** A link stops when its recommendation's `expiresAt` has passed. It also stops when its destination isn't one stored with the advice's chosen offer (direct or affiliate), and `?current=1` doesn't override that.
 
 **Not decided here.** Where venue age and entry policies would come from. Until a source exists, they are said as unknown.
+
+## 66. The advice email's header is two lines, the official sale opens when nothing else does, and a count is not a price
+
+**Why.** A live email (Red Wings vs. Rangers, five tickets, from a StubHub event link, on sale on Ticketmaster, the game that evening) was hard to read and partly wrong:
+- the whole brief ran together as one bold line that wrapped into a block;
+- Ticketmaster came up three times: the model's opener ("the place I'd start"), the official-sale line, and the link;
+- a listing count was footnoted as "StubHub and Vivid Seats resale prices before fees", but no price was shown;
+- 1928 and 2584 were printed without commas;
+- it asked for "the link" (we can't open marketplace pages, and they had sent one) and a per-ticket budget for five;
+- nothing said the game was that night.
+
+**What.**
+- **Header.** The event in bold, then a lighter line: where · when · the party · the budget. "Tonight" or "Today" goes before the date for a game later that local day. That is a day word, not "in 3 hours", so it stays true while a draft waits for review. "From the StubHub link you sent" is only said for a listing, not an event page. Packets from before the change keep their one-line `headline`.
+- **Opening.** With no answer to their own question to lead with, no listing of theirs and no verified offer, the official-sale line opens the email in the server's words, and the model's opener is dropped. Its link stays at the end.
+- **Market.** A count-only market is footnoted as a count ("That count is from StubHub and Vivid Seats…"). Listing counts get thousands separators.
+- **Questions.** The seats question asks for the price, section and row (a screenshot works), never a link. The budget question asks for the total with fees, as the watch question already does.
+
+**Tests.** `tests/acceptance/email-layout-0102.test.ts` replays that email's shape. The header assertions in the R6, R8 and market-tracking replays are updated to the two-line form.
