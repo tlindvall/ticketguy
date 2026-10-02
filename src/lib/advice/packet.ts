@@ -213,7 +213,17 @@ export function shownRowLead(a: BuildPacketArgs, sub: SubjectListing): string | 
   const fees = sub.feeBasis === 'all_in' ? ' including fees' : sub.feeBasis === 'before_fees' ? ' before fees' : '';
   const tax = sub.beforeTaxes ? `${fees ? ',' : ''} before taxes` : '';
   const which = sub.chosenFor ? `The ${sub.chosenFor} option in your screenshot` : 'The cheapest option in your screenshot';
-  return `${which} is “${sub.section}”${kind ? `, ${kind},` : ''} at ${formatUsd(sub.perTicketCents)} a ticket${fees}${tax}: ${formatUsd(sub.perTicketCents * n)} for ${qtyWord(n)}.`;
+  // The one comparison the page itself supports: the cheapest row in another area, and what the choice costs or saves.
+  const mine = areaOf(sub.section ?? '');
+  const other = (sub.offers ?? []).filter((o) => o.perTicketCents !== null && areaOf(o.label) !== mine).sort((x, y) => x.perTicketCents! - y.perTicketCents!)[0];
+  const otherArea = other ? areaOf(other.label) : null;
+  const gap = other ? (other.perTicketCents! - sub.perTicketCents) * n : 0;
+  const tradeoff = other && otherArea && gap !== 0
+    ? gap > 0
+      ? ` The cheapest ${otherArea} option, “${other.label}”, is ${formatUsd(gap)} more for ${qtyWord(n)}.`
+      : ` That’s ${formatUsd(-gap)} more for ${qtyWord(n)} than the cheapest ${otherArea} option, “${other.label}” at ${formatUsd(other.perTicketCents!)} a ticket.`
+    : '';
+  return `${which} is “${sub.section}”${kind ? `, ${kind},` : ''} at ${formatUsd(sub.perTicketCents)} a ticket${fees}${tax}: ${formatUsd(sub.perTicketCents * n)} for ${qtyWord(n)}.${tradeoff}`;
 }
 
 /** The rows of a results page other than the one chosen: "Balcony: Standing Room Only at $100.17 (resale) and $104.00 (Ticketmaster’s own ticket)". */
@@ -430,7 +440,9 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
   }
   // The row they'd buy and what the party pays come first; what we can or can't compare it with follows.
   const lead = shownRowLead(a, sub);
-  if (lead) text = `${lead} ${code === 'no_market' ? 'I can’t compare it with the wider resale market yet.' : text}`;
+  // Beside rows from the same page, a venue-wide floor from hours ago (another area, before fees) is no saving: it
+  // stays in the market section below, with its age, and doesn't follow the lead (live Oct 2: "$25.38 above").
+  if (lead) text = code === 'no_market' ? `${lead} I can’t compare it with the wider resale market yet.` : code.startsWith('price_') ? lead : `${lead} ${text}`;
   return { id: 'C_VERDICT', kind: 'verdict', text, values: { code }, scope: { quantity: q, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.0', limitations: ['no_authenticity_or_delivery_guarantee'], customerVisible: true };
 }
 
@@ -1130,7 +1142,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
         ? a.subject?.listingType === 'resale'
           // The page said resale: a resale price is never face value, whoever hosts it (live Oct 2: a Verified Resale
           // floor ticket on Ticketmaster was called "face value, not a resale markup").
-          ? `It’s marked as resale, so ${formatUsd(a.quote.perTicketCents)} is a resale price, not face value, and ${a.official.seller} doesn’t publish a face-value range for this show to set it against.`
+          ? `It’s resale, so ${formatUsd(a.quote.perTicketCents)} isn’t face value, and I don’t have the original face value for it.`
           : a.subject?.listingType === 'primary'
             ? `It’s ${a.official.seller}’s own ticket, not resale, so there’s no resale markup in it${a.quote.feeBasis === 'all_in' ? '; with fees included it’s more than the face value, which isn’t published for this show' : ''}.`
             : a.quote.feeBasis === 'all_in'
@@ -1578,6 +1590,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       ? `On buy or wait: ${trendClaim.text}${risk}`
       : `${view?.lead ? `${view.lead} ` : ''}I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}${view?.after ?? ''}`;
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
+    // A short follow-up about the row already chosen gets its answer, the other rows and the checks: not the row's
+    // price, the face-value line and the market section all over again (live Oct 2 C02 turn 2: 468 words).
+    if (sub && shownRowLead(a, sub)) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED'].includes(c.id)) c.customerVisible = false;
     claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim ? 1 : 0 }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: trendClaim ? [] : ['insufficient_history'], customerVisible: true });
   }
 

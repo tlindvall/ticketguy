@@ -209,11 +209,11 @@ describe('jigitz with the live market: the row, the party total, then the contex
     const sub = subject("Hey, is this worth it for two of us tonight, or can you find cheaper? We'd rather be on the floor.");
     expect(sub).toMatchObject({ section: 'GA Ticket Price Tier 2: While Supplies Last', perTicketCents: 10733, wholePartyCents: 21466, listingType: 'resale', admission: 'standing', chosenFor: 'floor', feeBasis: 'all_in', beforeTaxes: true });
     const text = body(args(sub));
-    expect(text).toContain('The floor option in your screenshot is “GA Ticket Price Tier 2: While Supplies Last”, a resale ticket, at $107.33 a ticket including fees, before taxes: $214.66 for two. It’s $25.38 a ticket above the cheapest listing I can see ($81.95 before fees).');
+    expect(text).toContain('The floor option in your screenshot is “GA Ticket Price Tier 2: While Supplies Last”, a resale ticket, at $107.33 a ticket including fees, before taxes: $214.66 for two. That’s $14.32 more for two than the cheapest balcony option, “Balcony: Standing Room Only” at $100.17 a ticket.');
     expect(text).toContain('It also shows Balcony: Standing Room Only at $100.17 a ticket (resale) and $104 a ticket (Ticketmaster’s own ticket).');
     expect(text).not.toMatch(/Balcony; General Admission Floor|in section Balcony/);
-    // The floor-gap line follows the row; it never opens a same-day reply on its own.
-    expect(text.indexOf('The floor option')).toBeLessThan(text.indexOf('$25.38'));
+    // A venue-wide floor from hours ago stays in the market section with its age; it is no saving beside the page's rows.
+    expect(text).not.toContain('$25.38');
   });
 
   it('"a lower price" or "box office" is not an area: the cheapest row, said as such', () => {
@@ -230,7 +230,7 @@ describe('jigitz with the live market: the row, the party total, then the contex
 
   it('HF-C-04: a resale row is never face value; the standard row is the seller’s own ticket', () => {
     const resale = buildPacket(args(subject('floor'))).claimRecords.find((c) => c.id === 'C_QUOTE');
-    expect(resale!.text).toBe('It’s marked as resale, so $107.33 is a resale price, not face value, and Ticketmaster doesn’t publish a face-value range for this show to set it against.');
+    expect(resale!.text).toBe('It’s resale, so $107.33 isn’t face value, and I don’t have the original face value for it.');
     const standard = buildPacket(args(subject('balcony', 10400))).claimRecords.find((c) => c.id === 'C_QUOTE');
     expect(standard!.text).toBe('It’s Ticketmaster’s own ticket, not resale, so there’s no resale markup in it; with fees included it’s more than the face value, which isn’t published for this show.');
     const text = body(args(subject('floor')));
