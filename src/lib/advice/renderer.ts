@@ -87,6 +87,20 @@ const questionsLead = (n: number) => (n === 1 ? 'One thing that would help me:' 
 const MARKET_LEAD = 'The resale market when I last checked:';
 const P = (inner: string) => `<p style="margin:0 0 18px;">${inner}</p>`;
 
+/**
+ * The header: the event in bold, then where, when and the brief in a lighter line. As one bold run it wrapped into a
+ * block that read like a warning (live Red Wings email). A packet from before the split keeps its one line.
+ */
+function header(packet: AdvicePacket): { text: string; html: string } | null {
+  if (packet.headlineTitle && packet.headlineDetails) {
+    return {
+      text: `${packet.headlineTitle}\n${packet.headlineDetails}`,
+      html: `<p style="margin:0 0 18px;"><strong style="font-size:16px;">${esc(packet.headlineTitle)}</strong><br><span style="font-size:14px;color:#6b6b6b;">${esc(packet.headlineDetails)}</span></p>`,
+    };
+  }
+  return packet.headline ? { text: packet.headline, html: `<p style="margin:0 0 18px;font-weight:600;">${esc(packet.headline)}</p>` } : null;
+}
+
 /** Escaped, with prices in bold and a leading "My read:" in bold: the numbers and the answer are what people scan for. */
 /**
  * Emphasis is for the decision, not every number: bolding each dollar amount made a dozen things compete with
@@ -169,14 +183,15 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   const quoteMarket = claim('C_QUOTE_MARKET');
   const marketFacts = [claim('C_MARKET'), claim('C_MARKET_TYPICAL')].filter((c): c is ClaimRecord => !!c);
   const coverage = claimsById.get('C_COVERAGE');
-  const marketSource = marketFacts.length > 0 && !!coverage && coverage.kind === 'coverage' && /resale prices before fees/.test(coverage.text);
+  const marketSource = marketFacts.length > 0 && !!coverage && coverage.kind === 'coverage' && /StubHub and Vivid Seats/.test(coverage.text);
 
   lines.push(GREETING);
   html.push(P(GREETING));
   // The header names the event, the party and the link they sent, so the opening line can be the answer.
-  if (packet.headline) {
-    lines.push(packet.headline);
-    html.push(`<p style="margin:0 0 18px;font-weight:600;">${esc(packet.headline)}</p>`);
+  const head = header(packet);
+  if (head) {
+    lines.push(head.text);
+    html.push(head.html);
   }
   // The answer to what they asked comes first: the verdict on their listing, the price they asked about, or,
   // with neither and nothing verified or on official sale to recommend, what the market means for them.
@@ -201,7 +216,11 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
       html.push(P(fmt(c.text)));
     }
   };
-  const opener = primary[0] ?? (read && !subject && !somethingToBuy ? read : undefined) ?? (packet.headline ? undefined : link);
+  // With nothing they asked about to answer first, the official sale is the answer, in the server's words. The
+  // model's opener there was filler that named the seller a line before the claim did ("Ticketmaster is the place
+  // I'd start." then "It's on general sale on Ticketmaster, and that's where I'd buy.", live Red Wings email).
+  const official = !primary.length && !subject && !claimsById.has('C_BEST') ? claim('C_OFFICIAL') : undefined;
+  const opener = primary[0] ?? official ?? (read && !subject && !somethingToBuy ? read : undefined) ?? (packet.headline ? undefined : link);
   if (opener) {
     put(opener, true);
   } else if (b.opening.trim()) {
@@ -260,7 +279,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set(['C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_TREND_ANSWER', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set([...(official ? ['C_OFFICIAL'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_TREND_ANSWER', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -274,7 +293,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(coverage.text);
     html.push(P(esc(coverage.text)));
   }
-  const linked = packet.claimRecords.filter((c) => c.url && used.has(c.id));
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official));
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
   const asks = packet.followUps ?? [];
@@ -315,8 +334,9 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
   const lead = link ? link.text : answer ? answer.text.split('\n')[0]! : decisionLine[packet.decision];
   const asks = packet.followUps ?? [];
   const linked = rest.filter((c) => c.url);
-  const head = packet.headline ? [packet.headline] : [];
+  const top = header(packet);
+  const head = top ? [top.text] : [];
   const text = [GREETING, ...head, lead, ...rest.map((c) => c.text), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
-  const html = [P(GREETING), ...head.map((h) => `<p style="margin:0 0 18px;font-weight:600;">${esc(h)}</p>`), P(rich(lead)), ...rest.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
+  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...rest.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
   return { textBody: text, htmlBody: html };
 }

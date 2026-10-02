@@ -159,7 +159,7 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
     expect(rec!.bodyText).not.toContain('no need to rush');
     // And it ends with the questions that would change the answer, not a request for things already sent.
-    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the link and a screenshot, or the price and section, and I’ll check it.\n- When do you need to have tickets sorted by?\n- Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
+    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them.\n- When do you need to have tickets sorted by?\n- Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
     expect(rec!.bodyHtml).toContain('<ul');
   });
 
@@ -224,7 +224,7 @@ describe('resale market tracking', () => {
     const body = rec!.bodyText;
     // The event and the link they sent in one line at the top, then the answer.
     // What we couldn't see comes before the market, so the figures aren't read as that listing's (post-#54 L01).
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston at Test Garden, New York, Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nI can’t open StubHub listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for two tickets, not that listing.\n\n')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nI can’t open StubHub listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for two tickets, not that listing.\n\n')).toBe(true);
     expect(body).toContain('My read: ');
     expect(body).toContain('- Lowest asking price with two or more tickets, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
@@ -318,7 +318,7 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston at Test Garden, New York, Fri, Oct 30, 7:30 PM EDT · 4 tickets\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 4 tickets\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
     expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);

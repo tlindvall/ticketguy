@@ -1,0 +1,14 @@
+/*
+ * The site's pointer: 1-bit pixel cursors from early desktops (public/brand/cursors, drawn at 2x on a pixel grid).
+ * An arrow everywhere, a pointing hand on anything clickable, an I-beam in text fields. !important because
+ * components set their own `cursor: pointer`; the system cursor stays as the fallback after each image.
+ */
+:root {
+  --px-arrow: url('/brand/cursors/arrow.svg') 1 1, default;
+  --px-hand: url('/brand/cursors/hand.svg') 11 1, pointer;
+  --px-text: url('/brand/cursors/text.svg') 9 17, text;
+}
+html, body, body * { cursor: var(--px-arrow) !important; }
+body a[href], body a[href] *, body button:not(:disabled), body button:not(:disabled) *, body summary, body summary *, body [role='tab'], body label:has(input[type='checkbox']), body select,
+body input[type='submit'], body input[type='button'], body input[type='checkbox'], body input[type='radio'] { cursor: var(--px-hand) !important; }
+body input:not([type='submit'], [type='button'], [type='checkbox'], [type='radio']), body textarea, body [contenteditable='true'] { cursor: var(--px-text) !important; }
