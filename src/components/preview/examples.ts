@@ -16,9 +16,6 @@ export type Example = {
   verdict: string;
   call: string;
   note: string;
-  /** For the questions section: what this question gets you, and the draft it opens. */
-  blurb: string;
-  draft: string;
 };
 
 export const EXAMPLES: Example[] = [
@@ -38,8 +35,6 @@ export const EXAMPLES: Example[] = [
     verdict: 'My call: fair price',
     call: 'A fair price for the section.',
     note: 'At the low end of similar listings, with fees in. If the view matters, check it before you pay.',
-    blurb: 'Send the listing. I’ll work out what you’d really pay, fees included, and how it sits against similar seats where we have the data.',
-    draft: 'Ticket link or screenshot:\nHow many:\n',
   },
   {
     key: 'wait',
@@ -57,8 +52,6 @@ export const EXAMPLES: Example[] = [
     verdict: 'My call: hold off',
     call: 'Prices are trending down.',
     note: 'Down 12% this week in the upper level. Reply any time and I’ll check again.',
-    blurb: 'Tell me the event and how many. Where there’s enough price history, I’ll tell you which way prices are moving and what I’d do.',
-    draft: 'Event and date:\nHow many:\n',
   },
   {
     key: 'catch',
@@ -76,8 +69,6 @@ export const EXAMPLES: Example[] = [
     verdict: 'My call: check first',
     call: 'Cheap for a reason: the view.',
     note: 'If a clear view or early delivery matters, I’d compare another option. Confirm the total at checkout.',
-    blurb: 'Seats look cheap? I’ll go through what the listing says about the view, delivery and fees, and what to confirm before you pay.',
-    draft: 'Ticket link or screenshot:\nWhat you’re unsure about (optional):\n',
   },
 ];
 

@@ -1,22 +1,20 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CopyAddress } from './CopyAddress';
 import { EXAMPLES, EXAMPLE_EVENT, type ExampleKey } from './examples';
 import { GuyMark, type GuyMood } from './GuyMark';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
 import { PixelCursor } from './PixelCursor';
 
 /**
- * The hero: the one real "New message" window and its illustrative reply. Above it sits a little inbox of three
- * subject lines; picking one plays that exchange (the request types itself, a pixel cursor presses the button,
- * the reply lands with a "New mail" flash and the ticket guy pops up over the window). The questions section
- * further down can ask for an example too (EXAMPLE_EVENT). Everything stays real: the fields are editable and
- * the button opens the visitor's email app with exactly that text. Touching the composer stops the
- * demonstration and hands it over. Reduced motion shows the finished state at once.
+ * The hero's "Example conversation": a demonstration, kept apart from the real action (the "Email your
+ * ticket guy" button under the headline). A little inbox of three subject lines picks the exchange; the request
+ * types itself into a read-only message, a pixel cursor presses Send, and the illustrative reply lands with a
+ * "New mail" flash while the ticket guy pops up over the window. Other parts of the page can ask for an example
+ * (EXAMPLE_EVENT). Reduced motion shows the finished state at once.
  */
 type Phase = 'idle' | 'subject' | 'body' | 'attach' | 'ask' | 'cursor' | 'press' | 'checking' | 'reply' | 'done';
 
-export function HeroDemo({ address, cta }: { address: string; cta: string }) {
+export function HeroDemo({ address }: { address: string }) {
   const [current, setCurrent] = useState<ExampleKey>('wait');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -27,8 +25,7 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const [composeFront, setComposeFront] = useState(false);
   const timers = useRef<number[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  const handedOver = useRef(false);
+  const button = useRef<HTMLSpanElement>(null);
   const reduced = useRef(false);
   const ex = EXAMPLES.find((e) => e.key === current)!;
 
@@ -47,7 +44,6 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   const play = useCallback((key: ExampleKey, quick = false) => {
     clear();
     const e = EXAMPLES.find((x) => x.key === key)!;
-    handedOver.current = false;
     setCurrent(key);
     if (reduced.current) { setComposeFront(false); finish(key); return; }
     const k = quick ? 0.55 : 1;
@@ -100,15 +96,6 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
     return () => { window.clearTimeout(start); clear(); window.removeEventListener(EXAMPLE_EVENT, onAsk); };
   }, [play]);
 
-  // The visitor takes over: stop the film and finish this example's fields so they can edit and send it.
-  const takeOver = () => {
-    setComposeFront(true);
-    if (handedOver.current || phase === 'done') return;
-    handedOver.current = true;
-    finish(current);
-  };
-
-  const href = `mailto:${address}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   const attached = !['idle', 'subject', 'body'].includes(phase);
   const showReply = phase === 'checking' || phase === 'reply' || phase === 'done';
   const replied = phase === 'reply' || phase === 'done';
@@ -124,9 +111,10 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
   }
 
   return (
-    <div className="hero-demo">
+    <div className="hero-demo" role="region" aria-label="Example conversation, illustrative">
+      <p className="demo-label"><span>Example conversation</span> Illustrative, not a live offer</p>
       <div className="inbox-strip" role="group" aria-label="Pick an example question">
-        <span className="inbox-strip-bar"><EnvelopeIcon /> Try asking</span>
+        <span className="inbox-strip-bar"><EnvelopeIcon /> Pick an example</span>
         {EXAMPLES.map((e) => (
           <button key={e.key} type="button" className={`inbox-row${e.key === current ? ' is-on' : ''}`} aria-pressed={e.key === current} onClick={() => play(e.key, true)}>
             <span className="mono">Subject:</span> {e.subject}
@@ -135,33 +123,32 @@ export function HeroDemo({ address, cta }: { address: string; cta: string }) {
       </div>
 
       <div className={`hero-stack${composeFront ? ' compose-front' : ''}`} ref={wrap}>
-        <form className="compose win" aria-label="Write to your ticket guy" onSubmit={(e) => { e.preventDefault(); window.location.href = href; }} onPointerDown={takeOver} onFocus={takeOver}>
+        <div className="compose win" aria-hidden="true">
           <div className="win-bar"><EnvelopeIcon /> New message</div>
           <div className="compose-row">
             <span className="compose-label">To:</span>
-            <a className="compose-to" href={`mailto:${address}`}>{address}</a>
+            <span className="compose-to">{address}</span>
           </div>
-          <label className="compose-row">
+          <div className="compose-row">
             <span className="compose-label">Subject:</span>
-            <input className="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={140} placeholder={phase === 'done' ? ex.subject : ''} />
-          </label>
-          <label className="compose-body-wrap">
-            <span className="sr-only">Message</span>
-            <textarea className="compose-body" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={2000} placeholder={phase === 'done' ? 'Paste your ticket link and tell me how many you need.' : ''} />
+            <span className="compose-subject">{subject}{phase === 'subject' ? <i className="caret" /> : null}</span>
+          </div>
+          <div className="compose-body-wrap">
+            <p className="compose-body">{body}{phase === 'body' || phase === 'ask' ? <i className="caret" /> : null}</p>
             {attached ? (
-              <span className="compose-file" aria-label={`Attached: ${ex.file}`}>
-                <span className="compose-file-thumb" aria-hidden="true"><i /><i /><i /></span>
+              <span className="compose-file">
+                <span className="compose-file-thumb"><i /><i /><i /></span>
                 <PaperclipIcon />
                 <span className="mono">{ex.file}</span>
               </span>
             ) : null}
-          </label>
-          <div className="compose-footer">
-            <span className="compose-attach"><PaperclipIcon /><span>Opens your email app. You send it from there.</span></span>
-            <CopyAddress address={address} />
-            <button type="submit" ref={button} className={`btn-lime${phase === 'press' ? ' is-pressed' : ''}`}>{cta} <span aria-hidden="true">›</span></button>
           </div>
-        </form>
+          <div className="compose-footer">
+            <span className="compose-attach"><PaperclipIcon /><span>Example request</span></span>
+            <span ref={button} className={`btn-lime demo-send${phase === 'press' ? ' is-pressed' : ''}`}>Send <span aria-hidden="true">›</span></span>
+          </div>
+        </div>
+        <p className="sr-only">Example request. Subject: {ex.subject}. {ex.link}{ex.ask}</p>
 
         <div className={`hero-reply-wrap${showReply ? ' is-shown' : ''}`}>
           <span className={`hero-guy${guy ? ' is-up' : ''}`} aria-hidden="true"><GuyMark mood={guy ?? 'idle'} /></span>

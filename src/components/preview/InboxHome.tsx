@@ -4,7 +4,7 @@ import { SvgLibrary } from '@/components/public/Landing';
 import { HeroDemo } from './HeroDemo';
 import { TrustSection } from './TrustSection';
 import { PixelCursor } from './PixelCursor';
-import { Questions } from './Questions';
+import { Proof } from './Proof';
 import { AddressBook, vcardHref } from './AddressBook';
 import { CopyAddress } from './CopyAddress';
 import { EnvelopeIcon, PaperclipIcon, ReplyIcon } from './icons';
@@ -19,7 +19,7 @@ import './inbox.css';
  * The composer plays its own short demonstration (HeroDemo): the request types itself, the button is
  * pressed, and the reply arrives with the call. It stays a working composer throughout.
  *
- * Order: promise + composer (three example questions play their labelled replies) → three questions to ask →
+ * Order: promise + the one action (Email your ticket guy) beside the labelled example conversation → one proof exchange →
  * how it works → your side of the market (principles; the source map is on /sources) → FAQ → closing with the
  * address-book card. Claims follow the service-depth policy: no unmeasured reply times, examples
  * labelled, market data described as context, listing facts attributed to the listing.
@@ -43,7 +43,7 @@ export function InboxHome({ state, address, preview = false }: Props) {
   // The visitor's own subject is sent as written; only the plain address links carry a default subject.
   const general = live ? 'Tickets' : 'Ticket Guy early access';
   const mailto = (subject: string, body?: string) => `mailto:${address}?subject=${encodeURIComponent(subject)}${body ? `&body=${encodeURIComponent(body)}` : ''}`;
-  const cta = live ? 'Ask your ticket guy' : 'Email for early access';
+  const cta = live ? 'Email your ticket guy' : 'Email for early access';
   return (
     <div className="tgx">
       <SvgLibrary />
@@ -68,15 +68,19 @@ export function InboxHome({ state, address, preview = false }: Props) {
             <h1 id="hero-title">You’ve finally got a ticket guy.</h1>
             <p className="hero-lede">Found tickets? Get a second opinion before you buy.</p>
             <p className="hero-focus">Independent ticket advice for concerts and major sports across the US.</p>
-            <p className="mono-note hero-note">Free. No app. Just email.</p>
+            <div className="hero-cta">
+              <a className="btn-lime btn-big" href={mailto(general)}>{cta} <span aria-hidden="true">›</span></a>
+              <CopyAddress address={address} />
+            </div>
+            <p className="mono-note hero-note">Free. No app. Just email <a href={mailto(general)}>{address}</a>.</p>
             <p className="hero-alt">Don’t have tickets in mind? <a href={mailto('Looking for tickets', 'Artist, team or event:\nCity or venue, and date:\nHow many tickets (optional):\n')}>Tell me what you’re looking for ›</a></p>
             <p className="hero-save"><a href={vcardHref(address)} download="ticket-guy.vcf"><span className="abook-icon" aria-hidden="true" />Save your ticket guy to your contacts</a></p>
           </div>
-          <HeroDemo address={address} cta={cta} />
+          <HeroDemo address={address} />
         </section>
 
 
-        <Questions address={address} />
+        <Proof mailto={mailto(general)} />
 
         <section id="how-it-works" className="how wrap" aria-labelledby="how-title">
           <h2 id="how-title">One email. A better call.</h2>
