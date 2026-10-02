@@ -104,6 +104,34 @@ export class MarketTracker {
     await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 300) ?? null, at: this.now() });
   }
 
+  /**
+   * One call of today's allowance, taken before a paid read is made (PW-CALL-BUDGET-01, concurrent case): the row
+   * is written by the same statement that checks the day's total, so two watches evaluated at once can't both
+   * spend the last call. Null when nothing is left, recorded as a skipped read so the gap stays visible.
+   */
+  private async reserve(kind: string, eventId: string | null): Promise<{ id: string; attempts: number } | null> {
+    const now = this.now();
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const limit = this.deps.env.SEATDATA_DAILY_CALL_LIMIT;
+    const r = await this.db.execute(sql`insert into market_fetches (provider, kind, event_id, status, calls, points, detail, at)
+      select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${now}
+      where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day}) < ${limit}
+      returning id`);
+    const rows = (Array.isArray(r) ? r : (r as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
+    const id = rows[0]?.id;
+    if (!id) {
+      await this.log(kind, eventId, 'skipped_budget', 0);
+      return null;
+    }
+    // The reserved call plus whatever is still free: a retry only when the allowance has room for it.
+    return { id, attempts: Math.max(1, limit - (await this.callsToday()) + 1) };
+  }
+
+  /** The reserved row, completed with what the read actually did. */
+  private async finish(id: string, status: string, calls: number, points = 0, detail: string | null = null) {
+    await this.db.update(t.marketFetches).set({ status, calls, points, detail: detail?.slice(0, 300) ?? null }).where(eq(t.marketFetches.id, id));
+  }
+
   /** Why nothing would run, or null when it can. */
   async blocked(): Promise<string | null> {
     if (!this.deps.env.SEATDATA_API_KEY) return 'no_api_key';
@@ -389,20 +417,23 @@ export class MarketTracker {
    */
   async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare'): Promise<{ at: Date; listings: MarketListing[] } | null> {
     if (await this.blocked()) return null;
-    if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return null;
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || tr.state !== 'active' || !tr.providerEventId) return null;
+    // The call is taken from the allowance before it is made; the attempts, retries included, can't exceed it.
+    const slot = await this.reserve(kind, eventId);
+    if (!slot) return null;
     const api = await this.api();
+    api.callCap = api.calls + slot.attempts;
     const before = api.calls;
     try {
       const r = await api.listings(tr.providerEventId);
       const raw = Array.isArray(r.listings) ? r.listings : [];
       const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
-      await this.log(kind, eventId, 'success', api.calls - before, listings.length, `${raw.length} listings`);
+      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings`);
       return { at: this.now(), listings };
     } catch (e) {
-      await this.log(kind, eventId, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+      await this.finish(slot.id, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       return null;
     }
   }
