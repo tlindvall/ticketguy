@@ -1190,3 +1190,15 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Discovery.** A full page records only the dates it reached. Event lookup asks for 100 results. A cached miss is re-asked once. "Not found" is said as what we searched.
 
 **Not decided here.** Whether SeatData's listing ids are StubHub's. `scripts/probe-seatdata-link.ts` answers that with one paid read. The concert items (screenshot rows, passes, standing room, buy-or-wait) are in #88.
+
+## 69. A StubHub link is read by StubHub's own event id; an unfound listing gets a price first and one ask
+
+**Why.** After #89, the live Rangers reply no longer crashed, but it read as three "I can't" lines: can't open the listing, can't see seats on Ticketmaster, can't see resale listings. The game wasn't matched to SeatData through its Ticketmaster id. The link already named StubHub's own event id, which SeatData reads directly (`listings/get?event_id_sh=`, SDK 1.2).
+
+**What.**
+- **Lookup.** When the event isn't tracked through Ticketmaster, a StubHub link's event id is used for the one listings read. It's the same licence gate, reservation and call cap as before.
+- **Listing found by its number.** The reply answers about that listing, as before (#67).
+- **Listing not found.** The reply leads with the cheapest listing for their party at that game: price before fees, the total for the party, section and row, and how many listings fit. Then it makes one ask: the price with fees, the section and the row, or a screenshot. When the market block is shown, the lead uses its floor instead, so one email never carries two "cheapest" prices.
+- **Removed from that reply:** the separate "I can't open StubHub listings" question, the budget question, "I can't see live resale listings", and the model's closer.
+- **Ticketmaster's open sale under a resale link** is a price to compare against ("check its total for two there against the one you found"), not "that's where I'd buy".
+- **Checkout links.** A StubHub checkout link (`ID=<session>|<listingId>|<qty>|0`) gives the listing and the quantity. `scripts/probe-seatdata-link.ts` also takes an event link with no listing; it prints rows to open and compare.

@@ -417,10 +417,13 @@ export class MarketTracker {
    * paid request, under the same gates as tracking, only for an event already matched to SeatData. The result
    * is used for this answer and never stored. Wheelchair, companion, parking and suite listings are left out.
    */
-  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare'): Promise<{ at: Date; listings: MarketListing[] } | null> {
+  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<{ at: Date; listings: MarketListing[] } | null> {
     if (await this.blocked()) return null;
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
-    if (!tr || tr.state !== 'active' || !tr.providerEventId) return null;
+    // Not matched to SeatData through Ticketmaster, but the customer's StubHub link names StubHub's own event id, which
+    // SeatData reads directly (SDK 1.2 `event_id_sh`): the Rangers link had no market at all without it (live Oct 2).
+    const bySh = !(tr && tr.state === 'active' && tr.providerEventId) && !!stubHubEventId && /^\d{4,15}$/.test(stubHubEventId);
+    if (!bySh && (!tr || tr.state !== 'active' || !tr.providerEventId)) return null;
     // The call is taken from the allowance before it is made; the attempts, retries included, can't exceed it.
     // A reservation that fails is no read, never an error for the reply that asked (R1-HUMAN-01).
     const slot = await this.reserve(kind, eventId).catch(async (e) => {
@@ -432,7 +435,7 @@ export class MarketTracker {
     api.callCap = api.calls + slot.attempts;
     const before = api.calls;
     try {
-      const r = await api.listings(tr.providerEventId);
+      const r = bySh ? await api.listingsByStubHubEvent(stubHubEventId!) : await api.listings(tr!.providerEventId!);
       const raw = Array.isArray(r.listings) ? r.listings : [];
       const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.

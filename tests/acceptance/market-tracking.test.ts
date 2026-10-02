@@ -67,6 +67,12 @@ describe('resale market tracking', () => {
       return json({ event_id: Number(m[1]), data: statsFor(new Date(start.getTime() - 40 * 24 * H), 40 * 24, base, base, base + 20, base + 20), has_more: false, next_cursor: null });
     }
     if (url.pathname === '/api/v0.1/listings/get' && url.searchParams.get('event_id') === '777') return groupListings();
+    // A game SeatData has under its StubHub event id only (no Ticketmaster match): SDK 1.2 `event_id_sh`.
+    if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id_sh') === '161999000') return json({ has_refreshed: 1, listings: [
+      { active: true, listing_id: 7001, source: 'sh', price: 88, quantity: 4, section: '224', row: '9' },
+      { active: true, listing_id: 7002, source: 'sh', price: 61, quantity: 1, section: '311', row: '2' },
+      { active: true, listing_id: 7003, source: 'sh', price: 74, quantity: 2, section: '312', row: '14' },
+    ] });
     if (url.pathname === '/api/v1/events/777/sales') return json({ event_id: 777, data: [], has_more: false, next_cursor: null });
     if (url.pathname === '/api/v0.4/events/event-request-add') return json({ job_id: 'job-1' });
     return new Response('{}', { status: 404 });
@@ -186,8 +192,10 @@ describe('resale market tracking', () => {
     const recs = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
     const body = recs.at(-1)!.bodyText;
     const lead = body.split('\n\n')[2]!;
-    expect(lead).toBe('Whether they’re worth it comes down to what they cost, and I can’t see that: I can’t open StubHub listings myself, so I don’t know the price or section of the ones you sent. For two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing; that’s context, not enough on its own to say buy now or hold off. Send me a screenshot showing the price with fees and the section and row, and I’ll give you a straight answer.');
-    expect(body.match(/I can’t open StubHub listings myself/g)).toHaveLength(1);
+    // A price first, then the one ask; no "I can't" lead (live Oct 2, Rangers).
+    expect(lead).toBe('For two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
+    expect(body.match(/doesn’t pass me the price/g)).toHaveLength(1);
+    expect(body).not.toMatch(/I can’t open StubHub/);
     // One ask, the one that decides it: no budget question for judging an offer they've already picked (live R07).
     expect(body).not.toMatch(/most you’d want to pay|narrow it down/);
     expect(body).not.toContain('Going by the StubHub link you sent');
@@ -224,11 +232,13 @@ describe('resale market tracking', () => {
     const body = rec!.bodyText;
     // The event and the link they sent in one line at the top, then the answer.
     // What we couldn't see comes before the market, so the figures aren't read as that listing's (post-#54 L01).
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nI can’t open StubHub listings myself, so I haven’t seen the one you sent: not its section and row, its total with fees, or its catches. What follows is the resale market for two tickets, not that listing.\n\n')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nFor two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s a good price.\n\n')).toBe(true);
     expect(body).toContain('My read: ');
     expect(body).toContain('- Lowest asking price with two or more tickets, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
-    expect(body).toContain('- I can’t open StubHub listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?');
+    // The ask is made once, in the lead; not again as a question at the end.
+    expect(body.match(/doesn’t pass me the price/g)).toHaveLength(1);
+    expect(body).not.toMatch(/I can’t open StubHub|most you’d (?:want to )?pay/);
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
 
@@ -263,7 +273,7 @@ describe('resale market tracking', () => {
     const unmatched = await ask(c, `${text}\n\n${link('14251313815')}`, 'r1-human-01a@customer.example');
     await c.research({ requestId: unmatched, revision: 1 });
     const [u] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, unmatched));
-    expect(u!.bodyText).toContain('Send me a screenshot showing the price with fees and the section and row, and I’ll give you a straight answer.');
+    expect(u!.bodyText).toContain('StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
     expect((await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, unmatched), eq(t.auditLog.action, 'listing.link_unmatched')))).length).toBe(1);
     const matched = await ask(c, `${text}\n\n${link('6189203345')}`, 'r1-human-01b@customer.example');
     await c.research({ requestId: matched, revision: 1 });
@@ -278,6 +288,23 @@ describe('resale market tracking', () => {
     await expect(broken.research({ requestId, revision: 1 })).resolves.toBeTruthy();
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     expect(rec!.bodyText).toContain('$100');
+  });
+
+  // Live Oct 2 (Rangers, after #89): the game wasn't matched to SeatData through Ticketmaster, so the reply was three
+  // "I can't" lines. The link names StubHub's own event id, which SeatData reads directly: the reply now leads with
+  // what two cost at that game, then makes one ask.
+  it('an unmatched game is read by the link\'s StubHub event id: the price for their party first, then one ask', async () => {
+    const OTHER = '30000000-0000-4000-8000-0000000000f9';
+    await h.db.insert(t.events).values({ id: OTHER, name: 'Metro Testers vs. Chicago', category: 'nba', venueId: ARENA, primaryEntityId: TEAM, isHome: true, localStartAt: new Date('2026-11-05T00:30:00Z'), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true, saleStatus: 'offsale' }).onConflictDoNothing();
+    const c = concierge();
+    const link = 'https://www.stubhub.com/metro-testers-new-york-tickets-11-4-2026/event/161999000/?quantity=2&listingId=55500011';
+    const requestId = await ask(c, `Is this a good deal for two or should I hold off? ${link}`, 'sh-event@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const body = rec!.bodyText;
+    expect(body).toContain('For two together, StubHub listings for this game start at $74 a ticket before fees (about $148 for two), in section 312, row 14, when I checked just now. There are 2 listings with two or more tickets. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
+    expect(body).not.toMatch(/I can’t open StubHub|I can’t see live resale listings|most you’d (?:want to )?pay/);
+    expect(calls.some((x) => x.startsWith('/api/v0.1.1/listings/get'))).toBe(true);
   });
 
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {

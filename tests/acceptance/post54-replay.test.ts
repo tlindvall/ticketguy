@@ -124,7 +124,7 @@ describe('the post-#54 QA, replayed exactly', () => {
 
   it('L01: the listing we can’t open is said before any market figures', () => {
     const body = all('L01');
-    const at = body.indexOf('I can’t open StubHub listings myself, so I haven’t seen the one you sent');
+    const at = body.indexOf('StubHub doesn’t pass me the price of the listing you picked');
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(Math.max(body.lastIndexOf('How this compares'), body.lastIndexOf('My read'), at + 1));
   });

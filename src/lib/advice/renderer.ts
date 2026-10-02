@@ -300,7 +300,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   if (asks.length) section(lines, html, questionsLead(asks.length), asks);
   // Nor over their own question (delivery, their offers, access, sales): a model closing there drifted into
   // generic buy-or-wait advice (post-#54 QA, R3-B03).
-  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING'].some((id) => claimsById.has(id))) {
+  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING', 'C_LINK_UNREAD'].some((id) => claimsById.has(id))) {
     // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
     // worse, ask for the listing they already sent.
     lines.push(b.closing.trim());
