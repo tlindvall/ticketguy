@@ -40,7 +40,7 @@ describe('expanded independent price-watch controls', () => {
     }
     if (url.pathname === '/api/v1/events/555/stats') return json({ event_id: 555, data: [], has_more: false, next_cursor: null });
     if (url.pathname === '/api/v1/events/555/sales') return json({ event_id: 555, data: [], has_more: false, next_cursor: null });
-    if (url.pathname === '/api/v0.1/listings/get' && url.searchParams.get('event_id') === '555') {
+    if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id') === '555') {
       reads += 1;
       if (failListings) return new Response('{}', {status:503});
       return json({ has_refreshed: true, listings });
@@ -183,7 +183,7 @@ describe('expanded independent price-watch controls', () => {
   });
   it('X09 control: with room for them, the two retries still run (a retried 503 then a success)',async()=>{
     const {w}=await create();await h.db.delete(t.marketFetches);let fails=2;failListings=false;listings=[listing(950,60,4)];
-    const flaky=(async(input:string)=>{const u=new URL(input);if(u.pathname==='/api/v0.1/listings/get'&&fails>0){fails-=1;reads+=1;return new Response('{}',{status:503});}return fetchImpl(input);}) as unknown as typeof fetch;
+    const flaky=(async(input:string)=>{const u=new URL(input);if(u.pathname==='/api/v0.1.1/listings/get'&&fails>0){fails-=1;reads+=1;return new Response('{}',{status:503});}return fetchImpl(input);}) as unknown as typeof fetch;
     now=new Date(QA_NOW.getTime()+5*MIN);await h.db.update(t.watches).set({nextCheckAt:new Date('2026-10-29T00:00:00Z')}).where(ne(t.watches.id,w!.id));await h.db.update(t.watches).set({nextCheckAt:now}).where(eq(t.watches.id,w!.id));
     const before=reads;const c=new Concierge({db:h.db,env:env({SEATDATA_DAILY_CALL_LIMIT:'3'}),extractor:new FixtureExtractor(),drafter:new FixtureDrafter(),clock:()=>now,emailProvider:null,marketFetch:flaky});
     const result=await c.evaluateDueWatches();

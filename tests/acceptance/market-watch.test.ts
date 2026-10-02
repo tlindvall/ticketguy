@@ -36,7 +36,7 @@ describe('a price watch on SeatData resale listings', () => {
     }
     if (url.pathname === '/api/v1/events/555/stats') return json({ event_id: 555, data: [], has_more: false, next_cursor: null });
     if (url.pathname === '/api/v1/events/555/sales') return json({ event_id: 555, data: [], has_more: false, next_cursor: null });
-    if (url.pathname === '/api/v0.1/listings/get' && url.searchParams.get('event_id') === '555') {
+    if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id') === '555') {
       reads += 1;
       return json({ has_refreshed: true, listings });
     }

@@ -249,8 +249,12 @@ describe('jigitz with the live market: the row, the party total, then the contex
   });
 
   it('HF-C-05: an open sale is never said as seats being there', () => {
-    const official = buildPacket(args(subject('floor'))).claimRecords.find((c) => c.id === 'C_OFFICIAL');
+    // Rows from another seller's page: the official sale is a place to compare, never seats.
+    const official = buildPacket(args({ ...subject('floor'), seller: 'StubHub' })).claimRecords.find((c) => c.id === 'C_OFFICIAL');
     expect(official!.text).toBe('Ticketmaster also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check the all-in total and the seats there before you buy.');
+    // Rows from Ticketmaster's own page: only its link, nothing said about the sale (FV-R2-03).
+    const own = buildPacket(args(subject('floor'))).claimRecords.find((c) => c.id === 'C_OFFICIAL');
+    expect(own).toMatchObject({ text: '', values: { sameSeller: 1 }, linkLabel: 'Event page on Ticketmaster' });
   });
 
   it('reserved-seat control: a single seated listing keeps its together and seat-number checks', () => {

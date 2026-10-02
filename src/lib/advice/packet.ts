@@ -470,6 +470,8 @@ function alternativesClaim(a: BuildPacketArgs, alt: AlternativesResult): ClaimRe
 /** Whether we have a verified alternative (checked by a person or a licensed source, all-in total), said plainly. */
 function verifiedClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord | null {
   if (a.best) return null; // C_BEST names it, with its link
+  // A results page has its own alternatives, the other rows, said with it (FV-R2-03).
+  if (shownRowLead(a, sub)) return null;
   // No source searched and no market shown: the verdict already says it can't be compared yet (TGQA-R8 S10).
   if (!a.sourcesChecked.length && !a.market?.visible) return null;
   return { id: 'C_VERIFIED', kind: 'coverage', text: 'I haven’t found a verified alternative I can link you to yet, with a checked all-in price.', values: {}, scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: null, limitations: ['no_verified_inventory'], customerVisible: true };
@@ -1188,6 +1190,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     if (verified) claims.push(verified);
   }
   if (a.official) {
+    // Rows from the official seller's own page: its link is where to buy them, and saying the sale is open adds
+    // nothing to what they're looking at (FV-R2-03), so only the link is placed.
+    const sameSeller = !!a.subject && a.subject.source === 'screenshot' && !!shownRowLead(a, a.subject) && a.subject.seller?.trim().toLowerCase() === a.official.seller.toLowerCase();
     claims.push({
       id: 'C_OFFICIAL',
       kind: 'official_sale',
@@ -1198,14 +1203,16 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       // question they didn't ask, and the link stays an event page (PW-EMAIL-FOCUS-01, L01).
       // A resale listing they asked about: the box office is the thing to compare it with, not a different answer to
       // their question (live Oct 2, Rangers: "that's where I'd buy" under "is this a good deal?").
-      text: a.link && !a.link.eventPage && a.link.marketplace !== a.official.seller
+      text: sameSeller
+        ? ''
+        : a.link && !a.link.eventPage && a.link.marketplace !== a.official.seller
         ? `${a.official.seller} also sells this ${a.eventNoun ?? 'game'} directly. I can’t see its seats or prices, so check its total for ${a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity)} there against the one you found.`
         : a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
         // An open sale is the sale window, not stock: the official page can say sold out while the catalog still says
         // on sale (live Oct 2, Metallica at Sphere), so it is never said as seats being there.
         ? `${a.official.seller} also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
         : a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy.`,
-      values: { seller: a.official.seller },
+      values: { seller: a.official.seller, sameSeller: sameSeller ? 1 : 0 },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
       methodVersion: null,
@@ -1411,7 +1418,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     });
   }
   // With a listing of theirs, the verdict and its catches check it against these; this is for requests without.
-  if (a.requirements?.length && !a.subject && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null)) {
+  // A listing link they sent is theirs too: the one ask for its price and seats covers it (FV-R1-03: "I haven't
+  // been able to check this against any seats yet: 2 seats together" under the StubHub link it was about).
+  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null)) {
     const reqs = a.requirements;
     claims.push({
       id: 'C_REQS',
@@ -1592,7 +1601,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
     // A short follow-up about the row already chosen gets its answer, the other rows and the checks: not the row's
     // price, the face-value line and the market section all over again (live Oct 2 C02 turn 2: 468 words).
-    if (sub && shownRowLead(a, sub)) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED'].includes(c.id)) c.customerVisible = false;
+    // The line naming the market's source goes with the market it describes ("Those figures are…" under nothing).
+    if (sub && shownRowLead(a, sub)) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
     claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim ? 1 : 0 }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: trendClaim ? [] : ['insufficient_history'], customerVisible: true });
   }
 

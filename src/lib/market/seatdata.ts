@@ -135,9 +135,13 @@ export class SeatDataClient {
     return this.request('GET', `/api/v1/events/${encodeURIComponent(String(eventId))}/sales`, q);
   }
 
-  /** Current listings. The item shape is undocumented; callers must treat every field as optional. */
+  /**
+   * Current listings: every stored row of the event, active and inactive. The path is SDK 1.2's and the docs'
+   * (`/api/v0.1.1/listings/get`); `/api/v0.1/` is in neither, and no live reply has yet shown a listings read
+   * (deployed fix verification Oct 2, FV-R1-01). The item shape is undocumented; callers treat every field as optional.
+   */
   listings(eventId: number | string): Promise<{ listings?: Array<Record<string, unknown>> } & Record<string, unknown>> {
-    return this.request('GET', '/api/v0.1/listings/get', { event_id: eventId });
+    return this.request('GET', '/api/v0.1.1/listings/get', { event_id: eventId });
   }
 
   /**

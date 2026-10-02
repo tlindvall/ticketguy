@@ -33,7 +33,7 @@ describe('advice email layout: a same-day game with only a listing count', () =>
       return json({ data: [], has_more: false, next_cursor: null });
     }
     if (url.pathname === '/api/v1/events/811/stats') return json({ event_id: 811, data: stats(), has_more: false, next_cursor: null });
-    if (url.pathname === '/api/v0.1/listings/get') return new Response('{"error":"boom"}', { status: 500 });
+    if (url.pathname === '/api/v0.1.1/listings/get') return new Response('{"error":"boom"}', { status: 500 });
     if (url.pathname === '/api/v1/events/811/sales') return json({ event_id: 811, data: [], has_more: false, next_cursor: null });
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;
