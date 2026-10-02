@@ -1105,3 +1105,21 @@ It is stored with its zone and compared with each offer's promised transfer, and
   - The alert leads with the bold estimate, and its footer doesn't promise a link.
 
 **Not decided here.** Whether a stale-invalidated alert should free its exact price for a later alert. It doesn't today.
+
+## 64. Every SeatData attempt counts against the day; a requirement listings can't show is the watch's stated reason
+
+**Why.** The retest on the deployed `a80744b` found four problems:
+- a retried 503 with one call left made three attempts;
+- a relative late-entry need ("after the show starts") vanished from the reply;
+- a stop email's question went unanswered;
+- the replies buried the blocker under repeated price maths and three questions (`docs/qa/PRICE_WATCH_RETEST.md`).
+
+**What.**
+- **Call cap.** `SeatDataClient.callCap` is checked before every HTTP attempt, retries included. The tracker sets it from the remaining daily allowance before each paid operation.
+- **Hard-requirement check first.** With no seller that may be monitored, a requirement a market watch can't honour (sections, accessible seating, a delivery time, an age or entry rule) is checked before the switch, licence and capability gates. A missing budget or quantity is audited too.
+- **Reason-specific replies.** The research reply names the recorded reason for no watch.
+- **Late entry with no clock time.** It gets the late-entry answer: unverified, nothing on file, don't buy on the start time, no ticket suggested.
+- **A stop with a question.** The stop is done first, and then the late-entry question is answered from what's on file.
+- **Watch requests.** They get one next step (the budget when missing), and an open sale is shown as an event page, not "where I'd buy". "My read" no longer repeats the floor the market lines already give. An event page is never called a listing.
+
+**Not done.** A shared atomic quota across overlapping evaluations of different watches. Each operation is capped, but two at once can each spend what's left.

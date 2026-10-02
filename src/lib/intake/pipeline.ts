@@ -497,6 +497,9 @@ export class Concierge {
           : `There was no active price watch or alert${scoped ? ' on this request' : ''}, so nothing was being monitored and there’s nothing to stop.`;
       const kept = keptAlerts ? `Your ${keptAlerts === 1 ? 'event alert is' : `${keptAlerts} event alerts are`} still on; reply “stop the alerts” to end ${keptAlerts === 1 ? 'it' : 'them'} too.` : null;
       const tail = [kept, 'Nothing else has changed: your other requests and your email preferences are as they were.'].filter(Boolean).join(' ');
+      // The stop is done first; a question in the same email is still answered, and nothing starts again
+      // (PW-MULTI-INTENT-01: "have you verified late entry? ... cancel only the watch" got the cancellation only).
+      const entryNote = await this.lateEntryStatus(req, latestText);
       // Kept as a revision and an outcome, as any reply is: "stop, we bought them" is also a reported purchase.
       const rev = priorVersion ? req.currentRevision + 1 : 1;
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
@@ -506,7 +509,7 @@ export class Concierge {
         { requestId: req.id, kind: 'stop_watching', source: 'customer_reply', messageId: msg.id, details: { watches: stoppedWatches.length, alerts: stoppedAlerts.length }, actor: 'customer', at: msg.receivedAt },
         ...(said?.bought === true ? [{ requestId: req.id, kind: 'user_reported_purchase', source: 'customer_reply', messageId: msg.id, details: {}, actor: 'customer', at: msg.receivedAt }] : []),
       ]);
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Stopped'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;">${line}</p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `cancel:${msg.id}` });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Stopped'), template: 'raw_auto', vars: { text: ['Hey,', line, tail, ...(entryNote ? [entryNote.text] : [])].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;">${line}</p>`, `<p style="margin:0 0 18px;">${tail}</p>`, ...(entryNote ? [entryNote.html] : [])].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `cancel:${msg.id}` });
       // Stopping it ends what this request was waiting on: closed, as a customer's own stop.
       await this.transition(req.id, 'closed', said?.bought === true ? 'customer_bought' : 'customer_stopped');
       return { state: 'closed', revision: rev, extraction: merged };
@@ -903,12 +906,20 @@ export class Concierge {
     // question, and a start time isn't a last-entry time. That answer comes first, before any seller (Research 1,
     // NW-01). The event is a candidate until its late-entry terms are confirmed.
     if (resolution.kind === 'resolved' && !supplied.textOffers.length && !listing.fields) {
-      const arrival = arrivalMinutes(threadTexts);
+      // An entry rule with a time in it ("must permit entry after midnight") says when they'd arrive, too.
+      const need = entryNeed(threadTexts);
+      const needAt = need ? (/after midnight/i.test(need) ? 1440 : (() => { const m = /^Entry at (.+?) \(/.exec(need); const v = m ? minutesOf(m[1]!) : null; return v === null ? null : v < 6 * 60 ? v + 1440 : v; })()) : null;
+      const arrival = arrivalMinutes(threadTexts) ?? needAt;
       const startMin = minutesOfDay(resolution.event.localStartAt, resolution.venue.timezone);
       const lateBy = arrival !== null ? arrival - (startMin < 6 * 60 ? startMin + 1440 : startMin) : null;
-      if (lateBy !== null && lateBy > 0) {
-        const arrive = arrival! >= 1440 ? (arrival === 1440 ? 'midnight' : `${timeLabel(arrival! - 1440)}`) : timeLabel(arrival!);
-        const Arrive = arrive.replace(/^./, (c) => c.toUpperCase());
+      // "I can only arrive after the show starts; late entry must be allowed": late, with no clock time to compare,
+      // is the same question (PW-ENTRY-REPLY-02), so it gets this answer, not general shopping advice.
+      // Re-entry is a different question (leaving and coming back), so it isn't answered as a late arrival.
+      const relative = !(lateBy !== null && lateBy > 0) && arrival === null && !!need && /^Late entry/.test(need);
+      if ((lateBy !== null && lateBy > 0) || relative) {
+        const arrive = relative ? 'after the start' : arrival! >= 1440 ? (arrival === 1440 ? 'midnight' : `${timeLabel(arrival! - 1440)}`) : timeLabel(arrival!);
+        const arriveAt = relative ? arrive : `at ${arrive}`;
+        const Arrive = relative ? 'Late' : arrive.replace(/^./, (c) => c.toUpperCase());
         const startLabel = timeLabel(startMin);
         const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
         const page = m?.url ?? null;
@@ -916,21 +927,26 @@ export class Concierge {
         const who = resolution.event.name;
         // A last-entry time they quote decides it, independently of the start: "the page says last entry is 1am".
         // It's their quote, so it's said as such, never as something checked here.
-        const quoted = [...threadTexts].reverse().map((x) => entryTerm(x) ?? lastEntryQuoted(x)).find((x) => x && x.kind !== 'unknown') ?? null;
+        const quotedTerm = [...threadTexts].reverse().map((x) => entryTerm(x) ?? lastEntryQuoted(x)).find((x) => x && x.kind !== 'unknown') ?? null;
+        // A cutoff can't be set against an arrival with no time; only "anytime entry" settles a relative one.
+        const quoted = relative && quotedTerm?.kind !== 'anytime' ? null : quotedTerm;
         const cutoff = quoted?.kind === 'before' ? (quoted.minutes < 12 * 60 ? quoted.minutes + 1440 : quoted.minutes) : null;
         const cutoffLabel = cutoff === null ? null : cutoff === 1440 ? 'midnight' : timeLabel(cutoff % 1440);
         const allows = quoted?.kind === 'anytime' || (cutoff !== null && (quoted?.kind === 'before' && quoted.boundary === 'strict' ? arrival! < cutoff : arrival! <= cutoff));
         const lead = quoted ? (allows ? `${Arrive} entry fits the terms you quoted.` : `${Arrive} entry doesn’t fit the terms you quoted.`) : `${Arrive} entry is unverified.`;
         const why = quoted
           ? allows
-            ? `${quoted.kind === 'anytime' ? 'You quoted anytime entry' : `You quoted last entry ${quoted.kind === 'before' && quoted.boundary === 'strict' ? 'before' : 'by'} ${cutoffLabel}`}, so arriving at ${arrive} works on that basis. I haven’t checked those terms myself, so keep the page that states them.`
+            ? `${quoted.kind === 'anytime' ? 'You quoted anytime entry' : `You quoted last entry ${quoted.kind === 'before' && quoted.boundary === 'strict' ? 'before' : 'by'} ${cutoffLabel}`}, so arriving ${arriveAt} works on that basis. I haven’t checked those terms myself, so keep the page that states them.`
             : `You quoted entry ${quoted.kind === 'before' && quoted.boundary === 'strict' ? 'before' : 'by'} ${cutoffLabel}, and you’d arrive at ${arrive}, so I wouldn’t buy this ticket for that arrival.`
-          : `The ${startLabel} start on the listing doesn’t tell us the latest entry time, so I wouldn’t buy on that basis yet.`;
+          : relative
+            ? `The ${startLabel} start on the event page doesn’t tell us whether people arriving after it are let in, so I wouldn’t buy on that basis yet.`
+            : `The ${startLabel} start on the event page doesn’t tell us the latest entry time, so I wouldn’t buy on that basis yet.`;
         const candidate = quoted ? '' : ' Treat it as a candidate until its late-entry policy is confirmed.';
         // The link says which night and room it is, so it's clear on its own or forwarded (R2-EMAIL-POLICY-01).
         const occurrence = `${who} at ${resolution.venue.name}, ${shortWhen(resolution.event.localStartAt, resolution.venue.timezone, false)}`;
-        const link = url ? `Here’s the listing for ${occurrence}: ${url}.${candidate}` : `Treat ${occurrence} as a candidate until its late-entry policy is confirmed.`;
-        const step = quoted && allows ? 'If the listing you buy from shows the same entry terms, it’s a fit for your arrival.' : quoted ? `Look for a ticket type that allows entry at ${arrive}, or plan to arrive before ${cutoffLabel}.` : `Before buying, confirm that this event admits people arriving at ${arrive}.`;
+        // It's the event page, not a listing of seats (PW-EMAIL-FOCUS-01): called that until seats are checked.
+        const link = url ? `Here’s the event page for ${occurrence}: ${url}.${candidate}` : `Treat ${occurrence} as a candidate until its late-entry policy is confirmed.`;
+        const step = quoted && allows ? 'If the listing you buy from shows the same entry terms, it’s a fit for your arrival.' : quoted ? `Look for a ticket type that allows entry at ${arrive}, or plan to arrive before ${cutoffLabel}.` : `Before buying, confirm that this event admits people arriving ${arriveAt}.`;
         // What we have and don't, not homework: no policy page or contact is on file, so none is offered.
         const where = quoted ? '' : `Nothing I have states ${resolution.venue.name}’s last entry for that night.`;
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -938,10 +954,10 @@ export class Concierge {
         const owned = /\b(?:you didn'?t answer|didn'?t answer (?:my|the)|you ignored|not what I asked|you skipped)\b/i.test(flat(latestText)) ? ' You’re right that my last reply should have said that first.' : '';
         // They asked for a watch: no listing shows an entry policy, so none is set up, and they're told so once
         // (PW-ENTRY-01), rather than left to assume this route is watching.
-        const noWatch = merged.intent === 'watch_request' && !(quoted && allows) ? `I haven’t set up a price watch for this: listings don’t show whether a ticket admits people arriving at ${arrive}, so an alert couldn’t tell you a ticket works for you.` : null;
+        const noWatch = merged.intent === 'watch_request' && !(quoted && allows) ? `I haven’t set up a price watch for this: listings don’t show whether a ticket admits people arriving ${arriveAt}, so an alert couldn’t tell you a ticket works for you.` : null;
         if (noWatch) await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: 'unverifiable:entry_rule' } });
         const text = ['Hey,', `${lead} ${why}${owned}`, link, ...(altDateNote ? [altDateNote] : []), `${step} ${where}`.trim(), ...(noWatch ? [noWatch] : [])].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the listing for <a href="${esc(url)}">${esc(occurrence)}</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`, ...(noWatch ? [`<p style="margin:0 0 18px;">${esc(noWatch)}</p>`] : [])].join('\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(why)}${esc(owned)}</p>`, url ? `<p style="margin:0 0 18px;">Here’s the event page for <a href="${esc(url)}">${esc(occurrence)}</a>.${esc(candidate)}</p>` : `<p style="margin:0 0 18px;">${esc(link)}</p>`, ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), `<p style="margin:0 0 18px;"><strong>${esc(step)}</strong> ${esc(where)}</p>`, ...(noWatch ? [`<p style="margin:0 0 18px;">${esc(noWatch)}</p>`] : [])].join('\n');
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Late entry'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `entry:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'late_entry_unverified');
         return { state: 'referred', revision, extraction: merged };
@@ -2490,7 +2506,9 @@ export class Concierge {
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
     if (brief.intent === 'watch_request') {
       const [w] = await this.db.select().from(t.watches).where(and(eq(t.watches.requestId, req.id), eq(t.watches.state, 'active'))).orderBy(desc(t.watches.createdAt)).limit(1);
-      watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt, market: (w.constraints as { monitor?: string } | null)?.monitor === 'market' ? { feeAllowancePct: this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT } : null } : { running: false };
+      // Why not, when it isn't: the reason recorded when it wasn't created, so the reply can name the real blocker.
+      const [why] = w ? [] : await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.entityId, req.id), eq(t.auditLog.action, 'watch.not_created'))).orderBy(desc(t.auditLog.createdAt)).limit(1);
+      watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt, market: (w.constraints as { monitor?: string } | null)?.monitor === 'market' ? { feeAllowancePct: this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT } : null } : { running: false, reason: (why?.diff as { reason?: string } | null)?.reason ?? null };
     }
     // Cheaper offers the comparison rejected for a hard requirement: named with the reason, never offered.
     const perSeat = (o: Offer) => { const tot = o.payableTotalCents ?? o.baseTotalCents; return tot === null ? null : tot / o.quantity; };
@@ -2523,7 +2541,7 @@ export class Concierge {
     const [opponent] = shown && event.opponentEntityId ? await this.db.select().from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
     const performers = [ent, opponent].filter((x): x is NonNullable<typeof x> => !!x);
     const eventIdentity = shown ? { names: [...performers.flatMap((x) => [x.name, ...x.aliases]), event.name], nicknames: performers.filter((x) => x.kind === 'team').map((x) => teamNickname(x.name)), venueNames: [venue.name, ...venue.aliases], city: venue.city } : null;
-    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace] } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(event, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];
@@ -2910,7 +2928,15 @@ export class Concierge {
       return null;
     };
     const target = wholePartyBudgetCents(a.brief.budgetCents, a.brief.budgetBasis, a.brief.quantity);
-    if (target === null || !a.brief.quantity) return null; // budget is required for a target-price watch → clarification already asked via ambiguities path
+    // A target-price watch needs both; the reply asks for what's missing (PW-EMAIL-FOCUS-01, L01).
+    if (target === null || !a.brief.quantity) return notCreated(!a.brief.quantity ? 'no_quantity' : 'no_budget');
+    // With no seller that may be monitored (production today), only a market watch is possible: a requirement it
+    // can't honour is the reason, whatever else is or isn't switched on, and it's known before any paid lookup.
+    const sellerCanMonitor = (await this.db.select({ id: t.adapterConfigs.sourceId }).from(t.adapterConfigs).where(and(eq(t.adapterConfigs.enabled, true), eq(t.adapterConfigs.monitoringAllowed, true))).limit(1)).length > 0;
+    if (!sellerCanMonitor) {
+      const early = marketWatchable(await this.basketFor(a.requestId, a.revision, a.brief, a.eventStartAt, a.eventId));
+      if (early) return notCreated(`market_unverifiable:${early}`);
+    }
     const active = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.watches).where(and(eq(t.watches.contactId, a.contactId), eq(t.watches.state, 'active')));
     if ((active[0]?.n ?? 0) >= WATCH_MAX_ACTIVE_PER_CONTACT) return null;
     // A watch whose alerts can't be sent would be "active" to staff and "stopped" on cancel while it never ran,
@@ -3072,6 +3098,22 @@ export class Concierge {
   }
 
   /**
+   * Their late-entry question, answered from what's on file, for a reply whose main job is something else (a stop):
+   * not verified, no policy source we've checked, and the start time is no answer. Null when they didn't ask.
+   */
+  private async lateEntryStatus(req: typeof t.requests.$inferSelect, latestText: string): Promise<{ text: string; html: string } | null> {
+    const t0 = flat(latestText);
+    if (!entryNeed([latestText]) && !/\b(?:late|last|latest) entry\b|\bentry (?:policy|rule|cutoff)\b/i.test(t0)) return null;
+    const row = req.eventId ? await loadEventRows(this.db, req.eventId) : null;
+    const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const where = row ? `${row.v.name}’s late-entry policy for ${shortWhen(row.e.localStartAt, row.v.timezone, true)}` : 'the venue’s late-entry policy';
+    const start = row ? ` The ${timeLabel(minutesOfDay(row.e.localStartAt, row.v.timezone))} start doesn’t tell us whether people arriving after it are let in, so don’t buy on that basis.` : ' A start time doesn’t tell us whether people arriving after it are let in, so don’t buy on that basis.';
+    const lead = 'On late entry: no, I haven’t verified it.';
+    const body = `Nothing I have states ${where}, and I don’t have an official policy page or contact for it that I’ve checked, so I can’t point you to one.${start}`;
+    return { text: `${lead} ${body}`, html: `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong> ${esc(body)}</p>` };
+  }
+
+  /**
    * This generation's alerts so far: how many in the last 24 hours (the daily cap counts every one), and the lowest
    * total alerted at any time, the baseline a new alert must beat by the re-alert rule. One the system invalidated
    * (stale before approval, or stopped) never reached the customer, so it is no baseline.
@@ -3215,11 +3257,18 @@ export function unverifiedRequirements(x: RequestExtraction, text = ''): string[
   else if (q && q > 1 && x.togetherRequired) out.push(`${q} seats together`);
   const total = wholePartyBudgetCents(x.budgetCents, x.budgetBasis, x.quantity);
   if (total !== null) out.push(`${formatUsd(total)} in total${q && q > 1 ? (q === 2 ? ' for both' : ` for all ${q}`) : ''}, once fees are added`);
-  if (x.accessibilityNeeds?.trim()) out.push(x.accessibilityNeeds.trim().replace(/^./, (c) => c.toUpperCase()));
-  if (x.seatingPreference?.trim()) out.push(x.seatingPreference.trim().replace(/^./, (c) => c.toUpperCase()));
+  // Their words, without the full stop they ended on: the list adds its own ("will not work..", live L02).
+  const said = (v: string) => v.trim().replace(/[\s.;,]+$/, '').replace(/^./, (c) => c.toUpperCase());
+  if (x.accessibilityNeeds?.trim()) out.push(said(x.accessibilityNeeds));
+  if (x.seatingPreference?.trim()) out.push(said(x.seatingPreference));
+  // Sections they insist on, from their own words when no field carries them (PW-SECTIONS-01).
+  else if (sectionsRequired([text])) out.push(`Only sections ${sectionsLabel(sectionsRequired([text])!)}`);
   // A seated ticket is a requirement of its own: general admission doesn't meet it (Research 1, LA).
   else if (/\b(?:reserved|assigned|allocated)\s+seat(?:s|ing)?\b|\bseated (?:tickets?|admission|seats?)\b|\bnot (?:general admission|GA|standing)\b/i.test(flat(text))) out.unshift('Reserved seats, not general admission');
   if (age) out.push(age);
+  // An entry rule is a requirement like any other: never dropped because no clock time was given (PW-ENTRY-REPLY-02).
+  const entry = entryNeed([text]);
+  if (entry) out.push(entry.replace(/ \(the venue’s entry policy\)$/, ''));
   // One admission check, not the same age rule said three ways (G02).
   return age ? out.filter((r) => r === age || !/\b(?:21|18)\s*\+|\bage\b|year[- ]old|\bteen/i.test(r)) : out;
 }
@@ -3265,6 +3314,13 @@ export function sectionsRequired(messagesOldestFirst: string[]): string[] | null
   return out;
 }
 
+/** "101 to 105", "101, 102 or 110": a run of consecutive sections said as a range. */
+function sectionsLabel(names: string[]): string {
+  const nums = names.map(Number);
+  if (names.length > 2 && nums.every((v, i) => Number.isInteger(v) && (i === 0 || v === nums[i - 1]! + 1))) return `${names[0]} to ${names.at(-1)}`;
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0]!;
+}
+
 /**
  * An entry rule they need and no listing can show (PW-ENTRY-01): "must permit entry after midnight", "late entry is
  * required", "I cannot enter before midnight", "I can only arrive after midnight; entry then must be allowed". A show
@@ -3281,14 +3337,17 @@ export function entryNeed(messagesOldestFirst: string[]): string | null {
     /\bentry\s+(?:then\s+|at that time\s+)?must\s+be\s+(?:allowed|permitted|possible)\b/i,
     new RegExp(`\\b(?:can(?:'|no)?t|cannot|won'?t be able to)\\s+(?:enter|get in)\\s+(?:before|until)\\s+${T}`, 'i'),
     new RegExp(`\\bcan only\\s+(?:arrive|enter|get (?:there|in))\\s+(?:after|from)\\s+${T}`, 'i'),
+    // Relative, with no clock time (PW-ENTRY-REPLY-02): "I can only arrive after the show starts".
+    /\b(?:arrive|get there|get in|make it)\s+(?:after|once)\s+(?:the\s+)?(?:(?:show|concert|game|gig|set|performance|event)\s+(?:starts|begins|has started|has begun|is underway)|start)\b/i,
+    /\b(?:can'?t|cannot|won'?t)\s+make\s+(?:it\s+(?:for|by)\s+)?the\s+start\b/i,
   ];
   for (const raw of messagesOldestFirst) {
     for (const s of flat(raw).split(/(?<=[.;!?])\s+/)) {
       if (/\b(?:(?:don'?t|do not|won'?t|no longer)\s+need\s+(?:late\s+|re-?)?entry|(?:late|re-?)\s*entry\s+(?:is\s+)?(?:not|isn'?t)\s+(?:required|needed|necessary))\b/i.test(s)) { out = null; continue; }
       const m = rules.map((r) => r.exec(s)).find(Boolean);
       if (!m) continue;
-      const when = /midnight/i.test(s) ? 'after midnight' : /\b(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(s)?.[1] ? `at ${/\b(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(s)![1]}` : 'late';
-      out = `Entry ${when} (the venue’s entry policy)`;
+      const when = /midnight/i.test(s) ? 'after midnight' : /\b(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(s)?.[1] ? `at ${/\b(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)/i.exec(s)![1]}` : null;
+      out = /\bre-?entry\b/i.test(m[0]) ? 'Re-entry (the venue’s entry policy)' : when ? `Entry ${when} (the venue’s entry policy)` : 'Late entry, after the start (the venue’s entry policy)';
     }
   }
   return out;
