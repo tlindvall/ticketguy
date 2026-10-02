@@ -70,7 +70,9 @@ export function parseTicketLink(raw: string): TicketLink | null {
   const eventId = /\/(?:event|production|events)\/([\w-]{3,40})(?:\/|$)/.exec(path)?.[1] ?? null;
 
   // The first path segment carries the names: "new-york-rangers-new-york-tickets-10-1-2026".
-  const firstSeg = path.split('/').filter(Boolean)[0] ?? '';
+  // A checkout, cart or account path names nothing ("/secure/buy/checkout" is not an event called "secure").
+  const segs = path.split('/').filter(Boolean);
+  const firstSeg = /^checkout\./.test(host) || /^(?:secure|checkout|cart|buy|order|orders|account|my|login|signin|purchase|payment)$/.test(segs[0] ?? '') ? '' : segs[0] ?? '';
   const slugText = firstSeg.replace(/-tickets?(?:-.*)?$/, '').replace(/-?\d{1,4}-\d{1,2}-\d{2,4}.*$/, '').replace(/[-_]+/g, ' ').trim() || null;
 
   return { url: raw, marketplace, localDate, quantity, listingId, eventId, slugText: slugText && /[a-z]{3}/.test(slugText) ? slugText : null };

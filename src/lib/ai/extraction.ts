@@ -8,6 +8,7 @@ import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
 import { MARKETS } from '@/lib/domain/markets';
 import { neighbourhoodFor } from '@/lib/domain/neighbourhoods';
 import { stateCodeFor } from '@/lib/domain/us-states';
+import { MARKETPLACE_NAMES, ticketLinksIn, type TicketLink } from '@/lib/domain/ticket-links';
 import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
@@ -405,15 +406,28 @@ export function titleCaseName(name: string): string {
   return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1)).replace(/\b(Vs|Versus|Against)\b/g, (w) => w.toLowerCase());
 }
 
+/**
+ * A link they sent that names no event (a StubHub checkout link carries only a cart, a listing number and a count):
+ * said back as what it is, never answered with "a link works" (live Oct 2: "Are these a good deal? should I hold
+ * off?" with a checkout link got "Which event … A link or screenshot works.").
+ */
+function blindLinkQuestion(l: TicketLink, who: string | null, priceAsked: boolean): string {
+  const site = MARKETPLACE_NAMES[l.marketplace];
+  const kind = /\bcheckout\./i.test(l.url) ? 'checkout link' : 'link';
+  const read = l.listingId ? ` It only has the listing number${l.quantity ? ` and ${l.quantity === 1 ? 'one ticket' : `${l.quantity} tickets`}` : ''}.` : '';
+  return `I can’t open ${site} pages, and that ${kind} doesn’t say which ${who ? `${who} date` : 'game or show'} it is.${read} Which ${who ? 'date and venue' : 'event and date'} is it? ${priceAsked ? 'Then I’ll check that price against the market. ' : ''}A screenshot of the checkout page with the section, row and total works too.`;
+}
+
 export function clarificationQuestions(missing: string[], known: RequestExtraction): string[] {
   const q: string[] = [];
   const who = known.performerOrTeam ? titleCaseName(known.performerOrTeam) : null;
+  const blind = ticketLinksIn(known.submittedUrls ?? []).find((l) => !l.eventId && !l.localDate && !l.slugText) ?? null;
   // A name that matches more than one team or artist has to be settled before anything else: asking which
   // date a "Rangers" game is would assume the very thing in doubt, so it replaces the generic event question.
   const nameAmbiguous = missing.includes('performer_ambiguous');
   if (nameAmbiguous) q.push(who ? `First, which ${who} do you mean? There is more than one team or artist by that name. A link to the event settles it.` : 'Which performer or team do you mean? A link to the event settles it.');
   for (const m of missing) {
-    if (m === 'event' && !nameAmbiguous) q.push(who ? `Which ${who} date and venue are you looking at? A link works too.` : 'Which event (performer or team, city, and date) are you looking at? A link or screenshot works.');
+    if (m === 'event' && !nameAmbiguous) q.push(blind ? blindLinkQuestion(blind, who, known.resaleAsked || known.quotedPriceCents != null) : who ? `Which ${who} date and venue are you looking at? A link works too.` : 'Which event (performer or team, city, and date) are you looking at? A link or screenshot works.');
     if (m === 'event_location_unknown' && !missing.includes('event')) q.push('Which city or venue are you looking at?');
     if (m === 'quantity_unclear' && !missing.includes('quantity')) q.push('How many tickets do you need in total?');
     // A date we could not pin down is asked about explicitly. Guessing which day "tonight" means across a
