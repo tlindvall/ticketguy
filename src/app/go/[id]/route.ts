@@ -25,7 +25,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!link || !/^https:\/\//i.test(link.url)) return new Response('Not found', { status: 404 });
   const likelyBot = LIKELY_BOT.test(req.headers.get('user-agent') ?? '');
   const current = new URL(req.url).searchParams.get('current') === '1';
-  const decision = current ? null : await linkDecision(db, link, new Date());
+  // The seller's current page (`?current=1`) is a deliberate choice past a stale quote, never past a link that no
+  // longer points to the offer we checked (R2-LINK-CONTEXT-01).
+  const checked = await linkDecision(db, link, new Date());
+  const decision = current && !(!checked.go && checked.reason === 'destination_mismatch') ? null : checked;
   const gated = decision && !decision.go ? decision.reason : null;
   await db.insert(t.requestOutcomes).values({ requestId: link.requestId, kind: 'link_click', source: 'redirect', recommendationId: link.recommendationId, details: { linkId: link.id, label: link.label, affiliate: link.affiliate, likelyBot, purpose: link.purpose, ...(gated ? { gated } : {}), ...(current ? { current: true } : {}), ...(decision?.go && decision.legacy ? { legacy: true } : {}) }, actor: 'customer', at: new Date() });
   const headers = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };

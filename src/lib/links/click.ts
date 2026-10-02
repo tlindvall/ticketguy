@@ -7,7 +7,7 @@ import { eventChangedSince } from '@/lib/domain/event-lifecycle';
 type Link = typeof t.trackedLinks.$inferSelect;
 
 /** Why a buy link's advice can't be stood behind at click time; each has its own explanation on the page. */
-export type RecheckReason = 'unbound' | 'advice_missing' | 'advice_withdrawn' | 'advice_superseded' | 'other_event' | 'event_cancelled' | 'event_postponed' | 'event_rescheduled' | 'event_started' | 'event_missing' | 'event_occurrence_unrecorded' | 'price_stale';
+export type RecheckReason = 'unbound' | 'advice_missing' | 'advice_withdrawn' | 'advice_superseded' | 'advice_expired' | 'destination_mismatch' | 'other_event' | 'event_cancelled' | 'event_postponed' | 'event_rescheduled' | 'event_started' | 'event_missing' | 'event_occurrence_unrecorded' | 'price_stale';
 
 export type LinkDecision =
   | { go: true; url: string; legacy: boolean }
@@ -41,7 +41,26 @@ export async function linkDecision(db: DbOrTx, link: Link, now: Date): Promise<L
   const obs = rec.chosenObservationIds.length ? await db.select().from(t.offerObservations).where(inArray(t.offerObservations.id, rec.chosenObservationIds)) : [];
   const checkedAt = obs.length ? new Date(Math.min(...obs.map((o) => Math.min(o.fetchedAt.getTime(), o.sourceAsOf?.getTime() ?? Infinity)))) : null;
   if (!obs.length || obs.some((o) => !checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: row!.e.localStartAt, now }).fresh)) return stop('price_stale', checkedAt);
+  // The advice's own validity limit, checked after the price's (a stale price is the more specific reason): past it, the advice no longer stands even when the
+  // observation behind it is still inside its window (R2-LINK-STALE-01). At the limit counts as past it.
+  if (rec.expiresAt && rec.expiresAt.getTime() <= now.getTime()) return stop('advice_expired', rec.expiresAt);
+  // Where it goes is where the advice's own offer goes (R2-LINK-CONTEXT-01): the seller's URL stored with the chosen
+  // observation, or that offer's affiliate wrapper. A stored link pointing anywhere else is a known mismatch and is
+  // never followed. Identity is never read from the URL's words; only the stored destinations count.
+  const offers = await db.select({ direct: t.offers.directPurchaseUrl, affiliate: t.offers.affiliateUrl }).from(t.offers).where(inArray(t.offers.id, obs.map((o) => o.offerId)));
+  const allowed = new Set(offers.flatMap((o) => [o.direct, o.affiliate]).filter((u): u is string => !!u).map(sameUrl));
+  if (allowed.size && !allowed.has(sameUrl(link.url))) return stop('destination_mismatch', checkedAt);
   return { go: true, url: link.url, legacy: false };
+}
+
+/** A URL compared as a destination: scheme and host case-folded, a trailing slash dropped; query and path kept. */
+function sameUrl(u: string): string {
+  try {
+    const x = new URL(u);
+    return `${x.protocol}//${x.host.toLowerCase()}${x.pathname.replace(/\/$/, '')}${x.search}`;
+  } catch {
+    return u.trim();
+  }
 }
 
 const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -63,6 +82,10 @@ export function recheckCopy(d: Extract<LinkDecision, { go: false }>): { title: s
       return { title: 'This event has started', body: `The event${what} has already started, so my advice on it no longer applies.` };
     case 'other_event':
       return { title: 'This link is for a different event', body: `This link was for an event${what} that’s no longer the one in your request. Reply to my latest email and I’ll check the one you want.` };
+    case 'advice_expired':
+      return { title: 'This advice has expired', body: `The advice I sent${what} was only good until ${when ? when : 'a set time'}, and that’s passed. Prices and seats may have changed, so reply to my email and I’ll check it again.` };
+    case 'destination_mismatch':
+      return { title: 'This link doesn’t match the offer I checked', body: `This link no longer points to the offer I checked${what}, so I won’t send you on from it. Reply to my email and I’ll check it again.` };
     case 'advice_superseded':
       return { title: 'This advice has been replaced', body: `You’ve changed the request since I sent this${what}, so the advice in that email no longer applies. My latest email has the current answer.` };
     default:
@@ -73,6 +96,7 @@ export function recheckCopy(d: Extract<LinkDecision, { go: false }>): { title: s
 /** The page a stale or changed buy link shows: why, and the seller's current page, labelled as that. */
 export function recheckPage(d: Extract<LinkDecision, { go: false }>, currentHref: string): string {
   const { title, body } = recheckCopy(d);
-  const current = d.reason === 'event_started' ? '' : `<p><a href="${esc(currentHref)}" rel="noreferrer">Go to the seller’s current page</a> (its prices and seats today, not the ones I quoted)</p>`;
+  // No onward link when the stored destination itself is what's wrong.
+  const current = d.reason === 'event_started' || d.reason === 'destination_mismatch' ? '' : `<p><a href="${esc(currentHref)}" rel="noreferrer">Go to the seller’s current page</a> (its prices and seats today, not the ones I quoted)</p>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title></head><body style="margin:0;padding:24px 16px;font:15px/1.6 Arial,sans-serif;color:#142438;background:#ffffff;"><main style="max-width:560px;margin:0 auto;"><h1 style="font-size:20px;line-height:1.3;margin:0 0 12px;">${esc(title)}</h1><p>${esc(body)}</p>${current}<p style="font-size:12px;color:#5b6675;">Ticket Guy</p></main></body></html>`;
 }

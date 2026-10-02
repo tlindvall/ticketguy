@@ -1123,3 +1123,23 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - **Watch requests.** They get one next step (the budget when missing), and an open sale is shown as an event page, not "where I'd buy". "My read" no longer repeats the floor the market lines already give. An event page is never called a listing.
 
 **Not done.** A shared atomic quota across overlapping evaluations of different watches. Each operation is capped, but two at once can each spend what's left.
+
+## 65. A listing's own age rule, a negated city and an expired recommendation are hard stops
+
+**Why.** The Research 2 retest on `a80744b` found these failures (`docs/qa/R2_DISCOVERY_LINK_RETEST.md`):
+- a 21+ night was offered to a group with a 20-year-old;
+- "skip Constellation Room" made it the venue to search;
+- a "$300 TOTAL including fees" cap was dropped;
+- "prefer Elsewhere, another venue is fine" fenced the search;
+- Franklin was offered after "not Franklin";
+- expired advice still redirected;
+- a buy link pointing somewhere else still redirected.
+
+**What.**
+- **Age.** A minimum age comes only from the listing's own title. A group member under it, or the group's own "no 21+", drops the listing before any pick, link or reply branch, and the reply says why first.
+- **Venue cues.** Skip, leave out and don't include are exclusions. A venue named as a preference is not a fence; "only" still is.
+- **Cities.** A negated city among the candidate venues' cities is out wherever the metro reaches, but never the city being searched. A later "is fine" lifts it.
+- **Budget.** A "$X total including fees" cap in a sentence without offer words is their budget.
+- **Buy links.** A link stops when its recommendation's `expiresAt` has passed. It also stops when its destination isn't one stored with the advice's chosen offer (direct or affiliate), and `?current=1` doesn't override that.
+
+**Not decided here.** Where venue age and entry policies would come from. Until a source exists, they are said as unknown.
