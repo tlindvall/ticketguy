@@ -92,6 +92,30 @@ describe('Final human QA replays', () => {
     expect(first!.text).toContain('Hamilton (NY)\nRichard Rodgers Theatre, New York · Sun, Oct 4, 1:00 PM EDT · 2 tickets');
     expect(first!.text).not.toMatch(/couldn.t find/);
   });
+
+  // The catalog after weeks of syncs: "Hamilton" is a surname, so Discovery brings in Anthony Hamilton, Bethany Hamilton
+  // and the rest. The name lookup took the first ten names containing "hamilton" alphabetically, and those sort
+  // ahead of "Hamilton (NY)": the show was on file and never looked at (Oct 2 live: "couldn't find a Hamilton
+  // performance in New York on Sun, Oct 4", with or without the provider's fresh page).
+  it('R1-HUMAN-02: a dozen artists named Hamilton on file don’t crowd out the show itself', async () => {
+    const names = ['Anthony', 'Ashley', 'Bethany', 'Brian', 'Carl', 'Chico', 'Dan', 'David', 'Ed', 'Florence', 'George', 'Gwen'].map((f) => `${f} Hamilton`);
+    await h.db.insert(t.entities).values(names.map((name, i) => ({ id: `7f100000-0000-4000-8000-0000000002${String(i).padStart(2, '0')}`, kind: 'performer', name, slug: `${name.toLowerCase().replace(/\s+/g, '-')}-final`, aliases: [] })));
+    const [first] = await converse([HAM_OPENING]);
+    expect(first!.text).toContain('Hamilton (NY)\nRichard Rodgers Theatre, New York · Sun, Oct 4, 1:00 PM EDT · 2 tickets');
+    expect(first!.text).not.toMatch(/couldn.t find/);
+  });
+
+  // An exact name is tried first ("rangers" is the two Rangers teams, not their alumni), but one with nothing that fits
+  // doesn't end the search: an artist billed as just "Hamilton" with no New York date leaves the show to be found.
+  it('R1-HUMAN-02: an exact "Hamilton" with nothing in New York that day falls through to "Hamilton (NY)"', async () => {
+    const OTHER = '7f100000-0000-4000-8000-000000000301';
+    const AUSTIN = '7f100000-0000-4000-8000-000000000302';
+    await h.db.insert(t.venues).values({ id: AUSTIN, name: 'Moody Theater', aliases: [], city: 'Austin', state: 'TX', country: 'US', timezone: 'America/Chicago' });
+    await h.db.insert(t.entities).values({ id: OTHER, kind: 'performer', name: 'Hamilton', slug: 'hamilton-band-final', aliases: [] });
+    await h.db.insert(t.events).values({ id: '7f100000-0000-4000-8000-000000000303', name: 'Hamilton', category: 'concert', venueId: AUSTIN, primaryEntityId: OTHER, localStartAt: new Date('2026-10-20T01:00:00Z'), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: false, saleStatus: 'onsale' });
+    const [first] = await converse([HAM_OPENING]);
+    expect(first!.text).toContain('Hamilton (NY)\nRichard Rodgers Theatre, New York · Sun, Oct 4, 1:00 PM EDT · 2 tickets');
+  });
 });
 
 /**

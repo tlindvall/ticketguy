@@ -1222,3 +1222,16 @@ It is stored with its zone and compared with each offer's promised transfer, and
   It upserts nothing and records no sync.
 
 **Not done.** Hamilton's cause stays unknown until the probe runs against production. The selected StubHub listing is still unproven until SeatData returns rows for it.
+
+## 71. A name is looked up by how well it matches, not by the first ten in alphabetical order
+
+**Why.** Hamilton's Sunday matinee was still "couldn't find a Hamilton performance in New York on Sun, Oct 4" after #89 and #92. The search reached the provider, but the step after it, finding the show in our own catalog by name, took the first ten entities whose names contain the word, in alphabetical order. Hamilton is a surname, so every sync adds artists like Anthony Hamilton and Bethany Hamilton, and they sort ahead of "Hamilton (NY)". Once ten of them were on file, the show was never looked at. An entity billed exactly "Hamilton" would also have hidden it, because an exact name ended the search even when it had nothing that fit.
+
+**What.**
+- **Order.** Exact names and nicknames are tried first, as before ("rangers" is the two Rangers teams, not their alumni). The rest come after, in this order:
+  - a name that starts with the word ("Hamilton (NY)") before one that merely contains it;
+  - then a name with something scheduled before one without;
+  - up to ten.
+- **Fallback.** An exact name with no event that fits no longer ends the search; the rest are tried.
+
+**Not certain.** This is the bug that matches the live symptom, and both new tests fail without the fix. The production catalog hasn't been read to confirm it holds ten or more such names. `scripts/probe-discovery.ts` shows it.
