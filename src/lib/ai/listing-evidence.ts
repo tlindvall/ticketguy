@@ -203,20 +203,24 @@ export function areaOf(label: string): string | null {
  * describe that row, and the other rows stay listed. A screenshot is what the page showed, not stock held.
  */
 export function chooseShownOffer<T extends ListingFields>(f: T, wanted: string, quotedCents: number | null = null): T {
-  const rows = (f.offers ?? []).filter((o) => o.perTicketCents !== null);
-  const said = wanted.toLowerCase();
-  const area = AREAS.find((w) => new RegExp(`\\b${w}\\b`).test(said)) ?? (/\b(?:ga|general admission)\b/.test(said) ? 'floor' : null);
-  const want = area === 'pit' ? 'floor' : area;
-  if (!rows.length) {
+  const all = (f.offers ?? []).filter((o) => o.perTicketCents !== null);
+  const { want, excluded } = areaIntent(wanted);
+  if (!all.length) {
     // An older read that ran rows together ("Balcony; General Admission Floor"): the part in their area, when one is.
     const parts = (f.section ?? '').split(/\s*;\s*/).filter(Boolean);
     const mine = want && parts.length > 1 ? parts.find((x) => areaOf(x) === want) : undefined;
     return mine ? { ...f, section: mine } : f;
   }
+  // "No floor" takes the floor rows out; "we don't need the floor" only stops preferring them (live Oct 2 C03).
+  const allowed = all.filter((o) => !excluded.has(areaOf(o.label) ?? ''));
+  const rows = allowed.length ? allowed : all;
   const byQuote = quotedCents !== null ? rows.find((o) => o.perTicketCents === quotedCents) : undefined;
   const inArea = want ? rows.filter((o) => areaOf(o.label) === want) : [];
   const pick = byQuote ?? (inArea.length ? inArea : rows).slice().sort((x, y) => x.perTicketCents! - y.perTicketCents!)[0]!;
   const q = f.quantity;
+  // Rows on one results page, priced at the quantity it's set to, are per ticket; so is a price they quote as "each".
+  // Read that way, the total isn't asked about again below (live Oct 2: "Is $107.33 the price per ticket, or for all 2?").
+  const perTicket = pick.priceBasis === 'whole_party' || pick.priceBasis === 'per_ticket' || byQuote !== undefined || (all.length >= 2 && !!q);
   return {
     ...f,
     section: pick.label,
@@ -225,7 +229,7 @@ export function chooseShownOffer<T extends ListingFields>(f: T, wanted: string, 
     priceText: null,
     perTicketCents: pick.perTicketCents,
     wholePartyCents: q ? pick.perTicketCents! * q : null,
-    priceBasis: pick.priceBasis === 'whole_party' ? 'per_ticket' : pick.priceBasis,
+    priceBasis: perTicket ? 'per_ticket' : pick.priceBasis,
     feeBasis: pick.feeBasis === 'unknown' ? f.feeBasis : pick.feeBasis,
     listingType: pick.listingType,
     admission: pick.admission,
@@ -233,6 +237,30 @@ export function chooseShownOffer<T extends ListingFields>(f: T, wanted: string, 
     offers: f.offers,
     chosenFor: want && areaOf(pick.label) === want ? want : null,
   };
+}
+
+/**
+ * What they said about each area, latest word winning: wanted ("we'd rather be on the floor"), merely acceptable or
+ * not needed ("we don't need the floor", "balcony is fine"), or ruled out ("no floor", "not the balcony").
+ */
+export function areaIntent(text: string): { want: string | null; excluded: Set<string> } {
+  const status = new Map<string, 'want' | 'any' | 'out'>();
+  const clauses = text.replace(/[’‘]/g, "'").split(/[.!?;\n\u2014\u2013,]+|\s-\s|\bbut\b/i);
+  for (const c of clauses) {
+    const l = c.toLowerCase();
+    const named = new Set<string>();
+    for (const w of AREAS) if (new RegExp(`\\b${w}\\b`).test(l)) named.add(w === 'pit' ? 'floor' : w);
+    if (!named.has('floor') && /\b(?:ga|general admission)\b/.test(l)) named.add('floor');
+    if (!named.size) continue;
+    const any = /\b(?:don't|do not|doesn't|does not|needn't|need not)\s+(?:really\s+)?(?:need|require|have to (?:be|sit|stand)|care about|mind)\b|\b(?:not|isn't|aren't) (?:required|necessary|needed|essential|a must|important)\b|\boptional\b|\bno need\b|\b(?:is|are|would be|'s) (?:fine|ok|okay|good too|also fine)\b|\bwould do\b|\beither\b|\bwhichever\b/.test(l);
+    const out = !any && /\b(?:no|not(?! sure)|avoid|skip|without|except|anything but|don't want|do not want|rather not|never)\b/.test(l);
+    for (const a of named) {
+      status.delete(a); // the latest word on an area is the one that counts, and the last wanted area leads
+      status.set(a, any ? 'any' : out ? 'out' : 'want');
+    }
+  }
+  const wanted = [...status].filter(([, v]) => v === 'want').map(([k]) => k);
+  return { want: wanted.at(-1) ?? null, excluded: new Set([...status].filter(([, v]) => v === 'out').map(([k]) => k)) };
 }
 
 /** Whether the read is a listing we can use: a listing or checkout page, nothing sensitive, and a price or seats on it. */
