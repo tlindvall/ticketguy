@@ -1050,14 +1050,17 @@ export class Concierge {
         : null;
       // One ask per missing thing: the event question already covers its date and place (TGQA-R8 S08).
       const coveredByEvent = (k: string) => k.startsWith('date_') || k.startsWith('event_') || k === 'performer_ambiguous';
-      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
+      // "The best tickets" names no goal: best view, best value or lowest price is the question that decides the
+      // answer, asked beside the event and party (live F06; master CL-05).
+      const bestAsk = /\bbest (?:tickets?|seats?)\b/i.test(flat(latestText)) && !/\b(?:view|value|cheap(?:est)?|lowest|price|closest|front|sightline)\b/i.test(flat(latestText)) ? 'Are you after the best view, the best value, or the lowest price?' : null;
+      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(bestAsk ? [bestAsk] : []), ...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       // Asked once, on the first reply in the thread, not on every follow-up (Research 1).
       const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
-      const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows are a trip away.'}` : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows I can find are a trip away.'}` : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
@@ -1077,7 +1080,7 @@ export class Concierge {
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -1627,6 +1630,13 @@ export class Concierge {
     const noLater = bounded || (!laterOk && !assumedWindow && nights);
     win ??= { from: today, to: day(today, 13) };
     if (win.from < today) win = { from: today, to: win.to };
+    // "Saturday works better" after "Friday Oct 2 or Saturday Oct 3": the window is that day of the window, so the
+    // reply names the night they chose, not the pair (live F03).
+    if (rules.weekdays?.length === 1 && Date.parse(win.to) - Date.parse(win.from) <= 7 * 86_400_000) {
+      const days: string[] = [];
+      for (let d = win.from; d <= win.to; d = day(d, 1)) if (new Date(`${d}T12:00:00Z`).getUTCDay() === rules.weekdays[0]) days.push(d);
+      if (days.length) win = { from: days[0]!, to: days.at(-1)! };
+    }
 
     // The borough they named and the kind of music narrow the list; either is dropped, and the reply says so,
     // when nothing on file fits it.
@@ -1728,6 +1738,23 @@ export class Concierge {
     // it is shown as the one option, and only the number is asked.
     // One show with many dates is not one match: which night is still theirs to pick.
     const single = !more && !after && events.length === 1 && !runOf.get(events[0]!.e.id)?.moreDates && genreKept && areaKept;
+    // A follow-up that asks us to choose is a decision, not another menu ("Which remaining option would you pick?
+    // Don't ask me the genre or dates again", live F02/F04): the closest candidate goes on to research as the pick,
+    // with its reason and the others named, so the checks they asked for are run rather than offered again.
+    const chooseNow = !single && !more && !after && revision > 1 && events.length > 1 && merged.quantity !== null && genreKept && areaKept && ASKED_CHOICE.test(flat(threadMsgs.at(-1) ?? '').replace(/[’‘]/g, "'"));
+    if (chooseNow) {
+      const score = (x: (typeof events)[number]) => genreFitScore(x.e.genre, merged.genreHint);
+      const ordered = [...events].sort((a, b) => score(b) - score(a) || a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
+      const top = ordered[0]!;
+      const clear = score(top) > Math.max(...ordered.slice(1).map(score));
+      const when = (x: (typeof events)[number]) => new Intl.DateTimeFormat('en-US', { timeZone: x.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(x.e.localStartAt);
+      const others = ordered.slice(1, 3).map((x) => `${readableTitle(x.e.name)} at ${x.v.name} (${when(x)})`);
+      const why = clear ? `it’s listed as ${(top.e.genre ?? '').split(' / ')[1] ?? 'the closest kind'}, the closest to what you asked for` : 'on what’s listed they’re equally close, so I’ve started with the earliest';
+      const pending = unverifiedRequirements(merged, threadText);
+      const note = `You asked me to pick, so I’ve gone with ${readableTitle(top.e.name)} at ${top.v.name}, ${when(top)}: ${why}.${others.length ? ` The other${others.length > 1 ? 's' : ''} I had: ${others.join('; ')}. Say the word and I’ll switch.` : ''}${pending.length ? ` Not checked yet: ${joinRequirements(pending.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}; I’m checking now.` : ''}`;
+      const ageFirst = within.ageOut[0];
+      return { lead: ageFirst ? `${withoutAgeTag(ageFirst.e.name)} is out: ${ageRuledOut(ageFirst.e.name, ageLimits)}.` : null, pick: top, note };
+    }
     if (single && merged.quantity !== null) {
       const only = events[0]!;
       // What we found, not a claim about everything on in the city (live G02: "the only show in Manhattan").
@@ -1800,12 +1827,12 @@ export class Concierge {
     const unchecked = answer && toCheck.length && !(genre && !events.length) && !broadened ? `Not checked yet for any of these: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
     // "Tell me which you'd choose": named only when one is plainly closer on what's on file; otherwise the checks
     // decide, and the reply says so rather than picking at random (R1-DISCOVERY-CLOSURE-01).
-    const askedChoice = /\bwhich (?:one |option |event |show )?(?:you'?d|would you|you would) (?:pick|choose|go for|recommend)\b|\btell me which you'?d\b|\bwhich (?:one|option|event|show) would you (?:pick|choose)\b|\bchoose (?:for us|one for us)\b|\b(?:what|which) would you (?:pick|choose)\b|\bwhich event could work\b/i.test(flat(threadText).replace(/[’‘]/g, "'"));
+    const askedChoice = ASKED_CHOICE.test(flat(threadText).replace(/[’‘]/g, "'"));
     const fit = shown.map((x) => genreFitScore(x.e.genre, merged.genreHint));
     const choice = askedChoice && shown.length > 1 && toCheck.length
       ? fit[0]! > Math.max(...fit.slice(1)) ? `If I start with one, it’s ${shown[0]!.e.name}: it’s listed as ${(shown[0]!.e.genre ?? '').split(' / ')[1] ?? genreAsked}, the closest to what you asked for. That’s where I’d begin, not a reason to buy before the checks.` : 'On what’s listed they’re equally close, so the checks will decide between them.'
       : null;
-    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${cityCore && v.city && !inCityCore(v, market) ? ` (${v.city})` : ''}`);
+    const options = shown.map(({ e, v }) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${v.city && ((cityCore && !inCityCore(v, market)) || (strictCore && v.city.toLowerCase() !== market.label.toLowerCase())) ? ` (${v.city})` : ''}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && (genreKept || bounded) ? genre.label : browseLabel(merged.categoryHint);
     const place = areaUsed?.label ?? market.label;
@@ -2096,14 +2123,17 @@ export class Concierge {
       return (reachable.length ? reachable : sorted).slice(0, 3);
     };
     const local = await load();
-    if (local.length) return local;
+    // What's on file is only the answer when something within reach is on it: a far show cached from an earlier
+    // lookup (Las Vegas) must not stand in for a closer one the provider knows (Hartford, for New York).
+    const withinReach = (shows: NearbyShow[]) => shows.some((s) => s.miles !== null && s.miles <= NEARBY_TRAVEL_MILES);
+    if (local.length && withinReach(local)) return local;
     const discovery = await this.discoveryAvailability();
-    if (!discovery) return [];
+    if (!discovery) return local;
     // "Soon" names no window; a tour stop a few months out, with its date, beats "couldn't find one".
     const win = this.discoveryWindow(x, ctx, 180);
-    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: name, city: null, size: 50, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
+    const sync = await syncFromDiscovery(this.db, discovery.adapter, { keyword: name, city: null, size: 100, startDateTime: win.start, endDateTime: win.end, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now });
     await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: name.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win, scope: 'national_fallback' } });
-    return sync.status === 'success' || sync.status === 'skipped_fresh' ? load() : [];
+    return sync.status === 'success' || sync.status === 'skipped_fresh' ? load() : local;
   }
 
   /**
@@ -3396,7 +3426,7 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean } {
   const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
@@ -3413,7 +3443,12 @@ export function questionsAsked(text: string): { deliveryRisk: boolean; accessibl
   // larger or smaller?" (live A11-F1): arithmetic on their numbers, answered without any market data.
   const gap = /\bgap\b[^?]{0,80}\b(?:larger|bigger|wider|smaller|narrower)\b/i.test(t) ? /\b(?:another|other|a second|a different|second)\s+(?:offer|listing|seller|price)\b[^.?]{0,40}?\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket)?\s*(before fees|plus fees|excluding fees|including (?:all )?fees|all[- ]in)?/i.exec(t) : null;
   const gapAgainst = gap ? { perTicketCents: Math.round(Number(gap[1]!.replace(/,/g, '')) * 100), beforeFees: /before|plus|excluding/i.test(gap[2] ?? '') } : null;
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst };
+  // "Are they worth it?", "is this a good deal?" about tickets they've picked: answered as that question, never
+  // with market figures alone (live, Oct 1 2026: a StubHub link we can't open).
+  const worth = /\b(?:worth (?:it|the (?:price|money|cost))|good (?:deal|price|value|buy)|fair price|over ?priced|should (?:i|we) (?:buy|get|grab|take) (?:them|these|it|those))\b/i.test(t);
+  // "How much cheaper is it?", "what is the price difference?": the saving is asked for by name (live F01).
+  const difference = /\b(?:price |cost )?difference\b|\bhow much (?:cheaper|less|more|pricier)\b|\bhow much (?:do|would) (?:i|we) save\b/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference };
 }
 
 /**
@@ -3524,6 +3559,21 @@ export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtract
 }
 
 const QTY_WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+
+/**
+ * A follow-up that corrects us or asks why we missed something ("they are playing in CT. why would you not suggest
+ * that?", "why didn't you tell me about the CT show before suggesting Las Vegas?") is owned first, in one line, and
+ * never answered with "Got it." as if it were a new request (live, Oct 1 2026: Metallica). The answer follows it.
+ */
+export function ownedMiss(latestText: string): string | null {
+  const t = flat(latestText).replace(/[’‘]/g, "'");
+  const asked = /\bwhy (?:didn't|did not|wouldn't|would|did|do) you (?:not )?(?:tell|mention|say|suggest|show|include|offer|find|list)\b|\byou (?:missed|never (?:mentioned|suggested|showed)|didn't (?:mention|suggest|include|find|show|tell))\b/i.test(t);
+  const corrected = /\bthey(?:'re| are) (?:playing|performing|on) (?:in|at)\b|\bthere(?:'s| is) (?:a|one) (?:show|date|game) (?:in|at)\b|\bwhat about (?:the )?(?:show|date|game|one) (?:in|at)\b/i.test(t);
+  if (!asked && !corrected) return null;
+  return asked && /\bbefore\b|\binstead\b|\bfurther\b|\bfar\b/i.test(t)
+    ? 'You’re right, I missed that, and I should have checked the whole tour before suggesting anything further away. Here’s what I have now.'
+    : 'You’re right, I missed that. Here’s what I have now.';
+}
 
 /** One sentence playing back the request — "Two Rangers tickets next week, up to $200 total—got it." */
 export function acknowledgementLine(x: RequestExtraction): string {
@@ -3786,6 +3836,9 @@ export function exclusionsIn(text: string): Exclusion[] {
     if (/\btribute/i.test(clause)) out.add('tribute');
     if (/\b(?:kids?|kids'|children'?s?|family|families|all[- ]ages)\b/i.test(clause)) out.add('kids');
   }
+  // "A mainstream pop concert", "original artist events": the act itself, not someone playing its songs (live F02:
+  // a tribute night was picked as the closest mainstream pop).
+  if (/\bmainstream\b|\boriginal (?:artists?|acts?|bands?)\b|\bheadline (?:act|artist|show)\b/i.test(t)) out.add('tribute');
   return [...out];
 }
 function excludedBy(k: Exclusion, e: { name: string; genre: string | null; category: string }): boolean {
@@ -4023,6 +4076,8 @@ const GENRE_SUBS: Record<string, string[]> = { country: ['americana', 'bluegrass
 /** The customer said other kinds of music are fine: a named genre with nothing on may widen to everything else. */
 const BROADEN_OK = /\b(?:or anything(?: else)?|anything (?:else )?(?:is |would be )?(?:fine|good|ok|okay)|open to (?:other|anything)|other (?:genres|kinds of music|styles) (?:are |would be )?(?:fine|ok|okay)|doesn'?t have to be|not fussy|any genre)\b/i;
 /** How many shows they asked for: "one or two real options" is two, "a couple" two, "one show" one. */
+/** "Which would you choose?", "which remaining option would you pick?", "choose for us": they want a pick made. */
+const ASKED_CHOICE = /\bwhich (?:one |option |event |show |remaining option |remaining one )?(?:you'?d|would you|you would) (?:pick|choose|go for|recommend)\b|\btell me which you'?d\b|\bwhich (?:one|option|event|show) would you (?:pick|choose)\b|\bchoose (?:for us|one for us)\b|\b(?:what|which) would you (?:pick|choose)\b|\bwhich event could work\b/i;
 function requestedCount(text: string): number | null {
   // Up to two describing words before the thing: "one or two official event links", "one or two original artist
   // events", "one or two usable official options" (R2-EMAIL-HIERARCHY-01: these got three).

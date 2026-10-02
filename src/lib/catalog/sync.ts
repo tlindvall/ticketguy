@@ -106,7 +106,9 @@ export function classificationFor(e: { segment: string | null; genre: string | n
 export function subtypeFor(e: { name: string; timeTba: boolean }): string | null {
   const n = e.name.toLowerCase();
   if (/\bparking\b/.test(n)) return 'parking';
-  if (/\b(vip|package|packages|suite|suites|hospitality|premium experience|fan pack|meet\s*(&|and)\s*greet)\b/.test(n)) return 'package';
+  // "Premium Seating", "Club Seats" and pass variants are the same game sold as an add-on, never the game itself (live Oct 1: a
+  // Rangers link resolved to the Premium Seating listing and its time).
+  if (/\b(vip|package|packages|suite|suites|hospitality|premium (?:experience|seating|seats?|access)|club (?:seats?|seating|access|level)|pinstripe pass|fan pack|meet\s*(&|and)\s*greet)\b/.test(n)) return 'package';
   // NFL listings sell the right to buy (seat licences), season plans and tailgates alongside the game itself.
   if (/\b(psls?|personal seat licen[cs]es?|season tickets?|season (?:ticket )?plans?|tailgates?|tailgating)\b/.test(n)) return 'package';
   if (/\bpreseason\b/.test(n)) return 'preseason';
