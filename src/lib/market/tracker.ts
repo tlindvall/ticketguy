@@ -525,29 +525,7 @@ export class MarketTracker {
   }
 
   private async storePoints(ev: EventRow, points: SeriesPoint[]): Promise<void> {
-    const rows = points.map((p) => ({
-      datasetId: SEATDATA_DATASET_ID,
-      eventId: ev.e.id,
-      basketKey: marketBasketKey(ev.e.id, p.basis, p.zone),
-      quantity: basisSize(p.basis),
-      seatZone: p.zone,
-      observedAt: p.observedAt,
-      providerAsOf: p.providerAsOf,
-      retrievedAt: p.retrievedAt,
-      leadTimeMinutes: Math.round((ev.e.localStartAt.getTime() - p.observedAt.getTime()) / 60_000),
-      cheapestEligibleTotalCents: p.priceCents,
-      medianEligibleTotalCents: p.medianCents,
-      eligibleOptionCount: p.activeListings,
-      sourceIds: [SEATDATA_PROVIDER],
-      // Listed per-ticket prices before fees: the verified-total trend and benchmark engines exclude this basis.
-      feeBasis: 'listed_price',
-      coverageComplete: true,
-      qualityFlags: ['per_ticket', 'listed_before_fees', ...(p.providerAsOf ? [] : ['provider_time_unknown'])],
-      observationIds: [],
-      methodVersion: MARKET_METHOD_VERSION,
-      isFixture: false,
-    }));
-    for (let i = 0; i < rows.length; i += 200) await this.db.insert(t.marketSnapshots).values(rows.slice(i, i + 200)).onConflictDoNothing();
+    await storeSeriesPoints(this.db, ev.e, points);
   }
 
   /** The market context for one of our events, from the series we hold (and comparables for "typical"). */
@@ -632,6 +610,36 @@ export class MarketTracker {
     }
     return n;
   }
+}
+
+/**
+ * Series points into market_snapshots. One row per event, basket and provider time (unique index): the same provider
+ * observation stored twice, even concurrently, is one row; the same price at a new provider time is another.
+ */
+export async function storeSeriesPoints(db: DbOrTx, e: { id: string; localStartAt: Date }, points: SeriesPoint[]): Promise<void> {
+  const rows = points.map((p) => ({
+    datasetId: SEATDATA_DATASET_ID,
+    eventId: e.id,
+    basketKey: marketBasketKey(e.id, p.basis, p.zone),
+    quantity: basisSize(p.basis),
+    seatZone: p.zone,
+    observedAt: p.observedAt,
+    providerAsOf: p.providerAsOf,
+    retrievedAt: p.retrievedAt,
+    leadTimeMinutes: Math.round((e.localStartAt.getTime() - p.observedAt.getTime()) / 60_000),
+    cheapestEligibleTotalCents: p.priceCents,
+    medianEligibleTotalCents: p.medianCents,
+    eligibleOptionCount: p.activeListings,
+    sourceIds: [SEATDATA_PROVIDER],
+    // Listed per-ticket prices before fees: the verified-total trend and benchmark engines exclude this basis.
+    feeBasis: 'listed_price',
+    coverageComplete: true,
+    qualityFlags: ['per_ticket', 'listed_before_fees', ...(p.providerAsOf ? [] : ['provider_time_unknown'])],
+    observationIds: [],
+    methodVersion: MARKET_METHOD_VERSION,
+    isFixture: false,
+  }));
+  for (let i = 0; i < rows.length; i += 200) await db.insert(t.marketSnapshots).values(rows.slice(i, i + 200)).onConflictDoNothing();
 }
 
 /**

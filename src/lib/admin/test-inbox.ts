@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
@@ -9,7 +9,8 @@ import { runOutboxBatch } from '@/inngest/functions';
 import { buildTestInbound, isTestConversation, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { reasonText, sendClassLabel, stateInfo } from '@/lib/admin/labels';
 import { audit } from '@/lib/util/audit';
-import { suppliedOffers, type IngestOutcome } from '@/lib/intake/pipeline';
+import { questionsAsked, suppliedOffers, type IngestOutcome } from '@/lib/intake/pipeline';
+import { resolveLinks } from '@/lib/domain/link-resolution';
 
 /** What the admin form and the agent API both accept. Attachments arrive base64-encoded (images, as a customer would attach). */
 export const TestMessageBody = z.object({
@@ -118,7 +119,12 @@ export async function testTranscript(requestId: string): Promise<Record<string, 
 }
 
 /** Listing fields safe to hand back: what a customer could read off a listing, never an image, URL or barcode. */
-const SAFE_LISTING_FIELDS = ['seller', 'eventName', 'eventDate', 'eventTime', 'venue', 'city', 'quantity', 'priceText', 'perTicketCents', 'wholePartyCents', 'priceBasis', 'feeBasis', 'section', 'row', 'seatNumbers', 'seatsTogether', 'restrictions', 'restrictionCodes', 'deliveryText', 'deliveryBy', 'includedBenefits'] as const;
+// The rows a results page showed, tax basis, doors and show times and admission type are what QA checks a screenshot
+// answer against (LAUNCH-10); they're what the page showed, nothing personal.
+const SAFE_LISTING_FIELDS = ['seller', 'eventName', 'eventDate', 'eventTime', 'venue', 'city', 'quantity', 'priceText', 'perTicketCents', 'wholePartyCents', 'priceBasis', 'feeBasis', 'section', 'row', 'seatNumbers', 'seatsTogether', 'restrictions', 'restrictionCodes', 'deliveryText', 'deliveryBy', 'includedBenefits', 'offers', 'beforeTaxes', 'doorsTime', 'showTime', 'admission', 'listingType', 'chosenFor'] as const;
+
+/** Audits a trace shows in full: link lookups, the trend read, market and AI fallbacks. Diffs carry no message text. */
+const TRACE_AUDITS = ['listing.link_matched', 'listing.link_unmatched', 'listing.link_skipped', 'market.trend_assessed', 'market.read_failed', 'ai.budget_rules_fallback', 'ai.provider_rules_fallback'];
 
 /**
  * What a QA replay needs to tell a real fix from a warmer sentence (TGQA-R6): the build that answered, how the
@@ -137,6 +143,15 @@ export async function qaTrace(db: Awaited<ReturnType<typeof getDb>>['db'], req: 
   const latest = inbound[inbound.length - 1];
   const [venue] = req.eventId ? await db.select({ tz: t.venues.timezone }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, req.eventId)) : [];
   const parsed = latest ? suppliedOffers(latest.sanitizedText ?? '', inbound.map((m) => m.sanitizedText ?? ''), venue?.tz ?? 'America/New_York') : null;
+  // What the trace needs to say why the answer followed (LAUNCH-10): per-turn model calls and fallbacks, which source
+  // reads ran or were skipped and why, what became of each link, and the latest trend read with its clocks.
+  const audits = await db.select({ action: t.auditLog.action, revision: t.auditLog.revision, diff: t.auditLog.diff, at: t.auditLog.createdAt }).from(t.auditLog).where(and(eq(t.auditLog.entityId, req.id), inArray(t.auditLog.action, TRACE_AUDITS))).orderBy(asc(t.auditLog.createdAt));
+  const usage = await db.select().from(t.usageLedger).where(eq(t.usageLedger.requestId, req.id)).orderBy(asc(t.usageLedger.createdAt));
+  const first = messages[0]?.receivedAt ?? req.createdAt;
+  const reads = req.eventId ? await db.select({ kind: t.marketFetches.kind, status: t.marketFetches.status, calls: t.marketFetches.calls, detail: t.marketFetches.detail, at: t.marketFetches.at }).from(t.marketFetches).where(and(eq(t.marketFetches.eventId, req.eventId), gte(t.marketFetches.at, first))).orderBy(asc(t.marketFetches.at)) : [];
+  const links = await db.select({ url: t.trackedLinks.url, label: t.trackedLinks.label, purpose: t.trackedLinks.purpose, affiliate: t.trackedLinks.affiliate }).from(t.trackedLinks).where(eq(t.trackedLinks.requestId, req.id));
+  const latestBrief = (versions[versions.length - 1]?.brief ?? {}) as { submittedUrls?: string[] };
+  const trend = [...audits].reverse().find((x) => x.action === 'market.trend_assessed');
   return {
     build: {
       commit: process.env.RENDER_GIT_COMMIT ?? process.env.GIT_COMMIT ?? null,
@@ -159,5 +174,27 @@ export async function qaTrace(db: Awaited<ReturnType<typeof getDb>>['db'], req: 
       fromLatestMessage: parsed ? { provenance: 'customer_text', offers: parsed.textOffers, setAside: parsed.offersSetAside } : null,
     },
     emails: intents.map((i) => ({ at: i.createdAt.toISOString(), kind: sendClassLabel(i.messageClass), state: i.state, subject: i.subject, text: i.bodyText, html: i.bodyHtml })),
+    diagnostics: {
+      questionsDetected: latest ? questionsAsked(latest.sanitizedText ?? '') : null,
+      links: resolveLinks(latestBrief.submittedUrls ?? [], { eventId: req.eventId, audits: audits.map((x) => ({ action: x.action, diff: x.diff as Record<string, unknown> | null })) }),
+      // Where the reply sent them: host and path, and whether it was a checked offer or an event page.
+      destinations: links.map((l) => ({ label: l.label, purpose: l.purpose, affiliate: l.affiliate, url: hostPath(l.url) })),
+      modelCalls: usage.map((u) => ({ revision: u.revision, job: u.jobName, model: u.model, state: u.kind, inputTokens: u.inputTokens, outputTokens: u.outputTokens, usdMicros: u.actualUsdMicros ?? u.estimatedUsdMicros })),
+      fallbacks: audits.filter((x) => x.action.startsWith('ai.')).map((x) => ({ at: x.at.toISOString(), revision: x.revision, action: x.action, diff: x.diff })),
+      sourceReads: reads.map((r) => ({ at: r.at.toISOString(), kind: r.kind, status: r.status, calls: r.calls, detail: r.detail })),
+      sourceCallCount: reads.reduce((n, r) => n + (r.calls ?? 0), 0),
+      linkLookups: audits.filter((x) => x.action.startsWith('listing.')).map((x) => ({ at: x.at.toISOString(), revision: x.revision, action: x.action, diff: x.diff })),
+      trend: trend ? { at: trend.at.toISOString(), revision: trend.revision, assessment: trend.diff } : null,
+    },
   };
+}
+
+/** A URL as host and path: query strings can carry session, cart or affiliate parameters. */
+function hostPath(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return `${u.host}${u.pathname}`;
+  } catch {
+    return raw.split('?')[0]!.slice(0, 200);
+  }
 }

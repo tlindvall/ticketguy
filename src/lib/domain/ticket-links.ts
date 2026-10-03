@@ -104,6 +104,33 @@ export function parseTicketLink(raw: string): TicketLink | null {
   return { url: raw, marketplace, localDate, quantity, listingId, eventId, slugText: slugText && /[a-z]{3}/.test(slugText) ? slugText : null, malformed: decoded.malformed };
 }
 
+/**
+ * A show's own official ticket site, when the customer started there (LAUNCH-07, final launch QA L04: "This is where I
+ * started: broadwaydirect.com/show/hamilton/" came back as "Event page on Ticketmaster"). Only sites that sell the shows
+ * they list, and only a show page, never an account, cart or checkout page.
+ */
+const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/**
+ * A show page on the show's own seller, and only for this event: Broadway Direct's /show/<name>/ whose name is this
+ * event's ("hamilton" for "Hamilton (NY)"). A lottery or terms page, another show, or any other path is not a reference.
+ */
+export function suppliedOfficialReference(urls: string[], eventName: string): { seller: string; url: string } | null {
+  const name = norm(eventName);
+  for (const raw of urls) {
+    let u: URL;
+    try {
+      u = new URL(raw.replace(/[.,;:!?)\]]+$/, ''));
+    } catch {
+      continue;
+    }
+    if (u.protocol !== 'https:' || !/^(?:www\.)?broadwaydirect\.com$/i.test(u.hostname)) continue;
+    const show = /^\/show\/([a-z0-9-]+)\/?$/i.exec(u.pathname)?.[1];
+    if (!show || !norm(show) || !` ${name} `.includes(` ${norm(show)} `)) continue;
+    return { seller: 'Broadway Direct', url: `${u.origin}${u.pathname}` };
+  }
+  return null;
+}
+
 /** One line for the reply when a link came through damaged, so the customer knows what we did and didn't read from it. */
 export function garbledLinkNote(urls: string[]): string | null {
   const broken = ticketLinksIn(urls).find((l) => l.malformed);

@@ -127,6 +127,8 @@ export type BuildPacketArgs = {
   subject?: SubjectListing | null;
   /** Their listing link wasn't found by its number, but the same read priced the game for their party: the cheapest
    * listing with enough tickets, and how many such listings there are. Listed prices before fees. */
+  /** The show's own ticket site the customer started on (Broadway Direct), kept as a reference link (LAUNCH-07). */
+  officialReference?: { seller: string; url: string } | null;
   /** `age`: the listings read's age by the provider's refresh time (LAUNCH-06), never by when we fetched it. */
   linkMarket?: { cheapest: MarketListing; count: number; age: 'undated' | 'recent' | number; marketplace: string } | null;
   /** The event's own local date and start, to check the listing against. */
@@ -1376,6 +1378,22 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       url: a.official.url,
       // An event page, never "Buy": no seats or prices behind it have been checked (post-deploy QA Oct 2, R1-2327-02).
       linkLabel: `Event page on ${a.official.seller}`,
+    });
+  }
+  // Where they started, if it's the show's own site: kept, said as what it is, and linked as an event page (L04).
+  if (a.officialReference) {
+    claims.push({
+      id: 'C_REFERENCE',
+      kind: 'coverage',
+      text: `You started on ${a.officialReference.seller}, which sells this ${a.eventNoun ?? 'show'} directly. I can’t see its seats or prices from here, so check its all-in total there too.`,
+      values: { seller: a.officialReference.seller },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['reference_not_checked'],
+      customerVisible: true,
+      url: a.officialReference.url,
+      linkLabel: `Event page on ${a.officialReference.seller}`,
     });
   }
 

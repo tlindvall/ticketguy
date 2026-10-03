@@ -91,6 +91,10 @@ describe('Final human QA replays', () => {
     const [first] = await converse([HAM_OPENING]);
     expect(first!.text).toContain('Hamilton (NY)\nRichard Rodgers Theatre, New York · Sun, Oct 4, 1:00 PM EDT · 2 tickets');
     expect(first!.text).not.toMatch(/couldn.t find/);
+    // LAUNCH-07 (final launch QA L04): where they started stays in the reply, as an event page, beside the catalog's seller.
+    expect(first!.text).toContain('Event page on Broadway Direct: https://broadwaydirect.com/show/hamilton/');
+    expect(first!.text).toContain('Event page on Ticketmaster:');
+    expect(first!.text).not.toMatch(/Buy (?:tickets )?on Broadway Direct/);
   });
 
   // The catalog after weeks of syncs: "Hamilton" is a surname, so Discovery brings in Anthony Hamilton, Bethany Hamilton

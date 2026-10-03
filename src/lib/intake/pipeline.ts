@@ -2,7 +2,7 @@ import { concertBudget, concertQuestion, concertContext, entryTerm, similarMusic
 import { asksProductChoice, productChoiceAnswer } from '@/lib/advice/product-choice';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
-import { MARKETPLACE_NAMES, garbledLinkNote, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { MARKETPLACE_NAMES, garbledLinkNote, suppliedOfficialReference, ticketLinksIn } from '@/lib/domain/ticket-links';
 import { problemTypesFor } from '@/lib/domain/problem-types';
 import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
@@ -2634,6 +2634,10 @@ export class Concierge {
     // What we know without listings: the official sale if it is open, the provider's face value, and the
     // price the customer asked about (per ticket; a total is divided by the party size).
     const official = await this.officialSale(event, now);
+    // The show's own site they started on stays in the reply as a reference, beside the catalog's seller, never
+    // silently replaced by it (LAUNCH-07, L04). Its link is an event page: nothing behind it has been checked.
+    const startedOn = suppliedOfficialReference(brief.submittedUrls ?? [], `${ent?.name ?? ''} ${event.name}`);
+    const officialReference = startedOn && startedOn.seller !== official?.seller ? { seller: startedOn.seller, url: this.env.APP_MODE === 'fixture' ? startedOn.url : await this.trackLink(req.id, startedOn.url, `Event page on ${startedOn.seller}`, false, { eventId: event.id }) } : null;
     const faceValue = event.faceMinCents != null && event.faceMaxCents != null ? { minCents: event.faceMinCents, maxCents: event.faceMaxCents } : null;
     // What they asked in the message behind this revision, not anywhere in the thread: a question answered
     // before, or quoted back, is not asked again (remediation review §1). Quoted history is already stripped.
@@ -2674,7 +2678,7 @@ export class Concierge {
     if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && !linkGates.length) {
       around = await tracker.currentListings(event.id, 'listings_compare', sentLink.marketplace === 'stubhub' ? sentLink.eventId : null);
       const m = around ? matchLinkedListing(around.listings, sentLink) : null;
-      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0 } });
+      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0, providerAsOf: around?.providerAsOf?.toISOString() ?? null, retrievedAt: around?.retrievedAt.toISOString() ?? null } });
       // Dated by the provider's refresh when it gave one; the fetch time only stands in for an undated read.
       if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.providerAsOf ?? around.retrievedAt);
       // Not found by its number: what the same read says the game costs for their party, so the reply leads with a
@@ -2746,7 +2750,7 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];
