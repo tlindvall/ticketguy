@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import type { DbHandle } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import { openTestDb, inbound, testEnv, RecordingProvider } from '../harness';
@@ -9,6 +9,7 @@ import { FixtureDrafter } from '@/lib/ai/drafting';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
+import { shouldAlertMarket } from '@/lib/domain/watches';
 import { setKillSwitch } from '@/lib/email/send-gate';
 import { TEST_MODE_KEY } from '@/lib/email/test-mode';
 
@@ -27,6 +28,8 @@ describe('a price watch on SeatData resale listings', () => {
   let now = FIXTURE_NOW;
   let listings: Array<Record<string, unknown>> = [];
   let reads = 0;
+  // When SeatData says it last refreshed the listings (unix seconds in the reply); by default, just now.
+  let refreshedAt: () => Date | null = () => now;
   const fetchImpl = (async (input: string) => {
     const url = new URL(input);
     const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200 });
@@ -38,12 +41,13 @@ describe('a price watch on SeatData resale listings', () => {
     if (url.pathname === '/api/v1/events/555/sales') return json({ event_id: 555, data: [], has_more: false, next_cursor: null });
     if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id') === '555') {
       reads += 1;
-      return json({ has_refreshed: true, listings });
+      const asOf = refreshedAt();
+      return json({ has_refreshed: true, ...(asOf ? { last_refresh_timestamp: Math.floor(asOf.getTime() / 1000) } : {}), listings });
     }
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;
 
-  const customers = ['watch-a@customer.example', 'watch-b@customer.example', 'watch-c@customer.example', 'watch-d@customer.example', 'watch-e@customer.example', 'watch-f@customer.example'];
+  const customers = ['watch-a@customer.example', 'watch-b@customer.example', 'watch-c@customer.example', 'watch-d@customer.example', 'watch-e@customer.example', 'watch-f@customer.example', 'watch-g@customer.example', 'watch-h@customer.example', 'watch-i@customer.example'];
   // Email unrestricted (no tester allowlist), so only the licence's alerts use lets SeatData watch.
   const env = (over: Record<string, string> = {}) => testEnv({ SEATDATA_API_KEY: KEY, WATCH_SEND_ENABLED: 'true', EMAIL_TEST_RECIPIENT_ALLOWLIST: '', ...over });
   const concierge = (over: Record<string, string> = {}, provider: RecordingProvider | null = null) => new Concierge({ db: h.db, env: env(over), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: provider, marketFetch: fetchImpl });
@@ -191,5 +195,67 @@ describe('a price watch on SeatData resale listings', () => {
     expect(await watchFor(requestId)).toBeUndefined();
     const notCreated = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.action, 'watch.not_created'), eq(t.auditLog.entityId, requestId)));
     expect(notCreated.map((a) => (a.diff as { reason: string }).reason)).toEqual(['market_unverifiable:accessible_seating']);
+  });
+
+  // LAUNCH-06 (final launch spec, A21): an alert is a "price hit now" only from listings the provider refreshed
+  // recently. Our fetch time never makes a cached read new.
+  it('a cached day-old read fetched now, an undated read and a future-dated read never alert; the reason is audited', async () => {
+    const requestId = await ask(concierge(), ASK, customers[6]!);
+    const w = (await watchFor(requestId))!;
+    listings = [listing(20, 70, 4)];
+    const at = new Date(FIXTURE_NOW.getTime() + 10 * MIN);
+    const cases: Array<[() => Date | null, string]> = [
+      [() => new Date(at.getTime() - 24 * 60 * MIN), 'stale_observation'],
+      [() => null, 'undated_observation'],
+      // A refresh time an hour after our fetch is impossible: it is read as no time at all, so undated.
+      [() => new Date(at.getTime() + 60 * MIN), 'undated_observation'],
+    ];
+    // And the rule refuses a future time on its own, whatever reaches it.
+    expect(shouldAlertMarket({ targetTotalCents: 40000, estimatedTotalCents: 36400, observedAt: new Date(at.getTime() + 60 * MIN), now: at, lastAlertedTotalCents: null, alertsInLast24h: 0, dedupeKeyExists: false })).toEqual({ alert: false, reason: 'future_observation' });
+    for (const [asOf, reason] of cases) {
+      refreshedAt = asOf;
+      expect(await evaluateAt(w.id, at)).toMatchObject({ alertsCreated: 0 });
+      const [log] = await h.db.select().from(t.auditLog).where(eq(t.auditLog.entityId, w.id)).orderBy(desc(t.auditLog.createdAt)).limit(1);
+      expect(log).toMatchObject({ action: 'watch.market_not_fresh', diff: { reason } });
+    }
+    expect(await alertsFor(w.id)).toHaveLength(0);
+    // The same listings, refreshed by the provider minutes ago: now it's news.
+    refreshedAt = () => new Date(at.getTime() - 20 * MIN);
+    expect(await evaluateAt(w.id, at)).toMatchObject({ alertsCreated: 1 });
+    const [alert] = await alertsFor(w.id);
+    expect(alert!.market).toMatchObject({ observedAt: new Date(at.getTime() - 20 * MIN).toISOString(), retrievedAt: at.toISOString() });
+    refreshedAt = () => now;
+  });
+
+  it('freshness is the provider’s: an alert from a read refreshed 2h50m before we fetched it is stale at approval 15 minutes later', async () => {
+    const requestId = await ask(concierge(), ASK, customers[7]!);
+    const w = (await watchFor(requestId))!;
+    listings = [listing(21, 70, 4)];
+    const at = new Date(FIXTURE_NOW.getTime() + 10 * MIN);
+    refreshedAt = () => new Date(at.getTime() - 170 * MIN);
+    expect(await evaluateAt(w.id, at)).toMatchObject({ alertsCreated: 1 });
+    const [alert] = await alertsFor(w.id);
+    now = new Date(at.getTime() + 15 * MIN);
+    expect(await concierge().approveWatchAlert({ alertId: alert!.id, reviewerUserId: 'staff' })).toEqual({ ok: false, reason: 'stale_observation' });
+    refreshedAt = () => now;
+  });
+
+  it('lifecycle: target → alert → cancel invalidates the pending alert; a new generation never revives it; the same price is deduplicated', async () => {
+    const requestId = await ask(concierge(), ASK, customers[8]!);
+    const w = (await watchFor(requestId))!;
+    listings = [listing(22, 70, 4)];
+    const at = new Date(FIXTURE_NOW.getTime() + 10 * MIN);
+    expect(await evaluateAt(w.id, at)).toMatchObject({ alertsCreated: 1 });
+    expect(await evaluateAt(w.id, new Date(at.getTime() + 5 * MIN))).toMatchObject({ alertsCreated: 0 });
+    const [alert] = await alertsFor(w.id);
+    await concierge().cancelWatch({ watchId: w.id, actor: 'customer', reason: 'stop' });
+    expect((await watchFor(requestId))!.generation).toBe(w.generation + 1);
+    now = new Date(at.getTime() + 10 * MIN);
+    // Cancelling invalidated the pending alert on the spot; approving it afterwards finds nothing to send.
+    expect((await alertsFor(w.id))[0]!.approvalState).toBe('invalidated');
+    expect(await concierge().approveWatchAlert({ alertId: alert!.id, reviewerUserId: 'staff' })).toEqual({ ok: false, reason: 'not_pending' });
+    // A cancelled watch isn't looked at again.
+    expect(await evaluateAt(w.id, new Date(at.getTime() + 30 * MIN))).toMatchObject({ alertsCreated: 0 });
+    expect(await alertsFor(w.id)).toHaveLength(1);
   });
 });

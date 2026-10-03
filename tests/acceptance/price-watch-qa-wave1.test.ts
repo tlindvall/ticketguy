@@ -46,7 +46,7 @@ describe('independent price watch QA contracts', () => {
     if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id') === '555') {
       reads += 1;
       if (failListings) return new Response('{}', {status:503});
-      return json({ has_refreshed: true, listings });
+      return json({ has_refreshed: true, last_refresh_timestamp: Math.floor(now.getTime() / 1000), listings }); // refreshed as we read it
     }
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;

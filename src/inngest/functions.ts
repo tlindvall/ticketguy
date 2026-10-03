@@ -5,7 +5,7 @@ import { getConcierge } from '@/lib/services';
 import { getDb } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import * as t from '@/lib/db/schema';
-import { leaseDueOutbox, markDispatched, markFailed } from '@/lib/intake/outbox';
+import { isPermanentFailure, leaseDueOutbox, markDispatched, markFailed } from '@/lib/intake/outbox';
 import { detailFromWebhookPayload, fetchReceivedEmail, withAttachmentUrls, downloadAttachments, normalizeReceived } from '@/lib/email/resend';
 import { audit } from '@/lib/util/audit';
 import { prewarmCatalog } from '@/lib/catalog/prewarm';
@@ -63,8 +63,9 @@ export async function runOutboxBatch(limit: number): Promise<{ processed: number
     } catch (e) {
       failed += 1;
       const error = e instanceof Error ? e.message : String(e);
-      const r = await markFailed(db, ev, error, new Date());
-      await audit(db, { actor: 'system', action: r === 'dead' ? 'outbox.dead_lettered' : 'outbox.retry_scheduled', entityKind: 'outbox_event', entityId: ev.id, diff: { eventType: ev.eventType, attempts: ev.attempts } });
+      const permanent = isPermanentFailure(e);
+      const r = await markFailed(db, ev, error, new Date(), { permanent });
+      await audit(db, { actor: 'system', action: r === 'dead' ? 'outbox.dead_lettered' : 'outbox.retry_scheduled', entityKind: 'outbox_event', entityId: ev.id, diff: { eventType: ev.eventType, attempts: ev.attempts, ...(permanent ? { permanent: true } : {}) } });
       // A customer's request that stops here is never silent: it goes to a person, saying what failed.
       if (r === 'dead') await c.handOffFailedWork({ eventType: ev.eventType, payload: ev.payload, error }).catch((err) => console.error('[outbox] hand-off failed', err instanceof Error ? err.message : err));
     }

@@ -72,14 +72,23 @@ function targetAndRepeats(args: { targetTotalCents: number; candidateTotalCents:
 export const MARKET_WATCH_MIN_CADENCE_MINUTES = 3 * 60;
 /** A market point older than this is not "now" (SeatData rescans an event about every 8 hours). */
 export const MARKET_ALERT_MAX_AGE_MINUTES = 3 * 60;
+/** Clock skew allowed between the provider and us before a "future" refresh time is refused. */
+export const MARKET_ALERT_FUTURE_TOLERANCE_MINUTES = 10;
 
 export function marketEstimate(listedPerTicketCents: number, quantity: number, feeAllowancePct: number): { listedTotalCents: number; estimatedTotalCents: number } {
   const listedTotalCents = listedPerTicketCents * quantity;
   return { listedTotalCents, estimatedTotalCents: Math.round(listedTotalCents * (1 + feeAllowancePct / 100)) };
 }
 
-export function shouldAlertMarket(args: { targetTotalCents: number; estimatedTotalCents: number; observedAt: Date; now: Date; lastAlertedTotalCents: number | null; alertsInLast24h: number; dedupeKeyExists: boolean }): AlertDecision {
-  if (args.now.getTime() - args.observedAt.getTime() > MARKET_ALERT_MAX_AGE_MINUTES * 60_000) return { alert: false, reason: 'stale_observation' };
+/**
+ * `observedAt` is the provider's refresh time, never our fetch time (LAUNCH-06): a cached day-old read fetched now is
+ * a day old. Undated, stale or future-dated reads can't be a "price hit now".
+ */
+export function shouldAlertMarket(args: { targetTotalCents: number; estimatedTotalCents: number; observedAt: Date | null; now: Date; lastAlertedTotalCents: number | null; alertsInLast24h: number; dedupeKeyExists: boolean }): AlertDecision {
+  if (!args.observedAt) return { alert: false, reason: 'undated_observation' };
+  const age = args.now.getTime() - args.observedAt.getTime();
+  if (age < -MARKET_ALERT_FUTURE_TOLERANCE_MINUTES * 60_000) return { alert: false, reason: 'future_observation' };
+  if (age > MARKET_ALERT_MAX_AGE_MINUTES * 60_000) return { alert: false, reason: 'stale_observation' };
   return targetAndRepeats({ ...args, candidateTotalCents: args.estimatedTotalCents });
 }
 

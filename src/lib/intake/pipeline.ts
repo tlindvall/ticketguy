@@ -3,7 +3,7 @@ import { asksProductChoice, productChoiceAnswer } from '@/lib/advice/product-cho
 import { answerFromEvidence, evidenceAsks } from '@/lib/advice/evidence-answer';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
-import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { MARKETPLACE_NAMES, garbledLinkNote, suppliedOfficialReference, ticketLinksIn } from '@/lib/domain/ticket-links';
 import { problemTypesFor } from '@/lib/domain/problem-types';
 import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
@@ -39,7 +39,7 @@ import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolve
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
-import { SEATDATA_DATASET_ID } from '@/lib/market/series';
+import { SEATDATA_DATASET_ID, listingAge } from '@/lib/market/series';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
@@ -809,7 +809,9 @@ export class Concierge {
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
     const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged);
     merged = withDefaults;
-    const assumptions = [...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+    // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
+    const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
+    const assumptions = [...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
@@ -2701,6 +2703,10 @@ export class Concierge {
     // What we know without listings: the official sale if it is open, the provider's face value, and the
     // price the customer asked about (per ticket; a total is divided by the party size).
     const official = await this.officialSale(event, now);
+    // The show's own site they started on stays in the reply as a reference, beside the catalog's seller, never
+    // silently replaced by it (LAUNCH-07, L04). Its link is an event page: nothing behind it has been checked.
+    const startedOn = suppliedOfficialReference(brief.submittedUrls ?? [], `${ent?.name ?? ''} ${event.name}`);
+    const officialReference = startedOn && startedOn.seller !== official?.seller ? { seller: startedOn.seller, url: this.env.APP_MODE === 'fixture' ? startedOn.url : await this.trackLink(req.id, startedOn.url, `Event page on ${startedOn.seller}`, false, { eventId: event.id }) } : null;
     const faceValue = event.faceMinCents != null && event.faceMaxCents != null ? { minCents: event.faceMinCents, maxCents: event.faceMaxCents } : null;
     // What they asked in the message behind this revision, not anywhere in the thread: a question answered
     // before, or quoted back, is not asked again (remediation review §1). Quoted history is already stripped.
@@ -2741,13 +2747,14 @@ export class Concierge {
     if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && !linkGates.length) {
       around = await tracker.currentListings(event.id, 'listings_compare', sentLink.marketplace === 'stubhub' ? sentLink.eventId : null);
       const m = around ? matchLinkedListing(around.listings, sentLink) : null;
-      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0 } });
-      if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.at);
+      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0, providerAsOf: around?.providerAsOf?.toISOString() ?? null, retrievedAt: around?.retrievedAt.toISOString() ?? null } });
+      // Dated by the provider's refresh when it gave one; the fetch time only stands in for an undated read.
+      if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.providerAsOf ?? around.retrievedAt);
       // Not found by its number: what the same read says the game costs for their party, so the reply leads with a
       // price, not with what we can't see (live Oct 2: three "I can't" lines and a request for a screenshot).
       else if (around) {
         const fits = around.listings.filter((l) => l.quantity >= quantity && (!l.marketplace || l.marketplace === sentLink.marketplace)).sort((x, y) => x.priceCents - y.priceCents);
-        if (fits.length) linkMarket = { cheapest: fits[0]!, count: fits.length, at: around.at, marketplace: MARKETPLACE_NAMES[sentLink.marketplace] };
+        if (fits.length) linkMarket = { cheapest: fits[0]!, count: fits.length, age: listingAge(around.providerAsOf, now), marketplace: MARKETPLACE_NAMES[sentLink.marketplace] };
       }
     }
     const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read ?? linked, changes: [] as string[], matches: false };
@@ -2758,8 +2765,8 @@ export class Concierge {
     const withFees = shown?.perTicketCents != null && shown.wholePartyCents != null && tickets > 0 && shown.wholePartyCents > shown.perTicketCents * tickets + 50;
     const quote: QuotedPrice | null = shown?.perTicketCents != null
       ? withFees
-        ? { perTicketCents: Math.round(shown.wholePartyCents! / tickets), assumedPerTicket: false, source: shown.source, feeBasis: 'all_in', seenAt: shown.observedAt, seller: shown.seller, base: { perTicketCents: shown.perTicketCents, feesCents: shown.wholePartyCents! - shown.perTicketCents * tickets, tickets, totalCents: shown.wholePartyCents! } }
-        : { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
+        ? { perTicketCents: Math.round(shown.wholePartyCents! / tickets), assumedPerTicket: false, source: shown.source, feeBasis: 'all_in', seenAt: shown.observedAt, seller: shown.seller, ...(shown.source === 'link_match' ? { listingAge: listingAge(around?.providerAsOf ?? null, now) } : {}), base: { perTicketCents: shown.perTicketCents, feesCents: shown.wholePartyCents! - shown.perTicketCents * tickets, tickets, totalCents: shown.wholePartyCents! } }
+        : { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller, ...(shown.source === 'link_match' ? { listingAge: listingAge(around?.providerAsOf ?? null, now) } : {}) }
       : brief.quotedPriceCents != null && !judged
         ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported', feeBasis: statedFeeBasis(said, brief.quotedPriceCents) ?? statedFeeBasis(saidInThread, brief.quotedPriceCents) ?? undefined }
         : null;
@@ -2812,7 +2819,7 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    const packet = buildPacket({ askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -3415,10 +3422,14 @@ export class Concierge {
     const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `market:${w.quantity}+`, totalCents: est.estimatedTotalCents });
     const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
     const recent = await this.alertHistory(w, now);
-    const d = shouldAlertMarket({ targetTotalCents: w.targetTotalCents, estimatedTotalCents: est.estimatedTotalCents, observedAt: read.at, now, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
-    if (!d.alert) return 0;
+    // The provider's refresh time decides freshness, never our fetch (LAUNCH-06): a cached or undated read is no "price hit now".
+    const d = shouldAlertMarket({ targetTotalCents: w.targetTotalCents, estimatedTotalCents: est.estimatedTotalCents, observedAt: read.providerAsOf, now, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
+    if (!d.alert) {
+      if (['undated_observation', 'stale_observation', 'future_observation'].includes(d.reason)) await audit(this.db, { actor: 'system', action: 'watch.market_not_fresh', entityKind: 'watch', entityId: w.id, diff: { reason: d.reason, providerAsOf: read.providerAsOf?.toISOString() ?? null, retrievedAt: read.retrievedAt.toISOString() } });
+      return 0;
+    }
     const lic = await marketLicence(this.db);
-    const evidence = { basis: `${w.quantity}+`, listedPerTicketCents: read.cheapestPerTicketCents, listedTotalCents: est.listedTotalCents, estimatedTotalCents: est.estimatedTotalCents, feeAllowancePct: pct, listings: read.listings, observedAt: read.at.toISOString(), datasetId: SEATDATA_DATASET_ID, isFixture: !!lic.row?.isFixture };
+    const evidence = { basis: `${w.quantity}+`, listedPerTicketCents: read.cheapestPerTicketCents, listedTotalCents: est.listedTotalCents, estimatedTotalCents: est.estimatedTotalCents, feeAllowancePct: pct, listings: read.listings, observedAt: read.providerAsOf!.toISOString(), retrievedAt: read.retrievedAt.toISOString(), datasetId: SEATDATA_DATASET_ID, isFixture: !!lic.row?.isFixture };
     const inserted = await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: null, market: evidence, dedupeKey: key, payableTotalCents: est.estimatedTotalCents, approvalState: 'pending', createdAt: now }).onConflictDoNothing().returning({ id: t.watchAlerts.id });
     if (!inserted.length) return 0;
     await audit(this.db, { actor: 'system', action: 'watch.market_alert_found', entityKind: 'watch', entityId: w.id, diff: { listedPerTicketCents: evidence.listedPerTicketCents, estimatedTotalCents: evidence.estimatedTotalCents, listings: evidence.listings } });

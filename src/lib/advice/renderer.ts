@@ -295,7 +295,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(coverage.text);
     html.push(P(esc(coverage.text)));
   }
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly));
+  // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE'));
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
   const asks = packet.followUps ?? [];

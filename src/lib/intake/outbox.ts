@@ -84,8 +84,18 @@ export async function markDispatched(db: DbOrTx, id: string, leaseToken: string,
 export const CUSTOMER_WORK_MAX_ATTEMPTS = 4;
 export const CUSTOMER_WORK: readonly string[] = ['request.interpret', 'research.requested'];
 
-export async function markFailed(db: DbOrTx, ev: LeasedEvent, error: string, now: Date): Promise<'retry' | 'dead'> {
-  const dead = ev.attempts >= (CUSTOMER_WORK.includes(ev.eventType) ? CUSTOMER_WORK_MAX_ATTEMPTS : OUTBOX_MAX_ATTEMPTS);
+/**
+ * Input that can never succeed on retry: a link or field the customer sent that our code can't read. Retrying it is
+ * minutes of silence before the same failure (live Oct 2, L03), so it goes to a person on the first failure.
+ */
+export class InvalidInputError extends Error {
+  readonly permanent = true;
+}
+/** A URIError is always the input's encoding, never a provider having a bad minute. */
+export const isPermanentFailure = (e: unknown): boolean => e instanceof URIError || (e instanceof Error && (e as { permanent?: unknown }).permanent === true);
+
+export async function markFailed(db: DbOrTx, ev: LeasedEvent, error: string, now: Date, opts: { permanent?: boolean } = {}): Promise<'retry' | 'dead'> {
+  const dead = !!opts.permanent || ev.attempts >= (CUSTOMER_WORK.includes(ev.eventType) ? CUSTOMER_WORK_MAX_ATTEMPTS : OUTBOX_MAX_ATTEMPTS);
   await db
     .update(outboxEvents)
     .set({
