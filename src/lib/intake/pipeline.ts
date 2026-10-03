@@ -18,7 +18,7 @@ import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReference
 import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
-import { chooseShownOffer, fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
+import { areaIntent, areaOf, chooseShownOffer, fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
@@ -36,7 +36,7 @@ import { planSources } from '@/lib/sources/routing';
 import { adapterFacts, capability, coveredSourceIds, gate as policyGate, loadEventRows, policyForEvent, storedPolicy } from '@/lib/intake/service-policy';
 import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolveServicePolicy, type Operation, type OutsideIntent } from '@/lib/domain/service-depth';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
-import { MarketTracker, marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker';
+import { MarketTracker, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
@@ -2616,11 +2616,18 @@ export class Concierge {
       } catch (e) {
         await audit(this.db, { actor: 'system', action: 'market.read_failed', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { step: 'refresh', error: (e instanceof Error ? e.message : String(e)).slice(0, 200) } });
       }
-      market = await marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now });
+      // The area they asked for ("floor seats"), read for its own series; the venue's stays alongside as context.
+      const zoneWanted = areaIntent(brief.seatingPreference ?? '').want;
+      market = await marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now, zone: zoneWanted ? { wanted: zoneWanted, matches: (z) => areaOf(z) === zoneWanted } : null });
     }
-    const marketSignal = market && uses.advice ? { basisMatchesGroup: !!market.context && market.context.adequacy === 'sufficient', direction: market.context?.direction ?? 'insufficient', supply: market.supplyScope === 'group' && market.supply.trend === 'unknown' ? market.single.supply.trend : market.supply.trend } : null;
+    // Venue-wide prices never decide advice about part of the venue: with a seating preference and no series for
+    // it, the direction is broader context and can't argue for waiting (TREND-ACC-04). Mixed never does either.
+    const broaderScope = !!market && !!brief.seatingPreference?.trim() && market.scope === 'venue';
+    const marketSignal = market && uses.advice ? { basisMatchesGroup: !!market.context && market.context.adequacy === 'sufficient' && !broaderScope, direction: market.context?.direction ?? 'insufficient', supply: market.supplyScope === 'group' && market.supply.trend === 'unknown' ? market.single.supply.trend : market.supply.trend, broaderScope } : null;
     const policy = decide({ market: marketSignal, now, eventStartAt: event.localStartAt, offers: { bestEligibleTotalCents: best?.comparableTotalCents ?? null, bestEligibleObservationId: best?.offer.id ?? null, eligibleCount: cmp.eligible.length, needsReviewCount: cmp.needsReview.length, alternativeAvailable: alternatives.length > 0 || cmp.needsReview.length > 0, deliveryFeasible: best ? (best.offer.deliveryMethod ? true : null) : null, safeDeliveryBufferMinutes: null }, benchmark, trend, priorities, monitoringCoverageAvailable: monitoringCoverage, staffedUntil: null });
 
+    // What the trend was read from and why it decided what it did: observations, their times, the windows, the scope.
+    if (market) await audit(this.db, { actor: 'system', action: 'market.trend_assessed', entityKind: 'request', entityId: req.id, revision: args.revision, diff: marketTrace(market, { preferenceGiven: !!brief.seatingPreference?.trim(), signal: marketSignal, usedInAdvice: uses.advice, policy }) });
     const isFixtureRun = allOffers.some((o) => o.collectionMode === 'fixture') || this.env.APP_MODE === 'fixture';
     // What we know without listings: the official sale if it is open, the provider's face value, and the
     // price the customer asked about (per ticket; a total is divided by the party size).
@@ -2736,7 +2743,7 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];

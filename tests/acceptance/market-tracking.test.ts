@@ -32,7 +32,8 @@ describe('resale market tracking', () => {
       return { timestamp: new Date(from.getTime() + i * 2 * H).toISOString(), total_listings_all: 600, total_listings_active: listings(i), listing_fill_rate: 0.6, avg_price: 200, median_price: 180, get_in: a + (b - a) * f, get_in_qty2plus: a2 + (b2 - a2) * f, zones: [{ zone_name: 'Lower Bowl', avg_price: 300, median_price: 280, get_in: a + 50, get_in_qty2plus: a2 + 60 }] };
     });
   // Current listings: two can seat five (from $140), one more seats four; an inactive one is ignored.
-  let groupListings = () => new Response(JSON.stringify({ has_refreshed: true, listings: [
+  // SeatData dates the listings by its last refresh (`last_refresh_timestamp`, unix seconds): this one just refreshed.
+  let groupListings = () => new Response(JSON.stringify({ has_refreshed: true, last_refresh_timestamp: Math.floor(now.getTime() / 1000), listings: [
     { active: true, listing_id: 1, price: 95, quantity: 2, quantity_start: 2, row: '10', section: '101', zone: 'Lower Bowl' },
     { active: true, listing_id: 2, price: 140, quantity: 6, quantity_start: 8, row: '4', section: '210', zone: 'Upper' },
     { active: true, listing_id: 6189203345, price: 155, quantity: 5, quantity_start: 5, row: '2', section: '112', zone: 'Lower Bowl' },

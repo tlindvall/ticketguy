@@ -1256,3 +1256,33 @@ It is stored with its zone and compared with each offer's promised transfer, and
   - `scripts/probe-request.ts <request id>` prints one request's links, listing audits, tracking row, 48 hours of SeatData reads, and licence state. It shows no message text and makes no provider call.
 
 **Not done.** Why the Rangers listing wasn't read is still unknown until `probe-request` runs on the production request. Hamilton is #71, which this QA didn't test.
+
+## 73. A trend is dated by the provider, repeated reads add nothing, mixed stays mixed, and the floor answers for the floor
+
+**Why.** The Oct 2 root-cause review (RC08) found four ways the buy-or-wait read could say more than its data:
+- **Timestamps.** Group series (three or more) were dated by when we fetched SeatData's listings, not by when SeatData last refreshed them. So a cached read fetched twice became two "observations", and any read looked fresh.
+- **Mixed.** A rise over three days with a fall over the last day came out "flat", and the reply said "about the same".
+- **Scope.** A floor-only request was decided on the venue's cheapest seats. A venue-wide fall could argue for waiting on floor seats whose prices were rising.
+- **Diagnostics.** Nothing recorded which observations, windows or scope a decision was read from.
+
+**What.**
+- **Two times per row.** `market_snapshots.observed_at` is the provider's time (the stats snapshot, or the listings' `last_refresh_timestamp`). `provider_as_of` holds that time, or null when the provider gave none. New `retrieved_at` is when we fetched. A row without a provider time is flagged `provider_time_unknown`. Migration 0021 adds the column and marks existing group rows that way, because their times were fetch times.
+- **Repeated reads.** The same refresh time lands on the same row (unique index), so fetching again adds nothing and keeps the first fetch time. An unchanged price with a new provider time is a new observation. Nothing is de-duplicated by price.
+- **Undated reads.** These never date a series, its freshness or its span. Alone, they give the price "when I checked", saying the data doesn't say how recent it is: never "currently", never a trend.
+- **Mixed.** When the day and the three days disagree, or the last day moved and the three days didn't, the direction is `mixed`.
+  - The decision never waits on it (`market_mixed_no_clear_direction`); shadow advice says buy.
+  - The reply gives both windows and "no clear direction".
+- **Scope.**
+  - A seating preference naming an area ("floor") reads that area's zone series: stats zones for one or two tickets, listing zones for groups. Several matching zones are merged at their cheapest per provider time.
+  - The venue figure follows, labelled "across every seat in the venue … includes seats away from the floor".
+  - With a preference but no series for it, the venue's direction is context only: `basisMatchesGroup` is false and `market_scope_broader_than_request` is recorded. The reply labels it and says not to decide on it.
+- **Buy or wait.** With no verified-total trend, a fresh, dated, sufficient series for their seats answers the question.
+  - Not falling: the verdict comes first ("I'd buy rather than wait once you find seats…"), then the window, the prices and the before-fees basis.
+  - Falling: the fall, then that it doesn't promise more.
+  - Stale, undated or broader-scope data gets its own reason line.
+- **Trace.** `market.trend_assessed` is audited per research revision. It records the basis, the zone wanted and matched, and the scope. For the context and the venue, it records the newest 12 observations (with provider and fetch times), the 24- and 72-hour windows, direction and the rule that set it, adequacy, reasons and supply. It also records the signal given to the policy, the decision and its market reason codes. It holds no customer text and no keys.
+
+**Not done.**
+- An area is matched only through `areaOf` (floor, balcony, mezzanine, orchestra, loge, lawn, terrace). "Lower level" or "100s" still read the venue, labelled.
+- Listing counts stay venue-wide even when prices are the zone's, and say so.
+- Listing fetches for a customer's link (`currentListings`) are unchanged.

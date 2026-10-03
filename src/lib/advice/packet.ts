@@ -1,7 +1,7 @@
 import { entryFailure, performanceFailure } from './concert-terms';
 import { fromVenueMinutes, minutesOf, offerTotal, timeLabel, venueZoneName, type PartyTerms, type TextOffer } from './text-offers';
 import { localStart } from '@/lib/domain/event-constraints';
-import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, type MarketBasis, type MarketContext } from '@/lib/market/series';
+import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, marketMoved, type Change, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
 import type { BenchmarkResult } from './benchmark';
@@ -115,7 +115,11 @@ export type BuildPacketArgs = {
    * Resale market statistics (DECISION_LOG #44): listed prices before fees, per ticket, never an offer.
    * `visible` is the licence's customer-display right; without it the claims are staff-only.
    */
-  market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; comparableLabel: string | null; visible: boolean } | null;
+  /**
+   * `scope: 'zone'`: `context` is the series for the area they asked for (`zoneWanted`, "floor"), and `venue` the whole
+   * venue's, said only as labelled broader context. `'venue'`: `context` covers every seat (TREND-ACC-04).
+   */
+  market?: { basis: MarketBasis | null; context: MarketContext | null; supply: MarketContext['supply']; supplyScope?: 'all' | 'group'; scope?: 'zone' | 'venue'; zoneWanted?: string | null; venue?: MarketContext | null; comparableLabel: string | null; visible: boolean } | null;
   /** A ticket-site link the customer sent (its marketplace name); we read the URL, never the page. */
   /** A ticket-site link they sent; `eventPage` when it names the event, not one listing (no listing id). */
   link?: { marketplace: string; eventPage?: boolean } | null;
@@ -611,7 +615,77 @@ const count = (n: number) => n.toLocaleString('en-US');
 /** Fewer listings than this for their group size is thin supply, said as a caution. */
 const SUPPLY_ADEQUATE_MIN = 15;
 
-function marketRead(a: BuildPacketArgs): ClaimRecord | null {
+/** "on the floor", "in the balcony": where a zone's figures apply. */
+const zonePhrase = (z: string) => (/^(?:floor|lawn|terrace)$/.test(z) ? `on the ${z}` : `in the ${z}`);
+/** Their area, when the market figures are that area's own series; null when they cover the whole venue. */
+const zoneOf = (a: BuildPacketArgs) => (a.market?.scope === 'zone' && a.market.zoneWanted ? a.market.zoneWanted : null);
+/** The figures speak for the seats they asked about: they named none, or we hold their area's own series. */
+const scopeFits = (a: BuildPacketArgs) => !a.seatingPreference?.trim() || !!zoneOf(a);
+const isStale = (c: MarketContext) => c.reasons.some((r) => r.startsWith('stale'));
+/** A trend can be said from it: enough fresh points the provider dated, with a real comparison window. */
+const trendReady = (c: MarketContext | null | undefined): c is MarketContext & { current: NonNullable<MarketContext['current']> } => !!c?.current && c.adequacy === 'sufficient' && c.current.timeKnown !== false && !isStale(c);
+
+/** How a series moved, as a clause: one window, or both when the day and the three days disagree ("mixed"). */
+function moveClause(c: MarketContext, verdict = true): string {
+  if (c.adequacy !== 'sufficient') return '';
+  const leg = (w: NonNullable<Change>, when: string) => (marketMoved(w) ? `${w.changeCents < 0 ? 'down' : 'up'} from ${formatUsd(w.fromCents)} ${when}` : `about the same as ${when}`);
+  if (c.direction === 'mixed' && c.h24 && c.h72) return `${leg(c.h24, 'a day ago')} but ${leg(c.h72, 'three days ago')}${verdict ? ', so no clear direction' : ''}`;
+  const w = c.h72 ?? c.h24;
+  if (!w) return '';
+  const when = w.hours >= 72 ? 'three days ago' : 'a day ago';
+  return c.direction === 'down' ? `down from ${formatUsd(w.fromCents)} ${when}` : c.direction === 'up' ? `up from ${formatUsd(w.fromCents)} ${when}` : `about the same as ${when}`;
+}
+
+/**
+ * "Buy now or wait?" answered from the resale series when it can be (TREND-ACC-03): fresh, dated by the provider,
+ * with a real window, and for the seats they asked about. The answer comes first and says the scope, the window,
+ * the prices and their basis; a mixed or held price is never a reason to wait, and a fall is never a promise.
+ */
+function marketTrendAnswer(a: BuildPacketArgs): { text: string; facts: string; why: string | null; direction: MarketContext['direction'] } | null {
+  const m = a.market;
+  const c = m?.context;
+  if (!m?.visible || !trendReady(c) || !scopeFits(a)) return null;
+  const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
+  const what = m.basis === 'pair' ? 'for two or more tickets' : group !== null ? `for ${group} or more tickets` : 'for a single ticket';
+  const z = zoneOf(a);
+  const subj = `listed resale prices ${what}${z ? ` ${zonePhrase(z)}` : ''}`;
+  const now = formatUsd(c.current.priceCents);
+  const w = (c.h72 ?? c.h24)!;
+  const span = w.hours >= 72 ? 'three days' : 'day';
+  const move = c.direction === 'down' ? `have fallen from ${formatUsd(w.fromCents)} to ${now} a ticket over the last ${span}`
+    : c.direction === 'up' ? `have risen from ${formatUsd(w.fromCents)} to ${now} a ticket over the last ${span}`
+    : c.direction === 'mixed' ? `are at ${now} a ticket, ${moveClause(c, false)}`
+    : `have held at about ${now} a ticket over the last ${span}`;
+  const facts = `${subj.replace(/^./, (ch) => ch.toUpperCase())} ${move} (before fees)`;
+  // Not falling: buy, said first, then why. Falling: the fall, then what it does and doesn't tell them.
+  const why = c.direction === 'up' ? 'waiting hasn’t been paying off' : c.direction === 'mixed' ? 'they’ve gone both ways and there’s no clear fall to wait for' : c.direction === 'flat' ? 'there’s no fall to wait for' : null;
+  const text = why
+    ? `I’d buy rather than wait once you find seats that work at a price you’re happy with. ${facts}, so ${why}.`
+    : `${facts}. ${a.policy.decision === 'wait_and_recheck' ? 'Waiting is reasonable, since you’ve said you can take the risk, but it isn’t a promise they keep falling and the seats you want could go.' : 'That doesn’t tell me they’ll keep falling, so whether to wait depends on when you need to decide and how much you’d mind missing out.'}`;
+  return { text, facts, why, direction: c.direction };
+}
+
+/** Why the series can't answer "buy or wait" for them, when it's a reason they should hear: stale, undated, or broader. */
+function marketTrendGap(a: BuildPacketArgs, marketShown: boolean): string | null {
+  const m = a.market;
+  const c = m?.context;
+  if (!m?.visible || !c?.current) return null;
+  const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
+  const what = m.basis === 'pair' ? 'for two or more tickets' : group !== null ? `for ${group} or more tickets` : 'for a single ticket';
+  const z = zoneOf(a);
+  const where = `${what}${z ? ` ${zonePhrase(z)}` : ''}`;
+  if (c.current.timeKnown === false) return `The resale listings I read ${where} don’t say when they were last refreshed, so I can’t date them or say which way prices are moving.`;
+  if (isStale(c)) return `The newest resale price I have ${where} is from ${checkedAt(c.current.at, a.timeZone)}, too old to say how prices are moving now.`;
+  // Venue-wide movement, labelled as that, never as theirs: it can't settle a question about part of the venue.
+  // Only beside a market section the reply shows (never under a results page's own rows, PD-R2-02).
+  if (marketShown && !scopeFits(a) && trendReady(c)) {
+    const clause = moveClause(c);
+    return clause ? `Across every seat in the venue, listed prices ${what} are at ${formatUsd(c.current.priceCents)} a ticket before fees, ${clause}, but that includes seats outside what you asked for, so I wouldn’t decide on it.` : null;
+  }
+  return null;
+}
+
+function marketRead(a: BuildPacketArgs, timingAnswered = false): ClaimRecord | null {
   const m = a.market;
   const c = m?.context;
   if (!m || !c?.current) return null;
@@ -647,7 +721,9 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
     if (!parts.length) return null;
     return readClaim(a, parts, c, s);
   }
-  const trendKnown = fresh && c.adequacy === 'sufficient' && !a.seatingPreference;
+  // Only a series for the seats they asked about, dated by the provider, says anything about their timing; and when
+  // the buy-or-wait answer above already said it, it isn't said twice.
+  const trendKnown = !timingAnswered && fresh && c.adequacy === 'sufficient' && c.current.timeKnown !== false && scopeFits(a);
   const p = a.priorities;
   const canWait = !a.travelling && p.mustAttend !== true && (p.waitRiskTolerance === 'medium' || p.waitRiskTolerance === 'high') && p.decisionDeadline !== null;
   // Scarcity for their group only from counts for their group size, never from all-event listing counts (R4-B07).
@@ -667,7 +743,8 @@ function marketRead(a: BuildPacketArgs): ClaimRecord | null {
     else if (canWait) parts.push(`Prices have been easing, but I can’t see how many listings there are for a group your size, so that alone isn’t a reason to wait. If you do wait, it’s a risk that the seats you want go${deadline ? `, and I’d decide${deadline}` : ''}.`);
     else parts.push('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
   } else if (trendKnown && c.direction === 'up') parts.push(`Prices have been climbing, so waiting hasn’t been paying off for this ${a.eventNoun ?? 'game'}.`);
-  else if (!trendKnown && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
+  else if (trendKnown && c.direction === 'mixed') parts.push('Prices have gone both ways over the last few days, so they don’t point to waiting.');
+  else if (!trendKnown && !timingAnswered && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
   return readClaim(a, parts, c, s);
 }
@@ -735,7 +812,7 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   // whose own deadline (a noon departure) is already the one that matters (retest R2-B04).
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
   // Judging an offer they've picked is one question; the buy-or-wait questions can wait for its price (live R07).
-  const timingMatters = !askedOther && !(a.link && a.asks?.worth) && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down'));
+  const timingMatters = !askedOther && !(a.link && a.asks?.worth) && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down' && scopeFits(a)));
   if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
   if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
   // A total with fees, as the watch asks and as every comparison is made: "per ticket" for five left the fees
@@ -762,30 +839,42 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
   const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
   const size = m.basis ? basisSize(m.basis) : q;
   const moved = (s: MarketContext['supply']) => s.before !== null && s.hours !== null && s.trend !== 'stable' && s.trend !== 'unknown' ? `, ${s.trend === 'shrinking' ? 'down' : 'up'} from ${count(s.before)} over the last ${s.hours} hours` : '';
+  const z = zoneOf(a);
+  // Listing counts are the whole venue's even when prices are their area's: said so.
+  const across = z ? ' across the venue' : '';
   const supplyText = (s: MarketContext['supply']) =>
-    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${count(s.now)} listing${s.now === 1 ? ' has' : 's have'} ${group} or more tickets${moved(s)}.` : ` About ${count(s.now)} listing${s.now === 1 ? ' is' : 's are'} up${moved(s)}.`;
+    s.now === null ? '' : group !== null && m.supplyScope === 'group' ? ` About ${count(s.now)} listing${s.now === 1 ? ' has' : 's have'} ${group} or more tickets${across}${moved(s)}.` : ` About ${count(s.now)} listing${s.now === 1 ? ' is' : 's are'} up${across}${moved(s)}.`;
   // A group's series starts at the first listings read, so its current floor is worth saying before there is a trend.
   const fresh = !!c?.current && !c.reasons.some((r) => r.startsWith('stale'));
-  if (c && c.current && (c.adequacy === 'sufficient' || (group !== null && fresh))) {
-    const what = m.basis === 'pair' ? 'with two or more tickets' : group !== null ? `with ${group} or more tickets` : 'for a single ticket';
-    // "Currently" only when the figure is recent; otherwise its age, so a day-old floor isn't passed off as now.
+  // Their area's own series is worth saying from its first fresh read too: it is the figure for their seats.
+  if (c && c.current && (c.adequacy === 'sufficient' || ((group !== null || z) && fresh))) {
+    const where = z ? ` ${zonePhrase(z)}` : '';
+    const what = `${m.basis === 'pair' ? 'with two or more tickets' : group !== null ? `with ${group} or more tickets` : 'for a single ticket'}${where}`;
+    // "Currently" only when the figure is recent; otherwise its age, so a day-old floor isn't passed off as now. A read
+    // the provider didn't date is said as when we checked, and as undated: never "currently", never a trend.
+    const undated = c.current.timeKnown === false;
     const ageHours = Math.round((a.observedAt.getTime() - c.current.at.getTime()) / 3_600_000);
-    const lead = ageHours < MARKET_RECENT_HOURS ? `Resale listings ${what} currently start at` : `As of about ${ageHours} hours ago, resale listings ${what} started at`;
+    const lead = undated ? `When I checked, resale listings ${what} started at` : ageHours < MARKET_RECENT_HOURS ? `Resale listings ${what} currently start at` : `As of about ${ageHours} hours ago, resale listings ${what} started at`;
     const w = c.adequacy === 'sufficient' ? (c.h72 ?? c.h24) : null;
-    const when = w ? (w.hours >= 72 ? 'three days ago' : 'a day ago') : null;
-    const move = !w || !when ? '' : c.direction === 'down' ? ` That’s down from ${formatUsd(w.fromCents)} ${when}.` : c.direction === 'up' ? ` That’s up from ${formatUsd(w.fromCents)} ${when}.` : ` About the same as ${when}.`;
+    const clause = moveClause(c);
+    const move = undated ? ' The listing data doesn’t say how recent it is, so I can’t say which way prices are moving.' : clause ? ` That’s ${clause}.` : '';
+    // With their area's figures leading, the whole venue is broader context, labelled as that.
+    const v = z ? m.venue : null;
+    const venueClause = v && v.adequacy === 'sufficient' ? moveClause(v) : '';
+    const venueLine = v?.current && v.current.timeKnown !== false && !isStale(v) ? `Across every seat in the venue, they start at ${formatUsd(v.current.priceCents)}${venueClause ? `, ${venueClause}` : ''}; that includes seats away from the ${z}.` : '';
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${wholeVenue(a.seatingPreference ?? null)}`,
+      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${venueLine ? ` ${venueLine}` : ''}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${z ? '' : wholeVenue(a.seatingPreference ?? null)}`,
       items: [
-        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' with two or more tickets' : ''}, checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${move}`,
+        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' with two or more tickets' : ''}${where}, ${undated ? `read ${checkedAt(c.current.at, a.timeZone)} (the data doesn’t say when it was last refreshed)` : `checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${undated ? '' : move}`,
+        ...(venueLine ? [venueLine] : []),
         ...(m.supply.now !== null
-          ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${count(m.supply.now)} resale listings in all${moved(m.supply)}.`]
+          ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${count(m.supply.now)} resale listings ${z ? 'across the venue' : 'in all'}${moved(m.supply)}.`]
           : []),
-        ...(a.seatingPreference ? [wholeVenue(a.seatingPreference ?? null).trim()] : []),
+        ...(a.seatingPreference && !z ? [wholeVenue(a.seatingPreference ?? null).trim()] : []),
       ],
-      values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before },
+      values: { priceCents: c.current.priceCents, fromCents: w?.fromCents ?? null, windowHours: w?.hours ?? null, direction: c.direction, listings: m.supply.now, listingsBefore: m.supply.before, scope: z ? `zone:${z}` : 'venue', providerTimeKnown: undated ? 0 : 1 },
       scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
       limitations: ['listed_prices_before_fees', 'market_statistics_not_listings', 'past_movement_does_not_predict', ...(group !== null ? ['group_split_not_guaranteed'] : [])],
       ...common,
@@ -1433,7 +1522,11 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // The answer to "are they worth it?" takes this place, so it opens the reply ahead of the market figures.
   const floor = a.market?.visible && a.market.context?.current ? a.market.context.current.priceCents : null;
   const ctxAge = a.market?.context?.current ? Math.round((a.observedAt.getTime() - a.market.context.current.at.getTime()) / 3_600_000) : null;
-  const moving = a.market?.context?.direction === 'down' ? 'easing' : a.market?.context?.direction === 'up' ? 'climbing' : 'about where it was a few days ago';
+  // Said only from a series that can say it: "about where it was" from no comparison was a made-up steady price.
+  const mc = a.market?.context;
+  const moving = !trendReady(mc) || !scopeFits(a) ? 'with too little dated history to say which way it’s heading'
+    : mc.direction === 'down' ? 'easing' : mc.direction === 'up' ? 'climbing' : mc.direction === 'mixed' ? 'moving both ways over the last few days' : `about where it was ${mc.h72 ? 'a few days' : 'a day'} ago`;
+  const undatedFloor = mc?.current?.timeKnown === false;
   // A listing link we couldn't find by its number: lead with what we do know (what the game costs for their party),
   // then one short ask. Three "I can't" lines and a homework request was the whole reply (live Oct 2, Rangers).
   const party = a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity);
@@ -1443,7 +1536,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const priced = lm && floor === null
     ? `For ${party}${a.quantity > 1 ? ' together' : ''}, ${lm.marketplace} listings for this ${a.eventNoun ?? 'game'} start at ${formatUsd(lm.cheapest.priceCents)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(lm.cheapest.priceCents * a.quantity)} for ${party})` : ''}${lm.cheapest.section ? `, in section ${lm.cheapest.section}${lm.cheapest.row ? `, row ${lm.cheapest.row}` : ''}` : ''}, when I checked just now. ${lm.count === 1 ? 'That’s the only listing' : `There are ${lm.count} listings`} with ${a.quantity > 1 ? `${party} or more tickets` : 'a ticket'}.`
     : floor !== null
-      ? `For ${party}, the cheapest listings I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${party})` : ''}, from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}. That’s where the market starts, not a verdict on yours.`
+      ? `For ${party}, the cheapest ${zoneOf(a) ? `listings ${zonePhrase(zoneOf(a)!)}` : 'listings'} I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${party})` : ''}, ${undatedFloor ? 'from listing data that doesn’t say how recent it is' : `from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}`}. That’s where the market starts, not a verdict on yours.`
       : null;
   // "Can you find a cheaper pair?" with no listings to look through: said so, and the one ask is for any pair they
   // find, not the first reply's ask again with their question left unanswered (post-deploy QA Oct 2, PD-R1-02).
@@ -1612,7 +1705,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   if (rowsPage && !a.market?.context?.zone) for (const c of market) c.customerVisible = false;
   claims.push(...market);
   // Their own offers are the question; what the market floor leaves of their budget isn't (post-#54 QA).
-  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price' && c.customerVisible) && !(a.textOffers && a.textOffers.length >= 2) ? marketRead(a) : null;
+  // Asked "buy or wait?" with a series that answers it: the answer says the timing, so the read doesn't repeat it.
+  // Only from a market section the reply shows: a venue floor hidden under a results page doesn't come back as the answer.
+  const marketTrend = a.trendAsked && !claims.some((c) => c.id === 'C_TREND' && c.customerVisible) && market.some((c) => c.id === 'C_MARKET' && c.customerVisible) ? marketTrendAnswer(a) : null;
+  const read = market.some((c) => c.id === 'C_MARKET' && c.kind === 'market_price' && c.customerVisible) && !(a.textOffers && a.textOffers.length >= 2) ? marketRead(a, !!marketTrend) : null;
   if (read) claims.push(read);
   const marketShown = market.some((c) => c.customerVisible);
 
@@ -1666,15 +1762,26 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     const seats = standing ? `${countWord(q).toLowerCase()} ${sub?.chosenFor ? `${sub.chosenFor} ` : ''}tickets` : `${q === 1 ? 'one seat' : `${countWord(q)} seats together`}`;
     const risk = a.trendAsked.riskOk ? ' You’re willing to risk missing out, but that alone doesn’t show that waiting will save money.' : '';
     const view = trendClaim ? null : buyOrWaitView(a);
+    // A follow-up about the row already chosen drops the market section below, and the series answer with it.
+    const rowLead = !!sub && !!shownRowLead(a, sub);
+    const mt = trendClaim || rowLead ? null : marketTrend;
+    // The resale series answers when the verified totals can't: its verdict first, unless the seats they showed us
+    // already lead with one (a fall is the exception: "I'd buy" over a fall isn't what the series says).
+    const gap = trendClaim || mt ? null : marketTrendGap(a, !rowLead && claims.some((c) => c.id === 'C_MARKET' && c.customerVisible));
+    const marketText = mt
+      ? mt.why && view?.lead
+        ? `${view.lead} ${mt.facts}, so ${mt.why}.${risk}${view.after}`
+        : `On buy or wait: ${mt.text}${!mt.why && a.policy.decision === 'wait_and_recheck' ? '' : risk}${view?.after ?? ''}`
+      : null;
     const text = trendClaim
       ? `On buy or wait: ${trendClaim.text}${risk}`
-      : `${view?.lead ? `${view.lead} ` : ''}I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}${view?.after ?? ''}`;
+      : marketText ?? `${view?.lead ? `${view.lead} ` : ''}I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}${view?.after ?? ''}`;
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
     // A short follow-up about the row already chosen gets its answer, the other rows and the checks: not the row's
     // price, the face-value line and the market section all over again (live Oct 2 C02 turn 2: 468 words).
     // The line naming the market's source goes with the market it describes ("Those figures are…" under nothing).
     if (sub && shownRowLead(a, sub)) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
-    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim ? 1 : 0 }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: trendClaim ? [] : ['insufficient_history'], customerVisible: true });
+    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
   }
 
   // Their correction, acknowledged first and specifically, then the answer on the corrected facts (live A11-F1).

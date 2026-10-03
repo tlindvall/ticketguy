@@ -320,7 +320,7 @@ function MarketCard({ market, tracked, licensed, shown, quantity, now }: { marke
       <p>
         {label}: from <strong>{formatUsd(c.current.priceCents)}</strong> a ticket
         {w ? <span className={w.changeCents < 0 ? 'text-emerald-700' : w.changeCents > 0 ? 'text-rose-700' : ''}> ({formatUsdChange(w.changeCents)} in {w.hours}h)</span> : null}
-        {c.adequacy !== 'sufficient' ? <span className="text-gray-500"> · not enough data for a trend</span> : c.direction !== 'flat' ? <span> · {c.direction === 'down' ? 'falling' : 'rising'}</span> : <span> · flat</span>}
+        {c.adequacy !== 'sufficient' ? <span className="text-gray-500"> · not enough data for a trend</span> : c.direction !== 'flat' ? <span> · {c.direction === 'down' ? 'falling' : c.direction === 'mixed' ? 'mixed (day and three days disagree)' : 'rising'}</span> : <span> · flat</span>}
       </p>
     );
   };
