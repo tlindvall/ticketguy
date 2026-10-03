@@ -1,5 +1,6 @@
 import { concertBudget, concertQuestion, concertContext, entryTerm, similarMusicGoal } from '@/lib/advice/concert-terms';
 import { asksProductChoice, productChoiceAnswer } from '@/lib/advice/product-choice';
+import { answerFromEvidence, evidenceAsks } from '@/lib/advice/evidence-answer';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
@@ -18,7 +19,7 @@ import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReference
 import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
-import { areaIntent, areaOf, chooseShownOffer, fieldsFromRead, looksLikeListingText, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
+import { areaIntent, areaOf, chooseShownOffer, distinctActs, fieldsFromRead, looksLikeListingText, usableEvidence, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
@@ -54,7 +55,7 @@ import { trendRights } from '@/lib/advice/trend-rights';
 import { evidenceFacts, suppliedEvidenceAnswer } from '@/lib/advice/supplied-evidence';
 import { decisionAnswer } from '@/lib/advice/decision-questions';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
-import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
+import { buildPacket, packetCoverage, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
@@ -387,7 +388,7 @@ export class Concierge {
     if (extraction.budgetCents !== null && !BUDGET_WORDS.test(latestText) && isListingPrice(flat(latestText), extraction.budgetCents, latestOffers)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // A follow-up about a listing we already read ("the image says $72 per ticket BEFORE fees…") is about that
     // listing's price: without budget words it sets no budget (live A11-F1 replay: $72 × 3 became "up to $216").
-    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !BUDGET_WORDS.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), sql`${t.listingEvidence.fields} is not null`)).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !BUDGET_WORDS.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), pricedEvidence())).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // "My BUDGET stayed $200": the same amount keeps the basis it had, and isn't asked about again (TGQA-R6 15).
     const priorBrief = priorVersion ? (priorVersion.brief as RequestExtraction) : null;
     if (priorBrief && extraction.budgetCents !== null && extraction.budgetCents === priorBrief.budgetCents && extraction.budgetBasis === null && priorBrief.budgetBasis) extraction = { ...extraction, budgetBasis: priorBrief.budgetBasis, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
@@ -420,7 +421,7 @@ export class Concierge {
     // An image they sent (or say they attached) that we couldn't read is said plainly, and nothing is assumed
     // in its place: "Two tickets. Got it" to a screenshot of three was answering an email they didn't send
     // (post-#54 QA, R3-B09).
-    const imageUnread = !listing.fields && !listing.redacted && (await this.unreadImage(msg, req.id));
+    const imageUnread = !listing.fields && !listing.facts.length && !listing.redacted && (await this.unreadImage(msg, req.id));
 
     // A first message that isn't about tickets ("tell me something about New York", "are you an idiot?") gets
     // one short "I only do tickets" reply a day, and nothing is assumed about a request that isn't there.
@@ -639,6 +640,13 @@ export class Concierge {
     // Their answer to our "how many new tickets?" question is about the same offers, whatever it refers back to.
     const [asked] = req.state === 'needs_clarification' ? await this.db.select({ id: t.requestTransitions.id }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, req.id), eq(t.requestTransitions.revision, req.currentRevision), eq(t.requestTransitions.reason, 'quantity_conflict'))).limit(1) : [];
     const supplied = suppliedOffers(latestText, threadTexts, venueTz ?? 'America/New_York', { continuing: !!asked });
+    // What their screenshots show, answered from the screenshots before any catalog search (LAUNCH-01/02/04): doors
+    // and show times, standing or seated, which product to click, a multi-night ticket's terms, a sold-out page and its
+    // packages, and two different shows kept apart. Nothing here needs, or claims, current stock.
+    if (!supplied.textOffers.length) {
+      const sent = await this.answerEvidence({ req, msg, contact: contact!, merged, latestText, threadTexts, revision: req.currentRevision + 1, mode: 'facts', multiEvent: listing.multiEvent });
+      if (sent) return { state: 'recommendation_sent', revision: sent, extraction: merged };
+    }
     const answerSupplied = async (recordVersion: boolean) => {
       const tz = venueTz ?? 'America/New_York';
       const terms = partyTerms(threadTexts, tz);
@@ -913,6 +921,13 @@ export class Concierge {
 
     if (supplied.textOffers.length && resolution.kind !== 'resolved') return answerSupplied(false);
 
+    // No upcoming event to match (a show that has already started, or one the catalog doesn't have), and a screenshot
+    // with the prices they're asking about: the answer comes from that screenshot, never "which event?" (LAUNCH-04).
+    if (resolution.kind !== 'resolved' && !supplied.textOffers.length) {
+      const sent = await this.answerEvidence({ req, msg, contact: contact!, merged, latestText, threadTexts, revision, mode: 'unmatched', multiEvent: false });
+      if (sent) return { state: 'recommendation_sent', revision, extraction: merged };
+    }
+
     // They arrive after the listed start ("we won't get there until midnight"): whether they can still get in is the
     // question, and a start time isn't a last-entry time. That answer comes first, before any seller (Research 1,
     // NW-01). The event is a candidate until its late-entry terms are confirmed.
@@ -1001,8 +1016,9 @@ export class Concierge {
       else if (snap && guideDepth) {
         const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
         const page = official?.buyUrl ?? m?.url ?? null;
-        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Buy on ${official.seller}` : 'Event page', official?.affiliate ?? false, { eventId: resolution.event.id }) : page;
-        const lead = official ? `${resolution.label} is on sale at ${official.seller}, the official seller.` : `For ${resolution.label}, the official seller is the venue’s own box office or ticket page.`;
+        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Event page on ${official.seller}` : 'Event page', official?.affiliate ?? false, { eventId: resolution.event.id }) : page;
+        // The sale window is open; that says nothing about seats left (launch E: general sale is not stock).
+        const lead = official ? `${resolution.label} is on general sale at ${official.seller}, the official seller, though I can’t see whether it has seats left.` : `For ${resolution.label}, the official seller is the venue’s own box office or ticket page.`;
         const venueNote = categoryBuyingNote(resolution.event.category, resolution.venue.name);
         const checks = `Before you pay, check ${guideChecks(resolution.event.category)}.${venueNote ? ` ${venueNote}` : ''}`;
         // What they asked for that nothing here has checked, said once (A05: three together, $450 all-in, step-free).
@@ -1015,8 +1031,8 @@ export class Concierge {
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
         const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
-        const text = ['Hey,', lead, ...(url ? [`Tickets: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Buy on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
+        const text = ['Hey,', lead, ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
         if (merged.intent === 'watch_request') await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: `policy:${snap.decision.reasons.includes('operator_blocked') ? 'operator_blocked' : 'guide_official_only'}` } });
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'guide_official_route');
@@ -1218,7 +1234,8 @@ export class Concierge {
       const tickets = url && seller ? sellerLink(url, seller, this.env.AFFILIATE_LINK_TEMPLATES) : null;
       const ent = ents.find((x) => x.id === e.primaryEntityId);
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
-      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Tickets', url: tickets.url }] : [])];
+      // An event page, not a checked offer: neutral label everywhere (launch A22).
+      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Event page', url: tickets.url }] : [])];
       return { line: lines[i]!, title: readableTitle(e.name), reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
     });
   }
@@ -1275,6 +1292,49 @@ export class Concierge {
    * Whether this message carries an image we didn't read: one attached (fetched or not) with nothing usable
    * read from it, or an email that says it attaches one when none reached us. 'missing' when it never arrived.
    */
+  /**
+   * Their screenshots' facts, answered (LAUNCH-01/02/04). Returns the revision answered, or null when nothing they
+   * asked can be answered from what the screenshots show. In "facts" mode only questions that need no catalog are
+   * taken; "unmatched" adds the shown prices when there's no upcoming event to price against.
+   */
+  private async answerEvidence(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; latestText: string; threadTexts: string[]; revision: number; mode: 'facts' | 'unmatched'; multiEvent: boolean }): Promise<number | null> {
+    const rows = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, a.req.id), eq(t.listingEvidence.sensitive, false), sql`${t.listingEvidence.fields} is not null`)).orderBy(asc(t.listingEvidence.createdAt));
+    const items = rows.map((r) => ({ fields: r.fields as unknown as ListingFields, observedAt: r.observedAt, messageId: r.messageId }));
+    if (!items.length) return null;
+    const asks = evidenceAsks(flat(a.latestText));
+    const factsAsked = asks.times || asks.admission || asks.product || asks.split || asks.soldOut || asks.explain;
+    if (a.mode === 'facts' && !factsAsked && !a.multiEvent) return null;
+    if (a.mode === 'unmatched' && !factsAsked && !asks.prices) return null;
+    const budget = wholePartyBudgetCents(a.merged.budgetCents, a.merged.budgetBasis, a.merged.quantity);
+    const answer = answerFromEvidence({ items, latest: flat(a.latestText), thread: flat(a.threadTexts.join('\n')), quantity: a.merged.quantity, budgetCents: budget, started: await this.evidenceStarted(items.map((i) => i.fields)), mode: a.mode });
+    if (!answer) return null;
+    const revision = a.mode === 'facts' ? await this.saveEvidenceRevision(a.req, a.merged, a.msg.id) : a.revision;
+    const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const text = ['Hey,', answer.lead, ...answer.items].join('\n\n');
+    const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(answer.lead)}</strong></p>`, ...answer.items.map((x) => `<p style="margin:0 0 18px;">${esc(x)}</p>`)].join('\n');
+    await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: a.req.id, diff: { route: `evidence_${a.mode}`, revision, questions: answer.coverage } });
+    await this.queueSend({ messageClass: 'acknowledgment', contactId: a.contact.id, conversationId: a.req.conversationId, requestId: a.req.id, revision, recipient: a.contact.emailOriginal, subject: reSubject(a.msg.subject, 'About your screenshot'), template: 'raw_auto', vars: { text, html }, inReplyTo: a.msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `evidence:${a.msg.id}` });
+    await this.transition(a.req.id, 'recommendation_sent', `evidence_answer_${a.mode}`);
+    return revision;
+  }
+
+  /** A revision for an answer given before event resolution, so the thread's facts (two tickets, the cap) are kept. */
+  private async saveEvidenceRevision(req: typeof t.requests.$inferSelect, merged: RequestExtraction, messageId: string): Promise<number> {
+    const revision = req.currentRevision + 1;
+    await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [messageId], unresolvedFields: [], createdBy: 'system' });
+    await this.db.update(t.requests).set({ currentRevision: revision, updatedAt: this.now() }).where(eq(t.requests.id, req.id));
+    return revision;
+  }
+
+  /** Whether the show a screenshot shows has already started, from the catalog's own start for that event and day. */
+  private async evidenceStarted(fs: ListingFields[]): Promise<boolean> {
+    const f = [...fs].reverse().find((x) => x.eventName && x.eventDate);
+    if (!f) return false;
+    const from = new Date(`${f.eventDate}T00:00:00Z`);
+    const rows = await this.db.select({ at: t.events.localStartAt }).from(t.events).where(and(sql`lower(${t.events.name}) = ${f.eventName!.toLowerCase()}`, gte(t.events.localStartAt, new Date(from.getTime() - 86_400_000)), lte(t.events.localStartAt, new Date(from.getTime() + 2 * 86_400_000)))).limit(3);
+    return rows.length > 0 && rows.every((r) => r.at.getTime() <= this.now().getTime());
+  }
+
   private async unreadImage(msg: typeof t.messages.$inferSelect, requestId?: string): Promise<'unread' | 'missing' | null> {
     const rows = await this.db.select().from(t.attachments).where(eq(t.attachments.messageId, msg.id));
     const images = rows.filter((a) => a.validationState !== 'quarantined' && (/^image\//i.test(a.detectedMimeType ?? a.declaredMimeType ?? '') || /\.(png|jpe?g|gif|webp|heic)$/i.test(a.filename ?? '')));
@@ -1286,21 +1346,24 @@ export class Concierge {
     return 'missing';
   }
 
-  private async readListingEvidence(msg: typeof t.messages.$inferSelect, req: typeof t.requests.$inferSelect): Promise<{ fields: ListingFields | null; source: 'screenshot' | 'listing_text' | null; images: number; redacted: number }> {
+  private async readListingEvidence(msg: typeof t.messages.$inferSelect, req: typeof t.requests.$inferSelect): Promise<{ fields: ListingFields | null; source: 'screenshot' | 'listing_text' | null; images: number; redacted: number; facts: ListingFields[]; multiEvent: boolean }> {
     const atts = await this.db.select().from(t.attachments).where(and(eq(t.attachments.messageId, msg.id), eq(t.attachments.validationState, 'accepted')));
     const images = atts.filter((a) => a.mediaId);
     const reader = this.deps.listingReader;
-    if (!reader) return { fields: null, source: null, images: images.length, redacted: 0 };
+    if (!reader) return { fields: null, source: null, images: images.length, redacted: 0, facts: [], multiEvent: false };
     const media = createMediaStore(this.db, this.env.MEDIA_PROVIDER, this.env.MEDIA_MAX_TOTAL_BYTES);
     let best: ListingFields | null = null;
     let source: 'screenshot' | 'listing_text' | null = null;
     let redacted = 0;
+    // Every image's facts, priced or not, each kept as its own (LAUNCH-01/02): a product page or a sold-out page is
+    // evidence, and two screenshots of two shows are two shows.
+    const facts: ListingFields[] = [];
     const read = async (input: { image?: ListingImage; text?: string }) => {
       const model = this.env.modelName ?? 'rules';
       const est = estimateUsdMicros(model, input.image ? 2200 : Math.ceil((input.text?.length ?? 0) / 3) + 900, 600, 0, this.env.modelPrices);
       const r = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'listing_read', model, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
       try {
-        const out = await reader.read({ ...input, receivedAt: msg.receivedAt });
+        const out = await reader.read({ ...input, receivedAt: msg.receivedAt, question: input.image ? (msg.sanitizedText ?? '').slice(0, 1500) : null });
         const usage = (reader as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
         if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
         return out;
@@ -1337,13 +1400,19 @@ export class Concierge {
         redacted += 1;
         continue;
       }
-      const fields = usableListing(r) ? fieldsFromRead(r) : null;
+      // Kept when it shows anything useful, priced or not; only a priced read is a listing to judge.
+      const fields = usableEvidence(r) ? fieldsFromRead(r) : null;
+      if (fields) facts.push(fields);
       await this.db.insert(t.listingEvidence).values({ requestId: req.id, messageId: msg.id, attachmentId: a.id, source: 'screenshot', observedAt: msg.receivedAt, kind: r.kind, confidence: r.confidence, fields: fields as unknown as Record<string, unknown> | null, readBy: reader.name });
-      if (fields && !best) {
+      if (fields && usableListing(r) && !best) {
         best = fields;
         source = 'screenshot';
       }
     }
+    // Screenshots of different shows are never one request's listing: none of them is applied to what they asked for,
+    // and each is explained on its own (LAUNCH-02: jigitz's prices and Metallica's Sphere date became one request).
+    const multiEvent = distinctActs(facts) > 1;
+    if (multiEvent) best = null;
     const text = msg.sanitizedText ?? '';
     // Two or more offers in their words are compared one by one (text-offers); read as one listing, their fields
     // run together (post-#54 QA, R3-B01).
@@ -1363,7 +1432,7 @@ export class Concierge {
         if (!(e instanceof BudgetExceededError)) await audit(this.db, { actor: 'system', action: 'listing.read_failed', entityKind: 'message', entityId: msg.id, diff: { source: 'listing_text', error: e instanceof ModelOutputError ? e.kind : 'error' } });
       }
     }
-    return { fields: best, source, images: images.length, redacted };
+    return { fields: best, source, images: images.length, redacted, facts, multiEvent };
   }
 
   /**
@@ -2648,7 +2717,7 @@ export class Concierge {
     const { textOffers, offersSetAside } = suppliedOffers(said, threadMessages, venue.timezone);
     const judged = textOffers.length >= 2 || offersSetAside.length > 0;
     // The listing they showed us, newest first: what it displayed is the price being checked, with its source.
-    const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), sql`${t.listingEvidence.fields} is not null`)).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
+    const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), pricedEvidence())).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
     // "section Offer B: 211" was the label read as the seat (retest R2-B06): the seat fields keep the value only.
     const evFields = ev ? (ev.fields as unknown as ListingFields) : null;
     // With two or more of their offers, the comparison is the answer: a single-listing read of the same email
@@ -2743,7 +2812,10 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    const packet = buildPacket({ eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
+    const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
+    if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];
@@ -3469,6 +3541,8 @@ export function unverifiedRequirements(x: RequestExtraction, text = ''): string[
   else if (sectionsRequired([text])) out.push(`Only sections ${sectionsLabel(sectionsRequired([text])!)}`);
   // A seated ticket is a requirement of its own: general admission doesn't meet it (Research 1, LA).
   else if (/\b(?:reserved|assigned|allocated)\s+seat(?:s|ing)?\b|\bseated (?:tickets?|admission|seats?)\b|\bnot (?:general admission|GA|standing)\b/i.test(flat(text))) out.unshift('Reserved seats, not general admission');
+  // "We don't want an obstructed view" is a requirement nothing has checked yet (launch Q01, A16).
+  if (NO_OBSTRUCTED.test(flat(text))) out.push('An unobstructed view');
   if (age) out.push(age);
   // An entry rule is a requirement like any other: never dropped because no clock time was given (PW-ENTRY-REPLY-02).
   const entry = entryNeed([text]);
@@ -3771,6 +3845,8 @@ export function linkedSubject(m: MarketListing, seller: string, quantity: number
     priceText: null, perTicketCents: m.priceCents, wholePartyCents: null, priceBasis: 'per_ticket', feeBasis: 'before_fees',
     section: m.section, row: m.row, seatNumbers: null, seatsTogether: null, restrictions: [], restrictionCodes: [],
     deliveryText: null, deliveryBy: null, includedBenefits: [], unreadable: [],
+    // A marketplace listing is resale: never "possibly the official seller's own price" (launch LAUNCH-08).
+    listingType: 'resale',
     source: 'link_match', observedAt: at, confidence: 'high',
   };
 }
@@ -4320,10 +4396,18 @@ const ONE_OFFER_ALONE = /\b(?:ignore|set aside|forget|drop|disregard|on its own|
 /** They ask about the offers without naming one: "which of the offers I pasted?", "does that change your pick?" */
 const ASKS_ABOUT_OFFERS = /\b(?:offers?|options?|listings?|sellers?|prices? I (?:pasted|gave|sent)|(?:change|changes) (?:your|the) pick|which (?:one|is cheaper|fits|costs less)|the totals?)\b/i;
 
+/**
+ * A stored read that has something to price: a price, a total, a section or priced rows. A product or sold-out page is
+ * kept as evidence too (LAUNCH-01), but it is never the listing being judged, and never mistaken for a quoted price.
+ */
+const pricedEvidence = () => sql`(${t.listingEvidence.fields}->>'perTicketCents' is not null or ${t.listingEvidence.fields}->>'wholePartyCents' is not null or ${t.listingEvidence.fields}->>'section' is not null or jsonb_array_length(coalesce(${t.listingEvidence.fields}->'offers', '[]'::jsonb)) > 0)`;
+
 /** How long a listing number seen in the resale feed stays good for placing a checkout link at its event. */
 const LISTING_SIGHTING_DAYS = 21;
 /** "Better to buy now or wait?", "do you have price history showing prices falling?", "trending down or up". */
-export const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
+// "Should I hold off?" and "what would you do in my position? We can wait a couple of days" are the same timing
+// question (launch A15): both get the buy-or-wait answer, never only the price ask.
+export const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop)|should (?:I|we) hold off|hold(?:ing)? off (?:for now|a bit|a few days|until)|what would you do|in (?:my|our) (?:position|shoes)|(?:we|I) can wait (?:a (?:couple|few)(?: of)? days|a (?:day|bit|while|week))|(?:buy )?now or later)\b/i;
 /** "Please don't set up any alerts". */
 const NO_ALERTS = /\b(?:don'?t|do not|no need to)\s+set(?:\s+up)?\s+(?:any\s+)?(?:alerts?|a watch|watches)\b|\bno alerts?\b/i;
 /** "Will you email me when tickets go on sale, or should I check myself?" */
@@ -4344,7 +4428,8 @@ export function customerBudget(merged: RequestExtraction, threadTexts: string[],
 
 /** Words that make a dollar figure their budget rather than a price they saw. */
 // "We have $220 for both" is their money, not a listing's price (post-deploy QA Oct 2, R2-2327-02: dropped as one).
-const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b|\b(?:we|i)(?:'ve| have|'ve got| have got| got)\s+\$\s?\d[\d,]*(?:\.\d{2})?\s+(?:for|between|to)\b/i;
+// "We can do $220 for both" is a cap too (launch A02); "these are $220 for both" stays a quote.
+export const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b|\b(?:we|i)(?:'ve| have|'ve got| have got| got)\s+\$\s?\d[\d,]*(?:\.\d{2})?\s+(?:for|between|to)\b|\b(?:we|i)(?:'d|\s+would|\s+can|\s+could)\s+(?:do|go(?: up)?(?: to)?|pay|manage|stretch(?: to)?)\s+\$\s?\d/i;
 
 /** Whether this amount is a price their offers or listings carry: an offer's own figure, or one said of a listing. */
 function isListingPrice(text: string, cents: number, offers: TextOffer[]): boolean {

@@ -232,7 +232,8 @@ function renderBody(
         v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '',
         v.affiliate ? AFFILIATE_DISCLOSURE : '',
       ].filter(Boolean);
-      const linkLine = unverified.length ? `Event page on ${seller}: ${String(v.url)}` : `Buy tickets on ${seller}: ${String(v.url)}`;
+      // No offer has been checked here, so the link is the event page, whatever is on sale (launch A22).
+      const linkLine = `Event page on ${seller}: ${String(v.url)}`;
       const text = ['Hey,', ...(recheckLine ? [recheckLine] : []), ...(opening ? [opening] : []), lead, ...(unverified.length ? [checkLead, unverified.map((u) => `- ${u}`).join('\n')] : []), linkLine, ...tail];
       // The seller's name is the link; the event title links to the event's page.
       const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
