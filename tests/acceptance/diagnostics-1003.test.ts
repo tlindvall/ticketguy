@@ -54,6 +54,7 @@ describe('LAUNCH-10: the QA trace says what was read and why the answer followed
     expect(d.questionsDetected).toBeTruthy();
     expect(Array.isArray(d.modelCalls)).toBe(true);
     expect(Array.isArray(d.sourceReads)).toBe(true);
+    expect(Array.isArray(d.answerCoverage)).toBe(true);
   });
 
   it('the selected listing lookup reads as matched, unmatched, skipped or unavailable, with the provider clock', () => {

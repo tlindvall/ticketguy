@@ -124,7 +124,7 @@ export async function testTranscript(requestId: string): Promise<Record<string, 
 const SAFE_LISTING_FIELDS = ['seller', 'eventName', 'eventDate', 'eventTime', 'venue', 'city', 'quantity', 'priceText', 'perTicketCents', 'wholePartyCents', 'priceBasis', 'feeBasis', 'section', 'row', 'seatNumbers', 'seatsTogether', 'restrictions', 'restrictionCodes', 'deliveryText', 'deliveryBy', 'includedBenefits', 'offers', 'beforeTaxes', 'doorsTime', 'showTime', 'admission', 'listingType', 'chosenFor'] as const;
 
 /** Audits a trace shows in full: link lookups, the trend read, market and AI fallbacks. Diffs carry no message text. */
-const TRACE_AUDITS = ['listing.link_matched', 'listing.link_unmatched', 'listing.link_skipped', 'market.trend_assessed', 'market.read_failed', 'ai.budget_rules_fallback', 'ai.provider_rules_fallback'];
+const TRACE_AUDITS = ['listing.link_matched', 'listing.link_unmatched', 'listing.link_skipped', 'market.trend_assessed', 'market.read_failed', 'ai.budget_rules_fallback', 'ai.provider_rules_fallback', 'answer.coverage'];
 
 /**
  * What a QA replay needs to tell a real fix from a warmer sentence (TGQA-R6): the build that answered, how the
@@ -185,6 +185,8 @@ export async function qaTrace(db: Awaited<ReturnType<typeof getDb>>['db'], req: 
       sourceCallCount: reads.reduce((n, r) => n + (r.calls ?? 0), 0),
       linkLookups: audits.filter((x) => x.action.startsWith('listing.')).map((x) => ({ at: x.at.toISOString(), revision: x.revision, action: x.action, diff: x.diff })),
       trend: trend ? { at: trend.at.toISOString(), revision: trend.revision, assessment: trend.diff } : null,
+      // Each question asked and what the reply did about it, per revision and route (launch A23).
+      answerCoverage: audits.filter((x) => x.action === 'answer.coverage').map((x) => ({ at: x.at.toISOString(), revision: x.revision, coverage: x.diff })),
     },
   };
 }
