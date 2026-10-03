@@ -111,3 +111,27 @@ describe('group floors ignore seats that are not for an ordinary buyer', () => {
     expect(pts[0]!.activeListings).toBe(2);
   });
 });
+
+describe('TREND-2327-01: no comparison window is no trend', () => {
+  const now = new Date('2026-10-02T23:50:00Z');
+  const series = (hours: number[], prices: number[]) => hours.map((h, i) => ({ observedAt: new Date(now.getTime() + h * H), priceCents: prices[i]!, activeListings: 50 }));
+  const ctx = (hours: number[], prices: number[]) => computeMarketContext({ basis: 'pair', zone: 'Floor', points: series(hours, prices), now, eventStartAt: new Date(now.getTime() + 48 * H) });
+
+  it('a 30% fall over 12 hours, with no 24- or 72-hour baseline, is insufficient, never "flat"', () => {
+    const c = ctx([-12, -8, -4, 0], [10000, 9000, 8000, 7000]);
+    expect(c).toMatchObject({ adequacy: 'insufficient', direction: 'insufficient', h24: null, h72: null });
+    expect(c.reasons).toContain('no_comparison_window');
+    // The newest price is still known and said.
+    expect(c.current?.priceCents).toBe(7000);
+  });
+
+  it('the same for a rise, and a held price, over 12 hours', () => {
+    expect(ctx([-12, -8, -4, 0], [7000, 8000, 9000, 10000]).direction).toBe('insufficient');
+    expect(ctx([-12, -8, -4, 0], [9000, 9000, 9000, 9000]).direction).toBe('insufficient');
+  });
+
+  it('with a real 24-hour window the direction is read as before', () => {
+    expect(ctx([-24, -16, -8, 0], [10000, 9000, 8000, 7000])).toMatchObject({ adequacy: 'sufficient', direction: 'down' });
+    expect(ctx([-24, -16, -8, 0], [9000, 9000, 9000, 9000])).toMatchObject({ adequacy: 'sufficient', direction: 'flat' });
+  });
+});

@@ -1,4 +1,5 @@
 import { concertBudget, concertQuestion, concertContext, entryTerm, similarMusicGoal } from '@/lib/advice/concert-terms';
+import { asksProductChoice, productChoiceAnswer } from '@/lib/advice/product-choice';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
 import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
@@ -1102,6 +1103,30 @@ export class Concierge {
     // Their offers (or a listing they showed) are the question: compared, never answered with "it's on general sale".
     // A direct question about price history or buy-or-wait is answered first, by the full reply (it carries the
     // official sale too): the sale pointer alone swallowed it (TGQA-R8 S06).
+    // Which product is concert admission (a single night, a suite, a 2-day ticket), or whether a 2-day ticket splits
+    // between two people: answered from the products' own names in the catalog, before any price search
+    // (post-deploy QA Oct 2, R2-2327-03). It says nothing about seats being on sale.
+    if (!supplied.textOffers.length && !listing.fields && asksProductChoice(flat(latestText))) {
+      const ev = resolution.event;
+      const around = await this.db.select({ e: t.events }).from(t.events).where(and(eq(t.events.venueId, resolution.venue.id), ev.primaryEntityId ? eq(t.events.primaryEntityId, ev.primaryEntityId) : sql`false`, gte(t.events.localStartAt, new Date(ev.localStartAt.getTime() - 3 * 86_400_000)), lte(t.events.localStartAt, new Date(ev.localStartAt.getTime() + 3 * 86_400_000))));
+      const others = [...new Map(around.filter(({ e }) => e.id !== ev.id && isNonAdmission(e)).map(({ e }) => [e.name, { name: e.name, when: shortWhen(e.localStartAt, resolution.venue.timezone, e.subtype === 'time_tba') }])).values()];
+      const thread = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).map((m) => m.text ?? '').join('\n');
+      const answer = productChoiceAnswer(flat(latestText), flat(thread), { name: ev.name, when: shortWhen(ev.localStartAt, resolution.venue.timezone, ev.subtype === 'time_tba') }, others);
+      if (answer) {
+        const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const sale = await this.officialSale(ev, now);
+        const [map] = sale ? [] : await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(eq(t.eventSourceMappings.eventId, ev.id)).limit(1);
+        const raw = sale?.url ?? map?.url ?? null;
+        const seller = sale?.seller ?? (raw ? officialSellerFor(raw) : null) ?? 'Ticketmaster';
+        const url = raw ? (this.env.APP_MODE === 'fixture' ? raw : await this.trackLink(req.id, raw, `Event page on ${seller}`, sale?.affiliate ?? false, { eventId: ev.id })) : null;
+        const paras = [...answer.items, ...(url ? [`Event page on ${seller}: ${url}`] : [])];
+        const text = ['Hey,', answer.lead, ...paras].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(answer.lead)}</strong></p>`, ...answer.items.map((x) => `<p style="margin:0 0 18px;">${esc(x)}</p>`), ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">Event page on ${esc(seller)}</a></p>`] : [])].join('\n');
+        await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Which ticket to start with'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `product:${req.id}:${revision}` });
+        await this.transition(req.id, 'recommendation_sent', 'product_choice');
+        return { state: 'recommendation_sent', revision, extraction: merged };
+      }
+    }
     const official = merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) ? null : await this.officialSale(resolution.event, now);
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
@@ -3546,7 +3571,7 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean; cheaper: boolean } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean; cheaper: boolean; whichCheaper: boolean; fits: boolean; taxAsked: boolean; quotedRows: number[] } {
   const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
@@ -3570,7 +3595,13 @@ export function questionsAsked(text: string): { deliveryRisk: boolean; accessibl
   const difference = /\b(?:price |cost )?difference\b|\bhow much (?:cheaper|less|more|pricier)\b|\bhow much (?:do|would) (?:i|we) save\b/i.test(t);
   // "Can you find a cheaper pair for the same game?": other seats wanted, not a verdict on theirs (PD-R1-02).
   const cheaper = /\b(?:find|get|see|any|anything|something|look for)\b[^.?!]{0,30}\bcheaper\b|\bcheaper (?:pair|seats?|tickets?|options?|ones?|listings?)\b/i.test(t);
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference, cheaper };
+  // About the rows they already showed us: "which is cheaper for two", "does the $107.33 option fit?", "does that include
+  // the tax?" (post-deploy QA Oct 2, R2-2327-01). The prices they quote say which rows they mean.
+  const whichCheaper = /\bwhich (?:one |option |row |tier |of (?:them|these|those) )?(?:is|would be|comes out|works out) (?:cheaper|less)\b|\bwhich (?:one |option |row |tier )?costs less\b/i.test(t);
+  const fits = /\b(?:does|do|would|will|is|are)\b(?:[^?.!]|\.\d){0,50}\bfit\b|\b(?:within|inside|under) (?:my|our|the) (?:budget|cap|\$)/i.test(t);
+  const taxAsked = /\b(?:include|includes|including|incl\.?|with)\s+(?:the\s+)?tax(?:es)?\b[^.!]*\?|\btax(?:es)?\s+(?:included|extra|on top)\b[^.!]*\?|\b(?:is|are) (?:the )?tax(?:es)? (?:included|in it|extra)/i.test(t);
+  const quotedRows = [...t.matchAll(/\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket|\/ticket|ea\b)/gi)].map((m) => Math.round(Number(m[1]!.replace(/,/g, '')) * 100));
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference, cheaper, whichCheaper, fits, taxAsked, quotedRows };
 }
 
 /**
@@ -4305,7 +4336,8 @@ export function customerBudget(merged: RequestExtraction, threadTexts: string[],
 }
 
 /** Words that make a dollar figure their budget rather than a price they saw. */
-const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b/i;
+// "We have $220 for both" is their money, not a listing's price (post-deploy QA Oct 2, R2-2327-02: dropped as one).
+const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b|\b(?:we|i)(?:'ve| have|'ve got| have got| got)\s+\$\s?\d[\d,]*(?:\.\d{2})?\s+(?:for|between|to)\b/i;
 
 /** Whether this amount is a price their offers or listings carry: an offer's own figure, or one said of a listing. */
 function isListingPrice(text: string, cents: number, offers: TextOffer[]): boolean {
