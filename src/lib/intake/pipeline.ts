@@ -55,7 +55,7 @@ import { trendRights } from '@/lib/advice/trend-rights';
 import { evidenceFacts, suppliedEvidenceAnswer } from '@/lib/advice/supplied-evidence';
 import { decisionAnswer } from '@/lib/advice/decision-questions';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
-import { buildPacket, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
+import { buildPacket, packetCoverage, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
@@ -2811,6 +2811,9 @@ export class Concierge {
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
     const packet = buildPacket({ askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
+    const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
+    if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
     // Seller links go through /go/<id>, so a click is counted as a click (never as a purchase).
     // A verified offer's link is a buy link: bound to this event now and to this advice once it's stored.
     const buyLinks: string[] = [];
@@ -3536,6 +3539,8 @@ export function unverifiedRequirements(x: RequestExtraction, text = ''): string[
   else if (sectionsRequired([text])) out.push(`Only sections ${sectionsLabel(sectionsRequired([text])!)}`);
   // A seated ticket is a requirement of its own: general admission doesn't meet it (Research 1, LA).
   else if (/\b(?:reserved|assigned|allocated)\s+seat(?:s|ing)?\b|\bseated (?:tickets?|admission|seats?)\b|\bnot (?:general admission|GA|standing)\b/i.test(flat(text))) out.unshift('Reserved seats, not general admission');
+  // "We don't want an obstructed view" is a requirement nothing has checked yet (launch Q01, A16).
+  if (NO_OBSTRUCTED.test(flat(text))) out.push('An unobstructed view');
   if (age) out.push(age);
   // An entry rule is a requirement like any other: never dropped because no clock time was given (PW-ENTRY-REPLY-02).
   const entry = entryNeed([text]);
@@ -4396,7 +4401,9 @@ const pricedEvidence = () => sql`(${t.listingEvidence.fields}->>'perTicketCents'
 /** How long a listing number seen in the resale feed stays good for placing a checkout link at its event. */
 const LISTING_SIGHTING_DAYS = 21;
 /** "Better to buy now or wait?", "do you have price history showing prices falling?", "trending down or up". */
-export const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop))\b/i;
+// "Should I hold off?" and "what would you do in my position? We can wait a couple of days" are the same timing
+// question (launch A15): both get the buy-or-wait answer, never only the price ask.
+export const TREND_ASKED = /\b(?:(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop)|should (?:I|we) hold off|hold(?:ing)? off (?:for now|a bit|a few days|until)|what would you do|in (?:my|our) (?:position|shoes)|(?:we|I) can wait (?:a (?:couple|few)(?: of)? days|a (?:day|bit|while|week))|(?:buy )?now or later)\b/i;
 /** "Please don't set up any alerts". */
 const NO_ALERTS = /\b(?:don'?t|do not|no need to)\s+set(?:\s+up)?\s+(?:any\s+)?(?:alerts?|a watch|watches)\b|\bno alerts?\b/i;
 /** "Will you email me when tickets go on sale, or should I check myself?" */
@@ -4417,7 +4424,8 @@ export function customerBudget(merged: RequestExtraction, threadTexts: string[],
 
 /** Words that make a dollar figure their budget rather than a price they saw. */
 // "We have $220 for both" is their money, not a listing's price (post-deploy QA Oct 2, R2-2327-02: dropped as one).
-const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b|\b(?:we|i)(?:'ve| have|'ve got| have got| got)\s+\$\s?\d[\d,]*(?:\.\d{2})?\s+(?:for|between|to)\b/i;
+// "We can do $220 for both" is a cap too (launch A02); "these are $220 for both" stays a quote.
+export const BUDGET_WORDS = /\b(?:budget|up to|max(?:imum)?|cap|limit|spend|no more than|at most|afford|willing to pay|under \$)\b|\b(?:we|i)(?:'ve| have|'ve got| have got| got)\s+\$\s?\d[\d,]*(?:\.\d{2})?\s+(?:for|between|to)\b|\b(?:we|i)(?:'d|\s+would|\s+can|\s+could)\s+(?:do|go(?: up)?(?: to)?|pay|manage|stretch(?: to)?)\s+\$\s?\d/i;
 
 /** Whether this amount is a price their offers or listings carry: an offer's own figure, or one said of a listing. */
 function isListingPrice(text: string, cents: number, offers: TextOffer[]): boolean {

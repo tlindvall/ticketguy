@@ -1241,6 +1241,59 @@ function buyOrWaitView(a: BuildPacketArgs): { lead: string; after: string } | nu
   };
 }
 
+export type QuestionCoverage = { question: string; status: 'answered' | 'needs_clarification' | 'unsupported' | 'operational_follow_up' };
+/**
+ * Every question we detected in their message, with what the packet does about it (launch A23): answered from the
+ * evidence, asked back, beyond what we can check, or handed to a person. `gaps` are questions no visible claim covers,
+ * for the audit trail; a reply is never padded with a guess to close one.
+ */
+export function packetCoverage(a: { said: string; trendAsked: boolean; asks: { worth?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean } }, packet: AdvicePacket): { questions: QuestionCoverage[]; gaps: string[] } {
+  const seen = new Map(packet.claimRecords.filter((c) => c.customerVisible).map((c) => [c.id, c]));
+  const q: QuestionCoverage[] = [];
+  const gaps: string[] = [];
+  const add = (question: string, status: QuestionCoverage['status'] | null) => (status ? q.push({ question, status }) : gaps.push(question));
+  if (a.asks.whichCheaper || a.asks.fits || a.asks.taxAsked) add('the shown rows: cheaper, fit or tax', seen.has('C_ROWS_ANSWER') ? 'answered' : null);
+  if (/\b(?:realistic|doable)\b/i.test(a.said)) add('is the budget realistic', seen.has('C_REALISTIC') ? (/can’t say yet/.test(seen.get('C_REALISTIC')!.text) ? 'unsupported' : 'answered') : null);
+  if (a.trendAsked) {
+    const t = seen.get('C_TREND_ANSWER');
+    add('buy now or wait', t ? (t.values?.supported ? 'answered' : /I’d buy|comes down to the price/.test(t.text) ? 'answered' : 'unsupported') : null);
+  }
+  if (a.asks.worth) add('is it a good price', seen.has('C_VERDICT') || seen.has('C_QUOTE') || seen.has('C_QUOTE_MARKET') ? 'answered' : seen.has('C_LINK_UNREAD') ? 'needs_clarification' : null);
+  if (a.asks.cheaper) add('find something cheaper', seen.has('C_BEST') || seen.has('C_ALTERNATIVES') ? 'answered' : seen.has('C_STAFF') ? 'operational_follow_up' : 'unsupported');
+  return { questions: q, gaps };
+}
+
+/** Their "is that realistic?" about the cap they gave, from the cheapest pair the market shows; null when not asked. */
+function realisticAnswer(a: BuildPacketArgs): string | null {
+  const budget = a.priorities.budgetTotalCents;
+  if (budget == null || !/\b(?:is (?:that|this|it|\$\s?\d[\d,]*) (?:realistic|doable|enough|possible)|realistic\??|doable\??)\b/i.test(a.askedText ?? '')) return null;
+  const n = a.quantity;
+  const cur = a.market?.visible ? a.market.context?.current ?? null : null;
+  if (!cur) return `Whether ${formatUsd(budget)} for ${qtyWord(n)} is realistic I can’t say yet: I can’t see current prices for this ${a.eventNoun ?? 'event'}.`;
+  const pair = cur.priceCents * n;
+  return pair > budget
+    ? `Not at the moment: the cheapest ${n === 2 ? 'pair' : `${qtyWord(n)} together`} I can see is listed at ${formatUsd(cur.priceCents)} a ticket before fees, ${formatUsd(pair)} for ${qtyWord(n)}, already over your ${formatUsd(budget)}.`
+    : `It’s possible: the cheapest ${n === 2 ? 'pair' : `${qtyWord(n)} together`} I can see is listed at ${formatUsd(cur.priceCents)} a ticket before fees, ${formatUsd(pair)} for ${qtyWord(n)}, under your ${formatUsd(budget)}, though fees come on top and those may not be seats you’d want.`;
+}
+
+/**
+ * "Should I hold off?", "what would you do in my position?" with no price trend and no price to judge, from someone
+ * who doesn't want to miss it (launch A15): a conditional decision from what they told us, never a forecast. The
+ * price decides, not the timing. Null when they haven't said they must go, or have said they'd risk missing out.
+ */
+function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
+  const said = `${a.threadText ?? ''}\n${a.askedText ?? ''}`.replace(/[’‘]/g, "'");
+  const must = a.priorities.mustAttend === true || /\b(?:don'?t|do not) want to miss\b|\bcan'?t (?:afford to )?miss\b/i.test(said);
+  if (!must || a.trendAsked?.riskOk) return null;
+  const wait = /\bwait (a (?:couple|few)(?: of)? days|a (?:day|week))\b/i.exec(said)?.[1] ?? null;
+  const when = a.eventLocalDate ? new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${a.eventLocalDate}T12:00:00Z`)) : null;
+  const yours = /\bwhat would you do\b|\bin (?:my|our) (?:position|shoes)\b/i.test(a.askedText ?? '') ? 'In your position, ' : '';
+  return {
+    lead: `${yours}I’d buy as soon as you have a price for ${qtyWord(a.quantity)} that works for you, rather than wait${wait ? ` ${wait}` : ''}:`,
+    why: `you don’t want to miss the ${a.eventNoun ?? 'event'}${when ? ` on ${when}` : ''}`,
+  };
+}
+
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A before-fees listing is not "cheaper" than an all-in price just by being lower: its fees are still to come.
   // One within a normal fee margin is noise to hunt for, not an alternative (live R05-F1: $207.62 before fees
@@ -1312,6 +1365,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // "Is that realistic?" about their cap (launch Q01, A23): answered from the cheapest pair the market shows, or said
+  // plainly that we can't see one. Listed prices are before fees; nothing here says those seats meet their other needs.
+  const realistic = realisticAnswer(a);
+  if (realistic) claims.push({ id: 'C_REALISTIC', kind: 'market_price', text: realistic, values: { budgetCents: a.priorities.budgetTotalCents }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['listed_prices_before_fees'], customerVisible: true });
   // Their question about the page's rows, answered before anything else about it; the opening summary isn't repeated.
   const shownAnswer = a.subject ? rowsAnswer(a, a.subject) : null;
   if (shownAnswer) claims.push({ id: 'C_ROWS_ANSWER', kind: 'quoted_price', text: shownAnswer, values: { rows: a.subject!.offers?.length ?? 0 }, scope: { quantity: q, seatZone: null, feeBasis: a.subject!.feeBasis, observedAt: a.subject!.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.1', limitations: ['customer_supplied_evidence', 'availability_not_checked'], customerVisible: true });
@@ -1761,7 +1818,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       : null;
     const text = trendClaim
       ? `On buy or wait: ${trendClaim.text}${risk}`
-      : marketText ?? `${view?.lead ? `${view.lead} ` : ''}I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}${view?.after ?? ''}`;
+      : marketText ?? (() => {
+        const call = view?.lead ? null : timingCall(a);
+        const noTrend = `I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}`;
+        const head = call ? `${call.lead} ${call.why}, and ${noTrend}, so waiting would be a guess.` : `${view?.lead ? `${view.lead} ` : ''}${noTrend}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.`;
+        // No price and no trend: the decision still has an answer, the price they'd pay (launch A15, "should I hold off?").
+        const priceDecides = !call && !view && !sub?.perTicketCents && !gap && !thin && !a.trendAsked.riskOk ? ' So it comes down to the price: if it’s one you’re happy to pay, I wouldn’t hold off for a drop I can’t show you.' : '';
+        return `${head}${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${priceDecides}${risk}${view?.after ?? ''}`;
+      })();
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
     // A short follow-up about the row already chosen gets its answer, the other rows and the checks: not the row's
     // price, the face-value line and the market section all over again (live Oct 2 C02 turn 2: 468 words).

@@ -151,6 +151,31 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     for (const r of [b1!, b2!, b3!]) expect(r.text).not.toMatch(/couldn’t find|couldn't find|Balcony[^\n]*fits your/i);
   });
 
+  it('A02: "we can do $220 for both" is a cap that replaces the earlier one; a later $226.58 floor price is $6.58 over it', async () => {
+    const [, c2, c3] = await converse([
+      { text: `What's the cheapest floor option for two here? We have $250 for both.\n\n${TM}`, images: ['jigitz-afternoon.jpg'], reads: [AFTERNOON] },
+      { text: 'Actually we can do $220 for both, fees in. Does the Tier 3 one fit?', reads: [] },
+      { text: 'Tier 3 is $226.58 for the two of us. Does that fit?', reads: [] },
+    ]);
+    expect(c2!.text).toContain('No: $226.58 for two is $6.58 over your $220.');
+    expect(c3!.text).toContain('$6.58 over your $220');
+    for (const r of [c2!, c3!]) expect(r.text).not.toMatch(/your \$250|within your \$226/);
+  });
+
+  it('B02 (A03/A04): two tiers compared for two in cents, with tax answered separately; by label alone too', async () => {
+    const [, b2] = await converse([
+      { text: `What's the cheapest floor option for two here?\n\n${TM}`, images: ['jigitz-afternoon.jpg'], reads: [AFTERNOON] },
+      { text: "It's the same jigitz event in the link — Brooklyn Paramount tonight. Tier 3 says $113.29 each and Tier 2 says $118.06 each. Which is cheaper for two, and does that include the tax?", reads: [] },
+    ]);
+    expect(b2!.text).toContain('GA Ticket Price Tier 3 is cheaper: $226.58 for two, against $236.12 for GA Ticket Price Tier 2, so $9.54 less.');
+    expect(b2!.text).toContain('Those prices include fees but not tax, so tax is added on top at checkout.');
+    const [, l2] = await converse([
+      { text: `What's the cheapest floor option for two here?\n\n${TM}`, images: ['jigitz-afternoon.jpg'], reads: [AFTERNOON] },
+      { text: 'Tier 2 or tier 3, which is cheaper for the two of us?', reads: [] },
+    ]);
+    expect(l2!.text).toContain('GA Ticket Price Tier 3 is cheaper: $226.58 for two, against $236.12 for GA Ticket Price Tier 2, so $9.54 less.');
+  });
+
   it('P02 (A07): which product to click on an unpriced artist page, then whether the 2-day ticket splits', async () => {
     const [p1, p2] = await converse([
       { text: 'Hey, which of these should I click if I just want to see Metallica on October 8? Two of us. Just the normal concert, no extras.', images: ['metallica-products.jpg'], reads: [PRODUCTS] },
@@ -184,6 +209,47 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     expect(s!.text).toContain('You don’t need a hotel package to get in');
     expect(s!.text).toContain('A screenshot can’t tell me what’s on sale now.');
     expect(s!.text).not.toMatch(/on general sale|Buy tickets|are available|in stock/i);
+    const cov = (await h.db.select().from(t.auditLog).where(eq(t.auditLog.action, 'answer.coverage'))).map((r) => r.diff as { route: string; questions: unknown[] });
+    expect(cov.at(-1)).toMatchObject({ route: 'evidence_facts', questions: [{ question: 'sold out and hotel packages', status: 'answered' }, { question: 'find two normal tickets another way', status: 'operational_follow_up' }] });
+  });
+
+  it('Q01 (A16): "best tickets" asks the goal once; the answer keeps value, seated, no obstruction and $300, and answers both questions', async () => {
+    const [q1, q2] = await converse([
+      { text: 'Hey, can you find me the best tickets for Metallica at Sphere on October 8?', reads: [] },
+      { text: "Best value, two seated tickets. Up to $300 total including fees. We don't want an obstructed view. Is that realistic, and should we wait?", reads: [] },
+    ]);
+    expect(q1!.text).toContain('Are you after the best view, the best value, or the lowest price?');
+    expect(q2!.text).toContain('Sphere, Las Vegas · Thu, Oct 8, 8:30 PM PDT · 2 tickets · up to $300 in total');
+    expect(q2!.text).toContain('Whether $300 for two is realistic I can’t say yet: I can’t see current prices for this show.');
+    expect(q2!.text).toContain('waiting would be a guess');
+    expect(q2!.text).toContain('reserved seats, not general admission; $300 in total for both, once fees are added; and an unobstructed view.');
+    // Answered questions aren't reopened.
+    expect(q2!.text).not.toMatch(/best view, the best value|How many tickets|together\?/);
+    // A23: each question's status is kept with the request.
+    const cov = (await h.db.select().from(t.auditLog).where(eq(t.auditLog.action, 'answer.coverage'))).map((r) => r.diff as { route: string; questions: Array<{ question: string; status: string }>; gaps: string[] });
+    expect(cov.at(-1)).toMatchObject({ route: 'advice_packet', gaps: [], questions: [{ question: 'is the budget realistic', status: 'unsupported' }, { question: 'buy now or wait', status: 'answered' }] });
+  });
+
+  it('Q02 (A17): a 12-year-old, Saturday, two tickets and $75 each are kept; a 21+ night is out; age is never called verified', async () => {
+    const [nash] = await h.db.insert(t.venues).values({ name: 'QA Launch Nashville Hall', city: 'Nashville', state: 'TN', country: 'US', timezone: 'America/Chicago', latitude: 36.1627, longitude: -86.7816 }).returning();
+    const rows: Array<[string, string, string]> = [
+      ['QA Launch Country Night', 'country / country', '2026-10-04T01:00:00Z'],
+      ['QA Launch Honky Tonk - 21+', 'country / country', '2026-10-04T02:00:00Z'],
+      ['QA Launch Americana Sunday', 'country / americana', '2026-10-05T00:00:00Z'],
+    ];
+    for (const [i, [name, genre, start]] of rows.entries()) {
+      const [e] = await h.db.insert(t.events).values({ name, genre, venueId: nash!.id, category: 'concert', localStartAt: new Date(start), status: 'scheduled', isFixture: true, verifiedSourceId: 'ticketmaster' }).returning();
+      await h.db.insert(t.eventSourceMappings).values({ eventId: e!.id, sourceId: 'ticketmaster', sourceEventId: `LAUNCHNASH${i}`, authoritativeUrl: `https://www.ticketmaster.com/event/LAUNCHNASH${i}`, role: 'discovery', confidence: 'provider_id' });
+    }
+    const [q1, q2] = await converse([
+      { text: "Any good country gigs in Nashville this weekend? I'm taking my 12-year-old daughter. Two tickets, no bars or 21+ shows, under $75 each with fees.", reads: [] },
+      { text: 'Just give me your best two options that she can actually get into. Saturday would be ideal.', reads: [] },
+    ]);
+    expect(q1!.text).toContain('QA Launch Honky Tonk is out: it’s listed as 21+, and one of you is 12.');
+    expect(q1!.text).toContain('admission for your 12-year-old (the venue’s age policy) and $150 in total for both, once fees are added');
+    expect(q2!.text).toContain('QA Launch Nashville Hall, Nashville · Sat, Oct 3, 8:00 PM CDT · 2 tickets · up to $150 in total');
+    expect(q2!.text).toContain('admission for your 12-year-old (the venue’s age policy)');
+    for (const r of [q1!, q2!]) expect(r.text).not.toMatch(/Honky Tonk[^\n]*(?:Tickets|Event page)|age (?:policy )?(?:is )?verified|verified for (?:her|your 12)/i);
   });
 
   it('A16: a barcode or ticket screenshot is still quarantined, never answered from', async () => {

@@ -335,7 +335,8 @@ export class FixtureExtractor implements Extractor {
     const sharedNickname = !!ent && input.knownEntities.filter((k) => [k.name, ...k.aliases].some((n) => n.toLowerCase() === ent.quote.toLowerCase())).length > 1;
     const performerOrTeam = ent ? (sharedNickname ? ent.quote : ent.entity.name) : null;
     const urls = [...t.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0]);
-    const mustAttend = /\b(must|definitely|have to|can'?t miss|need to) (attend|go|be there|make it)\b/i.test(t)
+    // "We can wait a couple of days but don't want to miss the game" (launch L01-3) is a must-attend.
+    const mustAttend = /\b(must|definitely|have to|can'?t miss|need to) (attend|go|be there|make it)\b|\b(?:don'?t|do not) want to miss (?:it|this|the (?:game|show|concert|match|gig))\b|\bcan'?t (?:afford to )?miss (?:it|this|the (?:game|show|concert|match|gig))\b/i.test(t)
       ? true
       : /\b(flexible (?:on|about) (?:the )?(?:date|day|game|night|timing|when|going|attending)|not a big deal if|don'?t mind (skipping|missing)|only if (it'?s )?cheap)\b/i.test(t)
         ? false
