@@ -40,6 +40,8 @@ describe('resale market tracking', () => {
     { active: true, listing_id: 4, price: 120, quantity: 4, quantity_start: 4, row: '8', section: '215', zone: 'Upper' },
     { active: false, listing_id: 5, price: 60, quantity: 8, quantity_start: 8, row: '1', section: '220', zone: 'Upper' },
   ] }), { status: 200 });
+  // When SeatData last refreshed the StubHub-id listings: just now unless a case says otherwise (LAUNCH-06).
+  let shRefresh: () => Date | null = () => now;
   let liveStats: () => unknown[] = () => statsFor(new Date(now.getTime() - 96 * H), 96, 150, 110, 170, 130);
   const past = [1, 2, 3, 4, 5, 6].map((i) => ({ event_id: 900 + i, event_name: `Metro Testers vs. Team ${i}`, event_date: `2026-0${i < 4 ? 3 : 4}-${String(10 + i).padStart(2, '0')}`, event_time: '19:00:00', venue_name: 'Test Garden', venue_city: 'New York', venue_state: 'NY' })).concat([
     // R2-TIME-FOLD-01: 1:30 AM on Nov 2, 2025 happened twice in New York; with no offset its lead times can't be
@@ -69,7 +71,7 @@ describe('resale market tracking', () => {
     }
     if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id') === '777') return groupListings();
     // A game SeatData has under its StubHub event id only (no Ticketmaster match): SDK 1.2 `event_id_sh`.
-    if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id_sh') === '161999000') return json({ has_refreshed: 1, listings: [
+    if (url.pathname === '/api/v0.1.1/listings/get' && url.searchParams.get('event_id_sh') === '161999000') return json({ has_refreshed: 1, ...(shRefresh() ? { last_refresh_timestamp: Math.floor(shRefresh()!.getTime() / 1000) } : {}), listings: [
       { active: true, listing_id: 7001, source: 'sh', price: 88, quantity: 4, section: '224', row: '9' },
       { active: true, listing_id: 7002, source: 'sh', price: 61, quantity: 1, section: '311', row: '2' },
       { active: true, listing_id: 7003, source: 'sh', price: 74, quantity: 2, section: '312', row: '14' },
@@ -306,6 +308,27 @@ describe('resale market tracking', () => {
     expect(body).toContain('For two together, StubHub listings for this game start at $74 a ticket before fees (about $148 for two), in section 312, row 14, when I checked just now. There are 2 listings with two or more tickets. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
     expect(body).not.toMatch(/I can’t open StubHub|I can’t see live resale listings|most you’d (?:want to )?pay/);
     expect(calls.some((x) => x.startsWith('/api/v0.1.1/listings/get'))).toBe(true);
+  });
+
+  // LAUNCH-06: the read's age is SeatData's refresh time, never our fetch. A five-hour-old refresh fetched now is
+  // said as five hours old; a read with no refresh time is said as undated, never "just now".
+  it('the same link read from listings SeatData refreshed hours ago, or never dated, is said as that', async () => {
+    const link = 'https://www.stubhub.com/metro-testers-new-york-tickets-11-4-2026/event/161999000/?quantity=2&listingId=55500011';
+    const bodyFor = async (from: string) => {
+      const c = concierge();
+      const requestId = await ask(c, `Is this a good deal for two or should I hold off? ${link}`, from);
+      await c.research({ requestId, revision: 1 });
+      return (await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId)))[0]!.bodyText;
+    };
+    shRefresh = () => new Date(now.getTime() - 5 * H);
+    const old = await bodyFor('sh-old@customer.example');
+    expect(old).toContain('start at $74 a ticket before fees (about $148 for two), in section 312, row 14, as of about 5 hours ago, when the resale data was last refreshed.');
+    expect(old).not.toContain('when I checked just now');
+    shRefresh = () => null;
+    const undated = await bodyFor('sh-undated@customer.example');
+    expect(undated).toContain('in section 312, row 14, when I checked, though the resale data doesn’t say how recently it was refreshed.');
+    expect(undated).not.toContain('just now');
+    shRefresh = () => now;
   });
 
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {

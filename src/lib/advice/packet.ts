@@ -127,7 +127,8 @@ export type BuildPacketArgs = {
   subject?: SubjectListing | null;
   /** Their listing link wasn't found by its number, but the same read priced the game for their party: the cheapest
    * listing with enough tickets, and how many such listings there are. Listed prices before fees. */
-  linkMarket?: { cheapest: MarketListing; count: number; at: Date; marketplace: string } | null;
+  /** `age`: the listings read's age by the provider's refresh time (LAUNCH-06), never by when we fetched it. */
+  linkMarket?: { cheapest: MarketListing; count: number; age: 'undated' | 'recent' | number; marketplace: string } | null;
   /** The event's own local date and start, to check the listing against. */
   eventLocalDate?: string | null;
   /**
@@ -574,6 +575,8 @@ export type QuotedPrice = {
   base?: { perTicketCents: number; feesCents: number; tickets: number; totalCents: number } | null;
   /** When the listing showed it (a screenshot's or pasted listing's time), when known. */
   seenAt?: Date | null;
+  /** A listing found in the resale feed: how old that read is by the provider's own refresh time (LAUNCH-06). */
+  listingAge?: 'undated' | 'recent' | number;
   seller?: string | null;
 };
 
@@ -589,7 +592,10 @@ function quoteLead(q: QuotedPrice): string {
   const per = q.assumedPerTicket ? ' (I’ve taken that as per ticket)' : ' a ticket';
   if (q.source === 'screenshot') return `The screenshot you sent shows ${formatUsd(q.perTicketCents)}${per}${fees}${on}. That’s what the listing showed when you took it; I haven’t checked that the seats are still there.`;
   // Found by its listing number in the resale feed: a listed price before fees, said as that (R-LINK-READ).
-  if (q.source === 'link_match') return `I found the listing you linked in the resale data I have, by its listing number: ${formatUsd(q.perTicketCents)}${per}${fees}${on}. Fees are added at checkout, and I haven’t checked that the seats are still there.`;
+  if (q.source === 'link_match') {
+    const age = q.listingAge === 'undated' ? ' The resale data doesn’t say how recently it was refreshed.' : typeof q.listingAge === 'number' ? ` That’s as of about ${q.listingAge} hours ago, when the resale data was last refreshed.` : '';
+    return `I found the listing you linked in the resale data I have, by its listing number: ${formatUsd(q.perTicketCents)}${per}${fees}${on}.${age} Fees are added at checkout, and I haven’t checked that the seats are still there.`;
+  }
   if (q.source === 'listing_text') return `The listing you pasted shows ${formatUsd(q.perTicketCents)}${per}${fees}${on}. That’s what it said when you copied it; I haven’t checked that the seats are still there.`;
   return `You mentioned ${formatUsd(q.perTicketCents)}${per}${fees}.`;
 }
@@ -1534,7 +1540,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // The market block's floor when it's shown, so one email never gives two "cheapest" prices; the fresh listings
   // read when there's no market at all (the Rangers link).
   const priced = lm && floor === null
-    ? `For ${party}${a.quantity > 1 ? ' together' : ''}, ${lm.marketplace} listings for this ${a.eventNoun ?? 'game'} start at ${formatUsd(lm.cheapest.priceCents)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(lm.cheapest.priceCents * a.quantity)} for ${party})` : ''}${lm.cheapest.section ? `, in section ${lm.cheapest.section}${lm.cheapest.row ? `, row ${lm.cheapest.row}` : ''}` : ''}, when I checked just now. ${lm.count === 1 ? 'That’s the only listing' : `There are ${lm.count} listings`} with ${a.quantity > 1 ? `${party} or more tickets` : 'a ticket'}.`
+    ? `For ${party}${a.quantity > 1 ? ' together' : ''}, ${lm.marketplace} listings for this ${a.eventNoun ?? 'game'} start at ${formatUsd(lm.cheapest.priceCents)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(lm.cheapest.priceCents * a.quantity)} for ${party})` : ''}${lm.cheapest.section ? `, in section ${lm.cheapest.section}${lm.cheapest.row ? `, row ${lm.cheapest.row}` : ''}` : ''}, ${lm.age === 'undated' ? 'when I checked, though the resale data doesn’t say how recently it was refreshed' : typeof lm.age === 'number' ? `as of about ${lm.age} hours ago, when the resale data was last refreshed` : 'when I checked just now'}. ${lm.count === 1 ? 'That’s the only listing' : `There are ${lm.count} listings`} with ${a.quantity > 1 ? `${party} or more tickets` : 'a ticket'}.`
     : floor !== null
       ? `For ${party}, the cheapest ${zoneOf(a) ? `listings ${zonePhrase(zoneOf(a)!)}` : 'listings'} I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${party})` : ''}, ${undatedFloor ? 'from listing data that doesn’t say how recent it is' : `from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}`}. That’s where the market starts, not a verdict on yours.`
       : null;

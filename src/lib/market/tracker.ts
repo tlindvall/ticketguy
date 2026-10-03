@@ -418,7 +418,11 @@ export class MarketTracker {
    * paid request, under the same gates as tracking, only for an event already matched to SeatData. The result
    * is used for this answer and never stored. Wheelchair, companion, parking and suite listings are left out.
    */
-  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<{ at: Date; listings: MarketListing[] } | null> {
+  /**
+   * `providerAsOf` is when SeatData last refreshed these listings (null when it didn't say); `retrievedAt` is when we
+   * fetched them. A cached read fetched again keeps its provider time: it is never "now" because we asked (LAUNCH-06).
+   */
+  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<{ providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] } | null> {
     // Every read that doesn't happen says why, so a reply with no market can be traced to its cause (PD-R1-01).
     const why = await this.blocked();
     if (why) {
@@ -448,9 +452,11 @@ export class MarketTracker {
       const raw = Array.isArray(r.listings) ? r.listings : [];
       const listings = raw.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null);
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
-      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings`);
-      await this.rememberListings(eventId, raw);
-      return { at: this.now(), listings };
+      const retrievedAt = this.now();
+      const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
+      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}`);
+      await this.rememberListings(eventId, raw, providerAsOf);
+      return { providerAsOf, retrievedAt, listings };
     } catch (e) {
       await this.finish(slot.id, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       return null;
@@ -463,19 +469,21 @@ export class MarketTracker {
    * under the same licence gates and daily cap as every other read. Null when it can't read; zero listings is an
    * answer, not a failure.
    */
-  async listingsForWatch(eventId: string, quantity: number): Promise<{ at: Date; cheapestPerTicketCents: number | null; listings: number } | null> {
+  async listingsForWatch(eventId: string, quantity: number): Promise<{ providerAsOf: Date | null; retrievedAt: Date; cheapestPerTicketCents: number | null; listings: number } | null> {
     const r = await this.currentListings(eventId, 'listings_watch');
     if (!r) return null;
     const fits = r.listings.filter((l) => l.quantity >= quantity).map((l) => l.priceCents).sort((a, b) => a - b);
-    return { at: r.at, cheapestPerTicketCents: fits[0] ?? null, listings: fits.length };
+    return { providerAsOf: r.providerAsOf, retrievedAt: r.retrievedAt, cheapestPerTicketCents: fits[0] ?? null, listings: fits.length };
   }
 
   /**
    * The listing numbers in a read we already paid for, under the event they were listed at: what lets a checkout link
    * with only a listing number be placed later. Only the number and the event are kept. Never fails the read.
+   * A sighting is dated by the provider's refresh: re-reading a cached response never makes an old listing look
+   * recently seen, and an undated read records a first sighting but never refreshes an existing one (LAUNCH-06).
    */
-  private async rememberListings(eventId: string, raw: Array<Record<string, unknown>>): Promise<void> {
-    const at = this.now();
+  private async rememberListings(eventId: string, raw: Array<Record<string, unknown>>, providerAsOf: Date | null): Promise<void> {
+    const at = providerAsOf ?? this.now();
     const seen = new Map<string, { marketplace: string; listingId: string }>();
     for (const l of raw) {
       const m = toMarketListing({ ...l, active: true, price: l.price ?? 1, quantity: l.quantity ?? 1 });
@@ -484,7 +492,10 @@ export class MarketTracker {
     const rows = [...seen.values()].map((r) => ({ ...r, eventId, firstSeenAt: at, lastSeenAt: at }));
     try {
       for (let k = 0; k < rows.length; k += 500) {
-        await this.db.insert(t.marketListingSightings).values(rows.slice(k, k + 500)).onConflictDoUpdate({ target: [t.marketListingSightings.marketplace, t.marketListingSightings.listingId, t.marketListingSightings.eventId], set: { lastSeenAt: at } });
+        const chunk = this.db.insert(t.marketListingSightings).values(rows.slice(k, k + 500));
+        const target = [t.marketListingSightings.marketplace, t.marketListingSightings.listingId, t.marketListingSightings.eventId];
+        if (providerAsOf) await chunk.onConflictDoUpdate({ target, set: { lastSeenAt: sql`greatest(${t.marketListingSightings.lastSeenAt}, ${at.toISOString()}::timestamptz)` } });
+        else await chunk.onConflictDoNothing();
       }
     } catch (e) {
       await this.log('listing_sightings', eventId, 'error', 0, 0, e instanceof Error ? e.message.slice(0, 200) : String(e)).catch(() => undefined);
@@ -508,7 +519,7 @@ export class MarketTracker {
     const asOf = providerTime(r.last_refresh_timestamp, retrievedAt);
     const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
-    await this.rememberListings(ev.e.id, listings);
+    await this.rememberListings(ev.e.id, listings, asOf);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}`);
     return points.length;
   }

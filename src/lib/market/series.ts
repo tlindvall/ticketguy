@@ -178,6 +178,16 @@ function change(points: Point[], current: Point, hours: number): Change {
   return { hours, fromCents: base.priceCents, toCents: current.priceCents, changeCents: current.priceCents - base.priceCents, pct: (current.priceCents - base.priceCents) / base.priceCents };
 }
 
+/**
+ * How old a listings read is by the provider's clock (LAUNCH-06): "undated" when the provider gave no refresh time,
+ * "recent" under two hours, otherwise whole hours. Our fetch time never makes a read look new.
+ */
+export function listingAge(providerAsOf: Date | null, now: Date): 'undated' | 'recent' | number {
+  if (!providerAsOf) return 'undated';
+  const ms = now.getTime() - providerAsOf.getTime();
+  return ms < 2 * 3_600_000 ? 'recent' : Math.round(ms / 3_600_000);
+}
+
 /** A window's change counts as a move: both the share and the cents. */
 export const marketMoved = (c: Change) => !!c && Math.abs(c.pct) >= MARKET_MOVE_PCT && Math.abs(c.changeCents) >= MARKET_MOVE_CENTS;
 const moved = marketMoved;

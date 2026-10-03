@@ -38,7 +38,7 @@ import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolve
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
-import { SEATDATA_DATASET_ID } from '@/lib/market/series';
+import { SEATDATA_DATASET_ID, listingAge } from '@/lib/market/series';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
@@ -2675,12 +2675,13 @@ export class Concierge {
       around = await tracker.currentListings(event.id, 'listings_compare', sentLink.marketplace === 'stubhub' ? sentLink.eventId : null);
       const m = around ? matchLinkedListing(around.listings, sentLink) : null;
       await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0 } });
-      if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.at);
+      // Dated by the provider's refresh when it gave one; the fetch time only stands in for an undated read.
+      if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.providerAsOf ?? around.retrievedAt);
       // Not found by its number: what the same read says the game costs for their party, so the reply leads with a
       // price, not with what we can't see (live Oct 2: three "I can't" lines and a request for a screenshot).
       else if (around) {
         const fits = around.listings.filter((l) => l.quantity >= quantity && (!l.marketplace || l.marketplace === sentLink.marketplace)).sort((x, y) => x.priceCents - y.priceCents);
-        if (fits.length) linkMarket = { cheapest: fits[0]!, count: fits.length, at: around.at, marketplace: MARKETPLACE_NAMES[sentLink.marketplace] };
+        if (fits.length) linkMarket = { cheapest: fits[0]!, count: fits.length, age: listingAge(around.providerAsOf, now), marketplace: MARKETPLACE_NAMES[sentLink.marketplace] };
       }
     }
     const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read ?? linked, changes: [] as string[], matches: false };
@@ -2691,8 +2692,8 @@ export class Concierge {
     const withFees = shown?.perTicketCents != null && shown.wholePartyCents != null && tickets > 0 && shown.wholePartyCents > shown.perTicketCents * tickets + 50;
     const quote: QuotedPrice | null = shown?.perTicketCents != null
       ? withFees
-        ? { perTicketCents: Math.round(shown.wholePartyCents! / tickets), assumedPerTicket: false, source: shown.source, feeBasis: 'all_in', seenAt: shown.observedAt, seller: shown.seller, base: { perTicketCents: shown.perTicketCents, feesCents: shown.wholePartyCents! - shown.perTicketCents * tickets, tickets, totalCents: shown.wholePartyCents! } }
-        : { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller }
+        ? { perTicketCents: Math.round(shown.wholePartyCents! / tickets), assumedPerTicket: false, source: shown.source, feeBasis: 'all_in', seenAt: shown.observedAt, seller: shown.seller, ...(shown.source === 'link_match' ? { listingAge: listingAge(around?.providerAsOf ?? null, now) } : {}), base: { perTicketCents: shown.perTicketCents, feesCents: shown.wholePartyCents! - shown.perTicketCents * tickets, tickets, totalCents: shown.wholePartyCents! } }
+        : { perTicketCents: shown.perTicketCents, assumedPerTicket: shown.priceBasis === 'unknown', source: shown.source, feeBasis: shown.feeBasis, seenAt: shown.observedAt, seller: shown.seller, ...(shown.source === 'link_match' ? { listingAge: listingAge(around?.providerAsOf ?? null, now) } : {}) }
       : brief.quotedPriceCents != null && !judged
         ? { perTicketCents: brief.quotedPriceBasis === 'whole_party' && quantity > 0 ? Math.round(brief.quotedPriceCents / quantity) : brief.quotedPriceCents, assumedPerTicket: brief.quotedPriceBasis === null, source: 'customer_reported', feeBasis: statedFeeBasis(said, brief.quotedPriceCents) ?? statedFeeBasis(saidInThread, brief.quotedPriceCents) ?? undefined }
         : null;
@@ -3345,10 +3346,14 @@ export class Concierge {
     const key = alertDedupeKey({ watchId: w.id, generation: w.generation, offerIdentity: `market:${w.quantity}+`, totalCents: est.estimatedTotalCents });
     const [existing] = await this.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(eq(t.watchAlerts.dedupeKey, key));
     const recent = await this.alertHistory(w, now);
-    const d = shouldAlertMarket({ targetTotalCents: w.targetTotalCents, estimatedTotalCents: est.estimatedTotalCents, observedAt: read.at, now, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
-    if (!d.alert) return 0;
+    // The provider's refresh time decides freshness, never our fetch (LAUNCH-06): a cached or undated read is no "price hit now".
+    const d = shouldAlertMarket({ targetTotalCents: w.targetTotalCents, estimatedTotalCents: est.estimatedTotalCents, observedAt: read.providerAsOf, now, lastAlertedTotalCents: recent[0]?.last ?? null, alertsInLast24h: recent[0]?.n ?? 0, dedupeKeyExists: !!existing });
+    if (!d.alert) {
+      if (['undated_observation', 'stale_observation', 'future_observation'].includes(d.reason)) await audit(this.db, { actor: 'system', action: 'watch.market_not_fresh', entityKind: 'watch', entityId: w.id, diff: { reason: d.reason, providerAsOf: read.providerAsOf?.toISOString() ?? null, retrievedAt: read.retrievedAt.toISOString() } });
+      return 0;
+    }
     const lic = await marketLicence(this.db);
-    const evidence = { basis: `${w.quantity}+`, listedPerTicketCents: read.cheapestPerTicketCents, listedTotalCents: est.listedTotalCents, estimatedTotalCents: est.estimatedTotalCents, feeAllowancePct: pct, listings: read.listings, observedAt: read.at.toISOString(), datasetId: SEATDATA_DATASET_ID, isFixture: !!lic.row?.isFixture };
+    const evidence = { basis: `${w.quantity}+`, listedPerTicketCents: read.cheapestPerTicketCents, listedTotalCents: est.listedTotalCents, estimatedTotalCents: est.estimatedTotalCents, feeAllowancePct: pct, listings: read.listings, observedAt: read.providerAsOf!.toISOString(), retrievedAt: read.retrievedAt.toISOString(), datasetId: SEATDATA_DATASET_ID, isFixture: !!lic.row?.isFixture };
     const inserted = await this.db.insert(t.watchAlerts).values({ watchId: w.id, generation: w.generation, observationId: null, market: evidence, dedupeKey: key, payableTotalCents: est.estimatedTotalCents, approvalState: 'pending', createdAt: now }).onConflictDoNothing().returning({ id: t.watchAlerts.id });
     if (!inserted.length) return 0;
     await audit(this.db, { actor: 'system', action: 'watch.market_alert_found', entityKind: 'watch', entityId: w.id, diff: { listedPerTicketCents: evidence.listedPerTicketCents, estimatedTotalCents: evidence.estimatedTotalCents, listings: evidence.listings } });
