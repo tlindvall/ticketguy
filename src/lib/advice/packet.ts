@@ -1616,6 +1616,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const noCheaper = a.link && a.asks?.cheaper && !priced ? `I can’t see resale listings for this ${a.eventNoun ?? 'game'} right now, so I can’t look for a cheaper pair myself. ` : '';
   const askListing = !a.link ? '' : noCheaper
     ? `${noCheaper}If you find one, or want me to check the one you picked, send its price for ${party} with fees and its section and row (a screenshot works), and I’ll compare.`
+    // An event page names the game, not seats: "these tickets" are whichever they're looking at (live Oct 3).
+    : a.link.eventPage
+      ? `That link is the game’s page, not particular seats, so reply with the price for ${party} with fees and the section and row of the ones you’re looking at (a screenshot works), and I’ll tell you straight whether they’re ${worthAsked ? 'worth it' : 'a good price'}.`
     // Not matched is all we know: never "the marketplace doesn't give prices" (launch LAUNCH-08).
     : `I couldn’t match the ${a.link.marketplace} listing you picked in the listing data I can see, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
   const worth = a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worthAsked)
