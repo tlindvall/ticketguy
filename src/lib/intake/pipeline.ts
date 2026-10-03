@@ -2827,7 +2827,7 @@ export class Concierge {
     if (!shown && !best && !sentLink?.listingId && brief.intent !== 'watch_request' && licence.allows('tracking') && trackingOk && uses.display) {
       if (!around) around = await tracker.recentListings(event.id);
       const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT) : null;
-      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing.marketplace ?? null, event.name, quantity, sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null) };
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null)) };
     }
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
@@ -4679,15 +4679,20 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  * game. Both marketplaces when the listings don't say which one the seats are on. Never a listing link: the feed's
  * listing numbers aren't confirmed to be the marketplace's own (DECISION_LOG #67).
  */
-export function pickLinksFor(marketplace: 'stubhub' | 'vividseats' | null, eventName: string, quantity: number, stubHubEventId: string | null): Array<{ label: string; url: string }> {
+export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null): Array<{ label: string; url: string }> {
+  const marketplace = pick.marketplace ?? null;
+  // The listing's own page, when the feed gives one.
+  if (pick.url) return [{ label: `See this listing on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
   const q = encodeURIComponent(eventName);
-  const stubhub = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId)
-    ? { label: 'Find it on StubHub', url: `https://www.stubhub.com/event/${stubHubEventId}/?quantity=${quantity}` }
-    : { label: 'Find it on StubHub', url: `https://www.stubhub.com/search?q=${q}` };
+  const sh = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId) ? stubHubEventId : null;
+  // StubHub's event page opened on the listing: its event id and a StubHub listing number (the feed's StubHub ids
+  // are StubHub's own; SDK 1.2 sales rows carry them as integers).
+  if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: 'See this listing on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}&listingId=${pick.id}` }];
+  const stubhub = sh ? { label: 'Find it on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: 'Find it on StubHub', url: `https://www.stubhub.com/search?q=${q}` };
   const vivid = { label: 'Find it on Vivid Seats', url: `https://www.vividseats.com/search?searchTerm=${q}` };
   if (marketplace === 'stubhub') return [stubhub];
   if (marketplace === 'vividseats') return [vivid];
-  return [{ ...stubhub, label: 'Search StubHub' }, { ...vivid, label: 'Search Vivid Seats' }];
+  return [{ ...stubhub, label: sh ? 'Find it on StubHub' : 'Search StubHub' }, { ...vivid, label: 'Search Vivid Seats' }];
 }
 
 /**

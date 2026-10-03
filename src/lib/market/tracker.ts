@@ -72,7 +72,18 @@ const MAX_MATCH_ATTEMPTS = 4;
 type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null };
 
 /** Listings reads by event, shared across requests in this process for a few minutes (see recentListings). */
-const RECENT_READS = new Map<string, { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] }>();
+/** A listings read: when the provider refreshed it, when we fetched it, the rows, and StubHub's event id when known. */
+export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null };
+
+/** StubHub's own event id, from the reply when it carries one (undocumented; read defensively) or the id we asked by. */
+export function replyStubHubEventId(r: Record<string, unknown>, askedBy: string | null): string | null {
+  for (const v of [r.event_id_sh, r.stubhub_event_id, r.sh_event_id, askedBy]) {
+    const id = typeof v === 'number' && Number.isInteger(v) ? String(v) : typeof v === 'string' ? v.trim() : '';
+    if (/^\d{4,15}$/.test(id)) return id;
+  }
+  return null;
+}
+const RECENT_READS = new Map<string, ListingsRead>();
 const RECENT_READ_MS = 10 * 60_000;
 
 /**
@@ -80,7 +91,7 @@ const RECENT_READ_MS = 10 * 60_000;
  * is undocumented, and whether rows carry a marketplace or a link decides what a reply can point to (live Oct 3:
  * named seats with no marketplace and no way to buy them).
  */
-export function listingShape(raw: Array<Record<string, unknown>>): string {
+export function listingShape(raw: Array<Record<string, unknown>>, reply?: Record<string, unknown>): string {
   const keys = new Set<string>();
   const sources = new Map<string, number>();
   for (const l of raw.slice(0, 500)) {
@@ -89,7 +100,9 @@ export function listingShape(raw: Array<Record<string, unknown>>): string {
     const name = typeof src === 'string' && /^[\w-]{1,20}$/.test(src) ? src : src == null ? 'none' : 'other';
     sources.set(name, (sources.get(name) ?? 0) + 1);
   }
-  return `keys ${[...keys].sort().join(',').slice(0, 400)}; sources ${[...sources].map(([k, n]) => `${k}=${n}`).join(',')}`;
+  // The reply's own fields too: a marketplace event id or link there would let a reply point at the listing itself.
+  const top = reply ? `top ${Object.keys(reply).sort().join(',').slice(0, 200)}; ` : '';
+  return `${top}keys ${[...keys].sort().join(',').slice(0, 300)}; sources ${[...sources].map(([k, n]) => `${k}=${n}`).join(',')}`;
 }
 
 export class MarketTracker {
@@ -448,7 +461,7 @@ export class MarketTracker {
    * minutes, before a new paid read (a customer asking again within the hour isn't charged twice). The age said is
    * still the provider's refresh time of whichever read it is.
    */
-  async recentListings(eventId: string): Promise<{ providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] } | null> {
+  async recentListings(eventId: string): Promise<ListingsRead | null> {
     const mine = this.lastRead.get(eventId);
     if (mine) return mine;
     const shared = RECENT_READS.get(eventId);
@@ -457,9 +470,9 @@ export class MarketTracker {
   }
 
   /** The listings this tracker read in this pass, by event: a second ask within the same request reuses it, unpaid. */
-  private lastRead = new Map<string, { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] }>();
+  private lastRead = new Map<string, ListingsRead>();
 
-  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<{ providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] } | null> {
+  async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<ListingsRead | null> {
     const held = kind === 'listings_compare' ? this.lastRead.get(eventId) : undefined;
     if (held) return held;
     // Every read that doesn't happen says why, so a reply with no market can be traced to its cause (PD-R1-01).
@@ -493,9 +506,9 @@ export class MarketTracker {
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
       const retrievedAt = this.now();
       const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
-      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw)}`);
+      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw, r)}`);
       await this.rememberListings(eventId, raw, providerAsOf);
-      const out = { providerAsOf, retrievedAt, listings };
+      const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null) };
       this.lastRead.set(eventId, out);
       RECENT_READS.set(eventId, out);
       return out;
@@ -562,10 +575,10 @@ export class MarketTracker {
     const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
     await this.rememberListings(ev.e.id, listings, asOf);
-    const read = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null) };
+    const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null) };
     this.lastRead.set(ev.e.id, read);
     RECENT_READS.set(ev.e.id, read);
-    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings)}`);
+    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings, r)}`);
     return points.length;
   }
 

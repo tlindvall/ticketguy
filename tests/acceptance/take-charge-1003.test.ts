@@ -9,8 +9,8 @@ import { FixtureDrafter } from '@/lib/ai/drafting';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
-import { pickListings } from '@/lib/market/alternatives';
-import { listingShape } from '@/lib/market/tracker';
+import { pickListings, toMarketListing } from '@/lib/market/alternatives';
+import { listingShape, replyStubHubEventId } from '@/lib/market/tracker';
 
 /**
  * Live, Oct 3 2026: "Looking for 4 tickets to the new home game for new york rangers. Max $400" was asked "Which date
@@ -136,15 +136,30 @@ describe('take charge: the next home game and seats for the party, not questions
     expect(pickListings([l(40, 2, 'F')], 4, 40000, 30)).toBeNull();
   });
 
-  it('find-it links: StubHub’s event page when their link named it, the search otherwise, both when the feed doesn’t say', () => {
-    expect(pickLinksFor('stubhub', 'A vs. B', 4, '159000123')).toEqual([{ label: 'Find it on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
-    expect(pickLinksFor('vividseats', 'A vs. B', 2, null)).toEqual([{ label: 'Find it on Vivid Seats', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
-    expect(pickLinksFor(null, 'A vs. B', 2, 'not-an-id').map((l) => l.label)).toEqual(['Search StubHub', 'Search Vivid Seats']);
+  it('find-it links: the listing itself when we can, StubHub’s event page when we know it, the search otherwise', () => {
+    const l = (over: Partial<Parameters<typeof pickLinksFor>[0]>) => ({ priceCents: 7000, quantity: 4, section: '214', row: '10', zone: null, ...over });
+    // The feed's own listing page, StubHub or Vivid Seats only.
+    expect(pickLinksFor(l({ marketplace: 'stubhub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }), 'A vs. B', 4, null)).toEqual([{ label: 'See this listing on StubHub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }]);
+    // StubHub's event id (their link, or the feed's reply) and a StubHub listing number: opened on that listing.
+    expect(pickLinksFor(l({ marketplace: 'stubhub', id: '6123456789' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'See this listing on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4&listingId=6123456789' }]);
+    expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'Find it on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
+    expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null)).toEqual([{ label: 'Find it on Vivid Seats', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
+    expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id').map((x) => x.label)).toEqual(['Search StubHub', 'Search Vivid Seats']);
+  });
+
+  it('a listing link from the feed is kept only for StubHub or Vivid Seats over https', () => {
+    expect(toMarketListing({ price: 70, quantity: 4, url: 'https://www.vividseats.com/x/production/1?showDetails=9' })).toMatchObject({ marketplace: 'vividseats', url: 'https://www.vividseats.com/x/production/1?showDetails=9' });
+    expect(toMarketListing({ price: 70, quantity: 4, url: 'https://evil.example/stubhub.com' })!.url).toBeNull();
+    expect(toMarketListing({ price: 70, quantity: 4, url: 'http://www.stubhub.com/event/1' })!.url).toBeNull();
+    expect(replyStubHubEventId({ event_id_sh: 159000123 }, null)).toBe('159000123');
+    expect(replyStubHubEventId({}, null)).toBeNull();
   });
 
   it('the listings shape is logged as field names and marketplace counts, never values', () => {
     const shape = listingShape([{ listing_id: 1, price: 70, section: '214', source: 'sh' }, { price: 74, section: '220' }, { price: 1, source: 'https://evil.example/x?token=1' }]);
     expect(shape).toBe('keys listing_id,price,section,source; sources sh=1,none=1,other=1');
+    // The reply's own fields too (a marketplace event id there would make a listing link possible).
+    expect(listingShape([{ price: 70 }], { listings: [], last_refresh_timestamp: 1, event_id_sh: 159 })).toBe('top event_id_sh,last_refresh_timestamp,listings; keys price; sources none=1');
     expect(shape).not.toMatch(/70|214|evil|token/);
   });
 });
