@@ -9,6 +9,7 @@ import type { TrendResult } from './trend';
 import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
 import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
+import { shownPriceParts } from './shown-prices';
 import type { AlternativesResult, MarketListing } from '@/lib/market/alternatives';
 
 /**
@@ -176,6 +177,9 @@ export type BuildPacketArgs = {
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
+  /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
+  askedText?: string;
+  threadText?: string;
   asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
@@ -244,9 +248,6 @@ function otherRows(sub: SubjectListing): string | null {
   return listJoin([...groups].map(([label, prices]) => `${label} at ${listJoin(prices)}`));
 }
 
-/** "GA Ticket Price Tier 3: While Supplies Last" → "GA Ticket Price Tier 3": the row's name without the page's boilerplate. */
-const rowName = (label: string) => label.replace(/:\s*while supplies last\s*$/i, '').trim();
-
 /**
  * Their question about the rows already on the page, answered first and in their terms: which of the rows they quote
  * is cheaper for the party and by how much, whether the chosen row fits the cap they gave, whether tax is in it
@@ -256,26 +257,11 @@ export function rowsAnswer(a: BuildPacketArgs, sub: SubjectListing): string | nu
   const rows = (sub.offers ?? []).filter((o) => o.perTicketCents !== null);
   if (!rows.length || sub.perTicketCents == null) return null;
   const n = sub.quantity ?? a.quantity;
-  const out: string[] = [];
-  const named = [...new Set(a.asks?.quotedRows ?? [])].map((c) => rows.find((o) => o.perTicketCents === c)).filter((o): o is NonNullable<typeof o> => !!o);
-  if (a.asks?.whichCheaper && named.length >= 2) {
-    const [lo, hi] = named.slice().sort((x, y) => x.perTicketCents! - y.perTicketCents!) as [typeof named[number], typeof named[number]];
-    const loName = rowName(lo.label);
-    const hiName = rowName(hi.label);
-    out.push(lo.perTicketCents === hi.perTicketCents
-      ? `They cost the same: ${formatUsd(lo.perTicketCents! * n)} for ${qtyWord(n)} either way.`
-      : `${loName} is cheaper: ${formatUsd(lo.perTicketCents! * n)} for ${qtyWord(n)}, against ${formatUsd(hi.perTicketCents! * n)} for ${hiName}, so ${formatUsd((hi.perTicketCents! - lo.perTicketCents!) * n)} less.`);
-  }
-  const budget = a.priorities.budgetTotalCents;
-  if (a.asks?.fits && budget != null) {
-    const total = sub.perTicketCents * n;
-    out.push(total <= budget
-      ? `Yes: ${formatUsd(total)} for ${qtyWord(n)} is within your ${formatUsd(budget)}${total < budget ? `, with ${formatUsd(budget - total)} to spare` : ''}.`
-      : `No: ${formatUsd(total)} for ${qtyWord(n)} is ${formatUsd(total - budget)} over your ${formatUsd(budget)}.`);
-  }
-  if (a.asks?.taxAsked && sub.beforeTaxes) out.push(`Those prices include fees but not tax, so tax is added on top at checkout.`);
-  else if (a.asks?.taxAsked) out.push(`The screenshot doesn’t say whether tax is included, so check the total at checkout.`);
-  return out.length ? out.join(' ') : null;
+  // Their own words when we have them ("tier 2 or tier 3?" names rows without a price); else the prices they quoted.
+  const text = a.askedText ?? (a.asks?.quotedRows ?? []).map((c) => `$${(c / 100).toFixed(2)} each`).join(' and ');
+  const chosen = rows.find((o) => o.label === sub.section && o.perTicketCents === sub.perTicketCents) ?? { label: sub.section ?? '', perTicketCents: sub.perTicketCents, priceBasis: 'per_ticket' as const, feeBasis: sub.feeBasis, listingType: sub.listingType ?? 'unknown', admission: sub.admission ?? 'unknown' };
+  const parts = shownPriceParts({ rows, chosen, quantity: n, budgetCents: a.priorities.budgetTotalCents, text, thread: a.threadText, beforeTaxes: sub.beforeTaxes ?? null, asks: { whichCheaper: !!a.asks?.whichCheaper, fits: !!a.asks?.fits, taxAsked: !!a.asks?.taxAsked } });
+  return parts.length ? parts.join(' ') : null;
 }
 
 /** "The listing shows 2 tickets in section 212, row D, seats 5 and 6, on StubHub, for $490 in total, delivered by Oct 3." */
@@ -398,9 +384,9 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
     // A11), so "fees are extra" would contradict the total one line up.
     const n = sub.quantity ?? q;
     const over = sub.wholePartyCents != null && sub.perTicketCents != null ? sub.wholePartyCents - sub.perTicketCents * n : 0;
-    out.push(over > 0
-      ? `Its total, ${formatUsd(sub.wholePartyCents!)}, is ${formatUsd(over)} more than ${countWord(n)} at ${formatUsd(sub.perTicketCents!)}, so it looks like it includes the fees it lists. Check the checkout total matches before you pay.`
-      : 'Fees are extra, so the total at checkout will be higher than the listed price.');
+    // A matched link's price line already says fees are added at checkout: not said twice (launch E).
+    if (over > 0) out.push(`Its total, ${formatUsd(sub.wholePartyCents!)}, is ${formatUsd(over)} more than ${countWord(n)} at ${formatUsd(sub.perTicketCents!)}, so it looks like it includes the fees it lists. Check the checkout total matches before you pay.`);
+    else if (sub.source !== 'link_match') out.push('Fees are extra, so the total at checkout will be higher than the listed price.');
   }
   const byTime = sub.deliveryText ? DELIVERY_TIME.exec(sub.deliveryText)?.[1] ?? null : null;
   if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) {
@@ -538,6 +524,8 @@ function verifiedClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord | n
   if (shownRowLead(a, sub)) return null;
   // No source searched and no market shown: the verdict already says it can't be compared yet (TGQA-R8 S10).
   if (!a.sourcesChecked.length && !a.market?.visible) return null;
+  // Cheaper listings already shown say what we can see; "no verified alternative" under them adds nothing (launch E).
+  if (a.marketAround?.alternatives.length) return null;
   return { id: 'C_VERIFIED', kind: 'coverage', text: 'I haven’t found a verified alternative I can link you to yet, with a checked all-in price.', values: {}, scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: null, limitations: ['no_verified_inventory'], customerVisible: true };
 }
 
@@ -821,13 +809,17 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
   // Judging an offer they've picked is one question; the buy-or-wait questions can wait for its price (live R07).
   const timingMatters = !askedOther && !(a.link && a.asks?.worth) && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down' && scopeFits(a)));
-  if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
-  if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
+  // The two timing unknowns are one question, so the email ends on one next step, not a questionnaire (launch E).
+  const askDeadline = timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now';
+  const askRisk = timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now';
+  if (askDeadline && askRisk) out.push('When do you need tickets sorted by, and would you rather lock in seats now or wait for a better price and risk missing out?');
+  else if (askDeadline) out.push('When do you need to have tickets sorted by?');
+  else if (askRisk) out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
   // A total with fees, as the watch asks and as every comparison is made: "per ticket" for five left the fees
   // and the arithmetic to them (live Red Wings email). Judging an offer they've already picked needs its price,
   // not a budget (live R07).
   if (askBudget && !(a.link && a.asks?.worth)) out.push(`What’s the most you’d pay in total for ${a.quantity === 1 ? 'the ticket' : a.quantity === 2 ? 'both' : `all ${a.quantity}`}, fees included?`);
-  return out.slice(0, 3);
+  return out.slice(0, 2);
 }
 
 /** "No obstructed views" is their words; the figures cover every seat in the venue, and say so. */
@@ -1263,6 +1255,59 @@ function buyOrWaitView(a: BuildPacketArgs): { lead: string; after: string } | nu
   };
 }
 
+export type QuestionCoverage = { question: string; status: 'answered' | 'needs_clarification' | 'unsupported' | 'operational_follow_up' };
+/**
+ * Every question we detected in their message, with what the packet does about it (launch A23): answered from the
+ * evidence, asked back, beyond what we can check, or handed to a person. `gaps` are questions no visible claim covers,
+ * for the audit trail; a reply is never padded with a guess to close one.
+ */
+export function packetCoverage(a: { said: string; trendAsked: boolean; asks: { worth?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean } }, packet: AdvicePacket): { questions: QuestionCoverage[]; gaps: string[] } {
+  const seen = new Map(packet.claimRecords.filter((c) => c.customerVisible).map((c) => [c.id, c]));
+  const q: QuestionCoverage[] = [];
+  const gaps: string[] = [];
+  const add = (question: string, status: QuestionCoverage['status'] | null) => (status ? q.push({ question, status }) : gaps.push(question));
+  if (a.asks.whichCheaper || a.asks.fits || a.asks.taxAsked) add('the shown rows: cheaper, fit or tax', seen.has('C_ROWS_ANSWER') ? 'answered' : null);
+  if (/\b(?:realistic|doable)\b/i.test(a.said)) add('is the budget realistic', seen.has('C_REALISTIC') ? (/can’t say yet/.test(seen.get('C_REALISTIC')!.text) ? 'unsupported' : 'answered') : null);
+  if (a.trendAsked) {
+    const t = seen.get('C_TREND_ANSWER');
+    add('buy now or wait', t ? (t.values?.supported ? 'answered' : /I’d buy|comes down to the price/.test(t.text) ? 'answered' : 'unsupported') : null);
+  }
+  if (a.asks.worth) add('is it a good price', seen.has('C_VERDICT') || seen.has('C_QUOTE') || seen.has('C_QUOTE_MARKET') ? 'answered' : seen.has('C_LINK_UNREAD') ? 'needs_clarification' : null);
+  if (a.asks.cheaper) add('find something cheaper', seen.has('C_BEST') || seen.has('C_ALTERNATIVES') ? 'answered' : seen.has('C_STAFF') ? 'operational_follow_up' : 'unsupported');
+  return { questions: q, gaps };
+}
+
+/** Their "is that realistic?" about the cap they gave, from the cheapest pair the market shows; null when not asked. */
+function realisticAnswer(a: BuildPacketArgs): string | null {
+  const budget = a.priorities.budgetTotalCents;
+  if (budget == null || !/\b(?:is (?:that|this|it|\$\s?\d[\d,]*) (?:realistic|doable|enough|possible)|realistic\??|doable\??)\b/i.test(a.askedText ?? '')) return null;
+  const n = a.quantity;
+  const cur = a.market?.visible ? a.market.context?.current ?? null : null;
+  if (!cur) return `Whether ${formatUsd(budget)} for ${qtyWord(n)} is realistic I can’t say yet: I can’t see current prices for this ${a.eventNoun ?? 'event'}.`;
+  const pair = cur.priceCents * n;
+  return pair > budget
+    ? `Not at the moment: the cheapest ${n === 2 ? 'pair' : `${qtyWord(n)} together`} I can see is listed at ${formatUsd(cur.priceCents)} a ticket before fees, ${formatUsd(pair)} for ${qtyWord(n)}, already over your ${formatUsd(budget)}.`
+    : `It’s possible: the cheapest ${n === 2 ? 'pair' : `${qtyWord(n)} together`} I can see is listed at ${formatUsd(cur.priceCents)} a ticket before fees, ${formatUsd(pair)} for ${qtyWord(n)}, under your ${formatUsd(budget)}, though fees come on top and those may not be seats you’d want.`;
+}
+
+/**
+ * "Should I hold off?", "what would you do in my position?" with no price trend and no price to judge, from someone
+ * who doesn't want to miss it (launch A15): a conditional decision from what they told us, never a forecast. The
+ * price decides, not the timing. Null when they haven't said they must go, or have said they'd risk missing out.
+ */
+function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
+  const said = `${a.threadText ?? ''}\n${a.askedText ?? ''}`.replace(/[’‘]/g, "'");
+  const must = a.priorities.mustAttend === true || /\b(?:don'?t|do not) want to miss\b|\bcan'?t (?:afford to )?miss\b/i.test(said);
+  if (!must || a.trendAsked?.riskOk) return null;
+  const wait = /\bwait (a (?:couple|few)(?: of)? days|a (?:day|week))\b/i.exec(said)?.[1] ?? null;
+  const when = a.eventLocalDate ? new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${a.eventLocalDate}T12:00:00Z`)) : null;
+  const yours = /\bwhat would you do\b|\bin (?:my|our) (?:position|shoes)\b/i.test(a.askedText ?? '') ? 'In your position, ' : '';
+  return {
+    lead: `${yours}I’d buy as soon as you have a price for ${qtyWord(a.quantity)} that works for you, rather than wait${wait ? ` ${wait}` : ''}:`,
+    why: `you don’t want to miss the ${a.eventNoun ?? 'event'}${when ? ` on ${when}` : ''}`,
+  };
+}
+
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A before-fees listing is not "cheaper" than an all-in price just by being lower: its fees are still to come.
   // One within a normal fee margin is noise to hunt for, not an alternative (live R05-F1: $207.62 before fees
@@ -1334,6 +1379,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // "Is that realistic?" about their cap (launch Q01, A23): answered from the cheapest pair the market shows, or said
+  // plainly that we can't see one. Listed prices are before fees; nothing here says those seats meet their other needs.
+  const realistic = realisticAnswer(a);
+  if (realistic) claims.push({ id: 'C_REALISTIC', kind: 'market_price', text: realistic, values: { budgetCents: a.priorities.budgetTotalCents }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['listed_prices_before_fees'], customerVisible: true });
   // Their question about the page's rows, answered before anything else about it; the opening summary isn't repeated.
   const shownAnswer = a.subject ? rowsAnswer(a, a.subject) : null;
   if (shownAnswer) claims.push({ id: 'C_ROWS_ANSWER', kind: 'quoted_price', text: shownAnswer, values: { rows: a.subject!.offers?.length ?? 0 }, scope: { quantity: q, seatZone: null, feeBasis: a.subject!.feeBasis, observedAt: a.subject!.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.1', limitations: ['customer_supplied_evidence', 'availability_not_checked'], customerVisible: true });
@@ -1567,7 +1616,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const noCheaper = a.link && a.asks?.cheaper && !priced ? `I can’t see resale listings for this ${a.eventNoun ?? 'game'} right now, so I can’t look for a cheaper pair myself. ` : '';
   const askListing = !a.link ? '' : noCheaper
     ? `${noCheaper}If you find one, or want me to check the one you picked, send its price for ${party} with fees and its section and row (a screenshot works), and I’ll compare.`
-    : `${a.link.marketplace} doesn’t pass me the price of the listing you picked, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
+    // Not matched is all we know: never "the marketplace doesn't give prices" (launch LAUNCH-08).
+    : `I couldn’t match the ${a.link.marketplace} listing you picked in the listing data I can see, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
   const worth = a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worthAsked)
     ? `${priced ? `${priced} ` : ''}${askListing}`
     : null;
@@ -1799,7 +1849,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       : null;
     const text = trendClaim
       ? `On buy or wait: ${trendClaim.text}${risk}`
-      : marketText ?? `${view?.lead ? `${view.lead} ` : ''}I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${risk}${view?.after ?? ''}`;
+      : marketText ?? (() => {
+        const call = view?.lead ? null : timingCall(a);
+        const noTrend = `I don’t have a supported price trend for ${seats} at this ${a.eventNoun ?? 'event'}`;
+        const head = call ? `${call.lead} ${call.why}, and ${noTrend}, so waiting would be a guess.` : `${view?.lead ? `${view.lead} ` : ''}${noTrend}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.`;
+        // No price and no trend: the decision still has an answer, the price they'd pay (launch A15, "should I hold off?").
+        const priceDecides = !call && !view && !sub?.perTicketCents && !gap && !thin && !a.trendAsked.riskOk ? ' So it comes down to the price: if it’s one you’re happy to pay, I wouldn’t hold off for a drop I can’t show you.' : '';
+        return `${head}${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${priceDecides}${risk}${view?.after ?? ''}`;
+      })();
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
     // A short follow-up about the row already chosen gets its answer, the other rows and the checks: not the row's
     // price, the face-value line and the market section all over again (live Oct 2 C02 turn 2: 468 words).

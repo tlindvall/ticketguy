@@ -17,7 +17,7 @@ describe('timing advice follows the buyer, not just the market', () => {
   it('falling prices alone are "not enough to say", with the deadline and risk asked for', () => {
     const p = buildPacket(args({}));
     expect(p.claimRecords.find((c) => c.id === 'C_READ')!.text).toContain('Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out');
-    expect(p.followUps).toEqual(expect.arrayContaining(['When do you need to have tickets sorted by?', 'Would you rather lock in seats now, or wait for a better price and accept you might miss out?']));
+    expect(p.followUps).toEqual(expect.arrayContaining(['When do you need tickets sorted by, and would you rather lock in seats now or wait for a better price and risk missing out?']));
   });
   it('a buyer who can wait, with a deadline, keeps the risk and the date; venue-wide counts are not their supply', () => {
     // R2-SUPPLY-COPY-01: 400 listings across the venue say nothing about blocks of two together.

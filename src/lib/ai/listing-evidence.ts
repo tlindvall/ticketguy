@@ -22,10 +22,44 @@ const SHOWN_OFFER = z
   })
   .strict();
 
+/** An event the page names: an artist or event page lists several, a listing page one (LAUNCH-01/02). */
+const PAGE_EVENT = z
+  .object({
+    /** The event's title as shown: "Metallica: Life Burns Faster", "jigitz". */
+    name: z.string().max(160),
+    /** The headline act or team as shown, when the page names one separately. */
+    performer: z.string().max(120).nullable(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    time: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+    venue: z.string().max(120).nullable(),
+    city: z.string().max(80).nullable(),
+    /** Marked as promoted or advertised: someone else's event placed on the page. */
+    promoted: z.boolean(),
+  })
+  .strict();
+/** A product row on an artist or event page, priced or not: what it is and the terms it states, verbatim. */
+const PAGE_PRODUCT = z
+  .object({
+    /** The row's own title as shown: "Metallica 2-Day Ticket (10/8/26 & 10/10/26) Cannot Split By Day". */
+    label: z.string().max(200),
+    /** single_show: one performance; multi_day: one ticket for several dates; suite: a suite booking; package: hotel/VIP/travel bundle; add_on: parking, merchandise or an upgrade without admission. */
+    kind: z.enum(['single_show', 'multi_day', 'suite', 'package', 'add_on', 'other']),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    /** The last date it covers, for a multi-day product ("Until Oct 10"). */
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    time: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+    venue: z.string().max(120).nullable(),
+    city: z.string().max(80).nullable(),
+    /** Terms the row states in its own words: "Cannot Split By Day", "On partner site". Never inferred. */
+    terms: z.array(z.string().max(120)).max(6),
+    promoted: z.boolean(),
+  })
+  .strict();
+
 /** What the model returns. Prices are the page's own numbers in dollars, converted to cents on our side. */
 export const LISTING_SCHEMA = z
   .object({
-    kind: z.enum(['ticket_listing', 'checkout', 'purchased_ticket', 'payment_or_id', 'unrelated']),
+    kind: z.enum(['ticket_listing', 'checkout', 'purchased_ticket', 'payment_or_id', 'event_page', 'unrelated']),
     /** A scannable barcode or QR code, a payment card number, an ID or a membership card is visible. */
     sensitiveContent: z.boolean(),
     seller: z.string().nullable(),
@@ -71,6 +105,14 @@ export const LISTING_SCHEMA = z
     showTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().default(null),
     /** Every priced row a results page shows, one entry each and never merged (live Oct 2: three rows became "Balcony; General Admission Floor"). Empty for a single listing. */
     offers: z.array(SHOWN_OFFER).max(12).default([]),
+    /** Every event the page names, one entry each (an artist page lists several). Empty when it names none. */
+    events: z.array(PAGE_EVENT).max(12).default([]),
+    /** Product rows on an artist or event page, priced or not (single night, suite, multi-day, package). */
+    products: z.array(PAGE_PRODUCT).max(12).default([]),
+    /** A sale status the page states, verbatim ("Tickets are sold out now. Check back soon."), as of the capture. */
+    availability: z.object({ status: z.enum(['sold_out', 'available', 'limited', 'unknown']), text: z.string().max(200) }).strict().nullable().default(null),
+    /** Short notices the page shows about other ways to buy, verbatim ("Concert & Hotel Packages On Sale Now … from Vibee"). */
+    notices: z.array(z.string().max(240)).max(6).default([]),
   })
   .strict();
 /** The read as given: `eventTime` may be absent in reads made before it existed. */
@@ -117,7 +159,16 @@ export type ListingFields = {
   chosenFor?: string | null;
   /** Areas they ruled out ("not the balcony"): never offered as the trade-off. */
   excludedAreas?: string[];
+  /** Facts that need no price: the events, product rows, sale status and notices the page showed (LAUNCH-01). */
+  pageKind?: string | null;
+  events?: PageEvent[];
+  products?: PageProduct[];
+  availability?: { status: 'sold_out' | 'available' | 'limited' | 'unknown'; text: string } | null;
+  notices?: string[];
 };
+
+export type PageEvent = z.infer<typeof PAGE_EVENT>;
+export type PageProduct = z.infer<typeof PAGE_PRODUCT>;
 
 export type ShownOffer = { label: string; perTicketCents: number | null; priceBasis: 'per_ticket' | 'whole_party' | 'unknown'; feeBasis: 'all_in' | 'before_fees' | 'unknown'; listingType: 'resale' | 'primary' | 'unknown'; admission: 'standing' | 'seated' | 'unknown' };
 
@@ -181,7 +232,56 @@ export function fieldsFromRead(r: ListingRead): ListingFields {
     doorsTime: r.doorsTime ?? null,
     showTime: r.showTime ?? null,
     offers: (r.offers ?? []).map((o) => ({ label: o.label, perTicketCents: o.priceBasis === 'whole_party' && q ? Math.round(o.priceDollars! * 100 / q) : cents(o.priceDollars), priceBasis: o.priceBasis, feeBasis: o.feeBasis, listingType: o.listingType, admission: o.admission === 'unknown' && standingWords([o.label]) ? 'standing' : o.admission })),
+    pageKind: r.kind,
+    events: r.events ?? [],
+    products: r.products ?? [],
+    availability: r.availability ?? null,
+    notices: r.notices ?? [],
   };
+}
+
+/** The acts a read names, folded to their first word ("Metallica: Life Burns Faster" → "metallica"); promoted rows aren't theirs. */
+export function actsOf(f: ListingFields): Set<string> {
+  const key = (x: string | null | undefined) => (x ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/^the\s+/, '').match(/[a-z0-9]+/)?.[0] ?? '';
+  const out = new Set<string>();
+  if (f.eventName) out.add(key(f.eventName));
+  for (const e of f.events ?? []) if (!e.promoted) out.add(key(e.performer ?? e.name));
+  for (const p of f.products ?? []) if (!p.promoted) out.add(key(p.label));
+  out.delete('');
+  return out;
+}
+
+/** How many different acts a set of reads names between them, counting a read that shares an act with another once. */
+export function distinctActs(fs: ListingFields[]): number {
+  const groups: Array<Set<string>> = [];
+  for (const f of fs) {
+    const acts = actsOf(f);
+    if (!acts.size) continue;
+    const hit = groups.find((g) => [...acts].some((a) => g.has(a)));
+    if (hit) for (const a of acts) hit.add(a);
+    else groups.push(acts);
+  }
+  return groups.length;
+}
+
+/** Whether a stored read can be priced against anything: a price, a total, a section or priced rows. */
+export function canComparePrices(f: ListingFields | null | undefined): boolean {
+  return !!f && (f.perTicketCents != null || f.wholePartyCents != null || !!f.section || (f.offers ?? []).some((o) => o.perTicketCents !== null));
+}
+
+/** Whether a read holds facts worth answering from, priced or not: products, events, a sale status, times, notices. */
+export function hasPageFacts(f: ListingFields | null | undefined): boolean {
+  return !!f && (canComparePrices(f) || !!f.products?.length || !!f.events?.length || !!f.availability || !!f.notices?.length || !!f.doorsTime || !!f.showTime || !!f.eventName);
+}
+
+/**
+ * Whether a read is evidence we keep, priced or not (LAUNCH-01: a product page or a sold-out page is not "nothing").
+ * Sensitive reads, payment screens and tickets already bought are never kept, as before.
+ */
+export function usableEvidence(r: ListingRead): boolean {
+  if (r.sensitiveContent || r.kind === 'payment_or_id' || r.kind === 'purchased_ticket') return false;
+  if (usableListing(r)) return true;
+  return !!(r.events?.length || r.products?.length || r.availability || r.notices?.length || r.doorsTime || r.showTime || (r.kind !== 'unrelated' && r.eventName));
 }
 
 /** "Standing Room Only", "General Admission", "GA Floor": no assigned seat to number or sit together in. */
@@ -246,6 +346,7 @@ export function chooseShownOffer<T extends ListingFields>(f: T, wanted: string, 
  * What they said about each area, latest word winning: wanted ("we'd rather be on the floor"), merely acceptable or
  * not needed ("we don't need the floor", "balcony is fine"), or ruled out ("no floor", "not the balcony").
  */
+// "Either of these floor options" picks among the floor rows; it isn't "either area will do".
 export function areaIntent(text: string): { want: string | null; excluded: Set<string> } {
   const status = new Map<string, 'want' | 'any' | 'out'>();
   const clauses = text.replace(/[’‘]/g, "'").split(/[.!?;\n\u2014\u2013,]+|\s-\s|\bbut\b/i);
@@ -255,7 +356,7 @@ export function areaIntent(text: string): { want: string | null; excluded: Set<s
     for (const w of AREAS) if (new RegExp(`\\b${w}\\b`).test(l)) named.add(w === 'pit' ? 'floor' : w);
     if (!named.has('floor') && /\b(?:ga|general admission)\b/.test(l)) named.add('floor');
     if (!named.size) continue;
-    const any = /\b(?:don't|do not|doesn't|does not|needn't|need not)\s+(?:really\s+)?(?:need|require|have to (?:be|sit|stand)|care about|mind)\b|\b(?:not|isn't|aren't) (?:required|necessary|needed|essential|a must|important)\b|\boptional\b|\bno need\b|\b(?:is|are|would be|'s) (?:fine|ok|okay|good too|also fine)\b|\bwould do\b|\beither\b|\bwhichever\b/.test(l);
+    const any = /\b(?:don't|do not|doesn't|does not|needn't|need not)\s+(?:really\s+)?(?:need|require|have to (?:be|sit|stand)|care about|mind)\b|\b(?:not|isn't|aren't) (?:required|necessary|needed|essential|a must|important)\b|\boptional\b|\bno need\b|\b(?:is|are|would be|'s) (?:fine|ok|okay|good too|also fine)\b|\bwould do\b|\beither\b(?! of (?:these|those|the|them|our|my)\b)|\bwhichever\b/.test(l);
     const out = !any && /\b(?:no|not(?! sure)|avoid|skip|without|except|anything but|don't want|do not want|rather not|never)\b/.test(l);
     for (const a of named) {
       status.delete(a); // the latest word on an area is the one that counts, and the last wanted area leads
@@ -287,7 +388,7 @@ export type ListingImage = { mimeType: 'image/jpeg' | 'image/png' | 'image/webp'
 export interface ListingReader {
   readonly name: string;
   /** Reads one screenshot, or listing text when no image is given. Throws ModelOutputError like the extractor. */
-  read(input: { image?: ListingImage | null; text?: string | null; receivedAt: Date }): Promise<ListingRead>;
+  read(input: { image?: ListingImage | null; text?: string | null; receivedAt: Date; question?: string | null }): Promise<ListingRead>;
 }
 
 /** Fixture mode reads nothing: a screenshot is stored and acknowledged, never guessed at. */

@@ -96,7 +96,7 @@ describe('FV-R1-03: a listing link with no market, asked buy or wait', () => {
     const r = validateAndRender(packet, await new FixtureDrafter().draft(packet, { quantity: 2, togetherRequired: true } as never));
     if (!r.ok) throw new Error(r.errors.join('; '));
     const text = r.textBody.split('\nTicket Guy\n')[0]!;
-    expect(text).toContain('StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works)');
+    expect(text).toContain('I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works)');
     expect(text).not.toMatch(/What follows is|resale market when I last checked|haven’t been able to check this against|can’t see live resale listings|most you’d pay|I can’t open StubHub/);
     expect(text.match(/screenshot/g)).toHaveLength(1);
     expect(text).toContain('Ticketmaster also sells this game directly.');

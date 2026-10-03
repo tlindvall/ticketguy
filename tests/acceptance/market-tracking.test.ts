@@ -168,7 +168,7 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
     expect(rec!.bodyText).not.toContain('no need to rush');
     // And it ends with the questions that would change the answer, not a request for things already sent.
-    expect(rec!.bodyText).toContain('A few things that would help me narrow it down:\n\n- Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them.\n- When do you need to have tickets sorted by?\n- Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
+    expect(rec!.bodyText).toContain('Two things that would help me narrow it down:\n\n- Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them.\n- When do you need tickets sorted by, and would you rather lock in seats now or wait for a better price and risk missing out?');
     expect(rec!.bodyHtml).toContain('<ul');
   });
 
@@ -196,8 +196,8 @@ describe('resale market tracking', () => {
     const body = recs.at(-1)!.bodyText;
     const lead = body.split('\n\n')[2]!;
     // A price first, then the one ask; no "I can't" lead (live Oct 2, Rangers).
-    expect(lead).toBe('For two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
-    expect(body.match(/doesn’t pass me the price/g)).toHaveLength(1);
+    expect(lead).toBe('For two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
+    expect(body.match(/couldn’t match the StubHub listing/g)).toHaveLength(1);
     expect(body).not.toMatch(/I can’t open StubHub/);
     // One ask, the one that decides it: no budget question for judging an offer they've already picked (live R07).
     expect(body).not.toMatch(/most you’d want to pay|narrow it down/);
@@ -235,12 +235,12 @@ describe('resale market tracking', () => {
     const body = rec!.bodyText;
     // The event and the link they sent in one line at the top, then the answer.
     // What we couldn't see comes before the market, so the figures aren't read as that listing's (post-#54 L01).
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nFor two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s a good price.\n\n')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nFor two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s a good price.\n\n')).toBe(true);
     expect(body).toContain('My read: ');
     expect(body).toContain('- Lowest asking price with two or more tickets, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
     // The ask is made once, in the lead; not again as a question at the end.
-    expect(body.match(/doesn’t pass me the price/g)).toHaveLength(1);
+    expect(body.match(/couldn’t match the StubHub listing/g)).toHaveLength(1);
     expect(body).not.toMatch(/I can’t open StubHub|most you’d (?:want to )?pay/);
     expect(body).not.toMatch(/send me the (link|listing)/i);
   });
@@ -276,7 +276,7 @@ describe('resale market tracking', () => {
     const unmatched = await ask(c, `${text}\n\n${link('14251313815')}`, 'r1-human-01a@customer.example');
     await c.research({ requestId: unmatched, revision: 1 });
     const [u] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, unmatched));
-    expect(u!.bodyText).toContain('StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
+    expect(u!.bodyText).toContain('I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
     expect((await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, unmatched), eq(t.auditLog.action, 'listing.link_unmatched')))).length).toBe(1);
     const matched = await ask(c, `${text}\n\n${link('6189203345')}`, 'r1-human-01b@customer.example');
     await c.research({ requestId: matched, revision: 1 });
@@ -305,7 +305,7 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body).toContain('For two together, StubHub listings for this game start at $74 a ticket before fees (about $148 for two), in section 312, row 14, when I checked just now. There are 2 listings with two or more tickets. StubHub doesn’t pass me the price of the listing you picked, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
+    expect(body).toContain('For two together, StubHub listings for this game start at $74 a ticket before fees (about $148 for two), in section 312, row 14, when I checked just now. There are 2 listings with two or more tickets. I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s worth it.');
     expect(body).not.toMatch(/I can’t open StubHub|I can’t see live resale listings|most you’d (?:want to )?pay/);
     expect(calls.some((x) => x.startsWith('/api/v0.1.1/listings/get'))).toBe(true);
   });
@@ -422,7 +422,8 @@ describe('resale market tracking', () => {
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);
     expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket before fees (about $620 for all four), in your section (cheaper than yours only if its fees come to less than $220 in total). These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. Your price includes fees (or may), so after fees these may not be cheaper: compare the checkout totals. They aren’t your seats, and I haven’t checked they’re still for sale.');
-    expect(body).toContain('I haven’t found a verified alternative I can link you to yet, with a checked all-in price.');
+    // The cheaper listings already say what we can see; no "no verified alternative" line under them (launch E).
+    expect(body).not.toContain('I haven’t found a verified alternative');
     // Recommendation first, the market figures after it, and nothing called a good deal.
     expect(body.indexOf('Before you buy it')).toBeLessThan(body.indexOf('Cheaper listings'));
     expect(body).not.toMatch(/good deal/i);

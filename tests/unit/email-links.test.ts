@@ -71,7 +71,7 @@ describe('the emails', () => {
   it('a buying email is one recommendation and a direct link to buy, written as a sentence', () => {
     const r = renderTemplate('official_sale', { eventLabel: 'x', eventTitle: 'Big Thief', eventWhen: 'Sat, Oct 3 at 8pm', venueName: 'Brooklyn Steel', seller: 'Ticketmaster', url: 'https://www.ticketmaster.com/e/1', eventUrl: 'https://www.ticketmaster.com/e/1', quantity: 2 }, ctx);
     expect(r.text).toContain("Big Thief (Sat, Oct 3 at 8pm at Brooklyn Steel) is still on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that's where I'd buy your 2 tickets.");
-    expect(r.text).toContain('Buy tickets on Ticketmaster: https://www.ticketmaster.com/e/1');
+    expect(r.text).toContain('Event page on Ticketmaster: https://www.ticketmaster.com/e/1');
     expect(r.html).toContain('>Ticketmaster</a>. I can’t see whether it has seats left');
     expect(r.html).not.toMatch(/border-radius|display:inline-block/);
     const body = r.text.split('\n\nTicket Guy')[0]!; // before the sign-off
