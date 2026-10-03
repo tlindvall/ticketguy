@@ -85,7 +85,7 @@ export default async function Templates() {
               extra={{ action: 'brand_save' }}
               fields={[
                 { name: 'displayName', label: 'Name', required: true, defaultValue: brand.displayName },
-                { name: 'logo', label: 'Logo', type: 'select', defaultValue: brand.logo, options: [{ value: 'badge', label: 'Round badge' }, { value: 'mark', label: 'Ticket mark' }, { value: 'none', label: 'No logo' }] },
+                { name: 'logo', label: 'Logo', type: 'select', defaultValue: brand.logo, options: [{ value: 'mascot', label: 'Waving mascot' }, { value: 'badge', label: 'Round badge' }, { value: 'mark', label: 'Ticket mark' }, { value: 'none', label: 'No logo' }] },
                 { name: 'tagline', label: 'Tagline (optional)', defaultValue: brand.tagline },
                 { name: 'shortSignoff', label: 'Short sign-off', required: true, defaultValue: brand.shortSignoff },
               ]}

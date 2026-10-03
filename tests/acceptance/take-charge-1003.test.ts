@@ -64,6 +64,8 @@ describe('take charge: the next home game and seats for the party, not questions
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
+    // Opt-in: writes each email as sent to $PRINT_HTML for a look in a browser.
+    if (process.env.PRINT_HTML) for (const [i, x] of [...sends, ...(rec ? [rec] : [])].entries()) (await import('node:fs')).writeFileSync(`${process.env.PRINT_HTML}/take-charge-${seq}-${i}.html`, x.bodyHtml ?? '');
     return { req: req!, emails: [...sends.map((s) => s.bodyText), rec?.bodyText ?? ''].join('\n----\n') };
   };
 
@@ -87,18 +89,17 @@ describe('take charge: the next home game and seats for the party, not questions
     expect(r.req.eventId).toBe(games[0]!.id);
     expect(r.emails).not.toMatch(/Which date|Which game|Send a date/);
     // The answer first, in bold-able words, then the seats as bullets, the way a person would write it.
-    expect(r.emails).toContain('Garden Arena, New York · Monday, October 5, at 7 p.m. · 4 tickets · up to $400 in total\n\nI’d buy Section 214, Row 10: four seats together for about $364 with fees, $36 under your $400.\n\n- Price: $70 each, $280 for four before fees; I’ve allowed 30% for fees.\n- Where: StubHub, link below.\n- Backup: Section 220, Row 4 on Vivid Seats, $74 each ($296 before fees).');
-    expect(r.emails).toContain('- Before you pay: check it’s still listed, the seats are together, and the checkout total (resale data from the last couple of hours).');
-    // The marketplace is known, so one link: its search for the game (no StubHub event id without their link).
-    expect(r.emails).toContain('Find it on StubHub: https://www.stubhub.com/search?q=Metro%20Rangers%20vs.%20Team%205');
-    expect(r.emails).not.toContain('Vivid Seats: https://');
+    // The answer first, then the game, then the offer as a card with its link, the estimate said as estimated
+    // (personal-email design, Oct 3).
+    expect(r.emails).toContain('Hey,\n\nI’d buy Section 214, Row 10: four seats together for about $364 with fees (estimated), $36 under your $400.\n\nMetro Rangers vs. Team 5\nGarden Arena, New York · Monday, October 5, at 7 p.m. · 4 tickets · up to $400 in total\n\nSection 214 · Row 10 on StubHub\nAbout $364 for four, estimated\n$280 for four before fees ($70 each), plus a 30% fee allowance.\nNot checked yet: that it’s still listed and the seats are together, from resale data refreshed in the last couple of hours.\nSearch StubHub for this game: https://www.stubhub.com/search?q=Metro%20Rangers%20vs.%20Team%205\n\nOther leads shown\nSection 220 · Row 4 on Vivid Seats: $296 for four before fees.');
+    expect(r.emails).not.toContain('Vivid Seats for this game');
     // Budget given and seats named: nothing left to ask.
     expect(r.emails).not.toMatch(/narrow it down|would help me/);
     // Never the wheelchair block, never a listing too small, never "verified" or "guaranteed".
     expect(r.emails).not.toMatch(/ADA 111|section 301|guarantee|verified at checkout/i);
     expect(r.emails).not.toMatch(/Found seats you like\? Send me/);
     // The $52 block of five is said once, as why it wasn't picked; no second "cheapest" or budget sum from it.
-    expect(r.emails).toContain('- Skipped: Section 330 at $52 each is 5 tickets, and sellers rarely leave a single seat.');
+    expect(r.emails).toContain('Why not cheaper: Section 330 at $52 each is 5 tickets, and sellers rarely leave a single seat.');
     expect(r.emails.match(/\$52/g)).toHaveLength(1);
     // Dates read the way a person says them, never "10-05-2026" or "7:00 PM EDT".
     expect(r.emails).toContain('• When: Monday, October 5, at 7 p.m.');
@@ -139,12 +140,12 @@ describe('take charge: the next home game and seats for the party, not questions
   it('find-it links: the listing itself when we can, StubHub’s event page when we know it, the search otherwise', () => {
     const l = (over: Partial<Parameters<typeof pickLinksFor>[0]>) => ({ priceCents: 7000, quantity: 4, section: '214', row: '10', zone: null, ...over });
     // The feed's own listing page, StubHub or Vivid Seats only.
-    expect(pickLinksFor(l({ marketplace: 'stubhub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }), 'A vs. B', 4, null)).toEqual([{ label: 'See this listing on StubHub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }]);
+    expect(pickLinksFor(l({ marketplace: 'stubhub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }), 'A vs. B', 4, null)).toEqual([{ label: 'View Section 214 on StubHub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }]);
     // StubHub's event id (their link, or the feed's reply) and a StubHub listing number: opened on that listing.
-    expect(pickLinksFor(l({ marketplace: 'stubhub', id: '6123456789' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'See this listing on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4&listingId=6123456789' }]);
-    expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'Find it on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
-    expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null)).toEqual([{ label: 'Find it on Vivid Seats', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
-    expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id').map((x) => x.label)).toEqual(['Search StubHub', 'Search Vivid Seats']);
+    expect(pickLinksFor(l({ marketplace: 'stubhub', id: '6123456789' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'View Section 214 on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4&listingId=6123456789' }]);
+    expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'Event page on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
+    expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null)).toEqual([{ label: 'Search Vivid Seats for this game', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
+    expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id').map((x) => x.label)).toEqual(['Search StubHub for this game', 'Search Vivid Seats for this game']);
   });
 
   it('a listing link from the feed is kept only for StubHub or Vivid Seats over https', () => {

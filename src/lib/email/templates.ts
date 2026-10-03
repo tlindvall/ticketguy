@@ -27,9 +27,11 @@ const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert', '
 const MARKET_ALERT_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We never buy, hold or resell tickets. Reply to this email any time.';
 const disclosureFor = (name: string) => (name === 'watch_alert_market' ? MARKET_ALERT_FOOTER : REVIEWED_TEMPLATES.has(name) ? REVIEWED_FOOTER : AUTOMATED_FOOTER);
 
-const BODY_OPEN = '<!doctype html><html><body style="margin:0;padding:0;"><div style="max-width:640px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#202124;">';
+// One type size for everything a person reads, 16/24, in Ticket Guy ink; 640px wide at most with 20px either side, so
+// nothing scrolls sideways at 320px (personal-email design, Oct 3).
+const BODY_OPEN = '<!doctype html><html><body style="margin:0;padding:0;background:#ffffff;"><div style="max-width:640px;padding:0 20px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#142438;">';
 const BODY_CLOSE = '</div></body></html>';
-const disclosureHtml = (text: string) => `<p style="margin:16px 0 0;font-size:11px;line-height:17px;color:#666;">${esc(text)}</p>`;
+const disclosureHtml = (text: string) => `<p style="margin:16px 0 0;font-size:14px;line-height:21px;color:#536174;">${esc(text)}</p>`;
 const para = (text: string) => `<p style="margin:0 0 18px;">${esc(text)}</p>`;
 /** A paragraph whose lines after the first start with "• " is a lead line and a list (the shows elsewhere, live Oct 3). */
 const block = (text: string) => {

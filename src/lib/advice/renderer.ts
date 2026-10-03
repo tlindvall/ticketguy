@@ -95,7 +95,7 @@ function header(packet: AdvicePacket): { text: string; html: string } | null {
   if (packet.headlineTitle && packet.headlineDetails) {
     return {
       text: `${packet.headlineTitle}\n${packet.headlineDetails}`,
-      html: `<p style="margin:0 0 18px;"><strong style="font-size:16px;">${esc(packet.headlineTitle)}</strong><br><span style="font-size:14px;color:#6b6b6b;">${esc(packet.headlineDetails)}</span></p>`,
+      html: `<p style="margin:0 0 18px;"><strong>${esc(packet.headlineTitle)}</strong><br><span style="color:#536174;">${esc(packet.headlineDetails)}</span></p>`,
     };
   }
   return packet.headline ? { text: packet.headline, html: `<p style="margin:0 0 18px;font-weight:600;">${esc(packet.headline)}</p>` } : null;
@@ -117,6 +117,36 @@ function leadRich(s: string): string {
 function labelRich(s: string): string {
   const m = /^((?:Section|Row|A listing)[^:]{0,60}):/.exec(s);
   return m ? `<strong>${esc(m[1]!)}</strong>${rich(s.slice(m[1]!.length))}` : rich(s);
+}
+
+/**
+ * The offer card (personal-email design, Oct 3): one cream block with a lime edge holding the seats, the estimated
+ * total in larger type with "estimated" beside it, what the estimate is made of and what isn't checked, and the
+ * link to it on the card itself. Then other leads and the one trade-off. The plain text carries the same facts.
+ */
+function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[], html: string[], withHead: boolean): void {
+  const k = c.card!;
+  const links = [c, ...(alt?.customerVisible && alt.url ? [alt] : [])].filter((x) => x.url);
+  if (withHead) {
+    lines.push(k.head);
+    html.push(P(`<strong>${esc(k.head)}</strong>`));
+  }
+  lines.push([k.title, `${k.price}, estimated`, ...k.notes, ...links.map((l) => `${l.linkLabel ?? 'Link'}: ${l.url}`)].join('\n'));
+  html.push(
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7f4ec;border-left:4px solid #d7f36b;margin:0 0 22px;"><tr><td style="padding:18px 20px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#142438;">` +
+      `<strong>${esc(k.title)}</strong><br><span style="font-size:20px;line-height:30px;font-weight:bold;">${esc(k.price)}</span>, estimated<br>` +
+      k.notes.map((n) => `<span style="color:#536174;">${esc(n)}</span><br>`).join('') +
+      links.map((l) => `<a href="${esc(l.url!)}" style="color:#142438;text-decoration:underline;font-weight:700;">${esc(l.linkLabel ?? 'View this listing')}</a>`).join(' · ') +
+      `</td></tr></table>`,
+  );
+  if (k.others.length) {
+    lines.push(['Other leads shown', ...k.others].join('\n'));
+    html.push(P(`<strong>Other leads shown</strong><br>${k.others.map(esc).join('<br>')}`));
+  }
+  for (const a of k.after) {
+    lines.push(a);
+    html.push(P(esc(a)));
+  }
 }
 
 /** A bold lead line and its bullets, in both bodies. */
@@ -194,6 +224,13 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   html.push(P(GREETING));
   // The header names the event, the party and the link they sent, so the opening line can be the answer.
   const head = header(packet);
+  // Named seats lead with the answer, then the event, then the offer (personal-email design, Oct 3).
+  const pickCard = claim('C_PICKS')?.card ? claim('C_PICKS')! : undefined;
+  const picksFirst = !!pickCard && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER');
+  if (picksFirst) {
+    lines.push(pickCard!.card!.head);
+    html.push(P(`<strong>${esc(pickCard!.card!.head)}</strong>`));
+  }
   if (head) {
     lines.push(head.text);
     html.push(head.html);
@@ -211,6 +248,10 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   const primary = [claim('C_CORRECTION'), watch, claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PICKS'), claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
+    if (c.card) {
+      offerCard(c, claimsById.get('C_PICKS_ALT'), lines, html, !picksFirst);
+      return;
+    }
     const fmt = lead || c.id === 'C_PICKS' ? leadRich : rich;
     // Named seats scan by their place: "Section 214, Row 10 (StubHub):" in bold, then the price.
     const item = c.id === 'C_PICKS' ? labelRich : rich;
@@ -277,7 +318,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     section(lines, html, MARKET_LEAD, marketFacts.flatMap((c) => c.items?.length ? c.items : [c.text]));
     if (marketSource) {
       lines.push(coverage!.text);
-      html.push(`<p style="margin:-8px 0 18px;font-size:13px;color:#6b6b6b;">${esc(coverage!.text)}</p>`);
+      html.push(`<p style="margin:-8px 0 18px;font-size:14px;line-height:21px;color:#536174;">${esc(coverage!.text)}</p>`);
     }
   }
   if (read && read !== opener) {
@@ -303,7 +344,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(P(esc(coverage.text)));
   }
   // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))));
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')));
+  // The offer card carries its own links.
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
   const asks = packet.followUps ?? [];

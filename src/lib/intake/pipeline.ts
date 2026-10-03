@@ -4681,18 +4681,20 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  */
 export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null): Array<{ label: string; url: string }> {
   const marketplace = pick.marketplace ?? null;
-  // The listing's own page, when the feed gives one.
-  if (pick.url) return [{ label: `See this listing on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
+  // Descriptive link text (personal-email design, Oct 3): "View Section 214 on StubHub" for the listing itself,
+  // "Event page" when it is only the event, "Search ... for this game" when it is only a search.
+  const seat = pick.section ? `Section ${pick.section}` : 'this listing';
+  if (pick.url) return [{ label: `View ${seat} on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
   const q = encodeURIComponent(eventName);
   const sh = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId) ? stubHubEventId : null;
   // StubHub's event page opened on the listing: its event id and a StubHub listing number (the feed's StubHub ids
   // are StubHub's own; SDK 1.2 sales rows carry them as integers).
-  if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: 'See this listing on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}&listingId=${pick.id}` }];
-  const stubhub = sh ? { label: 'Find it on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: 'Find it on StubHub', url: `https://www.stubhub.com/search?q=${q}` };
-  const vivid = { label: 'Find it on Vivid Seats', url: `https://www.vividseats.com/search?searchTerm=${q}` };
+  if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: `View ${seat} on StubHub`, url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}&listingId=${pick.id}` }];
+  const stubhub = sh ? { label: 'Event page on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: 'Search StubHub for this game', url: `https://www.stubhub.com/search?q=${q}` };
+  const vivid = { label: 'Search Vivid Seats for this game', url: `https://www.vividseats.com/search?searchTerm=${q}` };
   if (marketplace === 'stubhub') return [stubhub];
   if (marketplace === 'vividseats') return [vivid];
-  return [{ ...stubhub, label: sh ? 'Find it on StubHub' : 'Search StubHub' }, { ...vivid, label: 'Search Vivid Seats' }];
+  return [stubhub, vivid];
 }
 
 /**

@@ -158,7 +158,7 @@ export async function saveBrandSignature(db: DbOrTx, args: BrandSignature & { st
   }
   if (!fields.displayName) errors.push('Brand signature: a name is required.');
   if (!fields.shortSignoff) errors.push('Brand signature: a short sign-off is required.');
-  if (!(BRAND_LOGOS as readonly string[]).includes(args.logo)) errors.push('Brand signature: logo must be badge, mark or none.');
+  if (!(BRAND_LOGOS as readonly string[]).includes(args.logo)) errors.push('Brand signature: logo must be mascot, badge, mark or none.');
   if (errors.length) throw new TemplateValidationError(errors);
   const now = args.now ?? new Date();
   const values = { ...fields, logo: args.logo, updatedBy: args.staffUserId, updatedAt: now };
