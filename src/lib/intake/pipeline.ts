@@ -64,6 +64,7 @@ import { capturedIds, isTestConversation, testConversationIds, testModeFrom, TES
 import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
+import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
@@ -88,6 +89,8 @@ export type ConciergeDeps = {
   marketFetch?: typeof fetch;
   /** Reads the listing a customer shows us (screenshot or pasted text). Absent: stored, never read. */
   listingReader?: ListingReader;
+  /** Looks an event up on the open web when the catalog has nothing. Absent: never searched. */
+  webEventFinder?: WebEventFinder;
 };
 
 export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } | { kind: 'ignored_recipient'; messageId: string } | { kind: 'duplicate'; messageId: string } | { kind: 'queued'; messageId: string; conversationId: string; requestId: string; contactId: string; isNewConversation: boolean };
@@ -926,6 +929,19 @@ export class Concierge {
       await this.transition(req.id, 'unsupported', 'event_outside_us');
       await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: 'That event is outside the US, and we only cover US events for now.' }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'unsupported', revision, extraction: merged };
+    }
+
+    // Nothing in the catalog and nothing nearby: the open web, once (live Oct 3: "is there a soho house festival in
+    // new york today?" got "Which event?" while the festival was at Pier 17 that afternoon, sold by Soho House).
+    if (!picked && resolution.kind === 'no_match' && resolution.reason !== 'constraint_conflict' && !elsewhere.length && !merged.notifyAsked && (merged.performerOrTeam || merged.eventName)) {
+      const web = await this.findOnWeb(req, merged, latestText, venueTz);
+      if (web.length) {
+        const today = eventLocalDate(now, venueTz ?? 'America/New_York');
+        const { text, html } = await this.webEventReply(req.id, web, today);
+        await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Found it'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `web:${req.id}:${revision}` });
+        await this.transition(req.id, 'referred', 'web_event_found');
+        return { state: 'referred', revision, extraction: merged };
+      }
     }
 
     // "Let me know when it goes on sale / when they announce a date" (DECISION_LOG #43).
@@ -2396,6 +2412,89 @@ export class Concierge {
    * that has since been cancelled or played is not kept.
    */
   /** The request's settled event with its venue and performer, for answering about it without re-resolving. */
+  /**
+   * The open-web lookup: one search-backed call, within the AI budget and a daily cap on searches, recorded with what
+   * it found (names and source hosts, never the customer's words). Any failure is no answer, never an error.
+   */
+  private async findOnWeb(req: typeof t.requests.$inferSelect, x: RequestExtraction, text: string, tz: string | null): Promise<WebEvent[]> {
+    const finder = this.deps.webEventFinder;
+    if (!finder || this.env.WEB_EVENT_SEARCH === 'off') return [];
+    const [row] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.auditLog).where(and(eq(t.auditLog.action, 'web.event_search'), sql`${t.auditLog.createdAt} > now() - interval '24 hours'`));
+    if ((row?.n ?? 0) >= this.env.WEB_EVENT_SEARCH_DAILY_LIMIT) {
+      await audit(this.db, { actor: 'system', action: 'web.event_search_skipped', entityKind: 'request', entityId: req.id, diff: { reason: 'daily_limit', limit: this.env.WEB_EVENT_SEARCH_DAILY_LIMIT } });
+      return [];
+    }
+    const model = this.env.modelName ?? 'rules';
+    const est = estimateUsdMicros(model, 30_000, 2_000, 0.03, this.env.modelPrices);
+    let r;
+    try {
+      r = await reserveBudget(this.db, { requestId: req.id, revision: req.currentRevision, runId: null, jobName: 'web_event_search', model, estimatedUsdMicros: est, limits: this.limits(), now: this.now() });
+    } catch (e) {
+      if (e instanceof BudgetExceededError) return [];
+      throw e;
+    }
+    const today = eventLocalDate(this.now(), tz ?? 'America/New_York');
+    try {
+      const out = await finder.find({ text, name: x.eventName ?? x.performerOrTeam, city: x.city, date: x.resolvedLocalDate, today });
+      const usage = finder.lastUsage;
+      await settleBudget(this.db, r.ledgerId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0, toolCalls: out.searches, actualUsdMicros: estimateUsdMicros(model, usage?.inputTokens ?? 0, usage?.outputTokens ?? 0, out.searches * 0.01, this.env.modelPrices) });
+      const host = (u: string) => { try { return new URL(u).hostname; } catch { return null; } };
+      await audit(this.db, { actor: 'system', action: 'web.event_search', entityKind: 'request', entityId: req.id, diff: { searches: out.searches, resultUrls: out.resultUrls, found: out.events.map((e) => ({ name: e.name, date: e.date, source: host(e.sourceUrl) })) } });
+      return out.events;
+    } catch (e) {
+      if (e instanceof ModelOutputError && (e.kind === 'transport' || e.kind === 'rejected')) await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'web_event_search' });
+      await audit(this.db, { actor: 'system', action: 'web.event_search', entityKind: 'request', entityId: req.id, diff: { error: e instanceof ModelOutputError ? e.kind : 'error' } });
+      return [];
+    }
+  }
+
+  /**
+   * What the web says, as a person would put it: the event, the day and hours, the place, who sells it, and the link
+   * to that page. It's said as found on the web, never as seats, prices or availability we've checked.
+   */
+  private async webEventReply(requestId: string, events: WebEvent[], today: string): Promise<{ text: string; html: string }> {
+    const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const [ty, tm, td] = today.split('-').map(Number);
+    const tomorrow = new Date(Date.UTC(ty!, tm! - 1, td! + 1)).toISOString().slice(0, 10);
+    const clock = (hm: string) => {
+      const [h, m] = hm.split(':').map(Number);
+      return `${h! % 12 || 12}${m ? `:${String(m).padStart(2, '0')}` : ''}`;
+    };
+    const half = (hm: string) => (Number(hm.slice(0, 2)) < 12 ? 'a.m.' : 'p.m.');
+    const hours = (e: WebEvent) => (e.startTime && e.endTime ? (half(e.startTime) === half(e.endTime) ? `${clock(e.startTime)} to ${clock(e.endTime)} ${half(e.endTime)}` : `${clock(e.startTime)} ${half(e.startTime)} to ${clock(e.endTime)} ${half(e.endTime)}`) : e.startTime ? `${clock(e.startTime)} ${half(e.startTime)}` : null);
+    const when = (e: WebEvent) => {
+      if (!e.date) return null;
+      const day = e.date === today ? `today, ${friendlyDay(e.date)}` : e.date === tomorrow ? `tomorrow, ${friendlyDay(e.date)}` : friendlyDay(e.date);
+      const h = hours(e);
+      return h ? `${day}, ${e.startTime && e.endTime ? 'from ' : 'at '}${h}` : day;
+    };
+    const place = (e: WebEvent) => [e.venue, e.city].filter(Boolean).join(' in ');
+    const sentence = (e: WebEvent) => `${e.name} is ${[when(e), place(e) ? `at ${place(e)}` : null].filter(Boolean).join(', ')}.`;
+    const seller = (e: WebEvent) => e.seller ?? (() => { try { return new URL(e.ticketUrl ?? e.sourceUrl).hostname.replace(/^www\./, ''); } catch { return 'the organiser'; } })();
+    const links: Array<{ label: string; url: string }> = [];
+    for (const e of events.slice(0, 3)) {
+      const raw = e.ticketUrl ?? e.sourceUrl;
+      const label = e.ticketUrl ? `Tickets from ${seller(e)}` : `Event page (${seller(e)})`;
+      const url = this.env.APP_MODE === 'fixture' ? raw : await this.trackLink(requestId, raw, label, false, {});
+      links.push({ label, url });
+    }
+    const [first] = events;
+    const lead = events.length === 1 ? sentence(first!) : `I found ${events.length === 2 ? 'two' : 'a few'} on the web:`;
+    const list = events.length > 1 ? events.slice(0, 3).map((e) => sentence(e)) : [];
+    const sold = events.length === 1 ? `Tickets are sold by ${seller(first!)}, not on the resale sites I check, so I can’t see prices or what’s left.` : 'These aren’t on the resale sites I check, so I can’t see prices or what’s left.';
+    const next = 'Found tickets you’re weighing up? Send me the price and what it includes and I’ll check it.';
+    const text = ['Hey,', lead, ...(list.length ? [list.map((l) => `• ${l}`).join('\n')] : []), sold, links.map((l) => `${l.label}: ${l.url}`).join('\n'), next].join('\n\n');
+    const html = [
+      '<p style="margin:0 0 18px;">Hey,</p>',
+      `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`,
+      ...(list.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${list.map((l) => `<li style="margin:0 0 4px;">${esc(l)}</li>`).join('')}</ul>`] : []),
+      `<p style="margin:0 0 18px;">${esc(sold)}</p>`,
+      `<p style="margin:0 0 18px;">${links.map((l) => `<a href="${esc(l.url)}" style="color:#142438;text-decoration:underline;font-weight:700;">${esc(l.label)}</a>`).join('<br>')}</p>`,
+      `<p style="margin:0 0 18px;">${esc(next)}</p>`,
+    ].join('\n');
+    return { text, html };
+  }
+
   /** Events with their venues, in the order of `ids` (ids not found are left out). */
   private async eventRows(ids: string[]): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>> {
     if (!ids.length) return [];
