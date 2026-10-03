@@ -217,11 +217,16 @@ export function computeMarketContext(a: { basis: MarketBasis; zone: string | nul
   if (spanHours < MARKET_MIN_SPAN_HOURS) reasons.push(`span_under_${MARKET_MIN_SPAN_HOURS}h`);
   if (reasons.length) return base;
 
+  // No 24- or 72-hour baseline is no comparison at all: it never reads as prices holding steady (post-deploy QA Oct 2,
+  // TREND-2327-01: four reads over 12 hours falling 30% came back "sufficient, flat").
+  const w = base.h72 ?? base.h24;
+  if (!w) {
+    reasons.push('no_comparison_window');
+    return base;
+  }
   base.adequacy = 'sufficient';
   // Direction needs the window move and the longer view not to disagree: a dip after a week of rises is "mixed" → flat.
-  const w = base.h72 ?? base.h24;
-  if (!w) base.direction = 'flat';
-  else if (moved(w)) {
+  if (moved(w)) {
     const other = w === base.h72 ? base.h24 : null;
     base.direction = other && moved(other) && Math.sign(other.changeCents) !== Math.sign(w.changeCents) ? 'flat' : w.changeCents < 0 ? 'down' : 'up';
   } else base.direction = 'flat';

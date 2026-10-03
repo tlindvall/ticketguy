@@ -115,6 +115,8 @@ export type ListingFields = {
   offers?: ShownOffer[];
   /** Why that row: the area they asked for ("floor"), or null when it is just the cheapest shown. */
   chosenFor?: string | null;
+  /** Areas they ruled out ("not the balcony"): never offered as the trade-off. */
+  excludedAreas?: string[];
 };
 
 export type ShownOffer = { label: string; perTicketCents: number | null; priceBasis: 'per_ticket' | 'whole_party' | 'unknown'; feeBasis: 'all_in' | 'before_fees' | 'unknown'; listingType: 'resale' | 'primary' | 'unknown'; admission: 'standing' | 'seated' | 'unknown' };
@@ -236,6 +238,7 @@ export function chooseShownOffer<T extends ListingFields>(f: T, wanted: string, 
     seatsTogether: pick.admission === 'standing' ? null : f.seatsTogether,
     offers: f.offers,
     chosenFor: want && areaOf(pick.label) === want ? want : null,
+    excludedAreas: [...excluded],
   };
 }
 

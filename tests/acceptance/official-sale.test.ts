@@ -152,7 +152,7 @@ describe('still on general sale: point at the official sale', () => {
     // No resale in the email, so no "unless a resale seat is cheaper" hedge.
     expect(body).toContain('It’s on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that’s where I’d buy.');
     expect(body).not.toContain('unless a resale seat');
-    expect(body).toContain(`Buy on Ticketmaster: ${URL_OPEN}`);
+    expect(body).toContain(`Event page on Ticketmaster: ${URL_OPEN}`);
     for (const noise of ['not integrated', 'packet', 'check primary', 'marketplaces directly', 'Sources checked']) expect(body, noise).not.toContain(noise);
     // No listing was offered, so nothing needs a person's judgement: it goes out without review, and says so.
     expect(rec!.reviewStatus).toBe('auto_sent');

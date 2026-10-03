@@ -169,7 +169,7 @@ export type BuildPacketArgs = {
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
-  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean } | null;
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
@@ -215,7 +215,7 @@ export function shownRowLead(a: BuildPacketArgs, sub: SubjectListing): string | 
   const which = sub.chosenFor ? `The ${sub.chosenFor} option in your screenshot` : 'The cheapest option in your screenshot';
   // The one comparison the page itself supports: the cheapest row in another area, and what the choice costs or saves.
   const mine = areaOf(sub.section ?? '');
-  const other = (sub.offers ?? []).filter((o) => o.perTicketCents !== null && areaOf(o.label) !== mine).sort((x, y) => x.perTicketCents! - y.perTicketCents!)[0];
+  const other = (sub.offers ?? []).filter((o) => o.perTicketCents !== null && areaOf(o.label) !== mine && !(sub.excludedAreas ?? []).includes(areaOf(o.label) ?? '')).sort((x, y) => x.perTicketCents! - y.perTicketCents!)[0];
   const otherArea = other ? areaOf(other.label) : null;
   const gap = other ? (other.perTicketCents! - sub.perTicketCents) * n : 0;
   const tradeoff = other && otherArea && gap !== 0
@@ -235,6 +235,40 @@ function otherRows(sub: SubjectListing): string | null {
   const groups = new Map<string, string[]>();
   for (const o of rest) groups.set(o.label, [...(groups.get(o.label) ?? []), `${formatUsd(o.perTicketCents!)} a ticket${tag(o)}`]);
   return listJoin([...groups].map(([label, prices]) => `${label} at ${listJoin(prices)}`));
+}
+
+/** "GA Ticket Price Tier 3: While Supplies Last" → "GA Ticket Price Tier 3": the row's name without the page's boilerplate. */
+const rowName = (label: string) => label.replace(/:\s*while supplies last\s*$/i, '').trim();
+
+/**
+ * Their question about the rows already on the page, answered first and in their terms: which of the rows they quote
+ * is cheaper for the party and by how much, whether the chosen row fits the cap they gave, whether tax is in it
+ * (post-deploy QA Oct 2: "Which is cheaper for two, and does that include the tax?" got the opening summary again).
+ */
+export function rowsAnswer(a: BuildPacketArgs, sub: SubjectListing): string | null {
+  const rows = (sub.offers ?? []).filter((o) => o.perTicketCents !== null);
+  if (!rows.length || sub.perTicketCents == null) return null;
+  const n = sub.quantity ?? a.quantity;
+  const out: string[] = [];
+  const named = [...new Set(a.asks?.quotedRows ?? [])].map((c) => rows.find((o) => o.perTicketCents === c)).filter((o): o is NonNullable<typeof o> => !!o);
+  if (a.asks?.whichCheaper && named.length >= 2) {
+    const [lo, hi] = named.slice().sort((x, y) => x.perTicketCents! - y.perTicketCents!) as [typeof named[number], typeof named[number]];
+    const loName = rowName(lo.label);
+    const hiName = rowName(hi.label);
+    out.push(lo.perTicketCents === hi.perTicketCents
+      ? `They cost the same: ${formatUsd(lo.perTicketCents! * n)} for ${qtyWord(n)} either way.`
+      : `${loName} is cheaper: ${formatUsd(lo.perTicketCents! * n)} for ${qtyWord(n)}, against ${formatUsd(hi.perTicketCents! * n)} for ${hiName}, so ${formatUsd((hi.perTicketCents! - lo.perTicketCents!) * n)} less.`);
+  }
+  const budget = a.priorities.budgetTotalCents;
+  if (a.asks?.fits && budget != null) {
+    const total = sub.perTicketCents * n;
+    out.push(total <= budget
+      ? `Yes: ${formatUsd(total)} for ${qtyWord(n)} is within your ${formatUsd(budget)}${total < budget ? `, with ${formatUsd(budget - total)} to spare` : ''}.`
+      : `No: ${formatUsd(total)} for ${qtyWord(n)} is ${formatUsd(total - budget)} over your ${formatUsd(budget)}.`);
+  }
+  if (a.asks?.taxAsked && sub.beforeTaxes) out.push(`Those prices include fees but not tax, so tax is added on top at checkout.`);
+  else if (a.asks?.taxAsked) out.push(`The screenshot doesn’t say whether tax is included, so check the total at checkout.`);
+  return out.length ? out.join(' ') : null;
 }
 
 /** "The listing shows 2 tickets in section 212, row D, seats 5 and 6, on StubHub, for $490 in total, delivered by Oct 3." */
@@ -1203,6 +1237,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // Their question about the page's rows, answered before anything else about it; the opening summary isn't repeated.
+  const shownAnswer = a.subject ? rowsAnswer(a, a.subject) : null;
+  if (shownAnswer) claims.push({ id: 'C_ROWS_ANSWER', kind: 'quoted_price', text: shownAnswer, values: { rows: a.subject!.offers?.length ?? 0 }, scope: { quantity: q, seatZone: null, feeBasis: a.subject!.feeBasis, observedAt: a.subject!.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.1', limitations: ['customer_supplied_evidence', 'availability_not_checked'], customerVisible: true });
   if (a.subject) {
     claims.push(verdictClaim(a, a.subject));
     claims.push(subjectClaim(a, a.subject));
@@ -1242,7 +1279,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: ['sale_window_not_inventory'],
       customerVisible: true,
       url: a.official.url,
-      linkLabel: a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus || (a.link && !a.link.eventPage) ? `Event page on ${a.official.seller}` : `Buy on ${a.official.seller}`,
+      // An event page, never "Buy": no seats or prices behind it have been checked (post-deploy QA Oct 2, R1-2327-02).
+      linkLabel: `Event page on ${a.official.seller}`,
     });
   }
 
@@ -1650,6 +1688,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // The $20 parking price is not a ticket price to judge against the market, and a question about what gets them in
   // is answered by that alone: no seat search, history or coverage note under it (live V03).
   if (a.asks?.parking) for (const c of claims) if (!['C_PARKING', 'C_CORRECTION'].includes(c.id)) c.customerVisible = false;
+  if (shownAnswer) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED', 'C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
   // A made-up example (their word): what it shows, and nothing about live listings, checking out or buying (A11).
   // The writing review's shape: the total and the per-ticket price with fees in one line, then the working, the
   // seats and the catches as short points, each said once (live A11-F1 said $264 three times and 6pm twice).
