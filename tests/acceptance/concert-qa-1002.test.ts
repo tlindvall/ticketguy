@@ -155,14 +155,14 @@ describe('Oct 2 concert QA, replayed exactly', () => {
     const second = t2!.all.join('\n');
     expect(second).not.toMatch(/12pm|12:00 ?PM|Which show|2-Day|Cannot Split/i);
     // "$1,000 for both" is a thousand dollars for the pair, not $1 (the rules reader read the comma as a decimal point).
-    expect(second).toContain('Sphere, Las Vegas · Thu, Oct 8, 8:30 PM PDT · 2 tickets · up to $1,000 in total');
+    expect(second).toContain('Sphere, Las Vegas · Thursday, October 8, at 8:30 p.m. · 2 tickets · up to $1,000 in total');
     expect(second).not.toMatch(/\$1 total|read \$1 as/);
-    expect(t3!.text).toContain('Metallica: Life Burns Faster\nSphere, Las Vegas · Thu, Oct 8, 8:30 PM PDT · 2 tickets · up to $1,000 in total');
+    expect(t3!.text).toContain('Metallica: Life Burns Faster\nSphere, Las Vegas · Thursday, October 8, at 8:30 p.m. · 2 tickets · up to $1,000 in total');
   });
 
   it('HF-C-02/03/07: the exact jigitz thread, read row by row, opens with the floor row and two’s total', async () => {
     const [j1, j2] = await converse(JIG, { reader: new RowReader(), imageOn: 0 });
-    expect(j1!.text).toContain('jigitz\nBrooklyn Paramount, Brooklyn · Tonight, Fri, Oct 2, 9:00 PM EDT (doors 8:00 PM) · 2 tickets\n\nThe floor option in your screenshot is “GA Ticket Price Tier 2: While Supplies Last”, a resale ticket, at $107.33 a ticket including fees, before taxes: $214.66 for two.');
+    expect(j1!.text).toContain('jigitz\nBrooklyn Paramount, Brooklyn · Tonight at 9 p.m. (doors 8 p.m.) · 2 tickets\n\nThe floor option in your screenshot is “GA Ticket Price Tier 2: While Supplies Last”, a resale ticket, at $107.33 a ticket including fees, before taxes: $214.66 for two.');
     expect(j1!.text).toContain('It also shows Balcony: Standing Room Only at $100.17 a ticket (resale) and $104 a ticket (Ticketmaster’s own ticket).');
     for (const t of [j1!.text, j2!.text]) expect(t).not.toMatch(/seat numbers|seats are together|Balcony; General Admission Floor|Accessible seating information|Additional results|face value, not a resale markup|\.\./);
     expect(j2!.text).toContain('2 tickets\n\nIf $214.66 for two (with fees and before taxes) works for you and the floor is what you want, I’d buy rather than wait.');

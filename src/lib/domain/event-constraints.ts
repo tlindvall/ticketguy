@@ -1,4 +1,4 @@
-import { dateWindowFor, localDateParts, toIsoDate } from './dates';
+import { dateWindowFor, localDateParts, toIsoDate, WEEKS_AHEAD_RE } from './dates';
 
 /**
  * The hard rules a customer puts on which event they mean, read from their own words across the thread: the
@@ -150,6 +150,12 @@ function windowIn(t: string, receivedAt: Date, timeZone: string): EventConstrain
     const w = dateWindowFor(g.m2 && g.m2.slice(0, 3).toLowerCase() !== g.m1!.slice(0, 3).toLowerCase() ? `${g.m1} ${g.d1} - ${g.m2} ${g.d2}` : `${g.m1} ${g.d1}-${g.d2}`, receivedAt, timeZone);
     if (w && Date.parse(w.to) - Date.parse(w.from) <= 7 * 86_400_000) return { ...w, source: 'range' };
   }
+  // "About six weeks from now", "in three weeks".
+  const ahead = WEEKS_AHEAD_RE.exec(t);
+  if (ahead) {
+    const w = dateWindowFor(ahead[0], receivedAt, timeZone);
+    if (w) return { ...w, source: 'range' };
+  }
   // Part of a month: "mid-November", "early October", "the end of November".
   const part = new RegExp(`\\b(?:early|beginning of|start of|mid|middle of|late|end of)\\s*-?\\s*${MONTHS}`, 'i').exec(t);
   if (part) {
@@ -239,6 +245,11 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     else if (new RegExp(`\\b${MONTHS}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTHS}\\b`, 'i').test(t)) out.window = null;
     // "next Saturday" is a Saturday, whichever of the two it is.
     if (w?.source === 'next_weekday' && !days.weekdays) out.weekdays = [new Date(`${w.from}T12:00:00Z`).getUTCDay()];
+    // "the new home game", "the upcoming game": the next one too (live Oct 3: "4 tickets to the new home game for new york
+    // rangers" was asked "Which date?" twice). Only next to the noun, so "New York … game" never reads as "new game".
+    if (/\b(?:the|their|a)\s+(?:new|upcoming|coming|soonest)\s+(?:home\s+)?(?:game|match|show|performance|fixture|concert)\b/i.test(t)) out.next = true;
+    // "When are they playing home next?", "who do they play next", "next home": the next one (live Oct 3, third ask).
+    if (/\b(?:play(?:s|ing)?|home|on|game)\s+(?:at\s+home\s+)?next\b|\bnext\s+home\b/i.test(t)) out.next = true;
     if (/\bnext\b[^.?!]{0,30}?\b(?:game|match|show|performance|date|fixture|concert|one)\b|\b(?:find|any)\s+(?:a|the next|the earliest)\s+(?:weekend|saturday|sunday|date|game)\b|\bearliest\b/i.test(t)) out.next = true;
   }
   return out;

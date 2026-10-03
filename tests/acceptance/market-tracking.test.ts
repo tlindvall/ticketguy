@@ -142,34 +142,29 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).not.toContain('Resale listings');
   });
 
-  it('with customer display licensed: the reply carries the market numbers and says what they are', async () => {
+  it('with customer display licensed: the reply names seats for the pair first, with what they are and are not', async () => {
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
     const c = concierge();
     const requestId = await ask(c, '2 Testers tickets Oct 30 — is resale cheaper?', 'shown@customer.example');
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
-    // Answer first, then the market as bullets with its source under them.
-    expect(rec!.bodyText).toContain('The resale market when I last checked:\n\n- Lowest asking price with two or more tickets, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees (about $260 for two). That’s down from $160 three days ago.\n- About 400 resale listings in all.');
-    // Emphasis is the answer's first sentence, not every amount (post-#55 writing review).
-    expect(rec!.bodyHtml).toMatch(/<p style="margin:0 0 18px;"><strong>[^<]+<\/strong>/);
-    expect(rec!.bodyHtml).not.toContain('<strong>$130</strong>');
-    expect(rec!.bodyText).toContain('the cheapest listed price with two or more tickets at this point before the game was typically $122.50 to $147.50 (median $135)');
-    expect(rec!.bodyText).not.toContain('enough comparable history');
-    expect(rec!.bodyText).toContain('Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked');
+    // Seats for two, named from the listings we can read, are the answer (live Oct 3: seats, not questions). They are
+    // the one price summary: no venue floor or budget sum from it under them.
+    expect(rec!.bodyText).toContain('Test Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets\n\nCheapest pair I can see: about $247 for both with fees.\n\n- Section 101, Row 10: $95 each, $190 for two before fees\n- Section 215, Row 8: $120 each, $240 for two before fees');
+    expect(rec!.bodyText).toContain('- Fees: I’ve allowed 30%, so check the total at checkout.\n- Not checked yet: that they’re still for sale and sit together');
+    // With no budget, the one next step is an offer to narrow it, on its own line, not a questionnaire.
+    expect(rec!.bodyText).toContain('\n\nWant me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.');
+    expect(rec!.bodyText).not.toMatch(/things that would help|One thing that would help|When do you need tickets sorted by/);
+    expect(rec!.bodyText).not.toContain('The resale market when I last checked');
+    // The answer and each seat's place are bold; the prices are not (post-#55 writing review).
+    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>Cheapest pair I can see: about $247 for both with fees.</strong></p>');
+    expect(rec!.bodyHtml).toContain('<li style="margin:0 0 8px;"><strong>Section 101, Row 10</strong>: $95 each, $190 for two before fees</li>');
     expect(rec!.bodyText).not.toContain('SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
-    // Where the market starts, never a "fair price" from a venue-wide floor (TG-B04), and whether to hurry.
-    // The floor is said once, in the market lines with when it was seen; the read doesn't repeat it (PW-EMAIL-FOCUS-01).
-    expect(rec!.bodyText.match(/\$130 a ticket before fees/g)).toHaveLength(1);
-    expect(rec!.bodyText).toMatch(/My read: prices have been easing/);
-    expect(rec!.bodyText).not.toMatch(/fair price|better deal/);
-    // Prices are easing, but nobody has said when they must decide or whether they can risk missing it, so the
-    // email says the evidence doesn't settle waiting, and asks exactly that.
-    expect(rec!.bodyText).toContain('prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
+    expect(rec!.bodyText).not.toMatch(/fair price|better deal|guarantee/);
     expect(rec!.bodyText).not.toContain('no need to rush');
-    // And it ends with the questions that would change the answer, not a request for things already sent.
-    expect(rec!.bodyText).toContain('Two things that would help me narrow it down:\n\n- Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them.\n- When do you need tickets sorted by, and would you rather lock in seats now or wait for a better price and risk missing out?');
-    expect(rec!.bodyHtml).toContain('<ul');
+    // No homework: seats were named, so it doesn't ask them to go and find some.
+    expect(rec!.bodyText).not.toMatch(/Found seats you like\? Send me/);
   });
 
   // Live, Oct 1 2026: "I like the tickets I sent. are they worth it?" about a StubHub link got the market summary
@@ -235,7 +230,7 @@ describe('resale market tracking', () => {
     const body = rec!.bodyText;
     // The event and the link they sent in one line at the top, then the answer.
     // What we couldn't see comes before the market, so the figures aren't read as that listing's (post-#54 L01).
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 2 tickets · from the StubHub link you sent\n\nFor two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s a good price.\n\n')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets · from the StubHub link you sent\n\nFor two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s a good price.\n\n')).toBe(true);
     expect(body).toContain('My read: ');
     expect(body).toContain('- Lowest asking price with two or more tickets, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
@@ -400,9 +395,9 @@ describe('resale market tracking', () => {
     const requestId = await ask(c, '5 Testers tickets Oct 30 together, should I buy now or hold off?', 'rangers5@customer.example');
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
-    expect(rec!.bodyText).toMatch(/- Lowest asking price with 5 or more tickets, checked [A-Z][a-z]{2} \d+, \d+:\d{2} [AP]M E[DS]T: \$140 a ticket before fees \(about \$700 for five\)\./);
-    expect(rec!.bodyText).toContain('listings have 5 or more tickets');
-    expect(rec!.bodyText).toContain('StubHub and Vivid Seats resale prices before fees');
+    // Five together, named: the $140 block is six tickets and would leave the seller one, so it's said and passed over.
+    expect(rec!.bodyText).toContain('Cheapest five together I can see: about $1,008 for all 5 with fees.\n\n- Section 112, Row 2: $155 each, $775 for five before fees');
+    expect(rec!.bodyText).toContain('- Skipped: Section 210 at $140 each is 6 tickets, and sellers rarely leave a single seat.');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
   });
@@ -417,7 +412,7 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Fri, Oct 30, 7:30 PM EDT · 4 tickets\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 4 tickets\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
     expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);

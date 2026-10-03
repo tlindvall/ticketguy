@@ -29,7 +29,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
   it('08: explains the Philadelphia mismatch, never recommends it, keeps the access needs', () => {
     expect(turn('08', 2)).toContain("Preseason: New York Knicks v Philadelphia 76ers at Xfinity Mobile Arena, Philadelphia, Mon, Oct 5, 7:00 PM EDT doesn't fit: it's in Philadelphia, not at Madison Square Garden.");
     expect(turn('08', 2)).toContain('On another date, the next one that fits everything else you said is Preseason: New York Knicks v Washington Wizards at Madison Square Garden, New York, Thu, Oct 8, 7:30 PM EDT. Want that one instead?');
-    expect(turn('08', 3)).toMatch(/^Hey Jordan,\n\nPreseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thu, Oct 8/);
+    expect(turn('08', 3)).toMatch(/^Hey Jordan,\n\nPreseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thursday, October 8/);
     for (const n of [1, 2, 3]) expect(turn('08', n)).toContain(n === 2 ? 'Two New York Knicks tickets' : 'a wheelchair space with a companion seat beside it and a step-free route');
     expect(all('08')).not.toMatch(/Buy on|Event page on/);
     expect(turn('08', 3)).not.toContain('Philadelphia');
@@ -37,7 +37,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
 
   it('09: evening show only; A misses the 8am deadline, B fits; $360 and $390 stay order totals', () => {
     for (const n of [2, 3]) {
-      expect(turn('09', n)).toContain('Hamilton (NY)\nRichard Rodgers Theatre, New York · Sat, Oct 3, 8:00 PM EDT');
+      expect(turn('09', n)).toContain('Hamilton (NY)\nRichard Rodgers Theatre, New York · Saturday, October 3, at 8 p.m.');
       expect(turn('09', n)).toContain('Seller B is the one that meets what you asked for: $390 for both, fees included.');
       expect(turn('09', n)).toContain('- Seller A (ordinary seats, delivery by 5pm): $360 in total including fees. Delivery by 5pm misses your 8am deadline.');
       expect(turn('09', n)).toContain('Based on the terms you sent; I haven’t verified availability, and a promised transfer time isn’t a completed transfer.');
@@ -46,7 +46,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
   });
 
   it('15: keeps 7pm, $180 and the $24 order fee; the $200 budget stays separate; three seats do not cover four', () => {
-    expect(turn('15', 1)).toContain('Kanan Gill: Not This Again\nTown Hall, New York · Sat, Oct 3, 7:00 PM EDT · 3 tickets · up to $200 in total');
+    expect(turn('15', 1)).toContain('Kanan Gill: Not This Again\nTown Hall, New York · Saturday, October 3, at 7 p.m. · 3 tickets · up to $200 in total');
     for (const n of [1, 2, 3]) expect(turn('15', n)).toContain('The screenshot you sent shows $52 a ticket before fees, plus $24 in fees for the order: $180 for three, which is $60 each including fees.');
     for (const n of [2, 3]) {
       expect(turn('15', n)).toContain('· 4 tickets · up to $200 in total');
@@ -58,7 +58,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
 
   it('17: keeps the exact 7pm performance from the link, never the 4pm one', () => {
     expect(turn('17', 1)).toContain('That’s Kanan Gill: Not This Again at Town Hall, New York, Sat, Oct 3, 7:00 PM EDT.');
-    for (const n of [2, 3]) expect(turn('17', n)).toContain('Kanan Gill: Not This Again\nTown Hall, New York · Sat, Oct 3, 7:00 PM EDT · 3 tickets · up to $200 in total\n');
+    for (const n of [2, 3]) expect(turn('17', n)).toContain('Kanan Gill: Not This Again\nTown Hall, New York · Saturday, October 3, at 7 p.m. · 3 tickets · up to $200 in total\n');
     expect(all('17')).not.toContain('4:00 PM');
   });
 
@@ -71,7 +71,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
 
   it('04: next weekend has only Monday and Thursday games; says so and offers the next weekend game', () => {
     expect(turn('04', 1)).toContain("None of the two New York Knicks dates I found then fits: Mon, Oct 5, it's on a Monday; Thu, Oct 8, it's on a Thursday.");
-    expect(turn('04', 2)).toContain('New York Knicks vs. Fixture Opponent\nMadison Square Garden, New York · Sat, Oct 24, 7:30 PM EDT · 2 tickets · up to $300 in total');
+    expect(turn('04', 2)).toContain('New York Knicks vs. Fixture Opponent\nMadison Square Garden, New York · Saturday, October 24, at 7:30 p.m. · 2 tickets · up to $300 in total');
   });
 
   it('06: a Friday without a game is said plainly; the day is never changed', () => {
@@ -129,12 +129,12 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
 
   it('01 / 02 / 03 / 05 / 11 / 30: next home games resolved; no repeated home/away or date question', () => {
     for (const [id, n, label] of [
-      ['01', 2, 'Preseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thu, Oct 8, 7:30 PM EDT · 2 tickets · up to $300 in total'],
-      ['02', 2, 'New York Knicks vs. Fixture Opponent\nMadison Square Garden, New York · Sat, Oct 24, 7:30 PM EDT · 2 tickets · up to $300 in total'],
-      ['03', 2, 'New York Rangers vs. Tampa Bay Lightning\nMadison Square Garden, New York · Thu, Oct 1, 7:00 PM EDT · 3 tickets · up to $240 in total'],
-      ['05', 2, 'New York Rangers vs. Tampa Bay Lightning\nMadison Square Garden, New York · Thu, Oct 1, 7:00 PM EDT · 2 tickets · up to $200 in total'],
-      ['11', 2, 'Brooklyn Nets vs. Toronto Raptors\nBarclays Center, New York · Sat, Oct 10, 7:30 PM EDT · 3 tickets · up to $200 in total'],
-      ['30', 2, 'Brooklyn Nets vs. Toronto Raptors\nBarclays Center, New York · Sat, Oct 10, 7:30 PM EDT · 3 tickets · up to $240 in total'],
+      ['01', 2, 'Preseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thursday, October 8, at 7:30 p.m. · 2 tickets · up to $300 in total'],
+      ['02', 2, 'New York Knicks vs. Fixture Opponent\nMadison Square Garden, New York · Saturday, October 24, at 7:30 p.m. · 2 tickets · up to $300 in total'],
+      ['03', 2, 'New York Rangers vs. Tampa Bay Lightning\nMadison Square Garden, New York · Tomorrow, Thursday, October 1, at 7 p.m. · 3 tickets · up to $240 in total'],
+      ['05', 2, 'New York Rangers vs. Tampa Bay Lightning\nMadison Square Garden, New York · Tomorrow, Thursday, October 1, at 7 p.m. · 2 tickets · up to $200 in total'],
+      ['11', 2, 'Brooklyn Nets vs. Toronto Raptors\nBarclays Center, New York · Saturday, October 10, at 7:30 p.m. · 3 tickets · up to $200 in total'],
+      ['30', 2, 'Brooklyn Nets vs. Toronto Raptors\nBarclays Center, New York · Saturday, October 10, at 7:30 p.m. · 3 tickets · up to $240 in total'],
     ] as const) expect(turn(id, n)).toContain(label);
     for (const id of ['01', '03', '11', '30']) expect(all(id)).not.toMatch(/home or away|Which game|What date/i);
     expect(turn('03', 1)).toContain('That’s New York Rangers vs. Tampa Bay Lightning at Madison Square Garden, New York, Thu, Oct 1, 7:00 PM EDT.');

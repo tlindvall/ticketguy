@@ -114,6 +114,11 @@ function leadRich(s: string): string {
   return m ? `<strong>${esc(m[1]!)}</strong>${rich(s.slice(m[1]!.length))}` : `<strong>${esc(s)}</strong>`;
 }
 
+function labelRich(s: string): string {
+  const m = /^((?:Section|Row|A listing)[^:]{0,60}):/.exec(s);
+  return m ? `<strong>${esc(m[1]!)}</strong>${rich(s.slice(m[1]!.length))}` : rich(s);
+}
+
 /** A bold lead line and its bullets, in both bodies. */
 function section(lines: string[], html: string[], lead: string, items: string[]): void {
   lines.push(lead, items.map((i) => `- ${i}`).join('\n'));
@@ -203,14 +208,16 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [claim('C_CORRECTION'), watch, claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [claim('C_CORRECTION'), watch, claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PICKS'), claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
-    const fmt = lead ? leadRich : rich;
+    const fmt = lead || c.id === 'C_PICKS' ? leadRich : rich;
+    // Named seats scan by their place: "Section 214, Row 10 (StubHub):" in bold, then the price.
+    const item = c.id === 'C_PICKS' ? labelRich : rich;
     if (c.items?.length && c.text.includes('\n')) {
       const head = c.text.split('\n')[0]!;
       lines.push(head, c.items.map((i) => `- ${i}`).join('\n'));
-      html.push(P(fmt(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
+      html.push(P(fmt(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${item(i)}</li>`).join('')}</ul>`);
     } else {
       lines.push(c.text);
       html.push(P(fmt(c.text)));
@@ -281,7 +288,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PICKS', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -300,10 +307,14 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
   const asks = packet.followUps ?? [];
-  if (asks.length) section(lines, html, questionsLead(asks.length), asks);
+  // An offer to narrow named seats is a line of its own, not a one-item questionnaire.
+  if (asks.length === 1 && claimsById.get('C_PICKS')?.customerVisible) {
+    lines.push(asks[0]!);
+    html.push(P(esc(asks[0]!)));
+  } else if (asks.length) section(lines, html, questionsLead(asks.length), asks);
   // Nor over their own question (delivery, their offers, access, sales): a model closing there drifted into
   // generic buy-or-wait advice (post-#54 QA, R3-B03).
-  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING', 'C_LINK_UNREAD'].some((id) => claimsById.has(id))) {
+  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING', 'C_LINK_UNREAD', 'C_PICKS'].some((id) => claimsById.has(id))) {
     // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
     // worse, ask for the listing they already sent.
     lines.push(b.closing.trim());

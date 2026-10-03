@@ -1,6 +1,7 @@
 import { entryFailure, performanceFailure } from './concert-terms';
 import { fromVenueMinutes, minutesOf, offerTotal, timeLabel, venueZoneName, type PartyTerms, type TextOffer } from './text-offers';
 import { localStart } from '@/lib/domain/event-constraints';
+import { friendlyWhen } from '@/lib/domain/dates';
 import { MARKET_RECENT_HOURS, basisSize, isGroupBasis, marketMoved, type Change, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { createHash } from 'node:crypto';
 import { formatUsd, perPersonCents } from '@/lib/domain/money';
@@ -10,7 +11,7 @@ import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
 import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
 import { shownPriceParts } from './shown-prices';
-import type { AlternativesResult, MarketListing } from '@/lib/market/alternatives';
+import type { AlternativesResult, ListingPicks, MarketListing } from '@/lib/market/alternatives';
 
 /**
  * Typed evidence packet (API_AND_DATA_CONTRACTS §10). Every fact the customer sees is a server-rendered
@@ -142,6 +143,8 @@ export type BuildPacketArgs = {
   eventIdentity?: { names: string[]; nicknames: string[]; venueNames: string[]; city: string | null } | null;
   /** The event's start, to size delivery margins in its venue's zone. */
   eventStartAt?: Date | null;
+  /** The start the header shows: the show time when their screenshot put the stored time at doors. Defaults to eventStartAt. */
+  headerStartAt?: Date | null;
   /** Whether the buyer said they need accessible seating. */
   accessibilityRequired?: boolean;
   /** The venue's time zone, for saying when something was checked. */
@@ -191,6 +194,11 @@ export type BuildPacketArgs = {
   watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false; reason?: string | null } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
+  /**
+   * Seats for their party from the licensed listings read, when they sent nothing to judge (live Oct 3, Rangers: seats,
+   * not questions). Listed prices before fees with the fee allowance said; `age` is the provider's refresh time.
+   */
+  picks?: (ListingPicks & { age: 'undated' | 'recent' | number }) | null;
   /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
   travelling?: boolean;
   /** Where they want to sit ("lower level"), when they said: a venue-wide figure doesn't describe those seats. */
@@ -787,12 +795,15 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
     if (!a.best) return [a.link && !a.link.eventPage ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?` : 'Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them against what you need.'];
     return [];
   }
+  // Seats already named: the one useful next step is narrowing them, not a questionnaire (live Oct 3).
+  if (a.picks?.picks.length && picksAnswer(a)) return a.priorities.budgetTotalCents === null ? ['Want me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.'] : [];
   const out: string[] = [];
   const sub = a.subject ?? null;
   // "Are they worth it?" has already asked for the price and section in its answer.
   // A listing link's lead already makes the one ask (its price and section), so it isn't asked twice.
   const listingLink = !!a.link && !a.link.eventPage;
-  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2) && !(a.link && a.asks?.worth) && !listingLink) {
+  // Seats already named for them: no "found seats you like? send them" homework (live Oct 3, Rangers).
+  if (!a.quote && !a.best && !sub && !a.staffFollowUp && !(a.textOffers && a.textOffers.length >= 2) && !(a.link && a.asks?.worth) && !listingLink && !a.picks?.picks.length) {
     // We never open marketplace pages, so a link tells us the event and nothing about the seats or price.
     out.push(a.link && !a.link.eventPage
       ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?`
@@ -1202,6 +1213,18 @@ export function quoteVerdict(perTicketCents: number, face: { minCents: number; m
  * "Tonight" or "Today" for a game later the same local day: the one timing fact a same-day buyer needs up top. Not
  * "in about 3 hours", which goes stale while a draft waits for review; a day word stays true until the start.
  */
+/**
+ * The header's date as a person says it, "Tomorrow, Sunday, October 4, at 6 p.m." (live Oct 3: "Tue, Oct 13, 7:15 PM
+ * EDT" read like a form next to a browsing assistant's "tomorrow, Sunday October 4, at 6 p.m."). Doors stay as given.
+ */
+function friendlyHeaderWhen(a: BuildPacketArgs, catalogWhen: string, soon: 'Tonight' | 'Today' | null): string {
+  const doors = (/\s\((?:doors|that’s when)[^)]*\)$/.exec(catalogWhen)?.[0] ?? '').replace(/\b(\d{1,2}):(\d\d) ?(AM|PM)\b/gi, (_m, h: string, mm: string, ap: string) => `${h}${mm === '00' ? '' : `:${mm}`} ${ap.toUpperCase() === 'PM' ? 'p.m.' : 'a.m.'}`);
+  const start = a.headerStartAt ?? a.eventStartAt;
+  if (!start || !a.timeZone) return soon ? `${soon}, ${catalogWhen}` : catalogWhen;
+  const w = friendlyWhen(start, a.timeZone, a.observedAt);
+  return `${w.replace(/^./, (c) => c.toUpperCase())}${doors}`;
+}
+
 export function sameDay(start: Date | null | undefined, now: Date, tz: string | undefined): 'Tonight' | 'Today' | null {
   if (!start || !tz || start.getTime() <= now.getTime()) return null;
   const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
@@ -1227,7 +1250,7 @@ function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headl
   const parts = a.eventParts;
   return {
     headline: [a.eventLabel, ...brief].join(' · '),
-    ...(parts ? { headlineTitle: parts.title, headlineDetails: [parts.where, soon ? `${soon}, ${parts.when}` : parts.when, ...brief].join(' · ') } : {}),
+    ...(parts ? { headlineTitle: parts.title, headlineDetails: [parts.where, friendlyHeaderWhen(a, parts.when, soon), ...brief].join(' · ') } : {}),
   };
 }
 
@@ -1275,6 +1298,45 @@ export function packetCoverage(a: { said: string; trendAsked: boolean; asks: { w
   if (a.asks.worth) add('is it a good price', seen.has('C_VERDICT') || seen.has('C_QUOTE') || seen.has('C_QUOTE_MARKET') ? 'answered' : seen.has('C_LINK_UNREAD') ? 'needs_clarification' : null);
   if (a.asks.cheaper) add('find something cheaper', seen.has('C_BEST') || seen.has('C_ALTERNATIVES') ? 'answered' : seen.has('C_STAFF') ? 'operational_follow_up' : 'unsupported');
   return { questions: q, gaps };
+}
+
+/**
+ * "Four together for about $400 with fees, inside your $400: section 214, row 10 on StubHub, $77 a ticket before fees."
+ * The answer first, then the next options, then what it is and isn't: listed before fees with the allowance added, a
+ * listing of more than their number may not sell exactly that many, and nothing is checked as still there.
+ */
+function picksAnswer(a: BuildPacketArgs): { head: string; items: string[] } | null {
+  const p = a.picks;
+  if (!p?.picks.length || a.subject || a.quote || (a.best && a.best.comparableTotalCents !== null) || (a.textOffers && a.textOffers.length >= 2)) return null;
+  const q = a.quantity;
+  const n = q === 1 ? 'one' : qtyWord(q);
+  const seats = q === 1 ? 'one seat' : `${n} seats together`;
+  const seat = (x: (typeof p.picks)[number]) => {
+    const where = [x.listing.section ? `Section ${x.listing.section}` : null, x.listing.row ? `Row ${x.listing.row}` : null].filter(Boolean).join(', ') || 'A listing';
+    const on = x.listing.marketplace === 'stubhub' ? ' (StubHub)' : x.listing.marketplace === 'vividseats' ? ' (Vivid Seats)' : '';
+    return `${where}${on}`;
+  };
+  const [first, ...rest] = p.picks;
+  const est = formatUsd(roundToDollar(first!.estimatedTotalCents));
+  const budget = p.budgetTotalCents;
+  const all = q === 1 ? '' : q === 2 ? ' for both' : ` for all ${q}`;
+  // The answer, in one bold line, the way a person would say it (live Oct 3: compared with a browsing assistant's
+  // "Found four seats together for $308 total"). Then one short line per seat, its place first, so it scans.
+  const head = !p.fits && budget != null
+    ? `Nothing for ${seats} fits your ${formatUsd(budget)} with fees right now; the closest is about ${est}${all}.`
+    : budget != null
+      ? `I’d take these: ${seats} for about ${est} with fees, ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)}.`
+      : `Cheapest ${q === 2 ? 'pair' : q === 1 ? 'seat' : `${n} together`} I can see: about ${est}${all} with fees.`;
+  const line = (x: (typeof p.picks)[number]) =>
+    `${seat(x)}: ${formatUsd(x.listing.priceCents)} each${q > 1 ? `, ${formatUsd(x.listedTotalCents)} for ${n}` : ''} before fees${x.exactSplit ? '' : ` (a listing of ${x.listing.quantity}, so it may not sell exactly ${q})`}`;
+  const items: string[] = [line(first!), ...(p.fits ? rest.map(line) : [])];
+  // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
+  const u = p.cheaperUnsplit;
+  if (u && p.fits) items.push(`Skipped: ${u.listing.section ? `Section ${u.listing.section}` : 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`);
+  const age = p.age === 'undated' ? 'the resale data doesn’t say how recent it is' : typeof p.age === 'number' ? `resale data about ${p.age} hours old` : 'resale data from the last couple of hours';
+  items.push(`Fees: I’ve allowed ${p.feeAllowancePct}%, so check the total at checkout.`);
+  items.push(`Not checked yet: that they’re still for sale${q > 1 ? ' and sit together' : ''} (${age}).`);
+  return { head, items };
 }
 
 /** Their "is that realistic?" about the cap they gave, from the cheapest pair the market shows; null when not asked. */
@@ -1379,6 +1441,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
+  // Seats for their party, named, first: what they asked for, from the listings we can read (live Oct 3, Rangers).
+  const picksText = picksAnswer(a);
+  if (picksText) claims.push({ id: 'C_PICKS', kind: 'market_price', text: `${picksText.head}\n${picksText.items.join('\n')}`, items: picksText.items, values: { picks: a.picks!.picks.length, fits: a.picks!.fits ? 1 : 0, cheapestPerTicketCents: a.picks!.picks[0]?.listing.priceCents ?? null }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: 'picks-1.0', limitations: ['listed_prices_before_fees', 'fee_allowance_estimate', 'not_a_verified_offer'], customerVisible: !!a.market?.visible });
   // "Is that realistic?" about their cap (launch Q01, A23): answered from the cheapest pair the market shows, or said
   // plainly that we can't see one. Listed prices are before fees; nothing here says those seats meet their other needs.
   const realistic = realisticAnswer(a);
@@ -1656,7 +1721,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // With a listing of theirs, the verdict and its catches check it against these; this is for requests without.
   // A listing link they sent is theirs too: the one ask for its price and seats covers it (FV-R1-03: "I haven't
   // been able to check this against any seats yet: 2 seats together" under the StubHub link it was about).
-  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null)) {
+  // Seats already named for them say what is and isn't checked; "I haven't checked this against any seats" would contradict them.
+  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !picksAnswer(a)) {
     const reqs = a.requirements;
     claims.push({
       id: 'C_REQS',
@@ -1867,6 +1933,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     if (sub && shownRowLead(a, sub)) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
     claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
   }
+
+  // Seats named for them are the price summary: the venue floor, its source line and a read worked out from that floor
+  // would give a second, conflicting "cheapest" right under them (a block of five quoted under four seats picked).
+  if (claims.some((c) => c.id === 'C_PICKS' && c.customerVisible)) for (const c of claims) if (['C_MARKET', 'C_MARKET_TYPICAL', 'C_READ'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
 
   // Their correction, acknowledged first and specifically, then the answer on the corrected facts (live A11-F1).
   if (a.corrections?.length) {
