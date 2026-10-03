@@ -9,6 +9,7 @@ import type { TrendResult } from './trend';
 import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
 import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
+import { shownPriceParts } from './shown-prices';
 import type { AlternativesResult, MarketListing } from '@/lib/market/alternatives';
 
 /**
@@ -173,6 +174,9 @@ export type BuildPacketArgs = {
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
   /** Questions they asked that aren't about price, answered first (TG-B02). */
+  /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
+  askedText?: string;
+  threadText?: string;
   asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
@@ -241,9 +245,6 @@ function otherRows(sub: SubjectListing): string | null {
   return listJoin([...groups].map(([label, prices]) => `${label} at ${listJoin(prices)}`));
 }
 
-/** "GA Ticket Price Tier 3: While Supplies Last" → "GA Ticket Price Tier 3": the row's name without the page's boilerplate. */
-const rowName = (label: string) => label.replace(/:\s*while supplies last\s*$/i, '').trim();
-
 /**
  * Their question about the rows already on the page, answered first and in their terms: which of the rows they quote
  * is cheaper for the party and by how much, whether the chosen row fits the cap they gave, whether tax is in it
@@ -253,26 +254,11 @@ export function rowsAnswer(a: BuildPacketArgs, sub: SubjectListing): string | nu
   const rows = (sub.offers ?? []).filter((o) => o.perTicketCents !== null);
   if (!rows.length || sub.perTicketCents == null) return null;
   const n = sub.quantity ?? a.quantity;
-  const out: string[] = [];
-  const named = [...new Set(a.asks?.quotedRows ?? [])].map((c) => rows.find((o) => o.perTicketCents === c)).filter((o): o is NonNullable<typeof o> => !!o);
-  if (a.asks?.whichCheaper && named.length >= 2) {
-    const [lo, hi] = named.slice().sort((x, y) => x.perTicketCents! - y.perTicketCents!) as [typeof named[number], typeof named[number]];
-    const loName = rowName(lo.label);
-    const hiName = rowName(hi.label);
-    out.push(lo.perTicketCents === hi.perTicketCents
-      ? `They cost the same: ${formatUsd(lo.perTicketCents! * n)} for ${qtyWord(n)} either way.`
-      : `${loName} is cheaper: ${formatUsd(lo.perTicketCents! * n)} for ${qtyWord(n)}, against ${formatUsd(hi.perTicketCents! * n)} for ${hiName}, so ${formatUsd((hi.perTicketCents! - lo.perTicketCents!) * n)} less.`);
-  }
-  const budget = a.priorities.budgetTotalCents;
-  if (a.asks?.fits && budget != null) {
-    const total = sub.perTicketCents * n;
-    out.push(total <= budget
-      ? `Yes: ${formatUsd(total)} for ${qtyWord(n)} is within your ${formatUsd(budget)}${total < budget ? `, with ${formatUsd(budget - total)} to spare` : ''}.`
-      : `No: ${formatUsd(total)} for ${qtyWord(n)} is ${formatUsd(total - budget)} over your ${formatUsd(budget)}.`);
-  }
-  if (a.asks?.taxAsked && sub.beforeTaxes) out.push(`Those prices include fees but not tax, so tax is added on top at checkout.`);
-  else if (a.asks?.taxAsked) out.push(`The screenshot doesn’t say whether tax is included, so check the total at checkout.`);
-  return out.length ? out.join(' ') : null;
+  // Their own words when we have them ("tier 2 or tier 3?" names rows without a price); else the prices they quoted.
+  const text = a.askedText ?? (a.asks?.quotedRows ?? []).map((c) => `$${(c / 100).toFixed(2)} each`).join(' and ');
+  const chosen = rows.find((o) => o.label === sub.section && o.perTicketCents === sub.perTicketCents) ?? { label: sub.section ?? '', perTicketCents: sub.perTicketCents, priceBasis: 'per_ticket' as const, feeBasis: sub.feeBasis, listingType: sub.listingType ?? 'unknown', admission: sub.admission ?? 'unknown' };
+  const parts = shownPriceParts({ rows, chosen, quantity: n, budgetCents: a.priorities.budgetTotalCents, text, thread: a.threadText, beforeTaxes: sub.beforeTaxes ?? null, asks: { whichCheaper: !!a.asks?.whichCheaper, fits: !!a.asks?.fits, taxAsked: !!a.asks?.taxAsked } });
+  return parts.length ? parts.join(' ') : null;
 }
 
 /** "The listing shows 2 tickets in section 212, row D, seats 5 and 6, on StubHub, for $490 in total, delivered by Oct 3." */
