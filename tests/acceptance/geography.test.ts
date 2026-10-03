@@ -4,6 +4,7 @@ import type { DbHandle } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
+import { ordinalChoice } from '@/lib/intake/pipeline';
 import { openTestDb, makeConcierge, inbound } from '../harness';
 
 async function interpretAll(h: DbHandle, c: ReturnType<typeof makeConcierge>) {
@@ -64,11 +65,11 @@ describe('not playing where they asked: the nearest shows elsewhere', () => {
     const ask = sends.find((s) => s.messageClass === 'clarification')!;
     expect(ask.bodyText).toContain('Metallica isn’t playing in New York');
     expect(ask.bodyText).not.toContain('couldn\'t find a scheduled');
-    const q = ask.bodyText.split('\n\n').find((p) => p.startsWith('Would one of these work'))!;
-    expect(q).toBeDefined();
-    // Closest first, and a coast away is left out while there is something within reach.
-    expect(q).toBe('Would one of these work: Sat, Oct 24 at Hartford HealthCare Amphitheater, Bridgeport (about 55 miles from New York); Sat, Oct 10 at Lincoln Financial Field, Philadelphia (about 85 miles from New York); or Sat, Oct 17 at Gillette Stadium, Foxborough (about 170 miles from New York)? Reply with the date, or tell me how far you’d travel.');
-    expect(ask.bodyText).toContain('Metallica isn’t playing in New York, but there are shows not far off.');
+    // Closest first, and a coast away is left out while there is something within reach. Said as a person would:
+    // the answer, the shows as a list, then one question (live Oct 3: "around then", "shows not far off", a run-on).
+    expect(ask.bodyText).toContain('Hey,\n\nMetallica isn’t playing in New York. The closest shows:\n• Hartford HealthCare Amphitheater, Bridgeport, about 55 miles away: Saturday, October 24, at 7 p.m.\n• Lincoln Financial Field, Philadelphia, about 85 miles away: Saturday, October 10, at 7:30 p.m.\n• Gillette Stadium, Foxborough, about 170 miles away: Saturday, October 17, at 7:30 p.m.\n\nWhich one works? I’ll find you two seats for it, or tell me how far you’d travel.');
+    expect(ask.bodyText).not.toMatch(/Got it|around then|not far off|soon\./);
+    expect(ask.bodyHtml).toContain('<li style="margin:0 0 4px;">Hartford HealthCare Amphitheater, Bridgeport, about 55 miles away: Saturday, October 24, at 7 p.m.</li>');
     expect(ask.bodyText).not.toContain('Which Metallica date and venue');
 
     await c.ingestInbound(inbound({ text: 'Oct 10 works', from, subject: 'Re: Metallica', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
@@ -87,14 +88,40 @@ describe('not playing where they asked: the nearest shows elsewhere', () => {
     expect(sends.some((s) => s.bodyText.includes('Metallica isn’t playing in New York then, so I’ve gone with Lincoln Financial Field in Philadelphia (about 85 miles from New York). Tell me if that’s too far.'))).toBe(true);
   });
 
+  // Live Oct 3: "Yes the first one would be great. How much are the cheapest tickets? I need 2" got the same two
+  // Mohegan Sun nights back, word for word. The first one on the list is the one they get.
+  it('"the first one" after the list settles on the first show listed, never the same list again', async () => {
+    const c = makeConcierge(h);
+    const from = 'firstone@customer.example';
+    const first = inbound({ text: 'Looking for the best available Metallica tickets. Are they playing near new york soon?', from, subject: 'Metallica' });
+    const r = (await c.ingestInbound(first)) as { requestId: string };
+    await interpretAll(h, c);
+    await c.ingestInbound(inbound({ text: 'Yes the first one would be great. How much are the cheapest tickets_.I need 2', from, subject: 'Re: Metallica', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await interpretAll(h, c);
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+    const [bridgeport] = await h.db.select({ id: t.events.id }).from(t.events).where(eq(t.events.venueId, BRIDGEPORT));
+    expect(req!.eventId).toBe(bridgeport!.id);
+    const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
+    expect(sends.filter((s) => s.bodyText.includes('The closest shows:'))).toHaveLength(1);
+  });
+
+  it('picks by position only when the message picks by position', () => {
+    expect(ordinalChoice('Yes the first one would be great', 2)).toBe(0);
+    expect(ordinalChoice('the second show please', 3)).toBe(1);
+    expect(ordinalChoice('Let’s do the last one.', 3)).toBe(2);
+    expect(ordinalChoice('option 2', 3)).toBe(1);
+    expect(ordinalChoice('the third one', 2)).toBeNull();
+    expect(ordinalChoice('It’s my first time at a concert, first row would be nice', 3)).toBeNull();
+  });
+
   it('when every show is far, says so and still names the nearest', async () => {
     const c = makeConcierge(h);
     const r = (await c.ingestInbound(inbound({ text: 'Two Metallica tickets in Chicago', from: 'chicago@customer.example', subject: 'Metallica' }))) as { requestId: string };
     await interpretAll(h, c);
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     const body = sends.find((s) => s.messageClass === 'clarification')!.bodyText;
-    expect(body).toContain('Metallica isn’t playing in Chicago, and the nearest shows I can find are a trip away.');
-    expect(body).toMatch(/Philadelphia \(about [\d,]+ miles from Chicago\)/);
+    expect(body).toContain('Metallica isn’t playing in Chicago. The nearest I can find are a trip away:');
+    expect(body).toMatch(/Lincoln Financial Field, Philadelphia, about [\d,]+ miles away: /);
     expect(body).not.toContain('Seattle'); // three nearest to Chicago: the east coast shows, not the west
   });
 

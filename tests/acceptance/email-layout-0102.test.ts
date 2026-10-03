@@ -67,7 +67,7 @@ describe('advice email layout: a same-day game with only a listing count', () =>
 
   it('the header is the event in bold, then where, when (tonight) and the party in a lighter line', () => {
     expect(rec!.bodyText.startsWith('Hey,\n\nDetroit Red Wings vs. New York Rangers\nLittle Caesars Arena, Detroit · Tonight at 6:30 p.m. · 5 tickets\n\n')).toBe(true);
-    expect(rec!.bodyHtml).toContain('<strong style="font-size:16px;">Detroit Red Wings vs. New York Rangers</strong><br><span style="font-size:14px;color:#6b6b6b;">Little Caesars Arena, Detroit · Tonight at 6:30 p.m. · 5 tickets</span>');
+    expect(rec!.bodyHtml).toContain('<strong>Detroit Red Wings vs. New York Rangers</strong><br><span style="color:#536174;">Little Caesars Arena, Detroit · Tonight at 6:30 p.m. · 5 tickets</span>');
     // An event page told us the game, nothing else: the header doesn't say "from the StubHub link you sent".
     expect(rec!.bodyText).not.toContain('link you sent');
   });

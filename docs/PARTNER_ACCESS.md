@@ -72,3 +72,11 @@ The review console shows, for every resolved request, the sources the routing po
 ## What is explicitly off the table
 
 Scraping any of these sites, automating a browser against them, or presenting a search-page snippet as a live price. Each would get the sending domain blocked or the business into a dispute, and none produces an all-in price a customer can be told is real. The handoff excludes them; so does this document.
+
+## Open-web event lookup (Anthropic web search)
+
+When the catalog (Ticketmaster Discovery) and the nearby-shows search find nothing, intake asks Claude's web search tool once for the event the customer named (live Oct 3: Soho House Festival New York at Pier 17, sold by Soho House only). It runs only with `EXTRACTION_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`.
+
+- `WEB_EVENT_SEARCH=on|off` (default `on`). `WEB_EVENT_SEARCH_DAILY_LIMIT` (default 50) counts lookups across all customers in the last 24 hours; over it, the usual question is asked and `web.event_search_skipped` is recorded.
+- Each lookup reserves AI budget like any model call (up to 3 searches, about $0.01 each, plus tokens) and is recorded as `web.event_search` with the names, dates and source hosts it found, never the customer's words.
+- An event is only used when a page the search actually returned states it; a link the model wrote that isn't one of those pages is never sent. The reply says what the page says and links it. It never states prices, seats or availability.

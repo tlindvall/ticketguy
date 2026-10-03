@@ -1373,7 +1373,7 @@ export const emailBrandSignature = pgTable('email_brand_signature', {
   displayName: text('display_name').notNull(),
   tagline: text('tagline').notNull(),
   shortSignoff: text('short_signoff').notNull(),
-  logo: text('logo').notNull(), // 'badge' | 'mark' | 'none'
+  logo: text('logo').notNull(), // 'mascot' | 'badge' | 'mark' | 'none'
   updatedBy: text('updated_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

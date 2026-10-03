@@ -4,6 +4,7 @@ import { Concierge } from '@/lib/intake/pipeline';
 import { FixtureExtractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
 import { ModelDrafter, ModelExtractor, ModelListingReader, type Effort, type StructuredClient } from '@/lib/ai/model-client';
+import { AnthropicWebEventFinder } from '@/lib/ai/web-events';
 import { AnthropicClient } from '@/lib/ai/anthropic';
 import { OpenAiClient } from '@/lib/ai/openai';
 import { ResendProvider } from '@/lib/email/resend';
@@ -45,6 +46,8 @@ export function getConcierge(): Promise<Concierge> {
         drafter: selected ? new ModelDrafter(selected.client, selected.model, selected.effort) : new FixtureDrafter(),
         // Screenshots and pasted listings are read only by a real model; fixture mode stores them unread.
         listingReader: selected ? new ModelListingReader(selected.client, selected.model, selected.effort) : undefined,
+        // The open-web lookup runs on Anthropic's web search tool, so only with that provider and its key.
+        webEventFinder: !fixture && e.WEB_EVENT_SEARCH === 'on' && e.EXTRACTION_PROVIDER === 'anthropic' && e.ANTHROPIC_API_KEY ? new AnthropicWebEventFinder(e.ANTHROPIC_API_KEY, e.ANTHROPIC_BASE_MODEL) : undefined,
         emailProvider: e.EMAIL_SEND_ENABLED && e.RESEND_API_KEY ? new ResendProvider(e.RESEND_API_KEY) : null,
         fixtureOffers: fixture || e.DEV_FIXTURE_OFFERS ? FIXTURE_OFFERS : {},
       });

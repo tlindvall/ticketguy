@@ -69,6 +69,7 @@ describe('the advice email reads at a glance', () => {
     // The opener's first sentence carries the emphasis; amounts elsewhere aren't each bolded.
     expect(r.htmlBody).toMatch(/<strong>My read: [^<]+<\/strong>/);
     expect(r.htmlBody).not.toContain('<strong>$130</strong>');
-    expect(r.htmlBody).toContain('font-size:13px');
+    // The source line is the small print: 14/21 in the supporting grey (personal-email design, Oct 3).
+    expect(r.htmlBody).toContain('font-size:14px;line-height:21px;color:#536174;');
   });
 });

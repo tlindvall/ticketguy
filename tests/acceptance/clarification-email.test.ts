@@ -90,7 +90,10 @@ describe('the clarification email', () => {
     expect(body).not.toContain('Just reply and I’ll narrow it down.');
     // First message in the conversation: the full signature, and an honest disclosure.
     expect(body).toContain('Ticket Guy\nYour second opinion before you buy.\nhttps://ticketguy.now');
-    expect(intent!.bodyHtml).toContain('/email/ticket-mark@3x.png');
+    expect(intent!.bodyHtml).toContain('/email/ticket-guy-mascot@3x.png');
+    // One type size a person reads, 16/24 in Ticket Guy ink, and 20px either side (personal-email design, Oct 3).
+    expect(intent!.bodyHtml).toContain('font-size:16px;line-height:24px;color:#142438;');
+    expect(intent!.bodyHtml).not.toMatch(/font-size:(?:11|12|13|15)px/);
     expect(body.trim().endsWith('AI-assisted ticket advice.')).toBe(true);
     expect(body).not.toContain('human-reviewed');
     // Left-aligned, not a centred newsletter column.
