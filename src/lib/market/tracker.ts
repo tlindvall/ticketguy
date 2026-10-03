@@ -7,7 +7,7 @@ import { audit } from '@/lib/util/audit';
 import { gate as policyGate, policyForEvent } from '@/lib/intake/service-policy';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
 import { toMarketListing, type MarketListing } from './alternatives';
-import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, type MarketBasis, type MarketContext, type SeriesPoint } from './series';
+import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, providerTime, type MarketBasis, type MarketContext, type Point, type SeriesPoint } from './series';
 
 /**
  * Market tracking (DECISION_LOG #44): every event a customer asks about, and the cohort named in
@@ -364,7 +364,8 @@ export class MarketTracker {
     }
     const prompted = groupsRead || (await this.prioritize(tr.providerEventId, ev.e.id));
     const { snapshots } = await api.eventStats(tr.providerEventId, { start_date: tr.lastObservedAt ? tr.lastObservedAt.toISOString().slice(0, 10) : undefined });
-    const points = snapshots.flatMap(pointsFromSnapshot).filter((p) => !tr.lastObservedAt || p.observedAt > tr.lastObservedAt);
+    // A snapshot is dated by the provider: one we already hold, fetched again, is the same observation and adds nothing.
+    const points = snapshots.flatMap((s) => pointsFromSnapshot(s, now)).filter((p) => !tr.lastObservedAt || p.observedAt > tr.lastObservedAt);
     await this.storePoints(ev, points);
     const newest = points.reduce<Date | null>((m, p) => (!m || p.observedAt > m ? p.observedAt : m), tr.lastObservedAt);
     const ctx = await this.context(ev.e.id, 'single', ev.e.localStartAt);
@@ -501,10 +502,14 @@ export class MarketTracker {
     const before = api.calls;
     const r = await api.listings(providerEventId);
     const listings = Array.isArray(r.listings) ? r.listings : [];
-    const points = pointsFromListings(listings, sizes, this.now());
+    // Dated by when SeatData last refreshed the listings, not by when we asked: the same cached listings read twice
+    // land on the same time and add no history (TREND-ACC-01). No refresh time, and the read stays undated.
+    const retrievedAt = this.now();
+    const asOf = providerTime(r.last_refresh_timestamp, retrievedAt);
+    const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
     await this.rememberListings(ev.e.id, listings);
-    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}`);
+    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}`);
     return points.length;
   }
 
@@ -516,7 +521,8 @@ export class MarketTracker {
       quantity: basisSize(p.basis),
       seatZone: p.zone,
       observedAt: p.observedAt,
-      providerAsOf: p.observedAt,
+      providerAsOf: p.providerAsOf,
+      retrievedAt: p.retrievedAt,
       leadTimeMinutes: Math.round((ev.e.localStartAt.getTime() - p.observedAt.getTime()) / 60_000),
       cheapestEligibleTotalCents: p.priceCents,
       medianEligibleTotalCents: p.medianCents,
@@ -525,7 +531,7 @@ export class MarketTracker {
       // Listed per-ticket prices before fees: the verified-total trend and benchmark engines exclude this basis.
       feeBasis: 'listed_price',
       coverageComplete: true,
-      qualityFlags: ['per_ticket', 'listed_before_fees'],
+      qualityFlags: ['per_ticket', 'listed_before_fees', ...(p.providerAsOf ? [] : ['provider_time_unknown'])],
       observationIds: [],
       methodVersion: MARKET_METHOD_VERSION,
       isFixture: false,
@@ -565,7 +571,7 @@ export class MarketTracker {
       const start = starts[0]!;
       const b2 = api.calls;
       const { snapshots } = await api.eventStats(p.event_id, { maxPages: 3 });
-      const sampled = downsample(snapshots.flatMap(pointsFromSnapshot), HISTORY_SAMPLE_HOURS);
+      const sampled = downsample(snapshots.flatMap((s) => pointsFromSnapshot(s)), HISTORY_SAMPLE_HOURS);
       const rows = sampled.map((pt) => ({ datasetId: SEATDATA_DATASET_ID, providerEventId: String(p.event_id), entityId: ev.ent!.id, venueId: ev.v.id, eventName: p.event_name, eventStartAt: start, basketKey: marketBasketKey(`provider:${p.event_id}`, pt.basis, pt.zone), quantity: pt.basis === 'single' ? 1 : 2, seatZone: pt.zone, observedAt: pt.observedAt, leadTimeMinutes: Math.round((start.getTime() - pt.observedAt.getTime()) / 60_000), priceCents: pt.priceCents, medianCents: pt.medianCents, activeListings: pt.activeListings }));
       for (let i = 0; i < rows.length; i += 200) await this.db.insert(t.marketHistory).values(rows.slice(i, i + 200)).onConflictDoNothing();
       await this.log('history_stats', ev.e.id, 'success', api.calls - b2, rows.length, String(p.event_id));
@@ -625,35 +631,106 @@ export function marketDecision(ctx: MarketContext): { decision: 'buy' | 'wait'; 
   const reasons = [`direction_${ctx.direction}`, `supply_${ctx.supply.trend}`];
   if (ctx.supply.trend === 'shrinking') return { decision: 'buy', reasons: [...reasons, 'listings_shrinking'] };
   if (ctx.direction === 'down') return { decision: 'wait', reasons: [...reasons, 'prices_falling_supply_holding'] };
+  // Mixed is not a fall: the day and the three days disagree, so there is nothing to wait on.
+  if (ctx.direction === 'mixed') return { decision: 'buy', reasons: [...reasons, 'prices_mixed'] };
   return { decision: 'buy', reasons };
 }
 
-export async function loadMarketContext(db: DbOrTx, a: { eventId: string; basis: MarketBasis; zone?: string | null; eventStartAt: Date; now: Date }): Promise<MarketContext> {
+/**
+ * The context for one basis, from the series we hold. `zones` reads those zones' series together, the cheapest of
+ * them at each provider time ("Floor A" and "Floor B" are both the floor); none reads the whole venue.
+ */
+export async function loadMarketContext(db: DbOrTx, a: { eventId: string; basis: MarketBasis; zone?: string | null; zones?: string[]; eventStartAt: Date; now: Date }): Promise<MarketContext> {
   const since = new Date(a.now.getTime() - 10 * 86_400_000);
-  const basketKey = marketBasketKey(a.eventId, a.basis, a.zone ?? null);
-  const rows = await db.select({ at: t.marketSnapshots.observedAt, price: t.marketSnapshots.cheapestEligibleTotalCents, count: t.marketSnapshots.eligibleOptionCount }).from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, a.eventId), eq(t.marketSnapshots.basketKey, basketKey), gte(t.marketSnapshots.observedAt, since), lte(t.marketSnapshots.observedAt, a.now))).orderBy(asc(t.marketSnapshots.observedAt));
+  const zones = a.zones?.length ? a.zones : [a.zone ?? null];
+  const keys = zones.map((z) => marketBasketKey(a.eventId, a.basis, z));
+  const rows = await db.select({ at: t.marketSnapshots.observedAt, asOf: t.marketSnapshots.providerAsOf, got: t.marketSnapshots.retrievedAt, price: t.marketSnapshots.cheapestEligibleTotalCents, count: t.marketSnapshots.eligibleOptionCount }).from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, a.eventId), inArray(t.marketSnapshots.basketKey, keys), gte(t.marketSnapshots.observedAt, since), lte(t.marketSnapshots.observedAt, a.now))).orderBy(asc(t.marketSnapshots.observedAt));
+  const byTime = new Map<string, Point>();
+  for (const r of rows) {
+    if (r.price === null) continue;
+    const k = `${r.at.toISOString()}|${r.asOf ? 'dated' : 'undated'}`;
+    const prev = byTime.get(k);
+    if (prev && prev.priceCents <= r.price) continue;
+    byTime.set(k, { observedAt: r.at, priceCents: r.price, activeListings: zones.length > 1 ? null : r.count, timeKnown: r.asOf !== null, providerAsOf: r.asOf, retrievedAt: r.got });
+  }
+  const zoneLabel = a.zones?.length ? a.zones.join(' + ') : a.zone ?? null;
   const [ev] = await db.select({ ent: t.events.primaryEntityId, venue: t.events.venueId }).from(t.events).where(eq(t.events.id, a.eventId));
   // Past games' history is kept for singles and pairs only; groups have no "typical" yet.
-  const hist = ev?.ent && !isGroupBasis(a.basis)
-    ? await db.select({ eventKey: t.marketHistory.providerEventId, lead: t.marketHistory.leadTimeMinutes, price: t.marketHistory.priceCents }).from(t.marketHistory).where(and(eq(t.marketHistory.entityId, ev.ent), eq(t.marketHistory.venueId, ev.venue), eq(t.marketHistory.quantity, basisSize(a.basis)), a.zone ? eq(t.marketHistory.seatZone, a.zone) : isNull(t.marketHistory.seatZone)))
+  const histZone = zones.length === 1 ? zones[0] : undefined;
+  const hist = ev?.ent && !isGroupBasis(a.basis) && histZone !== undefined
+    ? await db.select({ eventKey: t.marketHistory.providerEventId, lead: t.marketHistory.leadTimeMinutes, price: t.marketHistory.priceCents }).from(t.marketHistory).where(and(eq(t.marketHistory.entityId, ev.ent), eq(t.marketHistory.venueId, ev.venue), eq(t.marketHistory.quantity, basisSize(a.basis)), histZone ? eq(t.marketHistory.seatZone, histZone) : isNull(t.marketHistory.seatZone)))
     : [];
-  return computeMarketContext({ basis: a.basis, zone: a.zone ?? null, points: rows.filter((r) => r.price !== null).map((r) => ({ observedAt: r.at, priceCents: r.price!, activeListings: r.count })), now: a.now, eventStartAt: a.eventStartAt, comparables: hist.map((h) => ({ eventKey: h.eventKey, leadMinutes: h.lead, priceCents: h.price })) });
+  return computeMarketContext({ basis: a.basis, zone: zoneLabel, points: [...byTime.values()], now: a.now, eventStartAt: a.eventStartAt, comparables: hist.map((h) => ({ eventKey: h.eventKey, leadMinutes: h.lead, priceCents: h.price })) });
 }
+
+/** Where a market figure applies: the zone the customer asked for, or the whole venue (said so whenever they asked for less). */
+export type MarketScope = 'zone' | 'venue';
 
 /**
  * Market signal for a customer's group. A single or a pair reads its own price series; three or more read the
  * series built from listings with at least that many tickets, whose count is also the group's supply signal.
  * Until that series has data, a group falls back to the count of all listings, labelled as such.
+ *
+ * `zone`: the area they asked for ("the floor"). Its zones' series become the context when we hold one; the venue
+ * stays alongside as `venue`, labelled broader context that never stands in for theirs (TREND-ACC-04).
  */
-export async function marketForGroup(db: DbOrTx, a: { eventId: string; quantity: number; eventStartAt: Date; now: Date }): Promise<{ basis: MarketBasis; context: MarketContext | null; supply: MarketContext['supply']; supplyScope: 'all' | 'group'; single: MarketContext; pair: MarketContext }> {
+export async function marketForGroup(db: DbOrTx, a: { eventId: string; quantity: number; eventStartAt: Date; now: Date; zone?: { wanted: string; matches: (zoneName: string) => boolean } | null }): Promise<{ basis: MarketBasis; context: MarketContext | null; venue: MarketContext; scope: MarketScope; zoneWanted: string | null; zones: string[]; supply: MarketContext['supply']; supplyScope: 'all' | 'group'; single: MarketContext; pair: MarketContext }> {
   const load = (basis: MarketBasis) => loadMarketContext(db, { eventId: a.eventId, basis, eventStartAt: a.eventStartAt, now: a.now });
   const [single, pair] = await Promise.all([load('single'), load('pair')]);
   const basis = basisForQuantity(a.quantity);
-  const context = basis === 'single' ? single : basis === 'pair' ? pair : await load(basis);
+  const venue = basis === 'single' ? single : basis === 'pair' ? pair : await load(basis);
   // A group's count from a single read is a count without a trend yet; it is still the number that matters.
-  const n = context.current?.activeListings ?? null;
-  const groupSupply: MarketContext['supply'] | null = !isGroupBasis(basis) ? null : context.supply.now !== null ? context.supply : n !== null && context.current && !context.reasons.some((r) => r.startsWith('stale')) ? { trend: 'unknown', now: n, before: null, hours: null } : null;
-  return { basis, context, supply: groupSupply ?? single.supply, supplyScope: groupSupply ? 'group' : 'all', single, pair };
+  const n = venue.current?.activeListings ?? null;
+  const groupSupply: MarketContext['supply'] | null = !isGroupBasis(basis) ? null : venue.supply.now !== null ? venue.supply : n !== null && venue.current && !venue.reasons.some((r) => r.startsWith('stale')) ? { trend: 'unknown', now: n, before: null, hours: null } : null;
+  let zoneCtx: MarketContext | null = null;
+  let zones: string[] = [];
+  if (a.zone) {
+    const since = new Date(a.now.getTime() - 10 * 86_400_000);
+    const held = await db.selectDistinct({ zone: t.marketSnapshots.seatZone }).from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, a.eventId), eq(t.marketSnapshots.quantity, basisSize(basis)), gte(t.marketSnapshots.observedAt, since), sql`${t.marketSnapshots.seatZone} is not null`));
+    zones = held.map((h) => h.zone!).filter((z) => a.zone!.matches(z)).sort();
+    if (zones.length) zoneCtx = await loadMarketContext(db, { eventId: a.eventId, basis, zones, eventStartAt: a.eventStartAt, now: a.now });
+  }
+  return { basis, context: zoneCtx ?? venue, venue, scope: zoneCtx ? 'zone' : 'venue', zoneWanted: a.zone?.wanted ?? null, zones, supply: groupSupply ?? single.supply, supplyScope: groupSupply ? 'group' : 'all', single, pair };
+}
+
+/**
+ * The trend trace for one research revision (TREND-ACC-05): which series answered (basis, zone or venue), the
+ * observations it read with the provider's time and our fetch time, the comparison windows, the direction and the
+ * rule that set it, why it was or wasn't enough, and what the decision did with it. Prices and times only: no
+ * customer text, no keys.
+ */
+export function marketTrace(m: Awaited<ReturnType<typeof marketForGroup>>, a: { preferenceGiven: boolean; signal: { basisMatchesGroup: boolean; direction: string; supply: string; broaderScope?: boolean } | null; usedInAdvice: boolean; policy: { decision: string; reasonCodes: string[] } }): Record<string, unknown> {
+  const ctx = (c: MarketContext | null) =>
+    c && {
+      zone: c.zone,
+      adequacy: c.adequacy,
+      direction: c.direction,
+      reasons: c.reasons,
+      rule: c.observations?.rule ?? null,
+      current: c.current ? { priceCents: c.current.priceCents, at: c.current.at.toISOString(), timeKnown: c.current.timeKnown !== false } : null,
+      h24: c.h24,
+      h72: c.h72,
+      points: c.points,
+      untimedReads: c.observations?.untimed ?? 0,
+      latestUntimedRetrievedAt: c.observations?.latestUntimedRetrievedAt ?? null,
+      observations: (c.observations?.used ?? []).slice(-12),
+      supply: c.supply,
+    };
+  return {
+    methodVersion: MARKET_METHOD_VERSION,
+    basis: m.basis,
+    preferenceGiven: a.preferenceGiven,
+    zoneWanted: m.zoneWanted,
+    zonesMatched: m.zones,
+    scope: m.scope,
+    context: ctx(m.context),
+    venue: m.scope === 'zone' ? ctx(m.venue) : null,
+    supplyScope: m.supplyScope,
+    usedInAdvice: a.usedInAdvice,
+    signal: a.signal,
+    decision: a.policy.decision,
+    marketReasons: a.policy.reasonCodes.filter((r) => r.startsWith('market_') || r === 'group_basket_trending_down'),
+  };
 }
 
 function norm(s: string | null | undefined): string {

@@ -1099,8 +1099,12 @@ export const marketSnapshots = pgTable(
     basketVersion: integer('basket_version').notNull().default(1),
     quantity: integer('quantity').notNull(),
     seatZone: text('seat_zone'),
+    // observed_at: when the provider saw these prices, or our fetch time when it didn't say; provider_as_of is the
+    // provider's own time, null when it didn't say (and that row never dates a trend).
     observedAt: ts('observed_at').notNull(),
     providerAsOf: ts('provider_as_of'),
+    // When we fetched them. A cached read fetched again keeps the first row: it is not a new observation.
+    retrievedAt: ts('retrieved_at'),
     leadTimeMinutes: integer('lead_time_minutes').notNull(),
     cheapestEligibleTotalCents: integer('cheapest_eligible_total_cents'),
     medianEligibleTotalCents: integer('median_eligible_total_cents'),

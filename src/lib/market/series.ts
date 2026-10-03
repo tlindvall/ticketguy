@@ -39,27 +39,46 @@ export function marketBasketKey(eventKey: string, basis: MarketBasis, zone: stri
   return createHash('sha256').update(`${eventKey}|market|${basis}|zone=${zone ?? 'any'}|listed`).digest('hex').slice(0, 24);
 }
 
-export type SeriesPoint = { basis: MarketBasis; zone: string | null; observedAt: Date; priceCents: number; medianCents: number | null; activeListings: number | null };
+/**
+ * `observedAt` is when the provider saw these prices: its snapshot time, or the time it last refreshed the listings.
+ * `retrievedAt` is when we fetched them. They are different facts: a cached read fetched again an hour later is the
+ * same observation, never a new one. When the provider doesn't say when it saw them, `providerAsOf` is null and
+ * `observedAt` falls back to our fetch time, flagged so a trend never reads that time as the market's.
+ */
+export type SeriesPoint = { basis: MarketBasis; zone: string | null; observedAt: Date; providerAsOf: Date | null; retrievedAt: Date | null; priceCents: number; medianCents: number | null; activeListings: number | null };
+
+/**
+ * The provider's own "as of" time from a listings reply (`last_refresh_timestamp`, unix seconds; milliseconds and
+ * ISO strings are read too). Missing, unreadable, before 2020 or more than ten minutes after we fetched it: unknown.
+ */
+export function providerTime(v: unknown, retrievedAt: Date): Date | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+(?:\.\d+)?$/.test(v.trim()) ? Number(v) : null;
+  const d = n !== null ? new Date(n > 1e12 ? n : n * 1000) : typeof v === 'string' && v.trim() ? new Date(v) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  if (d.getTime() < Date.UTC(2020, 0, 1) || d.getTime() > retrievedAt.getTime() + 10 * 60_000) return null;
+  return d;
+}
 
 const cents = (usd: number | null | undefined) => (typeof usd === 'number' && Number.isFinite(usd) && usd > 0 ? Math.round(usd * 100) : null);
 
 /** One provider snapshot → one point per basis, overall and per zone. Missing or zero prices are skipped. */
-export function pointsFromSnapshot(s: SeatDataStatsSnapshot): SeriesPoint[] {
+export function pointsFromSnapshot(s: SeatDataStatsSnapshot, retrievedAt: Date | null = null): SeriesPoint[] {
   const at = new Date(s.timestamp);
   if (Number.isNaN(at.getTime())) return [];
   const out: SeriesPoint[] = [];
+  const t = { observedAt: at, providerAsOf: at, retrievedAt };
   const active = typeof s.total_listings_active === 'number' ? s.total_listings_active : null;
   const one = cents(s.get_in);
   const two = cents(s.get_in_qty2plus);
-  if (one) out.push({ basis: 'single', zone: null, observedAt: at, priceCents: one, medianCents: cents(s.median_price), activeListings: active });
-  if (two) out.push({ basis: 'pair', zone: null, observedAt: at, priceCents: two, medianCents: cents(s.median_price), activeListings: active });
+  if (one) out.push({ basis: 'single', zone: null, ...t, priceCents: one, medianCents: cents(s.median_price), activeListings: active });
+  if (two) out.push({ basis: 'pair', zone: null, ...t, priceCents: two, medianCents: cents(s.median_price), activeListings: active });
   for (const z of s.zones ?? []) {
     const name = z.zone_name?.trim();
     if (!name) continue;
     const z1 = cents(z.get_in);
     const z2 = cents(z.get_in_qty2plus);
-    if (z1) out.push({ basis: 'single', zone: name, observedAt: at, priceCents: z1, medianCents: cents(z.median_price), activeListings: null });
-    if (z2) out.push({ basis: 'pair', zone: name, observedAt: at, priceCents: z2, medianCents: cents(z.median_price), activeListings: null });
+    if (z1) out.push({ basis: 'single', zone: name, ...t, priceCents: z1, medianCents: cents(z.median_price), activeListings: null });
+    if (z2) out.push({ basis: 'pair', zone: name, ...t, priceCents: z2, medianCents: cents(z.median_price), activeListings: null });
   }
   return out;
 }
@@ -78,17 +97,22 @@ export function isOrdinarySeatListing(l: Record<string, unknown>): boolean {
   return ![l.section, l.zone, l.row, l.notes].some((v) => typeof v === 'string' && NOT_ORDINARY_SEATS.test(v));
 }
 
-export function pointsFromListings(listings: Array<Record<string, unknown>>, sizes: number[], at: Date): SeriesPoint[] {
+export function pointsFromListings(listings: Array<Record<string, unknown>>, sizes: number[], retrievedAt: Date, providerAsOf: Date | null = null): SeriesPoint[] {
   const rows = listings
     .filter(isOrdinarySeatListing)
-    .map((l) => ({ active: l.active === undefined || l.active === null || l.active === true || l.active === 1 || l.active === 'true', price: Number(l.price), qty: Number(l.quantity) }))
+    .map((l) => ({ active: l.active === undefined || l.active === null || l.active === true || l.active === 1 || l.active === 'true', price: Number(l.price), qty: Number(l.quantity), zone: typeof l.zone === 'string' && l.zone.trim() ? l.zone.trim() : null }))
     .filter((r) => r.active && Number.isFinite(r.price) && r.price > 0 && Number.isInteger(r.qty) && r.qty > 0);
   const out: SeriesPoint[] = [];
+  const t = { observedAt: providerAsOf ?? retrievedAt, providerAsOf, retrievedAt };
+  const zones = [...new Set(rows.map((r) => r.zone).filter((z): z is string => !!z))].sort();
   for (const n of [...new Set(sizes.map((q) => Math.min(Math.floor(q), MAX_GROUP_SIZE)))].filter((q) => q >= 3).sort((a, b) => a - b)) {
-    const prices = rows.filter((r) => r.qty >= n).map((r) => r.price).sort((a, b) => a - b);
-    const cheapest = cents(prices[0]);
-    if (!cheapest) continue;
-    out.push({ basis: `group:${n}`, zone: null, observedAt: at, priceCents: cheapest, medianCents: cents(prices[Math.floor(prices.length / 2)]), activeListings: prices.length });
+    // The whole venue, then each zone the listings name, so a floor-only group has a floor-only series.
+    for (const zone of [null, ...zones]) {
+      const prices = rows.filter((r) => r.qty >= n && (zone === null || r.zone === zone)).map((r) => r.price).sort((a, b) => a - b);
+      const cheapest = cents(prices[0]);
+      if (!cheapest) continue;
+      out.push({ basis: `group:${n}`, zone, ...t, priceCents: cheapest, medianCents: cents(prices[Math.floor(prices.length / 2)]), activeListings: prices.length });
+    }
   }
   return out;
 }
@@ -114,7 +138,10 @@ export const SUPPLY_DROP_PCT = 0.25;
 export const SUPPLY_DROP_MIN = 10;
 export const TYPICAL_MIN_EVENTS = 5;
 
-export type Point = { observedAt: Date; priceCents: number; activeListings: number | null };
+/** `timeKnown: false`: the provider didn't say when it saw this price; it never dates a trend or its freshness. */
+export type Point = { observedAt: Date; priceCents: number; activeListings: number | null; timeKnown?: boolean; providerAsOf?: Date | null; retrievedAt?: Date | null };
+/** What a trend was read from, for the trace: the newest points used, and reads left out for having no provider time. */
+export type MarketObservations = { used: Array<{ observedAt: string; providerAsOf: string | null; retrievedAt: string | null; priceCents: number }>; untimed: number; latestUntimedRetrievedAt: string | null; rule: string | null };
 export type Change = { hours: number; fromCents: number; toCents: number; changeCents: number; pct: number } | null;
 export type SupplyTrend = 'shrinking' | 'stable' | 'growing' | 'unknown';
 
@@ -124,13 +151,16 @@ export type MarketContext = {
   zone: string | null;
   adequacy: 'sufficient' | 'insufficient';
   reasons: string[];
-  current: { priceCents: number; at: Date; activeListings: number | null } | null;
+  /** `timeKnown: false`: the newest read had no provider time; `at` is when we fetched it, not when the market was seen. */
+  current: { priceCents: number; at: Date; activeListings: number | null; timeKnown?: boolean } | null;
   h24: Change;
   h72: Change;
-  direction: 'down' | 'up' | 'flat' | 'insufficient';
+  /** `mixed`: the day and the three days moved in different directions; neither a fall to wait on nor a steady price. */
+  direction: 'down' | 'up' | 'flat' | 'mixed' | 'insufficient';
   supply: { trend: SupplyTrend; now: number | null; before: number | null; hours: number | null };
   typical: { events: number; p25Cents: number; medianCents: number; p75Cents: number; leadBucket: string } | null;
   points: number;
+  observations?: MarketObservations;
 };
 
 function nearest(points: Point[], target: number, toleranceMs: number): Point | undefined {
@@ -148,7 +178,9 @@ function change(points: Point[], current: Point, hours: number): Change {
   return { hours, fromCents: base.priceCents, toCents: current.priceCents, changeCents: current.priceCents - base.priceCents, pct: (current.priceCents - base.priceCents) / base.priceCents };
 }
 
-const moved = (c: Change) => !!c && Math.abs(c.pct) >= MARKET_MOVE_PCT && Math.abs(c.changeCents) >= MARKET_MOVE_CENTS;
+/** A window's change counts as a move: both the share and the cents. */
+export const marketMoved = (c: Change) => !!c && Math.abs(c.pct) >= MARKET_MOVE_PCT && Math.abs(c.changeCents) >= MARKET_MOVE_CENTS;
+const moved = marketMoved;
 
 export function leadBucketFor(leadMinutes: number): string {
   const h = leadMinutes / 60;
@@ -185,14 +217,25 @@ export function typicalAtLead(comparables: Array<{ eventKey: string; leadMinutes
 }
 
 export function computeMarketContext(a: { basis: MarketBasis; zone: string | null; points: Point[]; now: Date; eventStartAt: Date; comparables?: Array<{ eventKey: string; leadMinutes: number; priceCents: number }> }): MarketContext {
-  const pts = a.points.filter((p) => p.observedAt <= a.now).sort((x, y) => x.observedAt.getTime() - y.observedAt.getTime());
+  const all = a.points.filter((p) => p.observedAt <= a.now).sort((x, y) => x.observedAt.getTime() - y.observedAt.getTime());
+  // Only points the provider dated make a series: a read without its time could be hours old, or the same cached
+  // listings fetched again, and counting it would invent both history and freshness.
+  const pts = all.filter((p) => p.timeKnown !== false);
+  const untimed = all.filter((p) => p.timeKnown === false);
   const reasons: string[] = [];
   const current = pts[pts.length - 1];
-  const base: MarketContext = { methodVersion: MARKET_METHOD_VERSION, basis: a.basis, zone: a.zone, adequacy: 'insufficient', reasons, current: current ? { priceCents: current.priceCents, at: current.observedAt, activeListings: current.activeListings } : null, h24: null, h72: null, direction: 'insufficient', supply: { trend: 'unknown', now: null, before: null, hours: null }, typical: null, points: pts.length };
+  const lastUntimed = untimed[untimed.length - 1];
+  const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
+  const observations: MarketObservations = { used: pts.slice(-24).map((p) => ({ observedAt: p.observedAt.toISOString(), providerAsOf: iso(p.providerAsOf === undefined ? p.observedAt : p.providerAsOf), retrievedAt: iso(p.retrievedAt), priceCents: p.priceCents })), untimed: untimed.length, latestUntimedRetrievedAt: iso(lastUntimed?.retrievedAt ?? lastUntimed?.observedAt), rule: null };
+  const base: MarketContext = { methodVersion: MARKET_METHOD_VERSION, basis: a.basis, zone: a.zone, adequacy: 'insufficient', reasons, current: current ? { priceCents: current.priceCents, at: current.observedAt, activeListings: current.activeListings, timeKnown: true } : null, h24: null, h72: null, direction: 'insufficient', supply: { trend: 'unknown', now: null, before: null, hours: null }, typical: null, points: pts.length, observations };
   const lead = Math.round((a.eventStartAt.getTime() - a.now.getTime()) / 60_000);
   base.typical = a.comparables?.length ? typicalAtLead(a.comparables, lead) : null;
   if (!current) {
-    reasons.push('no_points');
+    if (lastUntimed) {
+      // The price is real, its age isn't known: said as "when I checked", never as a trend or as current.
+      reasons.push('provider_time_unknown');
+      base.current = { priceCents: lastUntimed.priceCents, at: lastUntimed.observedAt, activeListings: lastUntimed.activeListings, timeKnown: false };
+    } else reasons.push('no_points');
     return base;
   }
   const staleHours = (a.now.getTime() - current.observedAt.getTime()) / 3_600_000;
@@ -225,10 +268,21 @@ export function computeMarketContext(a: { basis: MarketBasis; zone: string | nul
     return base;
   }
   base.adequacy = 'sufficient';
-  // Direction needs the window move and the longer view not to disagree: a dip after a week of rises is "mixed" → flat.
-  if (moved(w)) {
-    const other = w === base.h72 ? base.h24 : null;
-    base.direction = other && moved(other) && Math.sign(other.changeCents) !== Math.sign(w.changeCents) ? 'flat' : w.changeCents < 0 ? 'down' : 'up';
-  } else base.direction = 'flat';
+  const dir = (c: NonNullable<Change>) => (c.changeCents < 0 ? 'down' : 'up') as 'down' | 'up';
+  const long = base.h72;
+  const short = base.h24;
+  // The day and the three days must agree for a direction. A dip after days of rises, or a jump that undoes a fall,
+  // is "mixed": it is neither a fall worth waiting on nor a steady price (it used to read "flat").
+  if (long && short) {
+    const lm = moved(long);
+    const sm = moved(short);
+    if (lm && sm) base.direction = dir(long) === dir(short) ? dir(long) : 'mixed';
+    else if (sm) base.direction = 'mixed';
+    else base.direction = lm ? dir(long) : 'flat';
+    observations.rule = `h72_${lm ? dir(long) : 'held'}_h24_${sm ? dir(short) : 'held'}`;
+  } else {
+    base.direction = moved(w) ? dir(w) : 'flat';
+    observations.rule = `h${w.hours}_${moved(w) ? dir(w) : 'held'}_only`;
+  }
   return base;
 }

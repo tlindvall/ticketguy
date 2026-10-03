@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { basisForQuantity, computeMarketContext, pointsFromListings, pointsFromSnapshot, typicalAtLead, marketBasketKey } from '@/lib/market/series';
+import { basisForQuantity, computeMarketContext, pointsFromListings, pointsFromSnapshot, providerTime, typicalAtLead, marketBasketKey } from '@/lib/market/series';
+import { decide } from '@/lib/advice/policy';
 import { marketDecision, pollIntervalMinutes } from '@/lib/market/tracker';
 
 const H = 3_600_000;
@@ -14,10 +15,13 @@ const series = (from: number, to: number, listingsFrom = 400, listingsTo = 400, 
 describe('market series', () => {
   it('reads a provider snapshot into single and pair points, overall and per zone, skipping empty prices', () => {
     const pts = pointsFromSnapshot({ timestamp: '2026-09-22T14:30:00Z', total_listings_all: 500, total_listings_active: 312, listing_fill_rate: 0.6, avg_price: 245.5, median_price: 198, get_in: 89, get_in_qty2plus: 145, zones: [{ zone_name: 'Lower Bowl', avg_price: 300, median_price: 280, get_in: 150, get_in_qty2plus: null }] });
+    // The provider's snapshot time dates the point; no fetch time was given.
+    const at = new Date('2026-09-22T14:30:00Z');
+    const d = { observedAt: at, providerAsOf: at, retrievedAt: null };
     expect(pts).toEqual([
-      { basis: 'single', zone: null, observedAt: new Date('2026-09-22T14:30:00Z'), priceCents: 8900, medianCents: 19800, activeListings: 312 },
-      { basis: 'pair', zone: null, observedAt: new Date('2026-09-22T14:30:00Z'), priceCents: 14500, medianCents: 19800, activeListings: 312 },
-      { basis: 'single', zone: 'Lower Bowl', observedAt: new Date('2026-09-22T14:30:00Z'), priceCents: 15000, medianCents: 28000, activeListings: null },
+      { basis: 'single', zone: null, ...d, priceCents: 8900, medianCents: 19800, activeListings: 312 },
+      { basis: 'pair', zone: null, ...d, priceCents: 14500, medianCents: 19800, activeListings: 312 },
+      { basis: 'single', zone: 'Lower Bowl', ...d, priceCents: 15000, medianCents: 28000, activeListings: null },
     ]);
     expect(pointsFromSnapshot({ timestamp: 'garbage' } as never)).toEqual([]);
   });
@@ -90,7 +94,8 @@ describe('market series', () => {
       ['group:4', 12000, 14000, 3],
       ['group:5', 14000, 15550, 2],
     ]);
-    expect(pts.every((p) => p.observedAt === at && p.zone === null)).toBe(true);
+    // No provider time given: dated by the fetch, and marked as undated.
+    expect(pts.every((p) => p.observedAt === at && p.retrievedAt === at && p.providerAsOf === null && p.zone === null)).toBe(true);
     // Nothing big enough: no point, rather than a made-up price.
     expect(pointsFromListings(listings, [10], at)).toEqual([]);
   });
@@ -106,9 +111,8 @@ describe('group floors ignore seats that are not for an ordinary buyer', () => {
       { active: true, price: 120, quantity: 6, section: '212', row: 'D' },
       { active: true, price: 140, quantity: 5, section: '224', row: 'F', zone: 'Upper Level' },
     ], [5], at);
-    expect(pts).toHaveLength(1);
-    expect(pts[0]!.priceCents).toBe(12000);
-    expect(pts[0]!.activeListings).toBe(2);
+    // The venue, then each zone the ordinary listings name.
+    expect(pts.map((p) => [p.zone, p.priceCents, p.activeListings])).toEqual([[null, 12000, 2], ['Upper Level', 14000, 1]]);
   });
 });
 
@@ -133,5 +137,68 @@ describe('TREND-2327-01: no comparison window is no trend', () => {
   it('with a real 24-hour window the direction is read as before', () => {
     expect(ctx([-24, -16, -8, 0], [10000, 9000, 8000, 7000])).toMatchObject({ adequacy: 'sufficient', direction: 'down' });
     expect(ctx([-24, -16, -8, 0], [9000, 9000, 9000, 9000])).toMatchObject({ adequacy: 'sufficient', direction: 'flat' });
+  });
+});
+
+describe('TREND-ACC: provider time, repeated reads, mixed movement', () => {
+  const now = new Date('2026-10-03T12:00:00Z');
+  const at = (h: number) => new Date(now.getTime() + h * H);
+
+  it('reads the provider refresh time in seconds, milliseconds or ISO, and treats missing or impossible times as unknown', () => {
+    expect(providerTime(Math.floor(at(-5).getTime() / 1000), now)).toEqual(at(-5));
+    expect(providerTime(at(-5).getTime(), now)).toEqual(at(-5));
+    expect(providerTime(String(Math.floor(at(-5).getTime() / 1000)), now)).toEqual(at(-5));
+    expect(providerTime(at(-5).toISOString(), now)).toEqual(at(-5));
+    for (const bad of [null, undefined, 0, '', 'soon', at(2).getTime()]) expect(providerTime(bad, now)).toBeNull();
+  });
+
+  it('a listings read is dated by the provider refresh, so the same cached read fetched twice is the same observation', () => {
+    const rows = [{ active: true, price: 140, quantity: 6 }];
+    const a = pointsFromListings(rows, [5], at(0), at(-5));
+    const b = pointsFromListings(rows, [5], at(4), at(-5));
+    expect(a[0]!.observedAt).toEqual(at(-5));
+    expect(b[0]!.observedAt).toEqual(a[0]!.observedAt);
+    expect([a[0]!.retrievedAt, b[0]!.retrievedAt]).toEqual([at(0), at(4)]);
+  });
+
+  const ctx = (hours: number[], prices: number[], extra: Parameters<typeof computeMarketContext>[0]['points'] = []) =>
+    computeMarketContext({ basis: 'pair', zone: null, points: [...hours.map((h, i) => ({ observedAt: at(h), priceCents: prices[i]!, activeListings: 300 })), ...extra], now, eventStartAt: at(240) });
+
+  it('up over three days and down over the day is mixed, not flat and not a fall; so is a day that undoes a held three days', () => {
+    const c = ctx([-72, -48, -24, -12, 0], [10000, 12500, 15000, 13500, 12000]);
+    expect(c).toMatchObject({ adequacy: 'sufficient', direction: 'mixed', observations: { rule: 'h72_up_h24_down' } });
+    expect(marketDecision(c)).toEqual({ decision: 'buy', reasons: ['direction_mixed', 'supply_stable', 'prices_mixed'] });
+    expect(ctx([-72, -48, -24, -12, 0], [12000, 13500, 15000, 13500, 12000])).toMatchObject({ direction: 'mixed', observations: { rule: 'h72_held_h24_down' } });
+    // Both windows agree: a direction. A three-day fall that held over the last day is still a fall.
+    expect(ctx([-72, -48, -24, -12, 0], [15000, 14000, 13000, 12500, 12000]).direction).toBe('down');
+    expect(ctx([-72, -48, -24, -12, 0], [15000, 13000, 12100, 12000, 12000]).direction).toBe('down');
+  });
+
+  it('a held price observed again by the provider is a real point: unchanged prices make a flat series, not a thin one', () => {
+    const c = ctx([-72, -60, -48, -36, -24, -12, 0], Array(7).fill(9000));
+    expect(c).toMatchObject({ adequacy: 'sufficient', direction: 'flat', points: 7 });
+  });
+
+  it('reads without a provider time never make history or freshness, and are counted in the trace', () => {
+    const undated = [-11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0].map((h) => ({ observedAt: at(h), priceCents: 9000, activeListings: 3, timeKnown: false, providerAsOf: null, retrievedAt: at(h) }));
+    const only = ctx([], [], undated);
+    expect(only).toMatchObject({ adequacy: 'insufficient', direction: 'insufficient', points: 0, reasons: ['provider_time_unknown'], current: { priceCents: 9000, timeKnown: false }, observations: { untimed: 12 } });
+    // Dated points that are stale stay stale, however many undated reads came after.
+    const mixed = ctx([-60, -50, -40, -30], [10000, 9800, 9600, 9400], undated);
+    expect(mixed.reasons).toContain('stale:30h');
+    expect(mixed).toMatchObject({ points: 4, current: { priceCents: 9400, timeKnown: true }, observations: { untimed: 12 } });
+  });
+});
+
+describe('TREND-ACC: the decision never waits on mixed or broader-scope movement', () => {
+  const base = { now: new Date('2026-10-03T12:00:00Z'), eventStartAt: new Date('2026-10-20T23:00:00Z'), offers: { bestEligibleTotalCents: null, bestEligibleObservationId: null, eligibleCount: 0, needsReviewCount: 0, alternativeAvailable: false, deliveryFeasible: null, safeDeliveryBufferMinutes: null }, benchmark: null, trend: null, priorities: { mustAttend: false, waitRiskTolerance: 'high' as const, decisionDeadline: new Date('2026-10-15T12:00:00Z'), budgetTotalCents: null, togetherRequired: null, splitGroupAllowed: null, watchConsentGiven: false }, monitoringCoverageAvailable: false, staffedUntil: null };
+  it('a fall for their seats can wait; mixed, or a venue-wide fall for a floor request, cannot', () => {
+    expect(decide({ ...base, market: { basisMatchesGroup: true, direction: 'down', supply: 'stable' } }).decision).toBe('wait_and_recheck');
+    const mixed = decide({ ...base, market: { basisMatchesGroup: true, direction: 'mixed', supply: 'stable' } });
+    expect(mixed.decision).not.toBe('wait_and_recheck');
+    expect(mixed.reasonCodes).toContain('market_mixed_no_clear_direction');
+    const broader = decide({ ...base, market: { basisMatchesGroup: false, direction: 'down', supply: 'stable', broaderScope: true } });
+    expect(broader.decision).not.toBe('wait_and_recheck');
+    expect(broader.reasonCodes).toContain('market_scope_broader_than_request');
   });
 });

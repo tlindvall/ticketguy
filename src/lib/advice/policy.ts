@@ -46,8 +46,10 @@ export type PolicyInput = {
    * Resale market statistics (DECISION_LOG #44), only when the licence allows them in advice.
    * `basisMatchesGroup` is true only for one or two tickets, where the provider's cheapest-price series is the
    * customer's own; the listing count applies to any group, and can only ever argue for buying sooner.
+   * `broaderScope`: they asked for part of the venue (the floor) and the series covers more than that, so its
+   * direction is context, never their seats' trend (TREND-ACC-04). `mixed` never counts as falling.
    */
-  market?: { basisMatchesGroup: boolean; direction: 'down' | 'up' | 'flat' | 'insufficient'; supply: 'shrinking' | 'stable' | 'growing' | 'unknown' } | null;
+  market?: { basisMatchesGroup: boolean; direction: 'down' | 'up' | 'flat' | 'mixed' | 'insufficient'; supply: 'shrinking' | 'stable' | 'growing' | 'unknown'; broaderScope?: boolean } | null;
 };
 
 export type PolicyResult = {
@@ -113,6 +115,8 @@ export function decide(input: PolicyInput): PolicyResult {
   const marketShrinking = market?.supply === 'shrinking';
   const marketFalling = !!market && market.basisMatchesGroup && market.direction === 'down' && !marketShrinking;
   if (marketShrinking) reasons.push('market_listings_shrinking');
+  if (market?.direction === 'mixed') reasons.push('market_mixed_no_clear_direction');
+  if (market?.broaderScope && market.direction !== 'insufficient') reasons.push('market_scope_broader_than_request');
   const waitCheckpoint = () => new Date(Math.min(waitDeadline.getTime(), input.now.getTime() + 24 * 3_600_000));
   const waitStops = ['listings_shrink', 'price_reverses_up', 'delivery_cutoff_approaches', 'customer_deadline', 'event_status_change'];
 
