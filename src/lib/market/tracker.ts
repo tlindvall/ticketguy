@@ -71,6 +71,10 @@ const MAX_MATCH_ATTEMPTS = 4;
 
 type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null };
 
+/** Listings reads by event, shared across requests in this process for a few minutes (see recentListings). */
+const RECENT_READS = new Map<string, { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] }>();
+const RECENT_READ_MS = 10 * 60_000;
+
 export class MarketTracker {
   private client: SeatDataClient | null = null;
   constructor(private readonly deps: { db: DbOrTx; env: Env; now?: () => Date; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }) {}
@@ -422,7 +426,25 @@ export class MarketTracker {
    * `providerAsOf` is when SeatData last refreshed these listings (null when it didn't say); `retrievedAt` is when we
    * fetched them. A cached read fetched again keeps its provider time: it is never "now" because we asked (LAUNCH-06).
    */
+  /**
+   * Listings to name seats from: this pass's read, or any read of the event in this process within the last ten
+   * minutes, before a new paid read (a customer asking again within the hour isn't charged twice). The age said is
+   * still the provider's refresh time of whichever read it is.
+   */
+  async recentListings(eventId: string): Promise<{ providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] } | null> {
+    const mine = this.lastRead.get(eventId);
+    if (mine) return mine;
+    const shared = RECENT_READS.get(eventId);
+    if (shared && this.now().getTime() - shared.retrievedAt.getTime() <= RECENT_READ_MS && shared.retrievedAt <= this.now()) return shared;
+    return this.currentListings(eventId);
+  }
+
+  /** The listings this tracker read in this pass, by event: a second ask within the same request reuses it, unpaid. */
+  private lastRead = new Map<string, { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] }>();
+
   async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<{ providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] } | null> {
+    const held = kind === 'listings_compare' ? this.lastRead.get(eventId) : undefined;
+    if (held) return held;
     // Every read that doesn't happen says why, so a reply with no market can be traced to its cause (PD-R1-01).
     const why = await this.blocked();
     if (why) {
@@ -456,7 +478,10 @@ export class MarketTracker {
       const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
       await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}`);
       await this.rememberListings(eventId, raw, providerAsOf);
-      return { providerAsOf, retrievedAt, listings };
+      const out = { providerAsOf, retrievedAt, listings };
+      this.lastRead.set(eventId, out);
+      RECENT_READS.set(eventId, out);
+      return out;
     } catch (e) {
       await this.finish(slot.id, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       return null;
@@ -520,6 +545,9 @@ export class MarketTracker {
     const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
     await this.rememberListings(ev.e.id, listings, asOf);
+    const read = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null) };
+    this.lastRead.set(ev.e.id, read);
+    RECENT_READS.set(ev.e.id, read);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}`);
     return points.length;
   }

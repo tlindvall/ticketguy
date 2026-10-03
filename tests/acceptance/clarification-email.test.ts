@@ -56,15 +56,16 @@ describe('the clarification email', () => {
     await h.close();
   });
 
-  it('reads "next week", leaves the alumni night out, and asks the one question that decides it', async () => {
+  it('reads "next week", leaves the alumni night out, and takes the one home game in it', async () => {
     const c = makeConcierge(h);
     const r = await c.ingestInbound(inbound({ text: 'Two tickets for the Rangers next week, up to $200 total.', from: 'alex@customer.example', subject: 'Rangers' }));
     await interpretAll(h, c);
     const requestId = (r as { requestId: string }).requestId;
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
-    expect(req!.state).toBe('needs_clarification');
     const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId));
     const body = intent!.bodyText;
+    // Live Oct 3: "Which date?" three times. The one home game in the week is the answer, said in a line they can correct.
+    expect(req!.state).toBe('researching');
     if (process.env.PRINT_CLARIFICATION) {
       // Opt-in: writes the email a customer would get to $PRINT_CLARIFICATION for review.
       const { writeFileSync } = await import('node:fs');
@@ -72,8 +73,9 @@ describe('the clarification email', () => {
       writeFileSync(`${process.env.PRINT_CLARIFICATION}/clarification.html`, intent!.bodyHtml ?? '');
     }
 
-    expect(body).toMatch(/^Hey,\n\nTwo (New York )?Rangers tickets next week, up to \$200 total\. Got it\./);
-    expect(body).toContain('Are you looking for a home game at Madison Square Garden, or are away games an option?');
+    expect(body).toContain("I've gone with the home game next week, Saturday, October 3. Tell me if you meant a different one.");
+    expect(body).toContain('• When: Saturday, October 3, at 7 p.m.');
+    expect(body).not.toContain('Are you looking for a home game at Madison Square Garden, or are away games an option?');
     expect(body).not.toMatch(/alumni/i); // neither the November night nor the alumni "team"
     expect(body).not.toContain('Oct 15'); // outside the week
     expect(body).not.toContain('possible matches');

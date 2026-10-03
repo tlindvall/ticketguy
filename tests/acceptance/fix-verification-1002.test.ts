@@ -144,7 +144,7 @@ describe('a screenshot headed with the doors time still finds the show', () => {
   it('stored as the 9pm show with doors at 8pm: that show, not "doesn’t fit: it starts at 9pm, not 8pm"', async () => {
     const said = await ask(new Date('2026-10-03T01:00:00Z'), new Date('2026-10-03T00:00:00Z'));
     expect(said).not.toMatch(/doesn't fit|doesn’t fit/);
-    expect(said).toContain('9:00 PM EDT (doors 8:00 PM) · 2 tickets');
+    expect(said).toContain('Tonight at 9 p.m. (doors 8 p.m.) · 2 tickets');
     expect(said).toContain('The cheapest option in your screenshot is “Balcony: Standing Room Only”');
   });
 

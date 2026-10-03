@@ -28,7 +28,7 @@ import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrow
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { dateWindowFor, deadlineInstant, eventLocalDate, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
@@ -40,6 +40,7 @@ import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, typ
 import { MarketTracker, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
 import { SEATDATA_DATASET_ID, listingAge } from '@/lib/market/series';
+import { pickListings } from '@/lib/market/alternatives';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
@@ -1174,7 +1175,7 @@ export class Concierge {
     const answeredUnreviewed = autoApproveActive(this.env) || merged.quotedPriceCents != null;
     // What we assumed or picked for them is said in it, so it still goes then.
     if ((revision === 1 || picked || cameFromReferral) && !selfContained && (!answeredUnreviewed || assumptions.length || picked)) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? ''), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -2226,7 +2227,27 @@ export class Concierge {
       return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => candidateFrom(entity, cands[0]!.e, cands[0]!.v, `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}`)) };
     }
     const { entity, cands } = withEvents[0]!;
-    if (cands.length > 1) return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
+    if (cands.length > 1) {
+      // A team and no exact date: take charge. The next game that fits, a home game first, said in one line they can
+      // correct, never "Which game?" (live Oct 3: "4 tickets to the new home game for new york rangers, max $400" was
+      // asked for a date twice while ChatGPT just found the next home game). Two games on one day still ask which.
+      const day = (e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect) => new Intl.DateTimeFormat('en-CA', { timeZone: v.timezone }).format(e.localStartAt);
+      const oneDay = new Set(cands.map(({ e, v }) => day(e, v))).size === 1;
+      // A window they named ("in October", "next week") with several home games in it is still a choice of date, asked
+      // once; one home game in it is the answer.
+      const isHome = ({ e, v }: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => e.isHome === true || entity.homeVenueId === v.id;
+      const homes = cands.filter(isHome);
+      const named = !!ruleWindow || (!!x.dateExpression && !rules?.next);
+      if (entity.kind === 'team' && !x.resolvedLocalDate && !oneDay && (!named || homes.length === 1)) {
+        const pick = homes[0] ?? cands[0]!;
+        if (pick.v.country === 'US') {
+          const when = friendlyDay(eventLocalDate(pick.e.localStartAt, pick.v.timezone));
+          const which = named ? `the ${homes.length ? 'home ' : ''}game ${x.dateExpression ? x.dateExpression.trim() : 'then'}` : `the next ${homes.length ? 'home ' : ''}game`;
+          return { kind: 'resolved', event: pick.e, venue: pick.v, label: eventLabel(pick.e, pick.v), entityKind: 'team', assumed: [assumed, `I've gone with ${which}, ${when}. Tell me if you meant a different one.`].filter(Boolean).join(' ') };
+        }
+      }
+      return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
+    }
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
     return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist', assumed };
@@ -2679,11 +2700,13 @@ export class Concierge {
     const licence = await marketLicence(this.db);
     const uses = marketUses(licence, this.env);
     let market: Awaited<ReturnType<typeof marketForGroup>> | null = null;
+    // One tracker for this research: a listings read it already paid for (a group's read) is reused, never bought twice.
+    const tracker = new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch });
     if (licence.allows('tracking') && trackingOk && historyOk) {
       // A supplier read that fails costs this reply its market lines, never the reply (R1-HUMAN-01: a throwing
       // read sent a linked listing to a person four retries later, and its follow-up after it).
       try {
-        await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).refreshEvent(event.id);
+        await tracker.refreshEvent(event.id);
       } catch (e) {
         await audit(this.db, { actor: 'system', action: 'market.read_failed', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { step: 'refresh', error: (e instanceof Error ? e.message : String(e)).slice(0, 200) } });
       }
@@ -2737,7 +2760,6 @@ export class Concierge {
     // The link they sent is acknowledged by name. Its page is never fetched; a listing link is looked up by its
     // listing number in the resale feed we're licensed for, and found or not, never guessed (R-LINK-READ).
     const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
-    const tracker = new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch });
     let around: Awaited<ReturnType<MarketTracker['currentListings']>> = null;
     let linked: SubjectListing | null = null;
     let linkMarket: Parameters<typeof buildPacket>[0]['linkMarket'] = null;
@@ -2776,6 +2798,16 @@ export class Concierge {
     // The same read when the link was looked up; one paid call, not two.
     if (!around && shown?.perTicketCents != null && licence.allows('tracking') && trackingOk) around = await tracker.currentListings(event.id);
     const marketAround = around && shown?.perTicketCents != null ? findAlternatives(around.listings, { perTicketCents: shown.perTicketCents, feeBasis: shown.feeBasis, section: shown.section, row: shown.row }, quantity) : null;
+    // Nothing of theirs to judge and nothing verified: name seats for their party from the same licensed listings read,
+    // one paid call, instead of asking them to go and find some (live Oct 3: "4 tickets to the next Rangers home game,
+    // max $400" got questions while a browser-based assistant named seats). Listed before fees, allowance said.
+    let picks: Parameters<typeof buildPacket>[0]['picks'] = null;
+    // A link to one listing is theirs to judge: its answer, not someone else's seats.
+    if (!shown && !best && !sentLink?.listingId && brief.intent !== 'watch_request' && licence.allows('tracking') && trackingOk && uses.display) {
+      if (!around) around = await tracker.recentListings(event.id);
+      const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT) : null;
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now) };
+    }
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
     if (brief.intent === 'watch_request') {
@@ -2819,7 +2851,7 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    const packet = buildPacket({ askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -3833,7 +3865,10 @@ export function acknowledgementLine(x: RequestExtraction): string {
   line = line[0]!.toUpperCase() + line.slice(1);
   if (x.togetherRequired) line += ' together';
   if (isGame) line += ` for ${who}`;
-  if (x.dateExpression && !/^\d{4}-\d{2}-\d{2}$/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
+  // A date as a person says it: never "10-13-2026" or "tickets next" played back (live Oct 3).
+  if (x.resolvedLocalDate) line += ` for ${friendlyDay(x.resolvedLocalDate)}`;
+  else if (x.dateExpression && /^(?:the\s+)?(?:next|new|upcoming|coming)(?:\s+home)?(?:\s+(?:game|match|one|show))?$/i.test(x.dateExpression.trim())) line += ' for the next game';
+  else if (x.dateExpression && !/\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
   return `${line}. Got it.`;
 }
@@ -4585,9 +4620,10 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  * What the acknowledgment says we understood, as a person would jot it down: the game or show, when, where,
  * how many, the budget, and the question they asked. Every line is something they told us or we found.
  */
-export function acknowledgedFacts(e: { name: string; category: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }, x: RequestExtraction, text: string): string[] {
+export function acknowledgedFacts(e: { name: string; category: string; localStartAt: Date }, v: { name: string; city: string | null; timezone: string }, x: RequestExtraction, text: string, now?: Date): string[] {
   const sports = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(e.category);
-  const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
+  // Said the way a person would ("Tomorrow, Sunday, October 4, at 6 p.m."), not "Sun, Oct 4, 6:00 PM EDT" (live Oct 3).
+  const when = now ? friendlyWhen(e.localStartAt, v.timezone, now).replace(/^./, (c) => c.toUpperCase()) : new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(e.localStartAt);
   const out = [`${sports ? 'Game' : 'Show'}: ${e.name}`, `When: ${when}`, `Where: ${v.name}${v.city ? `, ${v.city}` : ''}`];
   if (x.quantity) out.push(`Tickets: ${x.quantity}${x.togetherRequired ? ', together' : ''}`);
   if (x.budgetCents !== null && x.budgetBasis) out.push(`Budget: ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'a ticket'}`);

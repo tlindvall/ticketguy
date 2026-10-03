@@ -63,7 +63,7 @@ for (const mode of ['rules', 'live'] as Mode[]) {
       expect(turn('07', 2)).toContain('Preseason: New York Knicks v Philadelphia 76ers at Xfinity Mobile Arena, Philadelphia, Mon, Oct 5, 7:00 PM EDT doesn\'t fit: it\'s in Philadelphia, not at Madison Square Garden.');
       expect(turn('07', 2)).toContain('Which would you like?');
       expect(turn('07', 2)).not.toMatch(/· 2 tickets · up to \$300/);
-      expect(turn('07', 3)).toContain('Preseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thu, Oct 8, 7:30 PM EDT · 2 tickets · up to $300 in total');
+      expect(turn('07', 3)).toContain('Preseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thursday, October 8, at 7:30 p.m. · 2 tickets · up to $300 in total');
     });
 
     // S04: exclusions stay exclusions; a fallback that drops a rule says so.
@@ -73,14 +73,14 @@ for (const mode of ['rules', 'live'] as Mode[]) {
         expect(turn('16', n)).toContain('• Sun, Nov 22, 8pm: New York Knicks vs. Indiana Pacers at Madison Square Garden.');
         expect(turn('16', n)).not.toMatch(/UBS|Ubs|Prudential|Islanders|Devils|Rangers vs\. Boston/);
       }
-      expect(turn('16', 3)).toMatch(/Both still fit your schedule|New York Knicks vs\. Portland Trail Blazers\nMadison Square Garden, New York · Sat, Nov 21, 7:30 PM EST/);
+      expect(turn('16', 3)).toMatch(/Both still fit your schedule|New York Knicks vs\. Portland Trail Blazers\nMadison Square Garden, New York · Saturday, November 21, at 7:30 p.m./);
     });
 
     it('S04 (04): next weekend has no game; the Sunday home game is offered as another date, never a Friday', () => {
       expect(turn('04', 1)).toContain('None of the two New York Knicks dates I found then fits: Mon, Oct 5, it\'s on a Monday; Thu, Oct 8, it\'s on a Thursday.');
       expect(turn('04', 1)).toContain('On another date, the next one that fits everything else you said is New York Knicks vs. Orlando Magic at Madison Square Garden, New York, Sun, Oct 25, 7:00 PM EDT. Want that one instead?');
       expect(all('04')).not.toMatch(/Boston|Fri, Oct 23|fits everything you said is/);
-      expect(turn('04', 2)).toContain('New York Knicks vs. Orlando Magic\nMadison Square Garden, New York · Sun, Oct 25, 7:00 PM EDT · 2 tickets · up to $300 in total');
+      expect(turn('04', 2)).toContain('New York Knicks vs. Orlando Magic\nMadison Square Garden, New York · Sunday, October 25, at 7 p.m. · 2 tickets · up to $300 in total');
     });
 
     // S05: the same offers under any labels, and follow-ups that change only a requirement.
@@ -107,10 +107,13 @@ for (const mode of ['rules', 'live'] as Mode[]) {
 
     // S06: the trend question first, even when the game is on general sale.
     it('S06 (13): every turn says there is no comparable history; no alert is set', () => {
-      expect(turn('13', 1)).toContain('On buy or wait: I don’t have usable price history for two seats together at New York Knicks games');
-      for (const n of [2, 3]) {
+      // "About six weeks from now" is read as the fortnight around that day, whose one home game is the answer (live
+      // Oct 3, take charge), so turn 1 answers for that game too.
+      expect(turn('13', 1)).toContain('Madison Square Garden, New York · Wednesday, November 11, at 7 p.m.');
+      for (const n of [1, 2, 3]) {
         expect(turn('13', n)).toContain('I don’t have a supported price trend for two seats together at this game');
-        expect(turn('13', n)).toContain('I haven’t set an alert.');
+        // Only once they've said not to set one.
+        if (n > 1) expect(turn('13', n)).toContain('I haven’t set an alert.');
       }
       expect(turn('13', 2)).not.toMatch(/reply "compare"/);
     });
@@ -170,7 +173,7 @@ for (const mode of ['rules', 'live'] as Mode[]) {
       expect(turn('19', 1)).toContain('We only cover events in the US for now');
       expect(turn('21', 1)).toContain('Glad you got them. Enjoy it.');
       expect(turn('23', 2)).toContain('your request to delete your Ticket Guy data and preferences is verified');
-      expect(turn('24', 2)).toContain('Barclays Center, Brooklyn · Thu, Oct 8, 7:30 PM EDT · 3 tickets · up to $240 in total');
+      expect(turn('24', 2)).toContain('Barclays Center, Brooklyn · Thursday, October 8, at 7:30 p.m. · 3 tickets · up to $240 in total');
     });
 
     it('prints', () => {

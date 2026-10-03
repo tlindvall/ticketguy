@@ -221,7 +221,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
       { text: "Best value, two seated tickets. Up to $300 total including fees. We don't want an obstructed view. Is that realistic, and should we wait?", reads: [] },
     ]);
     expect(q1!.text).toContain('Are you after the best view, the best value, or the lowest price?');
-    expect(q2!.text).toContain('Sphere, Las Vegas · Thu, Oct 8, 8:30 PM PDT · 2 tickets · up to $300 in total');
+    expect(q2!.text).toContain('Sphere, Las Vegas · Thursday, October 8, at 8:30 p.m. · 2 tickets · up to $300 in total');
     expect(q2!.text).toContain('Whether $300 for two is realistic I can’t say yet: I can’t see current prices for this show.');
     expect(q2!.text).toContain('waiting would be a guess');
     expect(q2!.text).toContain('reserved seats, not general admission; $300 in total for both, once fees are added; and an unobstructed view.');
@@ -249,7 +249,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     ]);
     expect(q1!.text).toContain('QA Launch Honky Tonk is out: it’s listed as 21+, and one of you is 12.');
     expect(q1!.text).toContain('admission for your 12-year-old (the venue’s age policy) and $150 in total for both, once fees are added');
-    expect(q2!.text).toContain('QA Launch Nashville Hall, Nashville · Sat, Oct 3, 8:00 PM CDT · 2 tickets · up to $150 in total');
+    expect(q2!.text).toContain('QA Launch Nashville Hall, Nashville · Tomorrow, Saturday, October 3, at 8 p.m. · 2 tickets · up to $150 in total');
     expect(q2!.text).toContain('admission for your 12-year-old (the venue’s age policy)');
     for (const r of [q1!, q2!]) expect(r.text).not.toMatch(/Honky Tonk[^\n]*(?:Tickets|Event page)|age (?:policy )?(?:is )?verified|verified for (?:her|your 12)/i);
   });

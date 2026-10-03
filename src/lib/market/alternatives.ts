@@ -81,3 +81,34 @@ export function findAlternatives(listings: MarketListing[], subject: { perTicket
   if (inZone) out.push({ scope: 'same_zone', listing: inZone, perTicketSavingCents: subject.perTicketCents - inZone.priceCents });
   return { comparable: fits.length, zone, alternatives: out, subjectPerTicketCents: subject.perTicketCents };
 }
+
+/**
+ * Seats for the party when they sent nothing to judge (live Oct 3: "4 tickets to the next Rangers home game, max $400"
+ * deserved seats, not questions). From the licensed listings read: the cheapest listings that can seat the whole party,
+ * those that sell exactly their number or leave at least two first (a seller rarely leaves one ticket), and, with a
+ * budget, only those whose estimated all-in total fits. Prices are listed before fees; the estimate adds the fee
+ * allowance and says so. Not verified offers: no link, no check they're still there.
+ */
+export type ListingPick = { listing: MarketListing; listedTotalCents: number; estimatedTotalCents: number; exactSplit: boolean };
+export type ListingPicks = { picks: ListingPick[]; fits: boolean; budgetTotalCents: number | null; feeAllowancePct: number; comparable: number; cheaperUnsplit: ListingPick | null };
+export function pickListings(listings: MarketListing[], quantity: number, budgetTotalCents: number | null, feeAllowancePct: number, max = 3): ListingPicks | null {
+  const q = Math.max(1, Math.floor(quantity));
+  const all = listings
+    .filter((l) => l.quantity >= q)
+    .map((l) => {
+      const listedTotalCents = l.priceCents * q;
+      return { listing: l, listedTotalCents, estimatedTotalCents: Math.round(listedTotalCents * (1 + feeAllowancePct / 100)), exactSplit: l.quantity === q || l.quantity - q >= 2 };
+    })
+    .sort((a, b) => Number(b.exactSplit) - Number(a.exactSplit) || a.listing.priceCents - b.listing.priceCents);
+  if (!all.length) return null;
+  const within = budgetTotalCents === null ? all : all.filter((p) => p.estimatedTotalCents <= budgetTotalCents);
+  const byPrice = (xs: ListingPick[]) => [...xs].sort((a, b) => a.listing.priceCents - b.listing.priceCents || Number(b.exactSplit) - Number(a.exactSplit));
+  // Distinct seats: the same section and row at the same price is one choice, however many listings carry it.
+  const distinct = (xs: ListingPick[]) => [...new Map(xs.map((p) => [`${p.listing.section ?? ''}|${p.listing.row ?? ''}|${p.listing.priceCents}`, p])).values()];
+  if (within.length) {
+    const picks = distinct(byPrice(within.filter((p) => p.exactSplit).length ? within.filter((p) => p.exactSplit) : within)).slice(0, max);
+    const cheaperUnsplit = byPrice(within).find((p) => !p.exactSplit && p.listing.priceCents < picks[0]!.listing.priceCents) ?? null;
+    return { picks, fits: true, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit };
+  }
+  return { picks: distinct(byPrice(all)).slice(0, 1), fits: false, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit: null };
+}

@@ -184,6 +184,10 @@ const lastDayOf = (year: number, month: number) => new Date(Date.UTC(year, month
  * window, or null. Checked before the whole-month rule, because "the first week in October" also contains
  * "in October" and would otherwise widen to the whole month.
  */
+const NUMBER_WORDS = ['a', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const wordNumber = (w: string): number | null => (/^\d{1,2}$/.test(w) ? Number(w) : w === 'a' || w === 'an' ? 1 : NUMBER_WORDS.indexOf(w) > 0 ? NUMBER_WORDS.indexOf(w) : null);
+export const WEEKS_AHEAD_RE = /\b(\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(weeks?|months?)\s+(?:from\s+(?:now|today)|out|away)\b|\bin\s+(?:about\s+|around\s+|roughly\s+)?(\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(weeks?|months?)(?:'|’)?(?:\s+time)?\b/i;
+
 export function spanWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
   const e = expression.trim().toLowerCase();
   const now = localDateParts(receivedAt, timeZone);
@@ -192,6 +196,18 @@ export function spanWindowFor(expression: string, receivedAt: Date, timeZone: st
     const t = addDaysToCalendar(now.y, now.m, now.d, days);
     return toIsoDate(t.y, t.m, t.d);
   };
+
+  // "About six weeks from now", "in 3 weeks", "a month from now": a week either side of that day, so a team that
+  // plays twice that fortnight is a choice of date, never the next game three weeks earlier.
+  const ahead = WEEKS_AHEAD_RE.exec(e);
+  if (ahead) {
+    const n = wordNumber(ahead[1] ?? ahead[3] ?? '');
+    const unit = ahead[2] ?? ahead[4] ?? '';
+    if (n) {
+      const days = /^month/.test(unit) ? n * 30 : n * 7;
+      return { from: plus(Math.max(0, days - 7)), to: plus(days + 7) };
+    }
+  }
 
   const week = new RegExp(`\\b(first|1st|second|2nd|third|3rd|fourth|4th|last|final)\\s+week\\s+(?:of|on|in)\\s+${MONTH_RE}(?:\\s+(\\d{4}))?`).exec(e);
   if (week) {
@@ -246,4 +262,26 @@ export function spanWindowFor(expression: string, receivedAt: Date, timeZone: st
 /** Any span a date phrase names without naming a day: part of a month, a range, a month or a week. */
 export function dateWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
   return spanWindowFor(expression, receivedAt, timeZone) ?? monthWindowFor(expression, receivedAt) ?? weekWindowFor(expression, receivedAt, timeZone);
+}
+
+/**
+ * A date as a person says it: "Tuesday, October 13". `localDate` is YYYY-MM-DD in the event's own zone.
+ */
+export function friendlyDay(localDate: string): string {
+  const [y, m, d] = localDate.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(Date.UTC(y!, m! - 1, d!, 12)));
+}
+
+/**
+ * When an event is, as a person says it (live Oct 3: "Tue, Oct 13, 7:15 PM EDT" read as a form):
+ * "tonight at 7 p.m.", "tomorrow, Sunday, October 4, at 6 p.m.", "Tuesday, October 13, at 7:15 p.m.".
+ */
+export function friendlyWhen(at: Date, timeZone: string, now: Date): string {
+  const day = eventLocalDate(at, timeZone);
+  const today = eventLocalDate(now, timeZone);
+  const tomorrow = eventLocalDate(new Date(now.getTime() + 86_400_000), timeZone);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(at).map((p) => [p.type, p.value]));
+  const time = `${parts.hour}${parts.minute && parts.minute !== '00' ? `:${parts.minute}` : ''} ${String(parts.dayPeriod ?? '').toLowerCase() === 'pm' ? 'p.m.' : 'a.m.'}`;
+  if (day === today) return `${Number(parts.hour) >= 5 && String(parts.dayPeriod).toLowerCase() === 'pm' ? 'tonight' : 'today'} at ${time}`;
+  return `${day === tomorrow ? 'tomorrow, ' : ''}${friendlyDay(day)}, at ${time}`;
 }
