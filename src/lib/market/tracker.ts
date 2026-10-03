@@ -75,6 +75,23 @@ type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSele
 const RECENT_READS = new Map<string, { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[] }>();
 const RECENT_READ_MS = 10 * 60_000;
 
+/**
+ * The listings reply's shape, never its values: field names and how many rows name each marketplace. The item shape
+ * is undocumented, and whether rows carry a marketplace or a link decides what a reply can point to (live Oct 3:
+ * named seats with no marketplace and no way to buy them).
+ */
+export function listingShape(raw: Array<Record<string, unknown>>): string {
+  const keys = new Set<string>();
+  const sources = new Map<string, number>();
+  for (const l of raw.slice(0, 500)) {
+    for (const k of Object.keys(l)) keys.add(k);
+    const src = l.source ?? l.marketplace ?? l.exchange;
+    const name = typeof src === 'string' && /^[\w-]{1,20}$/.test(src) ? src : src == null ? 'none' : 'other';
+    sources.set(name, (sources.get(name) ?? 0) + 1);
+  }
+  return `keys ${[...keys].sort().join(',').slice(0, 400)}; sources ${[...sources].map(([k, n]) => `${k}=${n}`).join(',')}`;
+}
+
 export class MarketTracker {
   private client: SeatDataClient | null = null;
   constructor(private readonly deps: { db: DbOrTx; env: Env; now?: () => Date; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }) {}
@@ -105,7 +122,7 @@ export class MarketTracker {
   }
 
   private async log(kind: string, eventId: string | null, status: string, calls: number, points = 0, detail: string | null = null) {
-    await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 300) ?? null, at: this.now() });
+    await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 600) ?? null, at: this.now() });
   }
 
   /**
@@ -135,7 +152,7 @@ export class MarketTracker {
 
   /** The reserved row, completed with what the read actually did. */
   private async finish(id: string, status: string, calls: number, points = 0, detail: string | null = null) {
-    await this.db.update(t.marketFetches).set({ status, calls, points, detail: detail?.slice(0, 300) ?? null }).where(eq(t.marketFetches.id, id));
+    await this.db.update(t.marketFetches).set({ status, calls, points, detail: detail?.slice(0, 600) ?? null }).where(eq(t.marketFetches.id, id));
   }
 
   /** Why nothing would run, or null when it can. */
@@ -476,7 +493,7 @@ export class MarketTracker {
       // Its own kind: a comparison read stores no group points, so it must not make the group series look fresh.
       const retrievedAt = this.now();
       const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
-      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}`);
+      await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw)}`);
       await this.rememberListings(eventId, raw, providerAsOf);
       const out = { providerAsOf, retrievedAt, listings };
       this.lastRead.set(eventId, out);
@@ -548,7 +565,7 @@ export class MarketTracker {
     const read = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null) };
     this.lastRead.set(ev.e.id, read);
     RECENT_READS.set(ev.e.id, read);
-    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}`);
+    await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings)}`);
     return points.length;
   }
 

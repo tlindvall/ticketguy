@@ -150,15 +150,21 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Seats for two, named from the listings we can read, are the answer (live Oct 3: seats, not questions). They are
     // the one price summary: no venue floor or budget sum from it under them.
-    expect(rec!.bodyText).toContain('Test Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets\n\nCheapest pair I can see: about $247 for both with fees.\n\n- Section 101, Row 10: $95 each, $190 for two before fees\n- Section 215, Row 8: $120 each, $240 for two before fees');
-    expect(rec!.bodyText).toContain('- Fees: I’ve allowed 30%, so check the total at checkout.\n- Not checked yet: that they’re still for sale and sit together');
+    // One listing to buy, a backup, and where to find it (live Oct 3: three equal options and no way to buy).
+    expect(rec!.bodyText).toContain('Test Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets\n\nI’d buy Section 101, Row 10: the cheapest pair I can see, about $247 for both with fees.\n\n- Price: $95 each, $190 for two before fees; I’ve allowed 30% for fees.');
+    // The feed here names no marketplace, as live: both are searched, and it says why.
+    expect(rec!.bodyText).toContain('- Where: StubHub or Vivid Seats; my data doesn’t say which, so search both (links below).');
+    expect(rec!.bodyText).toContain('- Backup: Section 215, Row 8, $120 each ($240 before fees).');
+    expect(rec!.bodyText).not.toContain('Section 210, Row 4'); // one backup, not a list
+    expect(rec!.bodyText).toContain('- Before you pay: check it’s still listed, the seats are together, and the checkout total');
+    expect(rec!.bodyText).toContain('Search StubHub: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston');
     // With no budget, the one next step is an offer to narrow it, on its own line, not a questionnaire.
     expect(rec!.bodyText).toContain('\n\nWant me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.');
     expect(rec!.bodyText).not.toMatch(/things that would help|One thing that would help|When do you need tickets sorted by/);
     expect(rec!.bodyText).not.toContain('The resale market when I last checked');
-    // The answer and each seat's place are bold; the prices are not (post-#55 writing review).
-    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>Cheapest pair I can see: about $247 for both with fees.</strong></p>');
-    expect(rec!.bodyHtml).toContain('<li style="margin:0 0 8px;"><strong>Section 101, Row 10</strong>: $95 each, $190 for two before fees</li>');
+    // The recommendation is the bold line; the links are buttons-in-text.
+    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>I’d buy Section 101, Row 10: the cheapest pair I can see, about $247 for both with fees.</strong></p>');
+    expect(rec!.bodyHtml).toContain('style="font-weight:600;">Search StubHub</a>');
     expect(rec!.bodyText).not.toContain('SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     expect(rec!.bodyText).not.toMatch(/fair price|better deal|guarantee/);
@@ -396,7 +402,7 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Five together, named: the $140 block is six tickets and would leave the seller one, so it's said and passed over.
-    expect(rec!.bodyText).toContain('Cheapest five together I can see: about $1,008 for all 5 with fees.\n\n- Section 112, Row 2: $155 each, $775 for five before fees');
+    expect(rec!.bodyText).toContain('I’d buy Section 112, Row 2: the cheapest five together I can see, about $1,008 for all 5 with fees.\n\n- Price: $155 each, $775 for five before fees; I’ve allowed 30% for fees.');
     expect(rec!.bodyText).toContain('- Skipped: Section 210 at $140 each is 6 tickets, and sellers rarely leave a single seat.');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);

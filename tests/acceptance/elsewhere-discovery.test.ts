@@ -71,8 +71,7 @@ describe('a far show on file never stands in for a closer one the provider knows
   it('asks the provider nationwide and offers Connecticut, not Las Vegas, to New York', async () => {
     const body = await ask(concierge(), 'Two Metallica tickets in New York', 'met-ny@customer.example');
     expect(keywordCalls).toBeGreaterThanOrEqual(1);
-    expect(body).toContain('Metallica isn’t playing in New York, but there are shows not far off.');
-    expect(body).toMatch(/Rentschler Field, East Hartford \(about 1\d\d miles from New York\)/);
+    expect(body).toMatch(/Metallica isn’t playing in New York\. The closest (?:is|show is at) Rentschler Field in East Hartford, about 1\d\d miles away/);
     expect(body).not.toMatch(/Sphere|Las Vegas|a trip away/);
   });
 
@@ -85,13 +84,12 @@ describe('a far show on file never stands in for a closer one the provider knows
       await h.db.delete(t.events).where(eq(t.events.id, id));
     }
     const body = await ask(concierge(), 'Two Metallica tickets in New York', 'met-ny2@customer.example');
-    expect(body).toContain('Metallica isn’t playing in New York, and the nearest shows I can find are a trip away.');
-    expect(body).toMatch(/Sphere, Las Vegas \(about 2,2\d\d miles from New York\)/);
+    expect(body).toMatch(/Metallica isn’t playing in New York\. The nearest I can find is Sphere in Las Vegas, about 2,2\d\d miles away, on two nights:\n• /);
   });
 
   it('with no provider at all, what is on file is offered rather than nothing', async () => {
     const body = await ask(concierge({ TICKETMASTER_DISCOVERY_ENABLED: 'false' }), 'Two Metallica tickets in New York', 'met-ny3@customer.example');
-    expect(body).toContain('the nearest shows I can find are a trip away');
+    expect(body).toContain('The nearest I can find is Sphere in Las Vegas');
     expect(body).toContain('Sphere');
   });
 });

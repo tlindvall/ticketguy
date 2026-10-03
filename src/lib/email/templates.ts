@@ -31,6 +31,12 @@ const BODY_OPEN = '<!doctype html><html><body style="margin:0;padding:0;"><div s
 const BODY_CLOSE = '</div></body></html>';
 const disclosureHtml = (text: string) => `<p style="margin:16px 0 0;font-size:11px;line-height:17px;color:#666;">${esc(text)}</p>`;
 const para = (text: string) => `<p style="margin:0 0 18px;">${esc(text)}</p>`;
+/** A paragraph whose lines after the first start with "• " is a lead line and a list (the shows elsewhere, live Oct 3). */
+const block = (text: string) => {
+  const [head, ...rest] = text.split('\n');
+  if (!rest.length || !rest.every((l) => l.startsWith('• '))) return para(text);
+  return `<p style="margin:0 0 8px;">${esc(head!)}</p><ul style="margin:0 0 18px;padding-left:20px;">${rest.map((l) => `<li style="margin:0 0 4px;">${esc(l.slice(2))}</li>`).join('')}</ul>`;
+};
 
 type Pick = { line: string; title: string; reason: string; eventUrl: string | null; links: Array<{ label: string; url: string }> };
 
@@ -134,10 +140,10 @@ function renderBody(
         // No stock closer: the questions are the next step (TGQA-R6 writing review).
       ].filter(Boolean);
       const ra = vars.ra as Ra | null | undefined;
-      if (!ra) return wrap(paras, paras.map(para));
+      if (!ra) return wrap(paras, paras.map(block));
       // After the note that we couldn't find it, before the questions.
       const at = v.eventNote ? 3 : 2;
-      return wrap([...paras.slice(0, at), raText(ra), ...paras.slice(at)], [...paras.slice(0, at).map(para), raHtml(ra), ...paras.slice(at).map(para)]);
+      return wrap([...paras.slice(0, at), raText(ra), ...paras.slice(at)], [...paras.slice(0, at).map(block), raHtml(ra), ...paras.slice(at).map(block)]);
     }
     case 'browse_options': {
       // "What's on?" gets a few picks, each with why it fits and where to go next, then one easy next step.

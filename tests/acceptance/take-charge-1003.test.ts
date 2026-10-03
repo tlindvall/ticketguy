@@ -3,13 +3,14 @@ import { eq } from 'drizzle-orm';
 import type { DbHandle } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import { openTestDb, inbound, testEnv } from '../harness';
-import { Concierge } from '@/lib/intake/pipeline';
+import { Concierge, pickLinksFor } from '@/lib/intake/pipeline';
 import { FixtureExtractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
+import { listingShape } from '@/lib/market/tracker';
 
 /**
  * Live, Oct 3 2026: "Looking for 4 tickets to the new home game for new york rangers. Max $400" was asked "Which date
@@ -86,8 +87,11 @@ describe('take charge: the next home game and seats for the party, not questions
     expect(r.req.eventId).toBe(games[0]!.id);
     expect(r.emails).not.toMatch(/Which date|Which game|Send a date/);
     // The answer first, in bold-able words, then the seats as bullets, the way a person would write it.
-    expect(r.emails).toContain('Garden Arena, New York · Monday, October 5, at 7 p.m. · 4 tickets · up to $400 in total\n\nI’d take these: four seats together for about $364 with fees, $36 under your $400.\n\n- Section 214, Row 10 (StubHub): $70 each, $280 for four before fees\n- Section 220, Row 4 (Vivid Seats): $74 each, $296 for four before fees');
-    expect(r.emails).toContain('- Fees: I’ve allowed 30%, so check the total at checkout.\n- Not checked yet: that they’re still for sale and sit together (resale data from the last couple of hours).');
+    expect(r.emails).toContain('Garden Arena, New York · Monday, October 5, at 7 p.m. · 4 tickets · up to $400 in total\n\nI’d buy Section 214, Row 10: four seats together for about $364 with fees, $36 under your $400.\n\n- Price: $70 each, $280 for four before fees; I’ve allowed 30% for fees.\n- Where: StubHub, link below.\n- Backup: Section 220, Row 4 on Vivid Seats, $74 each ($296 before fees).');
+    expect(r.emails).toContain('- Before you pay: check it’s still listed, the seats are together, and the checkout total (resale data from the last couple of hours).');
+    // The marketplace is known, so one link: its search for the game (no StubHub event id without their link).
+    expect(r.emails).toContain('Find it on StubHub: https://www.stubhub.com/search?q=Metro%20Rangers%20vs.%20Team%205');
+    expect(r.emails).not.toContain('Vivid Seats: https://');
     // Budget given and seats named: nothing left to ask.
     expect(r.emails).not.toMatch(/narrow it down|would help me/);
     // Never the wheelchair block, never a listing too small, never "verified" or "guaranteed".
@@ -106,7 +110,7 @@ describe('take charge: the next home game and seats for the party, not questions
     const r = await ask('4 metro rangers tickets please, $400 max total');
     expect(r.req.eventId).toBe(games[0]!.id);
     expect(r.emails).toContain("I've gone with the next home game, Monday, October 5. Tell me if you meant a different one.");
-    expect(r.emails).toContain('I’d take these: four seats together');
+    expect(r.emails).toContain('I’d buy Section 214, Row 10: four seats together');
     expect(r.emails).not.toMatch(/Which date|Which game/);
   });
 
@@ -130,5 +134,17 @@ describe('take charge: the next home game and seats for the party, not questions
     expect(over).toMatchObject({ fits: false });
     expect(over.picks.map((p) => p.listing.section)).toEqual(['D']);
     expect(pickListings([l(40, 2, 'F')], 4, 40000, 30)).toBeNull();
+  });
+
+  it('find-it links: StubHub’s event page when their link named it, the search otherwise, both when the feed doesn’t say', () => {
+    expect(pickLinksFor('stubhub', 'A vs. B', 4, '159000123')).toEqual([{ label: 'Find it on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
+    expect(pickLinksFor('vividseats', 'A vs. B', 2, null)).toEqual([{ label: 'Find it on Vivid Seats', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
+    expect(pickLinksFor(null, 'A vs. B', 2, 'not-an-id').map((l) => l.label)).toEqual(['Search StubHub', 'Search Vivid Seats']);
+  });
+
+  it('the listings shape is logged as field names and marketplace counts, never values', () => {
+    const shape = listingShape([{ listing_id: 1, price: 70, section: '214', source: 'sh' }, { price: 74, section: '220' }, { price: 1, source: 'https://evil.example/x?token=1' }]);
+    expect(shape).toBe('keys listing_id,price,section,source; sources sh=1,none=1,other=1');
+    expect(shape).not.toMatch(/70|214|evil|token/);
   });
 });

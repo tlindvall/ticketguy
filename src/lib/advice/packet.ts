@@ -198,7 +198,8 @@ export type BuildPacketArgs = {
    * Seats for their party from the licensed listings read, when they sent nothing to judge (live Oct 3, Rangers: seats,
    * not questions). Listed prices before fees with the fee allowance said; `age` is the provider's refresh time.
    */
-  picks?: (ListingPicks & { age: 'undated' | 'recent' | number }) | null;
+  /** Where to find the pick: the marketplace's event page or search, never a listing we haven't checked is still there. */
+  picks?: (ListingPicks & { age: 'undated' | 'recent' | number; links?: Array<{ label: string; url: string }> }) | null;
   /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
   travelling?: boolean;
   /** Where they want to sit ("lower level"), when they said: a venue-wide figure doesn't describe those seats. */
@@ -1311,31 +1312,30 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[] } | nu
   const q = a.quantity;
   const n = q === 1 ? 'one' : qtyWord(q);
   const seats = q === 1 ? 'one seat' : `${n} seats together`;
-  const seat = (x: (typeof p.picks)[number]) => {
-    const where = [x.listing.section ? `Section ${x.listing.section}` : null, x.listing.row ? `Row ${x.listing.row}` : null].filter(Boolean).join(', ') || 'A listing';
-    const on = x.listing.marketplace === 'stubhub' ? ' (StubHub)' : x.listing.marketplace === 'vividseats' ? ' (Vivid Seats)' : '';
-    return `${where}${on}`;
-  };
-  const [first, ...rest] = p.picks;
+  const seat = (x: (typeof p.picks)[number]) => [x.listing.section ? `Section ${x.listing.section}` : null, x.listing.row ? `Row ${x.listing.row}` : null].filter(Boolean).join(', ') || 'the cheapest listing';
+  const on = (x: (typeof p.picks)[number]) => (x.listing.marketplace === 'stubhub' ? 'StubHub' : x.listing.marketplace === 'vividseats' ? 'Vivid Seats' : null);
+  const [first, backup] = p.picks;
   const est = formatUsd(roundToDollar(first!.estimatedTotalCents));
   const budget = p.budgetTotalCents;
   const all = q === 1 ? '' : q === 2 ? ' for both' : ` for all ${q}`;
-  // The answer, in one bold line, the way a person would say it (live Oct 3: compared with a browsing assistant's
-  // "Found four seats together for $308 total"). Then one short line per seat, its place first, so it scans.
+  // One listing to buy, in one bold line (live Oct 3: three equal options read as homework, not a recommendation).
+  // The seats are named first because that's what they'll look for on the marketplace.
   const head = !p.fits && budget != null
-    ? `Nothing for ${seats} fits your ${formatUsd(budget)} with fees right now; the closest is about ${est}${all}.`
+    ? `Nothing for ${seats} fits your ${formatUsd(budget)} with fees right now. The closest: ${seat(first!)}, about ${est}${all}.`
     : budget != null
-      ? `I’d take these: ${seats} for about ${est} with fees, ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)}.`
-      : `Cheapest ${q === 2 ? 'pair' : q === 1 ? 'seat' : `${n} together`} I can see: about ${est}${all} with fees.`;
-  const line = (x: (typeof p.picks)[number]) =>
-    `${seat(x)}: ${formatUsd(x.listing.priceCents)} each${q > 1 ? `, ${formatUsd(x.listedTotalCents)} for ${n}` : ''} before fees${x.exactSplit ? '' : ` (a listing of ${x.listing.quantity}, so it may not sell exactly ${q})`}`;
-  const items: string[] = [line(first!), ...(p.fits ? rest.map(line) : [])];
+      ? `I’d buy ${seat(first!)}: ${seats} for about ${est} with fees, ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)}.`
+      : `I’d buy ${seat(first!)}: the cheapest ${q === 2 ? 'pair' : q === 1 ? 'seat' : `${n} together`} I can see, about ${est}${all} with fees.`;
+  const where = on(first!);
+  const items: string[] = [
+    `Price: ${formatUsd(first!.listing.priceCents)} each${q > 1 ? `, ${formatUsd(first!.listedTotalCents)} for ${n}` : ''} before fees; I’ve allowed ${p.feeAllowancePct}% for fees${first!.exactSplit ? '' : `. It’s a listing of ${first!.listing.quantity}, so check it sells as ${q}`}.`,
+    where ? `Where: ${where}${p.links?.length ? ', link below' : ''}.` : `Where: StubHub or Vivid Seats; my data doesn’t say which, so search both${p.links?.length ? ' (links below)' : ''}.`,
+  ];
+  if (p.fits && backup) items.push(`Backup: ${seat(backup)}${on(backup) ? ` on ${on(backup)}` : ''}, ${formatUsd(backup.listing.priceCents)} each (${formatUsd(backup.listedTotalCents)} before fees).`);
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
   if (u && p.fits) items.push(`Skipped: ${u.listing.section ? `Section ${u.listing.section}` : 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`);
   const age = p.age === 'undated' ? 'the resale data doesn’t say how recent it is' : typeof p.age === 'number' ? `resale data about ${p.age} hours old` : 'resale data from the last couple of hours';
-  items.push(`Fees: I’ve allowed ${p.feeAllowancePct}%, so check the total at checkout.`);
-  items.push(`Not checked yet: that they’re still for sale${q > 1 ? ' and sit together' : ''} (${age}).`);
+  items.push(`Before you pay: check it’s still listed${q > 1 ? ', the seats are together,' : ''} and the checkout total (${age}).`);
   return { head, items };
 }
 
@@ -1443,7 +1443,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   }
   // Seats for their party, named, first: what they asked for, from the listings we can read (live Oct 3, Rangers).
   const picksText = picksAnswer(a);
-  if (picksText) claims.push({ id: 'C_PICKS', kind: 'market_price', text: `${picksText.head}\n${picksText.items.join('\n')}`, items: picksText.items, values: { picks: a.picks!.picks.length, fits: a.picks!.fits ? 1 : 0, cheapestPerTicketCents: a.picks!.picks[0]?.listing.priceCents ?? null }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: 'picks-1.0', limitations: ['listed_prices_before_fees', 'fee_allowance_estimate', 'not_a_verified_offer'], customerVisible: !!a.market?.visible });
+  const pickLinks = picksText ? a.picks!.links ?? [] : [];
+  if (picksText) claims.push({ id: 'C_PICKS', kind: 'market_price', text: `${picksText.head}\n${picksText.items.join('\n')}`, items: picksText.items, ...(pickLinks[0] ? { url: pickLinks[0].url, linkLabel: pickLinks[0].label } : {}), values: { picks: a.picks!.picks.length, fits: a.picks!.fits ? 1 : 0, cheapestPerTicketCents: a.picks!.picks[0]?.listing.priceCents ?? null }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: 'picks-1.0', limitations: ['listed_prices_before_fees', 'fee_allowance_estimate', 'not_a_verified_offer'], customerVisible: !!a.market?.visible });
+  // The other marketplace's search, when the data doesn't say which one has the seats: a link only, never a claim.
+  if (picksText && pickLinks[1]) claims.push({ id: 'C_PICKS_ALT', kind: 'coverage', text: pickLinks[1].label, values: {}, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['search_page_not_a_listing'], customerVisible: !!a.market?.visible, url: pickLinks[1].url, linkLabel: pickLinks[1].label });
   // "Is that realistic?" about their cap (launch Q01, A23): answered from the cheapest pair the market shows, or said
   // plainly that we can't see one. Listed prices are before fees; nothing here says those seats meet their other needs.
   const realistic = realisticAnswer(a);

@@ -857,6 +857,18 @@ export class Concierge {
         elsewhere = [];
       }
     }
+    // "Yes the first one would be great" after a list we sent: that one, never the same list again (live Oct 3,
+    // Metallica: the two Mohegan Sun nights were offered back word for word). The list is rebuilt the same way from the
+    // same request, so its order is the order they saw.
+    if (!picked && revision > 1) {
+      const options = elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
+      const idx = options.length > 1 ? ordinalChoice(flat(latestText), options.length) : null;
+      if (idx !== null) {
+        const { e, v } = options[idx]!;
+        found = { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: elsewhere[idx]?.kind ?? null };
+        elsewhere = [];
+      }
+    }
     // A game already settled stays settled unless this message moves it: "let's do 6 tickets" or a pasted link
     // to the same game must never reopen "which game?".
     // "Did you check Saturday too?" asks about another date; it doesn't move the request there (Research 1,
@@ -1054,7 +1066,7 @@ export class Concierge {
       // dump of them. The extractor's ambiguities are asked too: they are why this clarification exists, and
       // they used to trigger it without ever reaching the email.
       const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
-      const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')));
+      const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')) && !(elsewhere.length && k === 'quantity'));
       if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
       // They named the act, the date and the place and nothing is scheduled: asking "which date and venue?" asks
       // for what they already gave (post-#54 QA, R3-B10). One next step instead.
@@ -1088,7 +1100,7 @@ export class Concierge {
       const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
-      const noMatch = elsewhere.length ? `${titleCaseName(merged.performerOrTeam!)} isn’t playing in ${placeLabel(merged)}${merged.dateExpression ? ' around then' : ''}, ${near ? 'but there are shows not far off.' : 'and the nearest shows I can find are a trip away.'}` : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const noMatch = elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
@@ -1103,12 +1115,14 @@ export class Concierge {
       // "Do those still match the schedule?": yes or no first, with the times that decide it (TGQA-R8 S04).
       const scheduleAsked = resolution.kind === 'ambiguous' && /\b(?:still\s+)?(?:match|fit|meet)\b[^.]*\?|\bdo (?:those|they|these) (?:still )?(?:match|fit|work)\b/i.test(flat(latestText));
       const scheduleAnswer = scheduleAsked && resolution.kind === 'ambiguous' ? `${resolution.candidates.length === 2 ? 'Both still fit' : 'These still fit'} your schedule: ${((xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join('; ')} and ${xs[xs.length - 1]}` : xs[0]!))(resolution.candidates.map((c) => `${c.name} on ${c.when}${c.at ? ` at ${c.at}` : ''} at ${c.venueName}`))}. I haven’t checked seats or prices for either.` : null;
-      const eventNote = [capability || null, scheduleAnswer, settled, noMatch ? `${noMatch}${offerAlert ? (elsewhere.length ? ` If you’d rather wait for a ${placeLabel(merged)} date, reply "let me know" and I’ll email you when one is announced.` : ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.') : ''}` : null].filter(Boolean).join('\n\n') || null;
+      const eventNote = [capability || null, scheduleAnswer, settled, noMatch ? `${noMatch}${offerAlert && !elsewhere.length ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null].filter(Boolean).join('\n\n') || null;
+      // Shows elsewhere: the wait-for-a-local-date offer comes after the question, as the other option.
+      const waitLine = noMatch && offerAlert && elsewhere.length ? `Rather wait for a ${placeLabel(merged)} date? Reply "let me know" and I’ll email you when one is announced.` : null;
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? acknowledgementLine(merged), eventNote: imageUnread ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : assumptions, countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (elsewhere.length && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (elsewhere.length && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions, ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -2382,6 +2396,13 @@ export class Concierge {
    * that has since been cancelled or played is not kept.
    */
   /** The request's settled event with its venue and performer, for answering about it without re-resolving. */
+  /** Events with their venues, in the order of `ids` (ids not found are left out). */
+  private async eventRows(ids: string[]): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>> {
+    if (!ids.length) return [];
+    const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(inArray(t.events.id, ids));
+    return ids.map((id) => rows.find((r) => r.e.id === id)).filter((r): r is (typeof rows)[number] => !!r);
+  }
+
   private async settledRow(eventId: string): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null } | null> {
     const [row] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
     return row && row.e.status === 'scheduled' ? row : null;
@@ -2806,7 +2827,7 @@ export class Concierge {
     if (!shown && !best && !sentLink?.listingId && brief.intent !== 'watch_request' && licence.allows('tracking') && trackingOk && uses.display) {
       if (!around) around = await tracker.recentListings(event.id);
       const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT) : null;
-      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now) };
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing.marketplace ?? null, event.name, quantity, sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null) };
     }
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
@@ -3803,14 +3824,55 @@ function milesAway(miles: number | null, x: RequestExtraction): string {
   return ` (about ${rounded.toLocaleString('en-US')} miles from ${placeLabel(x)})`;
 }
 
-/** "Would one of these work: Sat, Oct 10 at Lincoln Financial Field, Philadelphia (about 95 miles from New York), or …?" */
+/**
+ * Which of a list they picked by its place in it: "the first one", "the second show", "the last night", "1st". Null
+ * when the message doesn't pick by position ("first time going", "first row" are not picks).
+ */
+export function ordinalChoice(text: string, n: number): number | null {
+  const m = /\b(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|last|latter|former)\s+(?:one|option|show|concert|game|date|night|day|match)\b|\bthe\s+(first|second|third|last|latter|former)\s*(?:[.,!?]|$)|\b(?:option|number|#)\s*([1-4])\b/i.exec(text);
+  if (!m) return null;
+  const w = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
+  const i = /^(?:first|1st|former|1)$/.test(w) ? 0 : /^(?:second|2nd|2)$/.test(w) ? 1 : /^(?:third|3rd|3)$/.test(w) ? 2 : /^(?:fourth|4th|4)$/.test(w) ? 3 : /^(?:last|latter)$/.test(w) ? n - 1 : -1;
+  return i >= 0 && i < n ? i : null;
+}
+
+/** "Soon", "anytime", "whenever": no date at all, so never played back ("Metallica tickets soon. Got it.", live Oct 3). */
+const VAGUE_WHEN = /^(?:(?:very |pretty )?soon|asap|anytime|any ?time|whenever|sometime|some time|in the near future|upcoming|coming up|any date|this season)$/i;
+
+/** " in November", " on Saturday, October 3", or nothing when what they said names no time ("soon"). */
+function whenPhrase(x: RequestExtraction): string {
+  if (x.resolvedLocalDate) return ` on ${friendlyDay(x.resolvedLocalDate)}`;
+  const d = x.dateExpression?.trim();
+  if (!d || VAGUE_WHEN.test(d) || /\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(d)) return '';
+  return /^(?:in|on|this|next|during|over|around|at|before|after|by)\b/i.test(d) ? ` ${d}` : '';
+}
+
+const milesOnly = (miles: number) => (miles < 20 ? Math.round(miles) : miles < 500 ? Math.round(miles / 5) * 5 : Math.round(miles / 100) * 100).toLocaleString('en-US');
+
+/**
+ * "Metallica isn’t playing in New York. The closest is Mohegan Sun Arena in Uncasville, about 115 miles away:" and the
+ * nights as bullets, said the way a person would (live Oct 3: "isn’t playing in New York around then, but there are
+ * shows not far off", then "Thu, Nov 19 at …; or Sat, Nov 21 at …" twice over in one run-on question).
+ */
+export function elsewhereNote(name: string, shows: NearbyShow[], x: RequestExtraction, now: Date): string {
+  const near = shows.some((s) => s.miles !== null && s.miles <= NEARBY_TRAVEL_MILES);
+  const day = (s: NearbyShow) => friendlyWhen(s.e.localStartAt, s.v.timezone, now).replace(/^./, (c) => c.toUpperCase());
+  const venues = new Set(shows.map((s) => s.v.id));
+  const lead = `${name} isn’t playing in ${placeLabel(x)}${whenPhrase(x)}.`;
+  if (venues.size === 1) {
+    const { v, miles } = shows[0]!;
+    const far = miles !== null ? `, about ${milesOnly(miles)} miles away` : '';
+    const intro = shows.length === 1 ? `${near ? 'The closest show is' : 'The nearest I can find is'} at ${v.name}${v.city ? ` in ${v.city}` : ''}${far}:` : `${near ? 'The closest is' : 'The nearest I can find is'} ${v.name}${v.city ? ` in ${v.city}` : ''}${far}, on ${shows.length === 2 ? 'two nights' : `${shows.length} nights`}:`;
+    return `${lead} ${intro}\n${shows.map((s) => `• ${day(s)}`).join('\n')}`;
+  }
+  const intro = near ? 'The closest shows:' : 'The nearest I can find are a trip away:';
+  return `${lead} ${intro}\n${shows.map((s) => `• ${s.v.name}${s.v.city ? `, ${s.v.city}` : ''}${s.miles !== null ? `, about ${milesOnly(s.miles)} miles away` : ''}: ${day(s)}`).join('\n')}`;
+}
+
+/** One next step for the shows above: which one, and how many tickets when we don't know yet. */
 export function elsewhereQuestion(shows: NearbyShow[], x: RequestExtraction): string {
-  const opts = shows.map(({ e, v, miles }) => {
-    const when = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt);
-    return `${when} at ${v.name}${v.city ? `, ${v.city}` : ''}${milesAway(miles, x)}`;
-  });
-  const list = opts.length === 1 ? opts[0]! : `${opts.slice(0, -1).join('; ')}; or ${opts[opts.length - 1]}`;
-  return `${opts.length === 1 ? 'Would this one work' : 'Would one of these work'}: ${list}? Reply with the date, or tell me how far you’d travel.`;
+  const which = shows.length === 1 ? 'Want that one?' : new Set(shows.map((s) => s.v.id)).size === 1 ? 'Which night works?' : 'Which one works?';
+  return x.quantity ? `${which} I’ll find you ${x.quantity === 1 ? 'a seat' : `${countWordLower(x.quantity)} seats`} for it, or tell me how far you’d travel.` : `${which} Tell me how many tickets and I’ll find you seats, or tell me how far you’d travel.`;
 }
 
 export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtraction): string {
@@ -3868,7 +3930,7 @@ export function acknowledgementLine(x: RequestExtraction): string {
   // A date as a person says it: never "10-13-2026" or "tickets next" played back (live Oct 3).
   if (x.resolvedLocalDate) line += ` for ${friendlyDay(x.resolvedLocalDate)}`;
   else if (x.dateExpression && /^(?:the\s+)?(?:next|new|upcoming|coming)(?:\s+home)?(?:\s+(?:game|match|one|show))?$/i.test(x.dateExpression.trim())) line += ' for the next game';
-  else if (x.dateExpression && !/\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(x.dateExpression)) line += ` ${x.dateExpression}`;
+  else if (x.dateExpression && !/\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(x.dateExpression) && !VAGUE_WHEN.test(x.dateExpression.trim())) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
   return `${line}. Got it.`;
 }
@@ -4610,6 +4672,22 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
   // Connecticut, not New York City with a CT state code beside it.
   if (next.city || next.state) [out.city, out.state] = [next.city, next.state];
   return out;
+}
+
+/**
+ * Where to find a pick: StubHub's own event page when a link named it, otherwise the marketplace's search for the
+ * game. Both marketplaces when the listings don't say which one the seats are on. Never a listing link: the feed's
+ * listing numbers aren't confirmed to be the marketplace's own (DECISION_LOG #67).
+ */
+export function pickLinksFor(marketplace: 'stubhub' | 'vividseats' | null, eventName: string, quantity: number, stubHubEventId: string | null): Array<{ label: string; url: string }> {
+  const q = encodeURIComponent(eventName);
+  const stubhub = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId)
+    ? { label: 'Find it on StubHub', url: `https://www.stubhub.com/event/${stubHubEventId}/?quantity=${quantity}` }
+    : { label: 'Find it on StubHub', url: `https://www.stubhub.com/search?q=${q}` };
+  const vivid = { label: 'Find it on Vivid Seats', url: `https://www.vividseats.com/search?searchTerm=${q}` };
+  if (marketplace === 'stubhub') return [stubhub];
+  if (marketplace === 'vividseats') return [vivid];
+  return [{ ...stubhub, label: 'Search StubHub' }, { ...vivid, label: 'Search Vivid Seats' }];
 }
 
 /**
