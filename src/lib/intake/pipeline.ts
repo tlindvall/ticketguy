@@ -2,7 +2,7 @@ import { concertBudget, concertQuestion, concertContext, entryTerm, similarMusic
 import { asksProductChoice, productChoiceAnswer } from '@/lib/advice/product-choice';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
-import { MARKETPLACE_NAMES, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { MARKETPLACE_NAMES, garbledLinkNote, ticketLinksIn } from '@/lib/domain/ticket-links';
 import { problemTypesFor } from '@/lib/domain/problem-types';
 import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
@@ -801,7 +801,9 @@ export class Concierge {
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
     const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged);
     merged = withDefaults;
-    const assumptions = [...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+    // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
+    const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
+    const assumptions = [...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
