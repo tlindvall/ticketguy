@@ -424,6 +424,28 @@ describe('resale market tracking', () => {
     expect(body).not.toMatch(/good deal/i);
   });
 
+  // Live Oct 3: "Are these tickets a good deal? Should I buy now or hold off?" with a Ticketmaster event link and no
+  // count got "How many tickets…?" and "I don't have usable price history", without SeatData ever being read.
+  it('an event link asked "good deal, buy now or hold off?" with no count is checked against the market for two', async () => {
+    const c = concierge();
+    const requestId = await ask(c, 'Are these tickets a good deal? Should I buy now or hold off?\n\nhttps://www.ticketmaster.com/metro-testers-vs-boston-new-york-new-york-10-30-2026/event/TMGAME1?refArtist=K8vZ9171o87&f_simplified_filter=true', 'evpage@customer.example');
+    for (const ev of (await leaseDueOutbox(h.db, { limit: 50, now })).filter((e) => e.eventType === 'research.requested')) {
+      await c.research({ requestId, revision: Number((ev.payload as Record<string, string>).revision) });
+      await markDispatched(h.db, ev.id, ev.leaseToken, now);
+    }
+    const sends = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, requestId))).map((x) => x.bodyText);
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    const all = [...sends, rec!.bodyText].join('\n');
+    // The market was read for this request (the series is already fresh from the cases above, so no new call is needed).
+    expect((await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, requestId), eq(t.auditLog.action, 'market.trend_assessed')))).length).toBe(1);
+    expect(all).toContain('I\'ve assumed two tickets. Just tell me if you need a different number.');
+    // What the market says depends on the series the cases above left; that it's answered from it does not.
+    expect(rec!.bodyText).toMatch(/On buy or wait: [^\n]*\$\d+ a ticket/);
+    expect(rec!.bodyText).toContain('That link is the game’s page, not particular seats, so reply with the price for two with fees and the section and row of the ones you’re looking at (a screenshot works)');
+    // The opponent in the link's words is not the city, and the event link is never "the listing you picked".
+    expect(all).not.toMatch(/usable price history|How many tickets|isn’t playing in Boston|listing you picked/);
+  });
+
   it('a failed listings read is logged and the stats poll still runs', async () => {
     const saved = groupListings;
     groupListings = () => new Response('{"error":"boom"}', { status: 500 });

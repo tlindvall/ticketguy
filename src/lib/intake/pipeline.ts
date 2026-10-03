@@ -808,7 +808,7 @@ export class Concierge {
 
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
-    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged);
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: (TREND_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null });
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
@@ -4695,14 +4695,18 @@ export const DEFAULT_QUANTITY = 2;
  * ("a few tickets" sets quantity_unclear), and a stated value is never replaced. Returns what was assumed
  * so the reply can say it; the stored brief carries the value, so a later "actually four" overrides it.
  */
-export function applyDefaults(x: RequestExtraction): { brief: RequestExtraction; assumed: Array<'quantity' | 'budget_basis'> } {
+export function applyDefaults(x: RequestExtraction, opts: { marketQuestion?: boolean } = {}): { brief: RequestExtraction; assumed: Array<'quantity' | 'budget_basis'> } {
   const assumed: Array<'quantity' | 'budget_basis'> = [];
   let brief = x;
+  // "Are these a good deal? Buy now or hold off?" about an event: the resale market answers that for a pair as well
+  // as for any count, so it goes ahead on two, said once, instead of asking first and saying "no price history"
+  // without ever looking (live Oct 3, Rangers vs. Tampa Bay event link). Not when a need turns on the count.
+  const marketCheck = brief.quantity === null && !!opts.marketQuestion && !brief.accessibilityNeeds && !brief.ambiguities.includes('quantity_unclear');
   // An unstated party size stays unknown and is asked once: two was assumed, and a party of three or a lone
   // wheelchair user was then judged as a pair (TGQA-R6 1008). The number decides the total, adjacency and fit.
   // A per-ticket price check ("is $106 a good deal?") doesn't turn on it, so it goes ahead on two, said once.
   const perTicketCheck = brief.quantity === null && brief.quotedPriceCents !== null && brief.quotedPriceBasis !== 'whole_party' && brief.budgetCents === null && !brief.togetherRequired && !brief.accessibilityNeeds;
-  if (perTicketCheck) {
+  if (perTicketCheck || marketCheck) {
     brief = { ...brief, quantity: DEFAULT_QUANTITY };
     assumed.push('quantity');
   }

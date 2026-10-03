@@ -285,7 +285,8 @@ export class FixtureExtractor implements Extractor {
       ev('city', hood.match.exec(t)?.[0] ?? hood.label);
     }
     // "1pm NEW YORK time", "11am Los Angeles" name a clock, not where the event is (TGQA-R8 17).
-    const tc = t.replace(/\b(?:\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\s+)(?:new york|nyc|los angeles|la|chicago|denver|phoenix|seattle|boston)\b(?:\s+time)?|\b(?:new york|nyc|los angeles|la|chicago|denver|pacific|eastern|central|mountain)\s+time\b/gi, ' ');
+    // A link's words aren't where they said: "…/metro-testers-vs-boston-new-york-…" names the opponent, not the city.
+    const tc = t.replace(/https?:\/\/\S+/gi, ' ').replace(/\b(?:\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\s+)(?:new york|nyc|los angeles|la|chicago|denver|phoenix|seattle|boston)\b(?:\s+time)?|\b(?:new york|nyc|los angeles|la|chicago|denver|pacific|eastern|central|mountain)\s+time\b/gi, ' ');
     for (const [re, c, s] of hood ? [] : CITIES) {
       const m = re.exec(tc);
       if (m) {
