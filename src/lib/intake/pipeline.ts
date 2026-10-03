@@ -1016,8 +1016,9 @@ export class Concierge {
       else if (snap && guideDepth) {
         const [m] = await this.db.select({ url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(eq(t.eventSourceMappings.eventId, resolution.event.id), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
         const page = official?.buyUrl ?? m?.url ?? null;
-        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Buy on ${official.seller}` : 'Event page', official?.affiliate ?? false, { eventId: resolution.event.id }) : page;
-        const lead = official ? `${resolution.label} is on sale at ${official.seller}, the official seller.` : `For ${resolution.label}, the official seller is the venue’s own box office or ticket page.`;
+        const url = page && this.env.APP_MODE !== 'fixture' ? await this.trackLink(req.id, page, official ? `Event page on ${official.seller}` : 'Event page', official?.affiliate ?? false, { eventId: resolution.event.id }) : page;
+        // The sale window is open; that says nothing about seats left (launch E: general sale is not stock).
+        const lead = official ? `${resolution.label} is on general sale at ${official.seller}, the official seller, though I can’t see whether it has seats left.` : `For ${resolution.label}, the official seller is the venue’s own box office or ticket page.`;
         const venueNote = categoryBuyingNote(resolution.event.category, resolution.venue.name);
         const checks = `Before you pay, check ${guideChecks(resolution.event.category)}.${venueNote ? ` ${venueNote}` : ''}`;
         // What they asked for that nothing here has checked, said once (A05: three together, $450 all-in, step-free).
@@ -1030,8 +1031,8 @@ export class Concierge {
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
         const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
-        const text = ['Hey,', lead, ...(url ? [`Tickets: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Buy on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
+        const text = ['Hey,', lead, ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
         if (merged.intent === 'watch_request') await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: `policy:${snap.decision.reasons.includes('operator_blocked') ? 'operator_blocked' : 'guide_official_only'}` } });
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'guide_official_route');
@@ -1233,7 +1234,8 @@ export class Concierge {
       const tickets = url && seller ? sellerLink(url, seller, this.env.AFFILIATE_LINK_TEMPLATES) : null;
       const ent = ents.find((x) => x.id === e.primaryEntityId);
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
-      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Tickets', url: tickets.url }] : [])];
+      // An event page, not a checked offer: neutral label everywhere (launch A22).
+      const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Event page', url: tickets.url }] : [])];
       return { line: lines[i]!, title: readableTitle(e.name), reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
     });
   }
@@ -3843,6 +3845,8 @@ export function linkedSubject(m: MarketListing, seller: string, quantity: number
     priceText: null, perTicketCents: m.priceCents, wholePartyCents: null, priceBasis: 'per_ticket', feeBasis: 'before_fees',
     section: m.section, row: m.row, seatNumbers: null, seatsTogether: null, restrictions: [], restrictionCodes: [],
     deliveryText: null, deliveryBy: null, includedBenefits: [], unreadable: [],
+    // A marketplace listing is resale: never "possibly the official seller's own price" (launch LAUNCH-08).
+    listingType: 'resale',
     source: 'link_match', observedAt: at, confidence: 'high',
   };
 }

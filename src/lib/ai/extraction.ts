@@ -426,9 +426,12 @@ export function clarificationQuestions(missing: string[], known: RequestExtracti
   // A name that matches more than one team or artist has to be settled before anything else: asking which
   // date a "Rangers" game is would assume the very thing in doubt, so it replaces the generic event question.
   const nameAmbiguous = missing.includes('performer_ambiguous');
-  if (nameAmbiguous) q.push(who ? `First, which ${who} do you mean? There is more than one team or artist by that name. A link to the event settles it.` : 'Which performer or team do you mean? A link to the event settles it.');
+  // They already sent a link: never ask for one again (launch E), at most for a screenshot.
+  const linked = (known.submittedUrls ?? []).length > 0;
+  const settles = linked ? '' : ' A link to the event settles it.';
+  if (nameAmbiguous) q.push(who ? `First, which ${who} do you mean? There is more than one team or artist by that name.${settles}` : `Which performer or team do you mean?${settles}`);
   for (const m of missing) {
-    if (m === 'event' && !nameAmbiguous) q.push(blind ? blindLinkQuestion(blind, who, known.resaleAsked || known.quotedPriceCents != null) : who ? `Which ${who} date and venue are you looking at? A link works too.` : 'Which event (performer or team, city, and date) are you looking at? A link or screenshot works.');
+    if (m === 'event' && !nameAmbiguous) q.push(blind ? blindLinkQuestion(blind, who, known.resaleAsked || known.quotedPriceCents != null) : who ? `Which ${who} date and venue are you looking at?${linked ? ' A screenshot of the page works too.' : ' A link works too.'}` : `Which event (performer or team, city, and date) are you looking at?${linked ? ' A screenshot of the page works too.' : ' A link or screenshot works.'}`);
     if (m === 'event_location_unknown' && !missing.includes('event')) q.push('Which city or venue are you looking at?');
     if (m === 'quantity_unclear' && !missing.includes('quantity')) q.push('How many tickets do you need in total?');
     // A date we could not pin down is asked about explicitly. Guessing which day "tonight" means across a

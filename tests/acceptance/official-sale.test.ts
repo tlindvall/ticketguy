@@ -65,7 +65,7 @@ describe('still on general sale: point at the official sale', () => {
     const [send] = await sendsFor(requestId);
     expect(send!.messageClass).toBe('acknowledgment'); // no prices, so no review gate
     expect(send!.bodyText).toContain("Metro Testers vs. Boston (Fri, Oct 30 at 7:30pm at Test Garden) is still on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that's where I'd buy your 4 tickets.");
-    expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: ${URL_OPEN}`);
+    expect(send!.bodyText).toContain(`Event page on Ticketmaster: ${URL_OPEN}`);
     expect(send!.bodyText).toContain('Games that aren\'t sold out often go for less on resale. Want me to compare? Just reply "compare".');
     expect(send!.bodyText).not.toMatch(/\$\d/); // never a price
 
@@ -84,7 +84,7 @@ describe('still on general sale: point at the official sale', () => {
     const requestId = (r as { requestId: string }).requestId;
     const [send] = await sendsFor(requestId);
     expect(send!.bodyText).toContain('Metro Testers vs. Boston'); // the same event as without the affiliate format
-    expect(send!.bodyText).toContain(`Buy tickets on Ticketmaster: https://aff.example/c/1?u=${encodeURIComponent(URL_OPEN)}`);
+    expect(send!.bodyText).toContain(`Event page on Ticketmaster: https://aff.example/c/1?u=${encodeURIComponent(URL_OPEN)}`);
     expect(send!.bodyText).toContain(AFFILIATE_DISCLOSURE);
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, requestId));
     expect(req!.eventId).toBe(ids.open);
@@ -108,7 +108,7 @@ describe('still on general sale: point at the official sale', () => {
     const [send] = await sendsFor((r as { requestId: string }).requestId);
         expect(send!.bodyText).toContain('• Fri, Oct 30: Metro Testers vs. Boston at Test Garden. Home game against Boston.');
     expect(send!.bodyText).toContain('Team page: https://www.metro-testers.example');
-    expect(send!.bodyText).toContain(`Tickets: ${URL_OPEN}`);
+    expect(send!.bodyText).toContain(`Event page: ${URL_OPEN}`);
     expect(send!.bodyHtml).toContain(`href="${URL_OPEN}"`);
   });
 

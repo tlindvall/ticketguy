@@ -100,6 +100,8 @@ describe('Final launch review, Workstream A, replayed with the original screensh
       const recs = (await h.db.select().from(t.recommendations)).filter((r) => !beforeRecs.has(r.id));
       const last = recs.at(-1) ?? sends.at(-1);
       out.push({ text: (last?.bodyText ?? '').split('\nTicket Guy\n')[0]!, subject: sends.at(-1)?.subject ?? '', html: (last as { bodyHtml?: string } | undefined)?.bodyHtml ?? '' });
+      // E: a single decision stays within 220 words.
+      expect(out.at(-1)!.text.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(220);
     }
     return out;
   };
@@ -128,7 +130,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     await h.close();
   });
 
-  it('S01 (A05/A06): doors and show and standing room, from the screenshot, after the show has started', async () => {
+  it('S01 (A09): doors and show and standing room, from the screenshot, after the show has started', async () => {
     const [r] = await converse([{ text: `I grabbed this screenshot earlier. Is 8pm the actual show or the doors? And are the floor tickets seats or standing?\n\n${TM}`, images: ['jigitz-afternoon.jpg'], reads: [AFTERNOON] }]);
     expect(r!.text).toContain('Doors open at 8pm and the show starts at 9pm, going by the page in your screenshot.');
     expect(r!.text).toContain('The floor tickets are standing room: general admission, with no assigned seats.');
@@ -138,7 +140,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     expect(reader.questions.at(-1)).toContain('Is 8pm the actual show or the doors?');
   });
 
-  it('B01 (A01/A02/A03): cheapest, then the $220 cap against $107.33 each, then the later screenshot’s two floor rows', async () => {
+  it('B01 (A01/A04): cheapest, then the $220 cap against $107.33 each, then the later screenshot’s two floor rows', async () => {
     const [b1, b2, b3] = await converse([
       { text: `We don't need the floor — what's the cheapest option for two in this screenshot?\n\n${TM}`, images: ['jigitz-morning.jpg'], reads: [MORNING] },
       { text: "Actually, we'd rather be on the floor — not the balcony. We have $220 for both, including fees but before tax. Does the $107.33 each option fit?", reads: [] },
@@ -176,7 +178,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     expect(l2!.text).toContain('GA Ticket Price Tier 3 is cheaper: $226.58 for two, against $236.12 for GA Ticket Price Tier 2, so $9.54 less.');
   });
 
-  it('P02 (A07): which product to click on an unpriced artist page, then whether the 2-day ticket splits', async () => {
+  it('P02 (A05/A06): which product to click on an unpriced artist page, then whether the 2-day ticket splits', async () => {
     const [p1, p2] = await converse([
       { text: 'Hey, which of these should I click if I just want to see Metallica on October 8? Two of us. Just the normal concert, no extras.', images: ['metallica-products.jpg'], reads: [PRODUCTS] },
       { text: 'And can my friend use the other night if I buy the one that covers both?', reads: [] },
@@ -203,7 +205,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     expect(req!.eventId).toBeNull();
   });
 
-  it('S03 (A09): a sold-out page with a hotel banner is explained without claiming availability', async () => {
+  it('S03 (A07): a sold-out page with a hotel banner is explained without claiming availability', async () => {
     const [s] = await converse([{ text: 'This is what Ticketmaster showed me earlier for Metallica at Sphere on October 8. Does this mean I have to buy a hotel package to get in, or can you find two normal tickets another way?', images: ['metallica-single-night-sold-out.jpg'], reads: [SOLD_OUT] }]);
     expect(s!.text).toContain('When you took the screenshot, the page for Metallica: Life Burns Faster on Thu, Oct 8 said “Tickets are sold out now. Check back soon.”');
     expect(s!.text).toContain('You don’t need a hotel package to get in');
@@ -252,7 +254,7 @@ describe('Final launch review, Workstream A, replayed with the original screensh
     for (const r of [q1!, q2!]) expect(r.text).not.toMatch(/Honky Tonk[^\n]*(?:Tickets|Event page)|age (?:policy )?(?:is )?verified|verified for (?:her|your 12)/i);
   });
 
-  it('A16: a barcode or ticket screenshot is still quarantined, never answered from', async () => {
+  it('quarantine (A preserved): a barcode or ticket screenshot is still quarantined, never answered from', async () => {
     const [s] = await converse([{ text: 'Is 8pm the doors or the show? Here are my tickets.', images: ['jigitz-afternoon.jpg'], reads: [{ ...AFTERNOON, sensitiveContent: true }] }]);
     expect(s!.text).not.toContain('Doors open at 8pm');
   });

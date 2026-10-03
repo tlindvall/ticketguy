@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BUDGET_WORDS, TREND_ASKED } from '@/lib/intake/pipeline';
+import { BUDGET_WORDS, TREND_ASKED, linkedSubject } from '@/lib/intake/pipeline';
+import { buildPacket, type BuildPacketArgs } from '@/lib/advice/packet';
+import { clarificationQuestions } from '@/lib/ai/extraction';
 import { namedRows, shownPriceParts } from '@/lib/advice/shown-prices';
 import { evidenceAsks } from '@/lib/advice/evidence-answer';
 import { areaIntent, type ShownOffer } from '@/lib/ai/listing-evidence';
@@ -79,5 +81,38 @@ describe('screenshot questions (A05–A09)', () => {
     expect(evidenceAsks('It says sold out — is a hotel package the only way?').soldOut).toBe(true);
     expect(evidenceAsks('Can you explain what each screenshot is offering?').explain).toBe(true);
     expect(evidenceAsks('Great, thanks!')).toEqual({ times: false, admission: false, product: false, split: false, soldOut: false, explain: false, prices: false });
+  });
+});
+
+describe('reply wording (Workstream E)', () => {
+  const at = new Date('2026-10-02T17:30:00Z');
+  const base = (over: Record<string, unknown>) => ({
+    requestId: 'r', revision: 1, quantity: 2, eventLabel: 'New York Rangers vs. New York Islanders', best: null, alternatives: [], entryReference: null, benchmark: null, benchmarkRunId: null, trend: null, trendRunId: null,
+    policy: { decision: 'insufficient_evidence', reasonCodes: [], abstentions: [], nextCheckpointAt: null, waitDeadlineAt: null, watchScheduled: false, stopConditions: [], policyVersion: 'p', clarificationNeeded: [] },
+    priorities: { mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, budgetTotalCents: null, togetherRequired: true, splitGroupAllowed: false, watchConsentGiven: false },
+    sourcesChecked: [], sourcesUnavailable: [], independentOptionCount: 0, observedAt: at, evidenceExpiresAt: null, basketKey: 'b', watchConsentReference: null, isFixture: false,
+    market: null, official: { seller: 'Ticketmaster', url: 'https://www.ticketmaster.com/event/RANGERS' }, faceValue: null, subject: null, quote: null,
+    timeZone: 'America/New_York', eventLocalDate: '2026-10-06', eventStartAt: new Date('2026-10-06T23:30:00Z'), eventNoun: 'game',
+    ...over,
+  }) as unknown as BuildPacketArgs;
+  const text = (a: BuildPacketArgs) => buildPacket(a).claimRecords.filter((c) => c.customerVisible).map((c) => c.text).join('\n');
+
+  it('a StubHub listing found by its number is resale: never "if it’s Ticketmaster’s own price"', () => {
+    const sub = linkedSubject({ listingId: '1', marketplace: 'stubhub', priceCents: 15500, quantity: 2, section: '112', row: '2' } as never, 'StubHub', 2, at);
+    const said = text(base({ subject: sub, quote: { perTicketCents: 15500, assumedPerTicket: false, source: 'link_match', feeBasis: 'before_fees', seenAt: at, seller: 'StubHub' }, link: { marketplace: 'StubHub', eventPage: false } }));
+    expect(sub.listingType).toBe('resale');
+    expect(said).not.toMatch(/Ticketmaster’s own (?:price|ticket)|it’s face value|face value, not a resale markup/);
+  });
+
+  it('a listing not matched in the feed is "couldn’t match", never "StubHub doesn’t pass me prices"', () => {
+    const said = text(base({ link: { marketplace: 'StubHub', eventPage: false }, askedText: 'Is this a good deal for two?' }));
+    expect(said).toContain('I couldn’t match the StubHub listing you picked in the listing data I can see');
+    expect(said).not.toMatch(/doesn’t pass me|never (?:gives|passes)/);
+  });
+
+  it('a link they already sent is never asked for again', () => {
+    const withLink = clarificationQuestions(['event'], { performerOrTeam: null, submittedUrls: ['https://broadwaydirect.com/show/hamilton/'] } as never);
+    expect(withLink.join(' ')).not.toMatch(/A link (?:works|or screenshot|to the event)/);
+    expect(clarificationQuestions(['event'], { performerOrTeam: null, submittedUrls: [] } as never).join(' ')).toContain('A link or screenshot works.');
   });
 });

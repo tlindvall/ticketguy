@@ -381,9 +381,9 @@ export function listingCatches(a: BuildPacketArgs, sub: SubjectListing): string[
     // A11), so "fees are extra" would contradict the total one line up.
     const n = sub.quantity ?? q;
     const over = sub.wholePartyCents != null && sub.perTicketCents != null ? sub.wholePartyCents - sub.perTicketCents * n : 0;
-    out.push(over > 0
-      ? `Its total, ${formatUsd(sub.wholePartyCents!)}, is ${formatUsd(over)} more than ${countWord(n)} at ${formatUsd(sub.perTicketCents!)}, so it looks like it includes the fees it lists. Check the checkout total matches before you pay.`
-      : 'Fees are extra, so the total at checkout will be higher than the listed price.');
+    // A matched link's price line already says fees are added at checkout: not said twice (launch E).
+    if (over > 0) out.push(`Its total, ${formatUsd(sub.wholePartyCents!)}, is ${formatUsd(over)} more than ${countWord(n)} at ${formatUsd(sub.perTicketCents!)}, so it looks like it includes the fees it lists. Check the checkout total matches before you pay.`);
+    else if (sub.source !== 'link_match') out.push('Fees are extra, so the total at checkout will be higher than the listed price.');
   }
   const byTime = sub.deliveryText ? DELIVERY_TIME.exec(sub.deliveryText)?.[1] ?? null : null;
   if (sub.deliveryBy && a.eventLocalDate && sub.deliveryBy >= a.eventLocalDate) {
@@ -521,6 +521,8 @@ function verifiedClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord | n
   if (shownRowLead(a, sub)) return null;
   // No source searched and no market shown: the verdict already says it can't be compared yet (TGQA-R8 S10).
   if (!a.sourcesChecked.length && !a.market?.visible) return null;
+  // Cheaper listings already shown say what we can see; "no verified alternative" under them adds nothing (launch E).
+  if (a.marketAround?.alternatives.length) return null;
   return { id: 'C_VERIFIED', kind: 'coverage', text: 'I haven’t found a verified alternative I can link you to yet, with a checked all-in price.', values: {}, scope: { quantity: a.quantity, seatZone: null, feeBasis: null, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: null, limitations: ['no_verified_inventory'], customerVisible: true };
 }
 
@@ -799,13 +801,17 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   const askedOther = !!(a.asks?.deliveryRisk || a.asks?.accessibleSpaces || (a.textOffers && a.textOffers.length >= 2));
   // Judging an offer they've picked is one question; the buy-or-wait questions can wait for its price (live R07).
   const timingMatters = !askedOther && !(a.link && a.asks?.worth) && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down' && scopeFits(a)));
-  if (timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now') out.push('When do you need to have tickets sorted by?');
-  if (timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now') out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
+  // The two timing unknowns are one question, so the email ends on one next step, not a questionnaire (launch E).
+  const askDeadline = timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now';
+  const askRisk = timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now';
+  if (askDeadline && askRisk) out.push('When do you need tickets sorted by, and would you rather lock in seats now or wait for a better price and risk missing out?');
+  else if (askDeadline) out.push('When do you need to have tickets sorted by?');
+  else if (askRisk) out.push('Would you rather lock in seats now, or wait for a better price and accept you might miss out?');
   // A total with fees, as the watch asks and as every comparison is made: "per ticket" for five left the fees
   // and the arithmetic to them (live Red Wings email). Judging an offer they've already picked needs its price,
   // not a budget (live R07).
   if (askBudget && !(a.link && a.asks?.worth)) out.push(`What’s the most you’d pay in total for ${a.quantity === 1 ? 'the ticket' : a.quantity === 2 ? 'both' : `all ${a.quantity}`}, fees included?`);
-  return out.slice(0, 3);
+  return out.slice(0, 2);
 }
 
 /** "No obstructed views" is their words; the figures cover every seat in the venue, and say so. */
@@ -1586,7 +1592,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const noCheaper = a.link && a.asks?.cheaper && !priced ? `I can’t see resale listings for this ${a.eventNoun ?? 'game'} right now, so I can’t look for a cheaper pair myself. ` : '';
   const askListing = !a.link ? '' : noCheaper
     ? `${noCheaper}If you find one, or want me to check the one you picked, send its price for ${party} with fees and its section and row (a screenshot works), and I’ll compare.`
-    : `${a.link.marketplace} doesn’t pass me the price of the listing you picked, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
+    // Not matched is all we know: never "the marketplace doesn't give prices" (launch LAUNCH-08).
+    : `I couldn’t match the ${a.link.marketplace} listing you picked in the listing data I can see, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
   const worth = a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worthAsked)
     ? `${priced ? `${priced} ` : ''}${askListing}`
     : null;
