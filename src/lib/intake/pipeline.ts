@@ -820,7 +820,7 @@ export class Concierge {
 
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
-    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: (TREND_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null });
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : req.clarificationCount });
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
@@ -865,7 +865,10 @@ export class Concierge {
       elsewhere = await this.nearestElsewhere(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz });
       const only = elsewhere.length === 1 ? elsewhere[0]! : null;
       if (only && (merged.resolvedLocalDate || (only.miles !== null && only.miles <= NEARBY_SAME_TRIP_MILES))) {
-        found = { kind: 'resolved', event: only.e, venue: only.v, label: eventLabel(only.e, only.v), entityKind: only.kind, assumed: `${titleCaseName(merged.performerOrTeam)} isn’t playing in ${placeLabel(merged)} then, so I’ve gone with ${only.v.name}${only.v.city ? ` in ${only.v.city}` : ''}${milesAway(only.miles, merged)}. Tell me if that’s too far.` };
+        // Picked from the list we sent ("nov 19th sounds good", "the 19th at the Mohegan Sun Arena"): their choice, not
+        // ours to explain again (live Oct 4: "isn't playing in New York then" twice more, then "I know they don't").
+        const chosen = revision > 1 && (!!extraction.resolvedLocalDate || flat(latestText).toLowerCase().includes(only.v.name.toLowerCase()));
+        found = { kind: 'resolved', event: only.e, venue: only.v, label: eventLabel(only.e, only.v), entityKind: only.kind, assumed: chosen ? null : `${titleCaseName(merged.performerOrTeam)} isn’t playing in ${placeLabel(merged)} then, so I’ve gone with ${only.v.name}${only.v.city ? ` in ${only.v.city}` : ''}${milesAway(only.miles, merged)}. Tell me if that’s too far.` };
         elsewhere = [];
       }
     }
@@ -1095,7 +1098,11 @@ export class Concierge {
       // The question that decides the event comes first and is built from the filtered candidates, never a
       // dump of them. The extractor's ambiguities are asked too: they are why this clarification exists, and
       // they used to trigger it without ever reaching the email.
-      const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
+      // "We want to see the knicks in new york in october": the games, listed, then which one and how many. Never "Which
+      // date are you looking at?" when we already know the dates they could mean (live Oct 4).
+      const gameRows = resolution.kind === 'ambiguous' && !elsewhere.length && resolution.candidates.length > 3 && new Set(resolution.candidates.map((c) => c.entityName)).size === 1 ? await this.eventRows(resolution.candidates.map((c) => c.id)) : [];
+      const gameNote = gameRows.length ? gameListNote(resolution.kind === 'ambiguous' ? resolution.candidates[0]! : null, gameRows, merged, this.now()) : null;
+      const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : gameNote ? `Which ${gameRows.some((r) => SPORT_HINTS.includes(r.e.category)) ? 'game' : 'show'} would you like? I’ll look for the best seats for it.` : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
       const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')) && !(elsewhere.length && k === 'quantity'));
       if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
       // They named the act, the date and the place and nothing is scheduled: asking "which date and venue?" asks
@@ -1158,15 +1165,15 @@ export class Concierge {
       // "Do those still match the schedule?": yes or no first, with the times that decide it (TGQA-R8 S04).
       const scheduleAsked = resolution.kind === 'ambiguous' && /\b(?:still\s+)?(?:match|fit|meet)\b[^.]*\?|\bdo (?:those|they|these) (?:still )?(?:match|fit|work)\b/i.test(flat(latestText));
       const scheduleAnswer = scheduleAsked && resolution.kind === 'ambiguous' ? `${resolution.candidates.length === 2 ? 'Both still fit' : 'These still fit'} your schedule: ${((xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join('; ')} and ${xs[xs.length - 1]}` : xs[0]!))(resolution.candidates.map((c) => `${c.name} on ${c.when}${c.at ? ` at ${c.at}` : ''} at ${c.venueName}`))}. I haven’t checked seats or prices for either.` : null;
-      const eventNote = [capability || null, scheduleAnswer, settled, noMatch ? `${noMatch}${offerAlert && !elsewhere.length ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null].filter(Boolean).join('\n\n') || null;
+      const eventNote = [capability || null, scheduleAnswer, gameNote, settled, noMatch ? `${noMatch}${offerAlert && !elsewhere.length ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null].filter(Boolean).join('\n\n') || null;
       // Shows elsewhere: the wait-for-a-local-date offer comes after the question, as the other option.
-      const answerFirst = elsewhere.length > 0 || !!conflict?.note || whenAsked;
+      const answerFirst = elsewhere.length > 0 || !!conflict?.note || whenAsked || !!gameNote;
       const waitLine = noMatch && offerAlert && elsewhere.length ? `Rather wait for a ${placeLabel(merged)} date? Reply "let me know" and I’ll email you when one is announced.` : null;
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions, ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions.filter((a) => !(settled && resolution.kind === 'resolved' && a === resolution.assumed)), ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -2212,7 +2219,10 @@ export class Concierge {
       if (x.city) {
         const mk = marketFor(x.city, x.state);
         cands = cands.filter(({ e, v }) => {
-          const ok = (mk ? inMarket(v, mk) : false) || (v.city ?? '').toLowerCase() === x.city!.toLowerCase();
+          // A venue they named wins over a city from earlier in the thread: "the 19th at the Mohegan Sun Arena" after
+          // asking about New York is Uncasville, never "it's in Uncasville, not at Mohegan Sun Arena".
+          const named = !!rules?.venueTerms?.some((n) => [v.name, ...v.aliases].some((a) => a.toLowerCase() === n));
+          const ok = named || (mk ? inMarket(v, mk) : false) || (v.city ?? '').toLowerCase() === x.city!.toLowerCase();
           // Kept as a reason: "Oct 5 at MSG" is a game in Philadelphia, and the reply says so (TGQA-R6 1001).
           if (!ok && rules && (rules.venueTerms || rules.homeOnly)) dropped.push({ e, v, why: [rules.venueTerms ? `it's in ${v.city ?? v.name}, not at ${rules.venueTerms.map((n) => (n.length <= 4 ? n.toUpperCase() : n.replace(/\b\w/g, (c) => c.toUpperCase()))).join(' or ')}` : `it's in ${v.city ?? v.name}, not ${mk?.label ?? x.city}`] });
           return ok;
@@ -2343,7 +2353,7 @@ export class Concierge {
           return { kind: 'resolved', event: pick.e, venue: pick.v, label: eventLabel(pick.e, pick.v), entityKind: 'team', assumed: [assumed, `I've gone with ${which}, ${when}. Tell me if you meant a different one.`].filter(Boolean).join(' ') };
         }
       }
-      return { kind: 'ambiguous', candidates: cands.slice(0, 5).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
+      return { kind: 'ambiguous', candidates: cands.slice(0, 12).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
     }
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
@@ -4073,6 +4083,27 @@ export function elsewhereNote(name: string, shows: NearbyShow[], x: RequestExtra
   return `${lead} ${intro}\n${shows.map((s) => `• ${s.v.name}${s.v.city ? `, ${s.v.city}` : ''}${s.miles !== null ? `, about ${milesOnly(s.miles)} miles away` : ''}: ${day(s)}`).join('\n')}`;
 }
 
+/**
+ * "Here are the New York Knicks games in New York in October:" and each one on its own line, as a person would write
+ * them: the day, the time, who they play. Ten at most; the rest are counted.
+ */
+export function gameListNote(c: EventCandidate | null, rows: Array<{ e: { name: string; localStartAt: Date; subtype?: string | null; category: string }; v: { id: string; name: string; timezone: string } }>, x: RequestExtraction, now: Date): string {
+  const team = c?.entityName ?? (x.performerOrTeam ? titleCaseName(x.performerOrTeam) : 'the');
+  const games = rows.some((r) => SPORT_HINTS.includes(r.e.category));
+  const venues = new Set(rows.map((r) => r.v.id)).size;
+  const where = x.city || stateOnly(x) ? ` in ${placeLabel(x)}` : '';
+  const when = whenPhrase(x).replace(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/gi, (m) => m[0]!.toUpperCase() + m.slice(1).toLowerCase());
+  const shown = rows.slice(0, 10);
+  const line = ({ e, v }: (typeof rows)[number]) => {
+    const vs = games && c ? opponentFor(c.entityName, e.name) : null;
+    const pre = /preseason/i.test(e.name) || e.subtype === 'preseason' ? ' (preseason)' : '';
+    const day = (e.subtype === 'time_tba' ? friendlyDay(eventLocalDate(e.localStartAt, v.timezone)) : friendlyWhen(e.localStartAt, v.timezone, now)).replace(/^./, (ch) => ch.toUpperCase());
+    return `• ${day}: ${vs ? `vs. ${vs}` : e.name}${pre}${venues > 1 || !games ? `, ${v.name}` : ''}`;
+  };
+  const more = rows.length - shown.length;
+  return `Here are the ${team} ${games ? 'games' : 'shows'}${where}${when}:\n${shown.map(line).join('\n')}${more > 0 ? `\n…and ${more} more after that.` : ''}`;
+}
+
 /** One next step for the shows above: which one, and how many tickets when we don't know yet. */
 export function elsewhereQuestion(shows: NearbyShow[], x: RequestExtraction): string {
   const which = shows.length === 1 ? 'Want that one?' : new Set(shows.map((s) => s.v.id)).size === 1 ? 'Which night works?' : 'Which one works?';
@@ -4988,6 +5019,12 @@ function observationToOffer(obs: typeof t.offerObservations.$inferSelect, off: t
   };
 }
 
+/** "Some tickets", "a few seats", "not sure how many": an answer that dodges the number, never read as two. */
+const VAGUE_QUANTITY = /\b(?:some|a few|few|several|a bunch of|a handful of)\s+(?:more\s+)?(?:tickets?|seats?)\b|\bnot sure how many\b/i;
+
+/** "what are tickets like?", "how much are they?", "what's the price?": a question the market answers. */
+export const PRICE_ASKED = /\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seats?|prices?) (?:like|going for|at)\b|\bhow much (?:are|is|do|would|for)\b|\bwhat(?:'s|’s| is| are) the (?:price|prices|cost|going rate)\b|\bhow (?:expensive|pricey)\b|\bwhat do (?:tickets|seats) (?:cost|go for|run)\b|\bprice check\b/i;
+
 /** Tickets assumed when the customer does not say: the most common party, and cheap to correct. */
 export const DEFAULT_QUANTITY = 2;
 
@@ -4996,7 +5033,7 @@ export const DEFAULT_QUANTITY = 2;
  * ("a few tickets" sets quantity_unclear), and a stated value is never replaced. Returns what was assumed
  * so the reply can say it; the stored brief carries the value, so a later "actually four" overrides it.
  */
-export function applyDefaults(x: RequestExtraction, opts: { marketQuestion?: boolean } = {}): { brief: RequestExtraction; assumed: Array<'quantity' | 'budget_basis'> } {
+export function applyDefaults(x: RequestExtraction, opts: { marketQuestion?: boolean; roundsAsked?: number } = {}): { brief: RequestExtraction; assumed: Array<'quantity' | 'budget_basis'> } {
   const assumed: Array<'quantity' | 'budget_basis'> = [];
   let brief = x;
   // "Are these a good deal? Buy now or hold off?" about an event: the resale market answers that for a pair as well
@@ -5007,7 +5044,10 @@ export function applyDefaults(x: RequestExtraction, opts: { marketQuestion?: boo
   // wheelchair user was then judged as a pair (TGQA-R6 1008). The number decides the total, adjacency and fit.
   // A per-ticket price check ("is $106 a good deal?") doesn't turn on it, so it goes ahead on two, said once.
   const perTicketCheck = brief.quantity === null && brief.quotedPriceCents !== null && brief.quotedPriceBasis !== 'whole_party' && brief.budgetCents === null && !brief.togetherRequired && !brief.accessibilityNeeds;
-  if (perTicketCheck || marketCheck) {
+  // Asked twice already and still no number: go ahead on two, said once, rather than a third ask and then a hand-off
+  // to staff (live Oct 4, Metallica: "what are tickets like?" ended in "I couldn't finish this one automatically").
+  const askedEnough = brief.quantity === null && (opts.roundsAsked ?? 0) >= 2 && !brief.accessibilityNeeds && !brief.ambiguities.includes('quantity_unclear');
+  if (perTicketCheck || marketCheck || askedEnough) {
     brief = { ...brief, quantity: DEFAULT_QUANTITY };
     assumed.push('quantity');
   }
