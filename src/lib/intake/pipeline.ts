@@ -934,12 +934,17 @@ export class Concierge {
     // Nothing in the catalog and nothing nearby: the open web, once (live Oct 3: "is there a soho house festival in
     // new york today?" got "Which event?" while the festival was at Pier 17 that afternoon, sold by Soho House).
     if (!picked && resolution.kind === 'no_match' && resolution.reason !== 'constraint_conflict' && !elsewhere.length && !merged.notifyAsked && (merged.performerOrTeam || merged.eventName)) {
-      const web = await this.findOnWeb(req, merged, latestText, venueTz);
+      // Already found for this request: a follow-up about the same event ("2 tickets please") is answered from what
+      // was found, briefly, never searched and sent again in full (the "it's repeating itself" failure).
+      // What this message names, when it names something; otherwise what the thread was about.
+      const named = extraction.eventName || extraction.performerOrTeam ? { ...merged, eventName: extraction.eventName ?? null, performerOrTeam: extraction.performerOrTeam ?? merged.performerOrTeam } : merged;
+      const prior = await this.priorWebEvents(req.id, named.eventName ?? named.performerOrTeam);
+      const web = prior ?? (await this.findOnWeb(req, named, latestText, venueTz));
       if (web.length) {
         const today = eventLocalDate(now, venueTz ?? 'America/New_York');
-        const { text, html } = await this.webEventReply(req.id, web, today);
+        const { text, html } = await this.webEventReply(req.id, web, today, !!prior);
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Found it'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `web:${req.id}:${revision}` });
-        await this.transition(req.id, 'referred', 'web_event_found');
+        await this.transition(req.id, 'referred', prior ? 'web_event_followup' : 'web_event_found');
         return { state: 'referred', revision, extraction: merged };
       }
     }
@@ -2440,6 +2445,8 @@ export class Concierge {
       await settleBudget(this.db, r.ledgerId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0, toolCalls: out.searches, actualUsdMicros: estimateUsdMicros(model, usage?.inputTokens ?? 0, usage?.outputTokens ?? 0, out.searches * 0.01, this.env.modelPrices) });
       const host = (u: string) => { try { return new URL(u).hostname; } catch { return null; } };
       await audit(this.db, { actor: 'system', action: 'web.event_search', entityKind: 'request', entityId: req.id, diff: { searches: out.searches, resultUrls: out.resultUrls, found: out.events.map((e) => ({ name: e.name, date: e.date, source: host(e.sourceUrl) })) } });
+      // What was found, kept with the request so a follow-up about the same event is answered from it, not searched again.
+      if (out.events.length) await audit(this.db, { actor: 'system', action: 'web.event_found', entityKind: 'request', entityId: req.id, diff: { query: sameEventKey(x.eventName ?? x.performerOrTeam), events: out.events } });
       return out.events;
     } catch (e) {
       if (e instanceof ModelOutputError && (e.kind === 'transport' || e.kind === 'rejected')) await releaseBudget(this.db, { requestId: req.id, revision: req.currentRevision, model, estimatedUsdMicros: est, jobName: 'web_event_search' });
@@ -2452,7 +2459,16 @@ export class Concierge {
    * What the web says, as a person would put it: the event, the day and hours, the place, who sells it, and the link
    * to that page. It's said as found on the web, never as seats, prices or availability we've checked.
    */
-  private async webEventReply(requestId: string, events: WebEvent[], today: string): Promise<{ text: string; html: string }> {
+  /** The events the open web gave for this request, when the customer is still asking about the same one. */
+  private async priorWebEvents(requestId: string, name: string | null): Promise<WebEvent[] | null> {
+    const [row] = await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.entityKind, 'request'), eq(t.auditLog.entityId, requestId), eq(t.auditLog.action, 'web.event_found'))).orderBy(desc(t.auditLog.createdAt)).limit(1);
+    const d = row?.diff as { query?: string | null; events?: WebEvent[] } | undefined;
+    if (!d?.events?.length) return null;
+    const key = sameEventKey(name);
+    return !key || !d.query || key === d.query || key.includes(d.query) || d.query.includes(key) ? d.events : null;
+  }
+
+  private async webEventReply(requestId: string, events: WebEvent[], today: string, followUp = false): Promise<{ text: string; html: string }> {
     const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const [ty, tm, td] = today.split('-').map(Number);
     const tomorrow = new Date(Date.UTC(ty!, tm! - 1, td! + 1)).toISOString().slice(0, 10);
@@ -2479,6 +2495,15 @@ export class Concierge {
       links.push({ label, url });
     }
     const [first] = events;
+    if (followUp) {
+      // The second time: what it is and where to buy, in a line, not the whole first answer again.
+      const line = events.length === 1 ? `${first!.name} is sold by ${seller(first!)}, not on the resale sites I check, so I still can’t see prices or seats for it. You can buy there:` : 'These aren’t on the resale sites I check, so I still can’t see prices or seats for them. You can buy here:';
+      const nextShort = 'Found tickets you’re weighing up? Send me the price and what it includes and I’ll check it.';
+      return {
+        text: ['Hey,', line, links.map((l) => `${l.label}: ${l.url}`).join('\n'), nextShort].join('\n\n'),
+        html: ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;">${esc(line)}</p>`, `<p style="margin:0 0 18px;">${links.map((l) => `<a href="${esc(l.url)}" style="color:#142438;text-decoration:underline;font-weight:700;">${esc(l.label)}</a>`).join('<br>')}</p>`, `<p style="margin:0 0 18px;">${esc(nextShort)}</p>`].join('\n'),
+      };
+    }
     const lead = events.length === 1 ? sentence(first!) : `I found ${events.length === 2 ? 'two' : 'a few'} on the web:`;
     const list = events.length > 1 ? events.slice(0, 3).map((e) => sentence(e)) : [];
     const sold = events.length === 1 ? `Tickets are sold by ${seller(first!)}, not on the resale sites I check, so I can’t see prices or what’s left.` : 'These aren’t on the resale sites I check, so I can’t see prices or what’s left.';
@@ -3933,6 +3958,12 @@ export function ordinalChoice(text: string, n: number): number | null {
   const w = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
   const i = /^(?:first|1st|former|1)$/.test(w) ? 0 : /^(?:second|2nd|2)$/.test(w) ? 1 : /^(?:third|3rd|3)$/.test(w) ? 2 : /^(?:fourth|4th|4)$/.test(w) ? 3 : /^(?:last|latter)$/.test(w) ? n - 1 : -1;
   return i >= 0 && i < n ? i : null;
+}
+
+/** An event name reduced to its words, for "still the same event?": case, punctuation and filler words don't count. */
+export function sameEventKey(name: string | null | undefined): string | null {
+  const k = (name ?? '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\b(?:the|a|an|tickets?|festival|fest|concert|show|nyc|new york)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return k || null;
 }
 
 /** "Soon", "anytime", "whenever": no date at all, so never played back ("Metallica tickets soon. Got it.", live Oct 3). */

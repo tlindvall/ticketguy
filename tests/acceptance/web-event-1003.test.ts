@@ -105,4 +105,36 @@ describe('an event that is only on the open web', () => {
     const [skip] = await h.db.select().from(t.auditLog).where(eq(t.auditLog.entityId, r.req.id));
     expect(skip!.action).toBe('web.event_search_skipped');
   });
+
+  // "It's repeating itself" (live Oct 3, Metallica): a follow-up about an event found on the web gets a short answer from
+  // what was found, with no second search and not the whole first email again. Another act is a new search.
+  it('a reply in the same thread is answered from what was found: one search, a short line, the link', async () => {
+    const web = new FakeWeb(FESTIVAL, [SOHO, IG]);
+    const env = testEnv();
+    const run = async (c: Concierge, text: string, first?: ReturnType<typeof inbound>) => {
+      const m = inbound({ text, from: 'thread@customer.example', subject: first ? 'Re: Soho' : 'Soho', receivedAt: NOW, ...(first ? { inReplyTo: first.rfcMessageId, references: first.rfcMessageId } : {}) });
+      const r = (await c.ingestInbound(m)) as { requestId: string };
+      for (const ev of (await leaseDueOutbox(h.db, { limit: 50, now: new Date(NOW.getTime() + 10_000) })).filter((e) => e.eventType === 'request.interpret')) {
+        const p = ev.payload as Record<string, string>;
+        await c.interpret({ messageId: p.messageId!, requestId: p.requestId! });
+        await markDispatched(h.db, ev.id, ev.leaseToken, NOW);
+      }
+      return { m, requestId: r.requestId };
+    };
+    const c1 = new Concierge({ db: h.db, env, extractor: new LiveFields(soho), drafter: new FixtureDrafter(), clock: () => NOW, emailProvider: null, webEventFinder: web });
+    const a = await run(c1, 'is there a soho house festival in new york today?');
+    const c2 = new Concierge({ db: h.db, env, extractor: new LiveFields({ ...soho, quantity: 2 }), drafter: new FixtureDrafter(), clock: () => NOW, emailProvider: null, webEventFinder: web });
+    const b = await run(c2, '2 tickets please', a.m);
+    expect(b.requestId).toBe(a.requestId);
+    expect(web.asked).toHaveLength(1);
+    const sends = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, a.requestId))).map((x) => x.bodyText);
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toContain('Hey,\n\nSoho House Festival New York is sold by Soho House, not on the resale sites I check, so I still can’t see prices or seats for it. You can buy there:\n\n' + `Tickets from Soho House: ${SOHO}`);
+    expect(sends[1]).not.toContain('is today, Saturday, October 3');
+    // Another act in the same thread is searched for.
+    const c3 = new Concierge({ db: h.db, env, extractor: new LiveFields({ ...soho, eventName: null, performerOrTeam: 'Alanis Morissette' }), drafter: new FixtureDrafter(), clock: () => NOW, emailProvider: null, webEventFinder: web });
+    await run(c3, 'Allan morisett is playing on pier 17', a.m);
+    expect(web.asked).toHaveLength(2);
+    expect(web.asked[1]!.name).toBe('Alanis Morissette');
+  });
 });
