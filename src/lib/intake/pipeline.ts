@@ -23,7 +23,7 @@ import { areaIntent, areaOf, chooseShownOffer, distinctActs, fieldsFromRead, loo
 import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
-import { isAgainst, opponentFor, splitMatchup } from '@/lib/domain/matchup';
+import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
@@ -101,7 +101,12 @@ const OBSERVATION_RETENTION_DAYS = 90;
 type NoMatchReason = 'no_performer' | 'unknown_performer' | 'no_scheduled_event' | 'discovery_no_results' | 'constraint_conflict';
 
 /** The customer's rules on which event they mean (event-constraints.ts), plus the event ids their links carry. */
-export type ResolveRules = EventConstraints & { linkedEventIds: string[] };
+/**
+ * imageEventName: the event name as only a screenshot gave it. Its opponent is often read off a logo in a schedule
+ * strip (live Oct 4: a Rangers page's "Oct 4 vs. [logo]"), so on a date the screenshot also gives it never rules out
+ * that day's game.
+ */
+export type ResolveRules = EventConstraints & { linkedEventIds: string[]; imageEventName?: string | null };
 /** Events that matched the name and date but break one of their rules, and the nearest one that doesn't. */
 export type ConstraintConflict = {
   label: string;
@@ -111,6 +116,9 @@ export type ConstraintConflict = {
   suggestion: { event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string } | null;
   /** Against the opponent they named, when that is a different event: "they do play the 76ers at MSG, on Oct 20". */
   sameOpponent?: { event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string } | null;
+  /** Said as it stands when only the part of the country rules them out: "I don't see any Metallica dates on the East Coast." */
+  note?: string;
+  ask?: string;
 };
 
 /** The keys that earn a clarification round. Ambiguities are a closed vocabulary, so this can match them. */
@@ -133,7 +141,8 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | 
   // This one is earned: the official listings were actually queried for this name and window.
   // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
   // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
-  if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} performance` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
+  const game = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(brief.categoryHint ?? '') ? 'game' : 'performance';
+  if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} ${game}` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
 
@@ -1095,7 +1104,12 @@ export class Concierge {
       // No date announced and they said so: one next step, never "which date and venue?" for a show that doesn't exist yet.
       const noDateYet = resolution.kind === 'no_match' && resolution.reason !== 'constraint_conflict' && !!merged.performerOrTeam && (/\b(?:isn'?t|not|no)\s+(?:an?\s+)?(?:announced|on sale)\b|\bdoesn'?t exist yet\b/i.test(flat(latestText)) || !!merged.notifyAsked);
       const teamish = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(merged.categoryHint ?? '') || /\b(?:game|match|home|away)\b/i.test(flat(latestText));
-      const nextStep = gaveWhenWhere
+      // A team or act on file with no date that day: their nearest dates, so they can say which, never a dead end (live
+      // Oct 4: "couldn't find a Rangers game on Sun, Oct 4", then "send me the link", to a screenshot of that game).
+      const nearDates = gaveWhenWhere && merged.resolvedLocalDate ? await this.nearestDates(merged, rules.imageEventName ?? null) : [];
+      const nextStep = nearDates.length
+        ? `Is it ${nearDates.length === 1 ? 'that one' : 'one of those'}? Tell me which and I’ll take it from there.`
+        : gaveWhenWhere
         ? `If you’ve seen a ${titleCaseName(merged.performerOrTeam!)} ${teamish ? 'game' : 'show'} announced for then, send me the link and I’ll check it. Or tell me another date or city and I’ll look there.`
         : noDateYet ? `If you see a ${titleCaseName(merged.performerOrTeam!)} date announced, send me the link and I’ll check it.` : null;
       const conflict = resolution.kind === 'no_match' ? resolution.conflict ?? null : null;
@@ -1107,7 +1121,7 @@ export class Concierge {
           ? `Two that fit everything else: ${conflict.sameOpponent.label}, against the same opponent, or ${conflict.suggestion.label}, the next one. Which would you like?`
           : conflict.suggestion
             ? `${conflict.dateNamed ? 'On another date, the next one that fits everything else you said' : 'The next one that fits everything you said'} is ${conflict.suggestion.label}. Want that one instead?`
-            : 'I haven’t found one that fits all of that. Tell me which of those to relax, or send a date or link.'
+            : conflict.ask ?? 'I haven’t found one that fits all of that. Tell me which of those to relax, or send a date or link.'
         : null;
       // One ask per missing thing: the event question already covers its date and place (TGQA-R8 S08).
       const coveredByEvent = (k: string) => k.startsWith('date_') || k.startsWith('event_') || k === 'performer_ambiguous';
@@ -1121,7 +1135,8 @@ export class Concierge {
       const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
-      const noMatch = elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const nearNote = nearDates.length ? `\n\nThe closest ${titleCaseName(merged.performerOrTeam!)} ${teamish || SPORT_HINTS.includes(nearDates[0]!.e.category) ? (nearDates.length === 1 ? 'game' : 'games') : nearDates.length === 1 ? 'date' : 'dates'} I have:\n${nearDates.map(({ e, v }) => `• ${friendlyWhen(e.localStartAt, v.timezone, this.now()).replace(/^./, (c) => c.toUpperCase())}: ${e.name}, ${v.name}`).join('\n')}` : '';
+      const noMatch = nearNote && resolution.kind === 'no_match' ? `${noMatchNote(resolution.reason, merged) ?? ''}${nearNote}`.trim() : elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? conflict.note ?? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
@@ -1132,18 +1147,26 @@ export class Concierge {
       ].filter(Boolean).join(' ');
       // The event is settled and only something else is missing (how many tickets): say which one, so "the next home
       // game" is answered, not just filed (TGQA-R6 1007).
-      const settled = resolution.kind === 'resolved' ? `${resolution.assumed ? `${resolution.assumed} ` : ''}That’s ${resolution.label}.` : null;
+      // "When is the next metallica concert on the east coast?" is a question: the answer is the reply's first line, not a
+      // "Metallica tickets. Got it." played back over it (live Oct 4).
+      const whenAsked = resolution.kind === 'resolved' && !resolution.assumed && WHEN_ASKED.test(flat(latestText));
+      const settled = resolution.kind === 'resolved'
+        ? whenAsked
+          ? `${rules.next ? 'The next one' : 'It’s'}${rules.region ? ` ${rules.region.where}` : ''}${rules.next ? ' is ' : ' '}${friendlyEventLine(resolution.event, resolution.venue, this.now())}`.replace(/\.?$/, '.')
+          : `${resolution.assumed ? `${resolution.assumed} ` : ''}That’s ${friendlyEventLine(resolution.event, resolution.venue, this.now())}`.replace(/\.?$/, '.')
+        : null;
       // "Do those still match the schedule?": yes or no first, with the times that decide it (TGQA-R8 S04).
       const scheduleAsked = resolution.kind === 'ambiguous' && /\b(?:still\s+)?(?:match|fit|meet)\b[^.]*\?|\bdo (?:those|they|these) (?:still )?(?:match|fit|work)\b/i.test(flat(latestText));
       const scheduleAnswer = scheduleAsked && resolution.kind === 'ambiguous' ? `${resolution.candidates.length === 2 ? 'Both still fit' : 'These still fit'} your schedule: ${((xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join('; ')} and ${xs[xs.length - 1]}` : xs[0]!))(resolution.candidates.map((c) => `${c.name} on ${c.when}${c.at ? ` at ${c.at}` : ''} at ${c.venueName}`))}. I haven’t checked seats or prices for either.` : null;
       const eventNote = [capability || null, scheduleAnswer, settled, noMatch ? `${noMatch}${offerAlert && !elsewhere.length ? ' If they haven’t announced it yet, reply "let me know" and I’ll email you when a date is out.' : ''}` : null].filter(Boolean).join('\n\n') || null;
       // Shows elsewhere: the wait-for-a-local-date offer comes after the question, as the other option.
+      const answerFirst = elsewhere.length > 0 || !!conflict?.note || whenAsked;
       const waitLine = noMatch && offerAlert && elsewhere.length ? `Rather wait for a ${placeLabel(merged)} date? Reply "let me know" and I’ll email you when one is announced.` : null;
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (elsewhere.length && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (elsewhere.length && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions, ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions, ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -2076,6 +2099,25 @@ export class Concierge {
    * something scheduled before one without. Ten names in alphabetical order used to be all that was looked at, and
    * "Hamilton" is a surname: a dozen artists sorted ahead of the show and it was never seen (Oct 2 live).
    */
+  /** The performer's dates nearest a day they named (ten days either side, in their place when they named one), at most three, by date. */
+  private async nearestDates(x: RequestExtraction, imageEventName: string | null): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>> {
+    const name = splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam;
+    // An opponent they typed holds ("Rangers vs Lightning on Oct 3" is never offered the Islanders game); one read off a
+    // screenshot's logo doesn't.
+    const typedOpponent = x.eventName && x.eventName === imageEventName ? null : splitMatchup(x.performerOrTeam)?.second ?? (name ? opponentFor(name, x.eventName) : null);
+    if (!name || !x.resolvedLocalDate) return [];
+    const day = Date.parse(`${x.resolvedLocalDate}T12:00:00Z`);
+    if (Number.isNaN(day)) return [];
+    const mk = marketFor(x.city, x.state);
+    const from = new Date(Math.max(day - 10 * 86_400_000, this.now().getTime()));
+    for (const entities of await this.entityTiers(name)) {
+      const rows = entities.length ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.primaryEntityId, entities.map((en) => en.id)), gte(t.events.localStartAt, from), lte(t.events.localStartAt, new Date(day + 10 * 86_400_000)), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40) : [];
+      const fit = rows.filter(({ e, v }) => !isNonAdmission(e) && (!typedOpponent || isAgainst(e.name, typedOpponent) || isAgainstPlace(e.name, typedOpponent, name)) && (!x.city || (mk ? inMarket(v, mk) : (v.city ?? '').toLowerCase() === x.city.toLowerCase())));
+      if (fit.length) return [...fit].sort((a, b) => Math.abs(a.e.localStartAt.getTime() - day) - Math.abs(b.e.localStartAt.getTime() - day)).slice(0, 3).sort((a, b) => a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
+    }
+    return [];
+  }
+
   private async entityTiers(performerOrTeam: string): Promise<Array<Array<typeof t.entities.$inferSelect>>> {
     const kw = performerOrTeam.trim().toLowerCase();
     if (!kw) return [];
@@ -2118,6 +2160,7 @@ export class Concierge {
     const now = this.now();
 
     const asked = [x.performerOrTeam, x.eventName, x.dateExpression].filter(Boolean).join(' ');
+    let opponentMisread: { said: string; e: typeof t.events.$inferSelect } | null = null;
     const windowFilter = (rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, isTeam: boolean, opponent: string | null, entity?: typeof t.entities.$inferSelect) => {
       // Home is the team's home venue, or its market when the catalog doesn't know the venue (TGQA-R8 S03).
       const homeMk = entity && isTeam ? teamHomeMarket(entity.name) : null;
@@ -2128,8 +2171,17 @@ export class Concierge {
       };
       let cands = rows.filter(({ e }) => !isNonAdmission(e)); // parking and packages are not "tickets to the game"
       if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
-      // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else.
-      if (opponent) cands = cands.filter(({ e }) => isAgainst(e.name, opponent));
+      // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else. A renamed
+      // team is the same opponent by its place ("Utah Hockey Club" is the Utah Mammoth now).
+      if (opponent) {
+        const vs = cands.filter(({ e }) => isAgainst(e.name, opponent));
+        const byPlace = vs.length ? vs : cands.filter(({ e }) => isAgainstPlace(e.name, opponent, entity?.name ?? x.performerOrTeam ?? ''));
+        // An opponent only a screenshot named, read off a logo, never outweighs the team and the date it also shows:
+        // that day's one game is the one, said so (live Oct 4: "couldn't find a Rangers game" on a day they play).
+        const thatDay = !byPlace.length && rules?.imageEventName && x.resolvedLocalDate && splitMatchup(rules.imageEventName) ? cands.filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === x.resolvedLocalDate) : [];
+        if (thatDay.length === 1) opponentMisread = { said: opponent, e: thatDay[0]!.e };
+        cands = byPlace.length ? byPlace : thatDay.length === 1 ? thatDay : [];
+      }
       // A span the customer named ("Oct 1-7", "first week of October") wins over a single date the extractor
       // may have pinned from it: the words are the evidence, and the 1st is not "the first week".
       const spanNamed = !!x.dateExpression && rows.some(({ v }) => dateWindowFor(x.dateExpression!, now, v.timezone) !== null);
@@ -2224,6 +2276,16 @@ export class Concierge {
     // An alternative is looked for once: the lookup for it never looks for one of its own (it would loop forever
     // when no alternative fits either).
     if (withEvents.length === 0 && dropped.length && rules && depth > 0) return { kind: 'no_match', reason: 'constraint_conflict' };
+    // Only the part of the country they named rules everything out ("the next metallica concert on the east coast"
+    // while the tour is in Las Vegas): said plainly, with where the dates are, never the Las Vegas show as the answer.
+    const region = rules?.region;
+    if (withEvents.length === 0 && dropped.length && region && dropped.every((d) => d.why.length === 1 && d.why[0]!.endsWith(`, not ${region.where}`))) {
+      const who = titleCaseName(splitMatchup(x.performerOrTeam)?.first ?? x.performerOrTeam);
+      const sorted = [...new Map(dropped.sort((a, b) => a.e.localStartAt.getTime() - b.e.localStartAt.getTime()).map((d) => [d.e.id, d])).values()];
+      const lines = sorted.slice(0, 3).map((d) => `• ${d.v.name}${d.v.city ? `, ${d.v.city}` : ''}: ${friendlyDay(eventLocalDate(d.e.localStartAt, d.v.timezone))}`);
+      const note = `I don’t see any ${who} dates ${region.where}. ${sorted.length === 1 ? 'The only one I have:' : `The next ${Math.min(3, sorted.length) === 2 ? 'two' : 'ones'} I have:`}\n${lines.join('\n')}`;
+      return { kind: 'no_match', reason: 'constraint_conflict', conflict: { label: who, why: `not ${region.where}`, dateNamed: false, suggestion: null, note, ask: `Would ${sorted.length === 1 ? 'that' : 'one of those'} work? Tell me the city and how many tickets.` } };
+    }
     if (withEvents.length === 0 && dropped.length && rules) {
       // What they named exists but breaks their rules ("Oct 5 at MSG" is in Philadelphia): say which rule, and the
       // nearest event that keeps them all, dates aside.
@@ -2285,6 +2347,11 @@ export class Concierge {
     }
     const { e, v } = cands[0]!;
     if (v.country !== 'US') return { kind: 'non_us' };
+    const misread = opponentMisread as { said: string; e: typeof t.events.$inferSelect } | null;
+    if (misread && misread.e.id === e.id) {
+      const real = opponentFor(entity.name, e.name) ?? splitMatchup(e.name)?.second ?? null;
+      assumed = [assumed, `Your screenshot looked to me like the ${titleCaseName(misread.said)} game, but the ${possessive(entity.name)} game that day is ${real ? `against the ${real}` : e.name}, so I’ve gone with that one.`].filter(Boolean).join(' ');
+    }
     return { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: entity.kind === 'team' ? 'team' : 'artist', assumed };
   }
 
@@ -2371,6 +2438,8 @@ export class Concierge {
     // alone never makes a venue rule.
     const venues = (await this.db.select({ name: t.venues.name, aliases: t.venues.aliases }).from(t.venues).limit(5000)).map((v) => ({ name: v.name.length >= 6 ? v.name : '', aliases: v.aliases.filter((a) => a.length >= 6 || /^[A-Z]{3,4}$/.test(a)) }));
     const c = eventConstraints(texts, { receivedAt, timeZone: venueTz ?? 'America/New_York', venues });
+    // A city they've since named outside the region ("Las Vegas is fine") is where they now mean.
+    if (c.region && x.state && !c.region.states.includes(x.state.toUpperCase())) c.region = null;
     // The screenshot's start time is the performance they are looking at, unless they typed a different one.
     if (c.exactTime === null && !c.after && !c.partOfDay) {
       const [ev] = await this.db.select({ fields: t.listingEvidence.fields }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false))).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
@@ -2383,12 +2452,15 @@ export class Concierge {
       const also = [mins(f?.doorsTime), mins(f?.showTime)].filter((x): x is number => x !== null);
       if (time !== null && also.length === 2 && also.includes(time)) c.exactTimeAlso = also;
     }
+    const [shot] = await this.db.select({ fields: t.listingEvidence.fields }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false))).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
+    const shotName = (shot?.fields as { eventName?: string | null } | null)?.eventName ?? null;
+    const imageEventName = shotName && x.eventName && shotName.trim().toLowerCase() === x.eventName.trim().toLowerCase() ? x.eventName : null;
     const linkedEventIds = ticketLinksIn(x.submittedUrls).map((l) => l.eventId).filter((id): id is string => !!id);
     // A checkout link names no event, but its listing number may have been seen in the resale feed: that event's own
     // ids pin it, so one of two shows that day isn't taken for the other.
     const seen = await this.eventForListing(x.submittedUrls);
     if (seen) linkedEventIds.push(...(await this.db.select({ id: t.eventSourceMappings.sourceEventId }).from(t.eventSourceMappings).where(eq(t.eventSourceMappings.eventId, seen.e.id))).map((r) => r.id).filter((id): id is string => !!id));
-    return { ...c, linkedEventIds };
+    return { ...c, linkedEventIds, imageEventName };
   }
 
   /**
@@ -3967,6 +4039,8 @@ export function sameEventKey(name: string | null | undefined): string | null {
 }
 
 /** "Soon", "anytime", "whenever": no date at all, so never played back ("Metallica tickets soon. Got it.", live Oct 3). */
+/** A question about when or whether a show is on, not a request played back: "when is the next …?", "is X playing …?". */
+const WHEN_ASKED = /\bwhen(?:'s|’s| is| are| does| do| will)\b|\bwhat(?:'s|’s| is) the (?:next|soonest|earliest)\b|\b(?:is|are) (?:there|they|\w+) (?:playing|performing|touring|coming)\b/i;
 const VAGUE_WHEN = /^(?:(?:very |pretty )?soon|asap|anytime|any ?time|whenever|sometime|some time|in the near future|upcoming|coming up|any date|this season)$/i;
 
 /** " in November", " on Saturday, October 3", or nothing when what they said names no time ("soon"). */
@@ -4044,6 +4118,8 @@ export function ownedMiss(latestText: string): string | null {
     : 'You’re right, I missed that. Here’s what I have now.';
 }
 
+const SPORT_HINTS = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'];
+
 /** One sentence playing back the request — "Two Rangers tickets next week, up to $200 total—got it." */
 export function acknowledgementLine(x: RequestExtraction): string {
   const who = x.performerOrTeam ? titleCaseName(x.performerOrTeam) : null;
@@ -4059,7 +4135,11 @@ export function acknowledgementLine(x: RequestExtraction): string {
   if (isGame) line += ` for ${who}`;
   // A date as a person says it: never "10-13-2026" or "tickets next" played back (live Oct 3).
   if (x.resolvedLocalDate) line += ` for ${friendlyDay(x.resolvedLocalDate)}`;
-  else if (x.dateExpression && /^(?:the\s+)?(?:next|new|upcoming|coming)(?:\s+home)?(?:\s+(?:game|match|one|show))?$/i.test(x.dateExpression.trim())) line += ' for the next game';
+  else if (x.dateExpression && /^(?:the\s+)?(?:next|new|upcoming|coming)(?:\s+home)?(?:\s+(?:game|match|one|show|concert))?$/i.test(x.dateExpression.trim())) {
+    // A concert is a show, never "the next game" (live Oct 4, Metallica).
+    const sport = isGame || SPORT_HINTS.includes(x.categoryHint ?? '') || /\b(?:game|match|home)\b/i.test(x.dateExpression);
+    line += ` for the next ${/\bhome\b/i.test(x.dateExpression) ? 'home ' : ''}${sport ? 'game' : 'show'}`;
+  }
   else if (x.dateExpression && !/\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(x.dateExpression) && !VAGUE_WHEN.test(x.dateExpression.trim())) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
   return `${line}. Got it.`;
@@ -4087,6 +4167,12 @@ export function linkedSubject(m: MarketListing, seller: string, quantity: number
     listingType: 'resale',
     source: 'link_match', observedAt: at, confidence: 'high',
   };
+}
+
+/** "Metallica at Mohegan Sun Arena in Uncasville, Thursday, November 19, at 7 p.m.": how a person names a show in a sentence. */
+export function friendlyEventLine(e: { name: string; localStartAt: Date; subtype?: string | null }, v: { name: string; city: string | null; timezone: string }, now: Date): string {
+  const when = e.subtype === 'time_tba' ? friendlyDay(eventLocalDate(e.localStartAt, v.timezone)) : friendlyWhen(e.localStartAt, v.timezone, now);
+  return `${e.name} at ${v.name}${v.city ? ` in ${v.city}` : ''}, ${when}`;
 }
 
 export function eventLabel(e: { name: string; localStartAt: Date; doorsAt?: Date | null }, v: { name: string; city: string | null; timezone: string }): string {

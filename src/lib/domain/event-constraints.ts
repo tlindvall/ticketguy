@@ -32,7 +32,44 @@ export type EventConstraints = {
   window: { from: string; to: string; source: 'month' | 'range' | 'next_weekday' } | null;
   /** "the next home game", "their next date": the earliest that fits. */
   next: boolean;
+  /** A part of the country they named ("on the East Coast", "in New England"): venues in those states only. */
+  region?: Region | null;
 };
+
+export type Region = { name: string; where: string; states: string[] };
+
+const NEW_ENGLAND = ['ME', 'NH', 'VT', 'MA', 'RI', 'CT'];
+/**
+ * Parts of the country as people say them (live Oct 4: "when is the next metallica concert on the east coast?" got
+ * the Las Vegas residency, because a region was no place at all to the resolver). Pennsylvania and DC count as East
+ * Coast: Philadelphia and Washington are where people mean.
+ */
+const REGIONS: Array<[RegExp, Region]> = [
+  [/\beast(?:ern)?[\s-]+coast\b/, { name: 'East Coast', where: 'on the East Coast', states: [...NEW_ENGLAND, 'NY', 'NJ', 'PA', 'DE', 'MD', 'DC', 'VA', 'NC', 'SC', 'GA', 'FL'] }],
+  [/\bwest(?:ern)?[\s-]+coast\b/, { name: 'West Coast', where: 'on the West Coast', states: ['CA', 'OR', 'WA'] }],
+  [/\bpacific\s+north[\s-]?west\b|\bthe\s+pnw\b/, { name: 'Pacific Northwest', where: 'in the Pacific Northwest', states: ['WA', 'OR', 'ID'] }],
+  [/\bnew\s+england\b/, { name: 'New England', where: 'in New England', states: NEW_ENGLAND }],
+  [/\btri[\s-]?state(?:\s+area)?\b/, { name: 'tri-state area', where: 'in the tri-state area', states: ['NY', 'NJ', 'CT'] }],
+  [/\bmid[\s-]?atlantic\b/, { name: 'Mid-Atlantic', where: 'in the Mid-Atlantic', states: ['NY', 'NJ', 'PA', 'DE', 'MD', 'DC', 'VA'] }],
+  [/\b(?:the|in)\s+north[\s-]?east\b/, { name: 'Northeast', where: 'in the Northeast', states: [...NEW_ENGLAND, 'NY', 'NJ', 'PA'] }],
+  [/\b(?:the\s+)?mid[\s-]?west\b/, { name: 'Midwest', where: 'in the Midwest', states: ['OH', 'IN', 'IL', 'MI', 'WI', 'MN', 'IA', 'MO', 'ND', 'SD', 'NE', 'KS'] }],
+  [/\b(?:the|in)\s+south[\s-]?east\b/, { name: 'Southeast', where: 'in the Southeast', states: ['FL', 'GA', 'SC', 'NC', 'VA', 'TN', 'AL', 'MS', 'KY', 'WV', 'AR', 'LA'] }],
+  [/\b(?:the|in)\s+south[\s-]?west\b(?!\s+(?:airlines?|flights?))/, { name: 'Southwest', where: 'in the Southwest', states: ['AZ', 'NM', 'NV', 'UT', 'TX', 'OK'] }],
+  [/\b(?:in|down)\s+(?:the\s+)?south\b(?!\s+(?:of|side|end|bronx|beach|bend|jersey|carolina|dakota|florida|street|st\b))/, { name: 'South', where: 'in the South', states: ['FL', 'GA', 'SC', 'NC', 'VA', 'TN', 'AL', 'MS', 'KY', 'WV', 'AR', 'LA', 'TX', 'OK'] }],
+];
+
+/** The region a message names as where the event should be, or undefined when it names none; null when it lifts one ("anywhere"). */
+export function regionIn(text: string): Region | null | undefined {
+  const t = text.toLowerCase();
+  for (const [re, region] of REGIONS) {
+    const m = re.exec(t);
+    // "not on the West Coast" names where they don't want it, and "we live on the East Coast" where they are: neither
+    // is a fence to search inside.
+    if (m && !/\b(?:not|outside(?:\s+of)?|except|other than|from|live|living|based|i'?m|we'?re)\s+(?:on\s+|in\s+)?(?:the\s+)?$/.test(t.slice(Math.max(0, m.index - 20), m.index))) return region;
+  }
+  if (/\banywhere\b|\bany\s+city\b|\bdon'?t care where\b/.test(t)) return null;
+  return undefined;
+}
 
 export const NO_CONSTRAINTS: EventConstraints = { venueTerms: null, excludedVenues: [], homeOnly: false, after: null, before: null, exactTime: null, notTimes: [], partOfDay: null, weekdays: null, notWeekdays: [], window: null, next: false };
 
@@ -250,6 +287,8 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     if (/\b(?:the|their|a)\s+(?:new|upcoming|coming|soonest)\s+(?:home\s+)?(?:game|match|show|performance|fixture|concert)\b/i.test(t)) out.next = true;
     // "When are they playing home next?", "who do they play next", "next home": the next one (live Oct 3, third ask).
     if (/\b(?:play(?:s|ing)?|home|on|game)\s+(?:at\s+home\s+)?next\b|\bnext\s+home\b/i.test(t)) out.next = true;
+    const region = regionIn(t);
+    if (region !== undefined) out.region = region;
     if (/\bnext\b[^.?!]{0,30}?\b(?:game|match|show|performance|date|fixture|concert|one)\b|\b(?:find|any)\s+(?:a|the next|the earliest)\s+(?:weekend|saturday|sunday|date|game)\b|\bearliest\b/i.test(t)) out.next = true;
   }
   return out;
@@ -272,7 +311,7 @@ const timeLabel = (m: number) => {
  * Why an event breaks their rules, in words for the reply ("it's in Philadelphia, not at Madison Square
  * Garden", "it starts at 7pm, and you asked for after 7pm"), or [] when it fits them all.
  */
-export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boolean | null }, v: { name: string; aliases: string[]; city: string | null; timezone: string }, opts: { team: boolean; atHome?: boolean | null }): string[] {
+export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boolean | null }, v: { name: string; aliases: string[]; city: string | null; state?: string | null; timezone: string }, opts: { team: boolean; atHome?: boolean | null }): string[] {
   const why: string[] = [];
   const at = localStart(e.localStartAt, v.timezone);
   const vn = [v.name, ...v.aliases].map((n) => n.toLowerCase());
@@ -293,6 +332,7 @@ export function breaks(c: EventConstraints, e: { localStartAt: Date; isHome: boo
   if (c.partOfDay === 'matinee' && at.minutes >= 17 * 60) why.push(`it's the ${timeLabel(at.minutes)} evening show, and you asked for a matinee`);
   if (c.weekdays && !c.weekdays.includes(at.weekday)) why.push(`it's on a ${DAYS[at.weekday]!.replace(/^./, (x) => x.toUpperCase())}`);
   else if (c.notWeekdays.includes(at.weekday)) why.push(`it's on a ${DAYS[at.weekday]!.replace(/^./, (x) => x.toUpperCase())}, which you ruled out`);
+  if (c.region && !c.region.states.includes((v.state ?? '').toUpperCase())) why.push(`it's in ${v.city ?? v.name}, not ${c.region.where}`);
   if (c.window && (at.date < c.window.from || at.date > c.window.to)) why.push('it falls outside the dates you gave');
   return why;
 }

@@ -57,7 +57,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
   });
 
   it('17: keeps the exact 7pm performance from the link, never the 4pm one', () => {
-    expect(turn('17', 1)).toContain('That’s Kanan Gill: Not This Again at Town Hall, New York, Sat, Oct 3, 7:00 PM EDT.');
+    expect(turn('17', 1)).toContain('That’s Kanan Gill: Not This Again at Town Hall in New York, Saturday, October 3, at 7 p.m.');
     for (const n of [2, 3]) expect(turn('17', n)).toContain('Kanan Gill: Not This Again\nTown Hall, New York · Saturday, October 3, at 7 p.m. · 3 tickets · up to $200 in total\n');
     expect(all('17')).not.toContain('4:00 PM');
   });
@@ -137,7 +137,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
       ['30', 2, 'Brooklyn Nets vs. Toronto Raptors\nBarclays Center, New York · Saturday, October 10, at 7:30 p.m. · 3 tickets · up to $240 in total'],
     ] as const) expect(turn(id, n)).toContain(label);
     for (const id of ['01', '03', '11', '30']) expect(all(id)).not.toMatch(/home or away|Which game|What date/i);
-    expect(turn('03', 1)).toContain('That’s New York Rangers vs. Tampa Bay Lightning at Madison Square Garden, New York, Thu, Oct 1, 7:00 PM EDT.');
+    expect(turn('03', 1)).toContain('That’s New York Rangers vs. Tampa Bay Lightning at Madison Square Garden in New York, tomorrow, Thursday, October 1, at 7 p.m.');
   });
 
   it('16 / 26: entry help for bought tickets; no buy link and no ticket values repeated', () => {
