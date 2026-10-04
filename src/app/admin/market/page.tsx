@@ -39,6 +39,9 @@ export default async function Market() {
   const byState = await db.select({ state: t.trackedEvents.state, n: sql<number>`count(*)::int` }).from(t.trackedEvents).where(eq(t.trackedEvents.provider, SEATDATA_PROVIDER)).groupBy(t.trackedEvents.state);
   const tracked = await db.select({ tr: t.trackedEvents, name: t.events.name, at: t.events.localStartAt }).from(t.trackedEvents).innerJoin(t.events, eq(t.events.id, t.trackedEvents.eventId)).where(eq(t.trackedEvents.provider, SEATDATA_PROVIDER)).orderBy(t.events.localStartAt).limit(60);
   const errors = await db.select().from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.status, 'error'))).orderBy(desc(t.marketFetches.at)).limit(5);
+  // The last listings read's shape (field names and marketplace counts, never values): whether the feed can say
+  // which marketplace a listing is on, or carry its event id or link, decides whether a reply can link to it.
+  const [shape] = await db.select({ at: t.marketFetches.at, detail: t.marketFetches.detail }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.status, 'success'), sql`${t.marketFetches.kind} in ('listings', 'listings_compare', 'listings_watch')`, sql`${t.marketFetches.detail} like '%keys %'`)).orderBy(desc(t.marketFetches.at)).limit(1);
   const [history] = await db.select({ events: sql<number>`count(distinct ${t.marketHistory.providerEventId})::int`, points: sql<number>`count(*)::int` }).from(t.marketHistory);
   const [own] = await db.select({ points: sql<number>`count(*)::int` }).from(t.marketSnapshots).where(eq(t.marketSnapshots.sourceIds, sql`'["seatdata"]'::jsonb`));
 
@@ -123,6 +126,7 @@ export default async function Market() {
             ))}</tbody>
           </table>
         ) : null}
+        {shape ? <p className="mt-2 text-xs text-gray-600">Last listings read ({whenStaff(shape.at)}): {shape.detail?.replace(/^.*?(?=top |keys )/, '')}</p> : null}
         {errors.length ? <p className="mt-2 text-xs text-rose-700">Recent errors: {errors.map((x) => `${whenStaff(x.at)} ${x.kind} ${x.detail ?? ''}`).join(' · ')}</p> : null}
       </section>
 

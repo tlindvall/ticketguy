@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 const Body = z.discriminatedUnion('action', [
   z.object({ action: z.literal('save'), id: z.string().uuid().nullable().default(null), name: z.string().min(1).max(80), body: z.string().min(1).max(MAX_SIGNATURE_LENGTH), isDefault: z.boolean().default(false) }),
   z.object({ action: z.literal('delete'), id: z.string().uuid() }),
-  z.object({ action: z.literal('brand_save'), displayName: z.string().max(80), tagline: z.string().max(160).nullable().default(''), shortSignoff: z.string().max(80), logo: z.enum(['badge', 'mark', 'none']) }),
+  z.object({ action: z.literal('brand_save'), displayName: z.string().max(80), tagline: z.string().max(160).nullable().default(''), shortSignoff: z.string().max(80), logo: z.enum(['mascot', 'badge', 'mark', 'none']) }),
   z.object({ action: z.literal('brand_reset') }),
 ]);
 

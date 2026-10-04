@@ -15,6 +15,8 @@ export type MarketListing = {
   id?: string | null;
   /** Which marketplace it is on, when the feed says (StubHub `sh`, Vivid Seats `vs`). */
   marketplace?: 'stubhub' | 'vividseats' | null;
+  /** The listing's own page on StubHub or Vivid Seats, when the feed carries one (https, those hosts only). */
+  url?: string | null;
 };
 
 const MARKETPLACES: Record<string, 'stubhub' | 'vividseats'> = { sh: 'stubhub', stubhub: 'stubhub', vs: 'vividseats', vivid: 'vividseats', vividseats: 'vividseats', vivid_seats: 'vividseats' };
@@ -30,7 +32,20 @@ export function toMarketListing(l: Record<string, unknown>): MarketListing | nul
   const rawId = l.listing_id ?? l.id;
   const id = typeof rawId === 'number' && Number.isFinite(rawId) ? String(rawId) : str(rawId);
   const src = str(l.source ?? l.marketplace ?? l.exchange)?.toLowerCase().replace(/[\s-]+/g, '_') ?? null;
-  return { priceCents: Math.round(price * 100), quantity: qty, section: str(l.section), row: str(l.row), zone: str(l.zone), id, marketplace: src ? (MARKETPLACES[src] ?? null) : null };
+  const url = listingUrl(l.url ?? l.listing_url ?? l.link ?? l.deep_link);
+  const fromUrl = url ? (new URL(url).hostname.endsWith('stubhub.com') ? 'stubhub' : 'vividseats') : null;
+  return { priceCents: Math.round(price * 100), quantity: qty, section: str(l.section), row: str(l.row), zone: str(l.zone), id, marketplace: (src ? (MARKETPLACES[src] ?? null) : null) ?? fromUrl, url };
+}
+
+/** A listing page we'd send a customer to: https on StubHub or Vivid Seats only, never any other host. */
+function listingUrl(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  try {
+    const u = new URL(v.trim());
+    return u.protocol === 'https:' && /^(?:www\.)?(?:stubhub\.com|vividseats\.com)$/.test(u.hostname) ? u.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

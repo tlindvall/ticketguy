@@ -20,7 +20,7 @@ describe('brand direction 01 previews', () => {
   });
 
   it('leaves the live signature alone', () => {
-    expect(renderSignature('full', 'https://ticketguy.now').html).toContain('width="40" height="32"');
+    expect(renderSignature('full', 'https://ticketguy.now').html).toContain('width="45" height="56"');
   });
 
   it('answers 404 outside local development to anyone who is not signed-in staff', async () => {

@@ -150,15 +150,21 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Seats for two, named from the listings we can read, are the answer (live Oct 3: seats, not questions). They are
     // the one price summary: no venue floor or budget sum from it under them.
-    expect(rec!.bodyText).toContain('Test Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets\n\nCheapest pair I can see: about $247 for both with fees.\n\n- Section 101, Row 10: $95 each, $190 for two before fees\n- Section 215, Row 8: $120 each, $240 for two before fees');
-    expect(rec!.bodyText).toContain('- Fees: I’ve allowed 30%, so check the total at checkout.\n- Not checked yet: that they’re still for sale and sit together');
+    // One listing to buy, said first, then the game, then the offer as a card (personal-email design, Oct 3). The feed
+    // here names no marketplace, as live: both are searched, and it says why.
+    expect(rec!.bodyText).toContain('Hey,\n\nI’d buy Section 101, Row 10, the cheapest pair I can see: about $247 for both with fees (estimated).\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets\n\nSection 101 · Row 10\nAbout $247 for two, estimated\n$190 for two before fees ($95 each), plus a 30% fee allowance.\nOn StubHub or Vivid Seats; my data doesn’t say which, so search both.\nNot checked yet: that it’s still listed and the seats are together');
+    expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\n\nOther leads shown\nSection 215 · Row 8: $240 for two before fees.\nSection 210 · Row 4: $280 for two before fees.');
+    // The card's links are on the card, once.
+    expect(rec!.bodyText.match(/Search StubHub for this game/g)).toHaveLength(1);
+    // The card: cream with a lime edge, the estimate in larger type and said as estimated, the link on it.
+    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>I’d buy Section 101, Row 10, the cheapest pair I can see: about $247 for both with fees (estimated).</strong></p>');
+    expect(rec!.bodyHtml).toContain('style="background:#f7f4ec;border-left:4px solid #d7f36b;');
+    expect(rec!.bodyHtml).toContain('<span style="font-size:20px;line-height:30px;font-weight:bold;">About $247 for two</span>, estimated');
+    expect(rec!.bodyHtml).toMatch(/<a href="https:\/\/www\.stubhub\.com\/search\?q=[^"]+" style="color:#142438;text-decoration:underline;font-weight:700;">Search StubHub for this game<\/a>/);
     // With no budget, the one next step is an offer to narrow it, on its own line, not a questionnaire.
     expect(rec!.bodyText).toContain('\n\nWant me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.');
     expect(rec!.bodyText).not.toMatch(/things that would help|One thing that would help|When do you need tickets sorted by/);
     expect(rec!.bodyText).not.toContain('The resale market when I last checked');
-    // The answer and each seat's place are bold; the prices are not (post-#55 writing review).
-    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>Cheapest pair I can see: about $247 for both with fees.</strong></p>');
-    expect(rec!.bodyHtml).toContain('<li style="margin:0 0 8px;"><strong>Section 101, Row 10</strong>: $95 each, $190 for two before fees</li>');
     expect(rec!.bodyText).not.toContain('SeatData');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     expect(rec!.bodyText).not.toMatch(/fair price|better deal|guarantee/);
@@ -396,8 +402,9 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Five together, named: the $140 block is six tickets and would leave the seller one, so it's said and passed over.
-    expect(rec!.bodyText).toContain('Cheapest five together I can see: about $1,008 for all 5 with fees.\n\n- Section 112, Row 2: $155 each, $775 for five before fees');
-    expect(rec!.bodyText).toContain('- Skipped: Section 210 at $140 each is 6 tickets, and sellers rarely leave a single seat.');
+    expect(rec!.bodyText).toContain('I’d buy Section 112, Row 2, the cheapest five together I can see: about $1,008 for all 5 with fees (estimated).');
+    expect(rec!.bodyText).toContain('Section 112 · Row 2\nAbout $1,008 for five, estimated\n$775 for five before fees ($155 each), plus a 30% fee allowance.');
+    expect(rec!.bodyText).toContain('Why not cheaper: Section 210 at $140 each is 6 tickets, and sellers rarely leave a single seat.');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
   });

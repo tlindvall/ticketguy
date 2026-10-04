@@ -235,6 +235,12 @@ const rawSchema = z.object({
   SEATDATA_API_KEY: z.string().optional(),
   SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(50),
   /**
+   * Looking an event up on the open web when the catalog has nothing (Anthropic web search; live Oct 3, Soho House
+   * Festival at Pier 17). "off" turns it off; the daily limit counts searches started, across all customers.
+   */
+  WEB_EVENT_SEARCH: z.enum(['on', 'off']).default('on'),
+  WEB_EVENT_SEARCH_DAILY_LIMIT: z.coerce.number().int().nonnegative().default(50),
+  /**
    * The fee allowance a SeatData market alert assumes on top of listed prices (DECISION_LOG #62): an alert goes
    * out only when the listed total plus this share still fits the customer's all-in budget, and says so.
    */

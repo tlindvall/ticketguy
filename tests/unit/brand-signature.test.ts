@@ -23,7 +23,11 @@ describe('brand signature', () => {
     const badge = renderSignature('full', APP, { ...BUILT_IN_BRAND, logo: 'badge' });
     expect(badge.html).toContain('https://ticketguy.now/email/ticket-badge@3x.png');
     expect(badge.html).toContain('width="44" height="44"');
-    expect(renderSignature('full', APP).html).toContain('ticket-mark@3x.png');
+    // The waving mascot by default, at its own 4:5 proportions, beside 14/21 text (personal-email design, Oct 3).
+    const full = renderSignature('full', APP).html;
+    expect(full).toContain('https://ticketguy.now/email/ticket-guy-mascot@3x.png" width="45" height="56"');
+    expect(full).toContain('font-size:14px;line-height:21px;font-weight:700;color:#142438;">Ticket Guy</p>');
+    expect(renderSignature('full', APP, { ...BUILT_IN_BRAND, logo: 'mark' }).html).toContain('ticket-mark@3x.png');
     const none = renderSignature('full', APP, { ...BUILT_IN_BRAND, logo: 'none' });
     expect(none.html).not.toContain('<img');
     expect(none.text).toBe('Ticket Guy\nYour second opinion before you buy.\nhttps://ticketguy.now');
