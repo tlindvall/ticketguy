@@ -49,3 +49,19 @@ export function opponentFor(performer: string, eventName: string | null | undefi
   if (norm(m.second).includes(p) || p.includes(norm(m.second))) return m.first;
   return null;
 }
+
+/**
+ * Against the same place's team under another name: a team renamed since a screenshot or a model learned it ("Utah
+ * Hockey Club" is the Utah Mammoth now). The other side of the event must start with the opponent's place, and the
+ * place must not be the performer's own ("New York" never matches the Rangers' own side).
+ */
+export function isAgainstPlace(eventName: string, opponent: string, performer: string): boolean {
+  const m = splitMatchup(eventName);
+  if (!m) return false;
+  const mine = norm(performer).split(' ').at(-1) ?? '';
+  const other = ` ${norm(mine && norm(m.first).includes(mine) ? m.second : m.first)} `;
+  const words = norm(opponent).replace(/\b(?:hockey|football|soccer|basketball|baseball)? ?(?:club|fc|sc|cf)\b/g, '').trim().split(' ');
+  const place = (words.length > 1 ? words.slice(0, -1) : words).join(' ');
+  if (place.length < 4 || norm(performer).startsWith(place)) return false;
+  return other.startsWith(` ${place} `);
+}
