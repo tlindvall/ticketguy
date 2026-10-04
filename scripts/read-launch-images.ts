@@ -1,5 +1,5 @@
 /**
- * Runs the production screenshot reader on the four original launch-review images, with each case's own question,
+ * Runs the production screenshot reader on the original launch-review images (and later live screenshots), with each case's own question,
  * and prints what it read, the checks the replies depend on, and the screenshot answer those facts produce
  * (`pnpm tsx scripts/read-launch-images.ts`). The acceptance replays in tests/acceptance/launch-evidence-1002.test.ts
  * stand in for this reader; this is the operator gate that shows the real model reads the same facts.
@@ -52,6 +52,18 @@ const CASES: Case[] = [
       ['Oct 8 at Sphere', (r) => r.eventDate === '2026-10-08' && /sphere/i.test(r.venue ?? '')],
     ],
   },
+  {
+    // Live Oct 4: a seat map with Sec 415, Row 6 selected, a $87.75 bubble over the map and a "Home Games" sidebar.
+    id: 'R04-1', image: 'rangers-canucks-seatmap.webp', question: 'Is this a good deal for the two of us?',
+    checks: [
+      ['the header game: Oct 11, 18:00', (r) => r.eventDate === '2026-10-11' && (r.eventTime ?? '18:00') === '18:00'],
+      ['the selected listing: section 415, row 6, 2 tickets', (r) => r.section === '415' && r.row === '6' && r.quantity === 2],
+      ['$175.50 is the subtotal for two, never per ticket', (r) => (r.priceDollars === 175.5 && r.priceBasis === 'whole_party') || r.totalDollars === 175.5 || (r.priceDollars === 87.75 && r.priceBasis === 'per_ticket')],
+      ['no $175.50-a-ticket row and no map bubble as a second row', (r) => !(r.offers ?? []).some((o) => o.priceDollars === 175.5 && o.priceBasis === 'per_ticket') && (r.offers ?? []).length <= 1],
+      ['seated, together, not general admission', (r) => r.seatsTogether === true && r.admission !== 'standing'],
+      ['no sidebar dates taken as events', (r) => !(r.events ?? []).some((e) => e.date && e.date !== '2026-10-11')],
+    ],
+  },
 ];
 
 const e = env();
@@ -65,9 +77,10 @@ const reader = new ModelListingReader(selected.client, selected.model, selected.
 let failed = 0;
 for (const c of CASES) {
   const base64 = readFileSync(join(import.meta.dirname, '../tests/fixtures/launch-images', c.image)).toString('base64');
+  const mimeType = c.image.endsWith('.webp') ? 'image/webp' as const : 'image/jpeg' as const;
   const receivedAt = new Date('2026-10-02T21:00:00Z');
   try {
-    const r = await reader.read({ image: { mimeType: 'image/jpeg', base64 }, receivedAt, question: c.question });
+    const r = await reader.read({ image: { mimeType, base64 }, receivedAt, question: c.question });
     console.log(`\n=== ${c.id} · ${c.image}`);
     console.log(JSON.stringify(r, null, 2));
     for (const [name, ok] of c.checks) {
