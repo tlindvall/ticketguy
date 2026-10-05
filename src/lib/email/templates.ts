@@ -132,10 +132,13 @@ function renderBody(
       // One sentence saying what we understood, then the questions that decide it, one per line. Headings
       // like "What we have so far" / "Could you tell us" made a two-line question read like a form.
       const qs = (v.questions as string[]) ?? [];
+      // The note is paragraphs of its own (what I searched, then the nearest games as a list): one block each, or a
+      // list run into the sentence before it (live Oct 5: "The closest games I have: • Tomorrow… • Sunday…" in one line).
+      const note = v.eventNote ? String(v.eventNote).split(/\n{2,}/).filter(Boolean) : [];
       const paras = [
         'Hey,',
         v.acknowledgement ? String(v.acknowledgement) : 'Thanks for getting in touch.',
-        v.eventNote ? String(v.eventNote) : '',
+        ...note,
         ...qs,
         ...((v.assumptions as string[] | undefined) ?? []),
         v.countryCheck ? COUNTRY_CHECK_LINE : '',
@@ -144,7 +147,7 @@ function renderBody(
       const ra = vars.ra as Ra | null | undefined;
       if (!ra) return wrap(paras, paras.map(block));
       // After the note that we couldn't find it, before the questions.
-      const at = v.eventNote ? 3 : 2;
+      const at = 2 + note.length;
       return wrap([...paras.slice(0, at), raText(ra), ...paras.slice(at)], [...paras.slice(0, at).map(block), raHtml(ra), ...paras.slice(at).map(block)]);
     }
     case 'browse_options': {

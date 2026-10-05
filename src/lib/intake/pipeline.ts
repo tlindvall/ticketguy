@@ -881,7 +881,9 @@ export class Concierge {
     // same request, so its order is the order they saw.
     if (!picked && revision > 1) {
       const options = elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
-      const idx = options.length > 1 ? ordinalChoice(flat(latestText), options.length) : null;
+      // "the first one", or the day itself: "the 19th", "Nov 19", "Thursday" (live Oct 5: "the 19th. 2 tickets together
+      // please" after "Thu, Nov 19 or Sat, Nov 21?" got the same question back).
+      const idx = options.length > 1 ? ordinalChoice(flat(latestText), options.length) ?? dayChoice(flat(latestText), options.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone))) : null;
       if (idx !== null) {
         const { e, v } = options[idx]!;
         found = { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: elsewhere[idx]?.kind ?? null };
@@ -1154,7 +1156,9 @@ export class Concierge {
       const alertsOff = !this.env.EVENT_ALERTS_ENABLED && (merged.notifyAsked || ON_SALE_ASKED.test(flat(latestText)));
       const capability = [
         alertsOff ? `I can’t email you when tickets go on sale: automatic on-sale alerts are switched off for now, so nothing is watching this for you. ${merged.performerOrTeam ? `Check ${possessive(titleCaseName(merged.performerOrTeam))} official website or Ticketmaster` : 'Check the official website or Ticketmaster'} for the on-sale date; I haven’t seen one announced.` : null,
-        TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I don’t have usable price history for ${merged.quantity && merged.quantity > 1 ? `${countWordLower(merged.quantity)} seats together` : 'these seats'} at ${merged.performerOrTeam ? `${titleCaseName(merged.performerOrTeam)} games` : 'these events'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
+        // Nothing has been read yet on this path, so "no price history" would be a claim about data we never looked at
+        // (live Oct 5: said before any game was settled or SeatData asked). Say when it gets checked instead.
+        TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I haven’t looked at price history yet${resolution.kind === 'resolved' ? '' : ', because I don’t know which game it is'}. ${resolution.kind === 'resolved' ? 'I’ll' : 'Once you pick the game, I’ll'} check which way resale prices for it are moving and whether waiting is worth it.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
       ].filter(Boolean).join(' ');
       // The event is settled and only something else is missing (how many tickets): say which one, so "the next home
       // game" is answered, not just filed (TGQA-R6 1007).
@@ -4100,6 +4104,33 @@ export function ordinalChoice(text: string, n: number): number | null {
   return i >= 0 && i < n ? i : null;
 }
 
+const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const WEEKDAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/**
+ * Which of the dates we listed a reply names by its day: "the 19th", "Nov 19", "11/19", "Thursday", "Saturday's show".
+ * Null unless exactly one listed date fits, so a day that fits two (or none) is never guessed.
+ */
+export function dayChoice(text: string, dates: string[]): number | null {
+  const t = text.toLowerCase();
+  const fits = (pred: (y: number, m: number, d: number, wd: number) => boolean) => {
+    const hits = dates.map((iso, i) => {
+      const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+      return pred(y, m, d, new Date(Date.UTC(y, m - 1, d)).getUTCDay()) ? i : -1;
+    }).filter((i) => i >= 0);
+    return hits.length === 1 ? hits[0]! : null;
+  };
+  const md = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:uary|ruary|ch|il|e|y|ust|t|tember|ober|ember)?\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/.exec(t) ?? null;
+  if (md) return fits((_y, m, d) => m === MONTH_NAMES.indexOf(md[1]!) + 1 && d === Number(md[2]));
+  const slash = /\b(\d{1,2})\/(\d{1,2})\b/.exec(t);
+  if (slash) return fits((_y, m, d) => m === Number(slash[1]) && d === Number(slash[2]));
+  const day = /\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b/.exec(t);
+  if (day) return fits((_y, _m, d) => d === Number(day[1]));
+  const wd = /\b(sun|mon|tue|wed|thu|fri|sat)(?:s|day|days|\.|nesday|rsday|rs|urday|sday)?(?:'s)?\b/.exec(t);
+  if (wd) return fits((_y, _m, _d, w) => w === WEEKDAY_NAMES.indexOf(wd[1]!));
+  return null;
+}
+
 /** An event name reduced to its words, for "still the same event?": case, punctuation and filler words don't count. */
 export function sameEventKey(name: string | null | undefined): string | null {
   const k = (name ?? '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\b(?:the|a|an|tickets?|festival|fest|concert|show|nyc|new york)\b/g, ' ').replace(/\s+/g, ' ').trim();
@@ -4991,7 +5022,8 @@ export function pickLinksFor(pick: MarketListing, eventName: string, quantity: n
   const where = seatPhrase(pick.section, null);
   const seat = where ? (where.startsWith('general admission') ? `the ${where} listing` : where) : 'this listing';
   if (pick.url) return [{ label: `View ${seat} on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
-  const q = encodeURIComponent(eventName);
+  // A search for the name as a fan types it: "Mind Enterprises (16 and over)" finds nothing; "Mind Enterprises" does.
+  const q = encodeURIComponent(eventName.replace(/\s*\([^)]*\)/g, '').trim() || eventName);
   const sh = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId) ? stubHubEventId : null;
   // StubHub's event page opened on the listing: its event id and a StubHub listing number (the feed's StubHub ids
   // are StubHub's own; SDK 1.2 sales rows carry them as integers).

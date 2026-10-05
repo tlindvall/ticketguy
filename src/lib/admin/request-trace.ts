@@ -14,7 +14,7 @@ export type TraceStep = {
   /** What happened, in a line: "Searched the web (2 searches, 14 pages)". */
   title: string;
   /** Status in a word: ok, none, skipped, error. */
-  status: 'ok' | 'none' | 'skipped' | 'error';
+  status: 'ok' | 'none' | 'skipped' | 'error' | 'info';
   /** Supporting facts, one per line. */
   details: string[];
   urls: string[];
@@ -62,8 +62,16 @@ const AUDIT_LABEL: Record<string, { source: TraceSource; title: string }> = {
   'market.trend_assessed': { source: 'seatdata', title: 'Assessed the price trend' },
   'ai.provider_rules_fallback': { source: 'ai', title: 'AI unavailable: read the email with rules instead' },
   'ai.budget_rules_fallback': { source: 'ai', title: 'AI budget reached: read the email with rules instead' },
-  'service_policy.would_block': { source: 'system', title: 'Service depth would have blocked a step' },
+  'service_policy.would_block': { source: 'system', title: 'Service depth, shadow mode' },
   'answer.coverage': { source: 'system', title: 'Checked the reply answers every question' },
+};
+
+const OPERATION_LABEL: Record<string, string> = {
+  historical_context: 'price history for comparison',
+  trend_advice: 'buy-or-wait trend advice',
+  market_tracking: 'tracking the resale market',
+  staff_comparison: 'offering a staff comparison',
+  ticket_intake: 'taking the request',
 };
 
 const usd = (micros: number) => `$${(micros / 1e6).toFixed(micros < 10_000 ? 4 : 3)}`;
@@ -137,6 +145,20 @@ export async function requestTrace(db: Db, req: { id: string; conversationId: st
       continue;
     }
     if (a.action === 'web.event_found') continue; // the search line above already names what was found
+    // A shadow-mode note, not a failure: the step ran; it says what enforcing the service depth would have skipped
+    // (live Oct 5: read as "failed" in red on a request that was answered with prices).
+    if (a.action === 'service_policy.would_block') {
+      const op = String(d.operation ?? 'a step');
+      steps.push({
+        at: a.createdAt,
+        source: 'system',
+        title: `Service depth, shadow mode: would skip “${OPERATION_LABEL[op] ?? op.replace(/_/g, ' ')}” once enforced`,
+        status: 'info',
+        details: [`It ran this time; nothing was blocked. Depth “${String(d.depth ?? '?')}” for ${String(d.category ?? 'this kind of event').replace(/_/g, ' ')}.`],
+        urls: [],
+      });
+      continue;
+    }
     steps.push({
       at: a.createdAt,
       source: label.source,
@@ -160,6 +182,19 @@ export async function requestTrace(db: Db, req: { id: string; conversationId: st
         urls: [],
       });
     }
+  }
+
+  // No SeatData call at all is said, with why: it prices one game at a time, so nothing is asked until a game is settled
+  // (live Oct 5: "SeatData API: not used" with no reason, on a screenshot whose date matched no game).
+  if (!steps.some((s) => s.source === 'seatdata')) {
+    steps.push({
+      at: new Date(Math.min(to.getTime(), Math.max(from.getTime(), req.updatedAt.getTime()))),
+      source: 'seatdata',
+      title: 'SeatData not called',
+      status: 'skipped',
+      details: [req.eventId ? 'A game was matched, but no prices were read for it in this request: the resale feed may be off, the game not tracked yet, or the reply didn’t need prices.' : 'No game was matched yet, and SeatData prices one game at a time. It is asked once the customer picks the game.'],
+      urls: [],
+    });
   }
 
   // Sellers checked by each research run: which source, the outcome and how many listings came back.
@@ -196,7 +231,7 @@ export async function requestTrace(db: Db, req: { id: string; conversationId: st
 export function traceSummary(steps: TraceStep[]): Array<{ source: TraceSource; used: boolean; calls: number }> {
   const order: TraceSource[] = ['ai', 'ticketmaster', 'web', 'seatdata', 'seller', 'link'];
   return order.map((source) => {
-    const mine = steps.filter((s) => s.source === source && s.status !== 'skipped');
+    const mine = steps.filter((s) => s.source === source && s.status !== 'skipped' && s.status !== 'info');
     return { source, used: mine.length > 0, calls: mine.length };
   });
 }

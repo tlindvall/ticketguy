@@ -149,6 +149,8 @@ describe('take charge: the next home game and seats for the party, not questions
     // A concert is a show (live Oct 5: "Search StubHub for this game" under a Brooklyn Steel concert), and a GA listing is general admission.
     expect(pickLinksFor(l({ section: 'General Admission', row: 'GA' }), 'Mind Enterprises', 2, null, 'show').map((x) => x.label)).toEqual(['Search StubHub for this show', 'Search Vivid Seats for this show']);
     expect(pickLinksFor(l({ marketplace: 'stubhub', section: 'General Admission', row: 'GA', url: 'https://www.stubhub.com/event/1/?listingId=2' }), 'Mind Enterprises', 2, null, 'show')[0]!.label).toBe('View the general admission listing on StubHub');
+    // The search is the name a fan would type (live Oct 5: "Mind Enterprises (16 and over)" searched with the age note in it).
+    expect(pickLinksFor(l({}), 'Mind Enterprises (16 and over)', 2, null, 'show').map((x) => x.url)).toEqual(['https://www.stubhub.com/search?q=Mind%20Enterprises', 'https://www.vividseats.com/search?searchTerm=Mind%20Enterprises']);
   });
 
   it('a listing link from the feed is kept only for StubHub or Vivid Seats over https', () => {

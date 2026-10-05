@@ -9,6 +9,7 @@ import { FixtureExtractor, type Extractor } from '@/lib/ai/extraction';
 import { FixtureDrafter } from '@/lib/ai/drafting';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import type { RequestExtraction } from '@/lib/domain/types';
+import { requestTrace } from '@/lib/admin/request-trace';
 
 /**
  * Live, Oct 4 2026: "We want to see the knicks in new york in october. give me some good options!" got "New York Knicks
@@ -61,5 +62,20 @@ describe('a team and a month', () => {
     expect(body).toMatch(/How many tickets/);
     expect(body).not.toMatch(/Which date are you looking at|76ers|Bulls|Got it/);
     expect(send!.bodyHtml).toContain('<li');
+    // No game settled yet, so SeatData was never asked, and the admin trace says why.
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+    const sd = (await requestTrace(h.db, req!)).filter((s) => s.source === 'seatdata');
+    expect(sd).toHaveLength(1);
+    expect(sd[0]!.title).toBe('SeatData not called');
+    expect(sd[0]!.details[0]).toMatch(/No game was matched yet, and SeatData prices one game at a time/);
+  });
+
+  it('a shadow-mode service-depth note is a note, never a failure', async () => {
+    const [req] = await h.db.select().from(t.requests).limit(1);
+    await h.db.insert(t.auditLog).values({ actor: 'system', action: 'service_policy.would_block', entityKind: 'request', entityId: req!.id, diff: { operation: 'trend_advice', depth: 'guide', category: 'electronic_nightlife' } });
+    const note = (await requestTrace(h.db, req!)).find((s) => s.source === 'system' && /Service depth/.test(s.title))!;
+    expect(note.status).toBe('info');
+    expect(note.title).toBe('Service depth, shadow mode: would skip “buy-or-wait trend advice” once enforced');
+    expect(note.details[0]).toBe('It ran this time; nothing was blocked. Depth “guide” for electronic nightlife.');
   });
 });

@@ -91,6 +91,19 @@ describe('a show picked from the list we sent', () => {
     expect(r.all.slice(1).join('\n')).not.toContain('isn’t playing in New York');
   });
 
+  // Live Oct 5: "I want to see Metallica in CT…" got "Which show: Thu, Nov 19 … or Sat, Nov 21 …?", and "the 19th. 2 tickets
+  // together please." got the same question back: "the 19th" wasn't a date the extractor pinned, so both shows stood.
+  it('"the 19th" after the two nights were listed: that night, never the same question again', async () => {
+    const ct: Partial<RequestExtraction> = { ...base, city: null, state: 'CT', dateExpression: null };
+    const r = await thread([
+      { text: 'I want to see Metallica in CT. Can you find any good tickets? they look very expensive.', over: ct },
+      { text: 'the 19th. 2 tickets together please.', over: { ...ct, dateExpression: 'the 19th', resolvedLocalDate: null, quantity: 2, togetherRequired: true } },
+    ], 'm3@customer.example');
+    expect(r.all[0]).toMatch(/Which show: Thu, Nov 19 at Mohegan Sun Arena or Sat, Nov 21 at Mohegan Sun Arena\?/);
+    expect(r.req.eventId).toBe(NOV19);
+    expect(r.all.slice(1).join('\n')).not.toMatch(/Which show/);
+  });
+
   it('reads price questions', () => {
     for (const q of ['what are tickets like?', 'How much are they?', "what's the price", 'how expensive is it', 'what do tickets go for']) expect(PRICE_ASKED.test(q)).toBe(true);
     expect(PRICE_ASKED.test('two tickets please')).toBe(false);

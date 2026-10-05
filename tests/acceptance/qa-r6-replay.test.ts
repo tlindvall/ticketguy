@@ -165,7 +165,9 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
 
   // Routing and preference flows (1010-1014).
   it('24: a direct trend abstention; no alert set', () => {
-    expect(turn('24', 2)).toContain('On buy or wait: I don’t have usable price history for two seats together at New York Knicks games, so I can’t tell you whether prices are rising or falling, and waiting would be a guess. I haven’t set an alert.');
+    // Turn 2 has no game settled yet, so nothing has been read: said as such, never "no usable history" about data never
+    // looked at (live Oct 5).
+    expect(turn('24', 2)).toContain('On buy or wait: I haven’t looked at price history yet, because I don’t know which game it is. Once you pick the game, I’ll check which way resale prices for it are moving and whether waiting is worth it. I haven’t set an alert.');
     expect(turn('24', 3)).toContain('I don’t have a supported price trend for two seats together at this game, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.');
     expect(turn('24', 3)).toContain('I haven’t set an alert.');
     expect(all('24')).not.toMatch(/I’ll (?:watch|keep an eye)|I'll (?:watch|keep an eye)|price watch is on/i);
