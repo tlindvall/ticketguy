@@ -429,6 +429,7 @@ export class Concierge {
     // So does the listing they show us: a screenshot, or listing text pasted into the email. What it showed is
     // kept as evidence; what it didn't show stays unknown.
     const listing = await this.readListingEvidence(msg, req);
+    if (listing.fields) listing.fields = await this.matchupDate(listing.fields, known, req.id, msg.id);
     if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known);
     const listingNotes = listing.redacted ? [REDACTED_NOTE] : [];
     // An image they sent (or say they attached) that we couldn't read is said plainly, and nothing is assumed
@@ -2481,6 +2482,47 @@ export class Concierge {
    * already made: only when the number was seen in the last three weeks, at exactly one event still to come. A link
    * that names its event never needs this; a number seen at two events is no answer.
    */
+  /**
+   * The game a screenshot is for, by its matchup: the page's header ("New York Rangers vs. Vancouver Canucks") names
+   * one game, and a date read from a sidebar of other home games ("Oct 4 vs. …", live Oct 5) must not move it. When
+   * the catalog has exactly one upcoming game for that matchup and the read's date isn't its date, the game's date
+   * wins, and the correction is audited. A date that agrees, or a matchup we can't place, leaves the read alone.
+   */
+  private async matchupDate(f: ListingFields, known: Array<{ name: string; aliases: string[] }>, requestId: string, messageId: string): Promise<ListingFields> {
+    const m = splitMatchup(f.eventName);
+    if (!m) return f;
+    const team = knownNameIn(m.first, known) ?? knownNameIn(m.second, known);
+    if (!team) return f;
+    const opponent = opponentFor(team, f.eventName) ?? null;
+    if (!opponent) return f;
+    const now = this.now();
+    const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.events.venueId, t.venues.id)).where(and(gte(t.events.localStartAt, new Date(now.getTime() - 6 * 3_600_000)), lte(t.events.localStartAt, new Date(now.getTime() + 180 * 86_400_000)), eq(t.events.status, 'scheduled'), sql`${t.events.name} ilike ${`%${opponent.split(/\s+/).at(-1)!.replace(/[%_]/g, '')}%`}`));
+    const all = rows.filter(({ e }) => !isNonAdmission(e) && !!opponentFor(team, e.name) && isAgainst(e.name, opponent));
+    // Home and away against the same team: the venue the page names picks one.
+    const atVenue = f.venue ? all.filter(({ v }) => v.name.toLowerCase() === f.venue!.toLowerCase()) : [];
+    const games = all.length > 1 && atVenue.length ? atVenue : all;
+    if (games.length !== 1) return f;
+    const date = eventLocalDate(games[0]!.e.localStartAt, games[0]!.v.timezone);
+    if (f.eventDate === date) return f;
+    // Only a date that can't be this game moves: one already past, or a day the team plays someone else. A day with no
+    // game at all is left to the nearest-games answer (screenshot-game-1004).
+    if (f.eventDate) {
+      const tz = games[0]!.v.timezone;
+      const past = f.eventDate < eventLocalDate(now, tz);
+      const thatDay = (await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.events.venueId, t.venues.id)).where(and(gte(t.events.localStartAt, new Date(`${f.eventDate}T00:00:00Z`)), lte(t.events.localStartAt, new Date(new Date(`${f.eventDate}T00:00:00Z`).getTime() + 2 * 86_400_000)))))
+        .filter(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone) === f.eventDate && !isNonAdmission(e) && !!opponentFor(team, e.name));
+      const otherGame = thatDay.length > 0 && thatDay.every(({ e }) => !isAgainst(e.name, opponent));
+      if (!past && !otherGame) return f;
+    }
+    // The stored read is what the reply judges the listing by, so it carries the game's date too.
+    for (const row of await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, requestId), eq(t.listingEvidence.messageId, messageId)))) {
+      const stored = row.fields as unknown as ListingFields | null;
+      if (stored && stored.eventName === f.eventName && stored.eventDate === f.eventDate) await this.db.update(t.listingEvidence).set({ fields: { ...stored, eventDate: date } as never }).where(eq(t.listingEvidence.id, row.id));
+    }
+    await audit(this.db, { actor: 'system', action: 'listing.date_corrected', entityKind: 'request', entityId: requestId, diff: { eventName: f.eventName, readDate: f.eventDate, gameDate: date, eventId: games[0]!.e.id } });
+    return { ...f, eventDate: date };
+  }
+
   private async eventForListing(urls: string[]): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null } | null> {
     const link = ticketLinksIn(urls).find((l) => l.listingId && !l.eventId && !l.localDate && !l.slugText);
     if (!link?.listingId) return null;
