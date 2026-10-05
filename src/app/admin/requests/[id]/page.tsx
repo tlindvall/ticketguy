@@ -290,8 +290,8 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   );
 }
 
-const TRACE_TONE: Record<TraceStep['status'], string> = { ok: 'tg-badge-ok', none: 'tg-badge-muted', skipped: 'tg-badge-warn', error: 'tg-badge-danger' };
-const TRACE_STATUS: Record<TraceStep['status'], string> = { ok: 'used', none: 'nothing found', skipped: 'skipped', error: 'failed' };
+const TRACE_TONE: Record<TraceStep['status'], string> = { ok: 'tg-badge-ok', none: 'tg-badge-muted', skipped: 'tg-badge-warn', error: 'tg-badge-danger', info: 'tg-badge-muted' };
+const TRACE_STATUS: Record<TraceStep['status'], string> = { ok: 'used', none: 'nothing found', skipped: 'skipped', error: 'failed', info: 'note only' };
 
 /** Which sources this request used, and every call in order (staff only): AI, Ticketmaster, web, SeatData, sellers, links. */
 function SourcesCard({ steps, timeZone }: { steps: TraceStep[]; timeZone: string }) {

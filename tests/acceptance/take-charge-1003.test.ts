@@ -146,6 +146,12 @@ describe('take charge: the next home game and seats for the party, not questions
     expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'Event page on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
     expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null)).toEqual([{ label: 'Search Vivid Seats for this game', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
     expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id').map((x) => x.label)).toEqual(['Search StubHub for this game', 'Search Vivid Seats for this game']);
+    // A concert is a show, and the search is the name a fan would type (live Oct 5: "Search StubHub for this game" for
+    // "Mind Enterprises (16 and over)", searched with the age note in it).
+    expect(pickLinksFor(l({}), 'Mind Enterprises (16 and over)', 2, null, 'show')).toEqual([
+      { label: 'Search StubHub for this show', url: 'https://www.stubhub.com/search?q=Mind%20Enterprises' },
+      { label: 'Search Vivid Seats for this show', url: 'https://www.vividseats.com/search?searchTerm=Mind%20Enterprises' },
+    ]);
   });
 
   it('a listing link from the feed is kept only for StubHub or Vivid Seats over https', () => {
