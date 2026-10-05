@@ -9,6 +9,7 @@ import { FixtureDrafter } from '@/lib/ai/drafting';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { groundedEvents, lastJsonObject, type WebEventFinder, type WebEventQuery } from '@/lib/ai/web-events';
 import type { RequestExtraction } from '@/lib/domain/types';
+import { requestTrace } from '@/lib/admin/request-trace';
 
 /**
  * Live, Oct 3 2026, 4:32 p.m. in New York: "is there a soho house festival in new york today?" got "Which event
@@ -37,7 +38,7 @@ class FakeWeb implements WebEventFinder {
   constructor(private readonly answer: unknown, private readonly urls: string[]) {}
   async find(q: WebEventQuery) {
     this.asked.push(q);
-    return { events: groundedEvents(this.answer, new Set(this.urls)), searches: 2, resultUrls: this.urls.length };
+    return { events: groundedEvents(this.answer, new Set(this.urls)), searches: 2, resultUrls: this.urls.length, queries: ['soho house festival new york october 3 2026'], urls: this.urls };
   }
 }
 
@@ -79,6 +80,12 @@ describe('an event that is only on the open web', () => {
     expect(r.req.state).toBe('referred');
     const [log] = await h.db.select().from(t.auditLog).where(eq(t.auditLog.entityId, r.req.id));
     expect(log).toBeDefined();
+    // The admin trace shows the search, what it searched for, and every page it returned.
+    const step = (await requestTrace(h.db, r.req)).find((s) => s.source === 'web')!;
+    expect(step.title).toBe('Searched the web (2 searches, 2 pages)');
+    expect(step.details).toContain('Query: soho house festival new york october 3 2026');
+    expect(step.details).toContain('Found: Soho House Festival New York on 2026-10-03');
+    expect(step.urls).toEqual([SOHO, IG]);
   });
 
   it('a page the search never returned is never the answer, and a link it didn’t return is never sent', async () => {

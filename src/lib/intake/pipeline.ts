@@ -849,7 +849,7 @@ export class Concierge {
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
-      : await this.resolveEventWithDiscovery(merged, { receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id), rules });
+      : await this.resolveEventWithDiscovery(merged, { requestId: req.id, receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id), rules });
     // The date came from an earlier message and breaks a rule they have now given ("Oct 5 is in Philadelphia; I
     // only want a HOME game at MSG, find one instead"): the nearest event that keeps every rule, said so.
     if (found.kind === 'no_match' && found.reason === 'constraint_conflict' && found.conflict?.suggestion && !extraction.dateExpression && !extraction.resolvedLocalDate) {
@@ -1211,7 +1211,10 @@ export class Concierge {
         return { state: 'recommendation_sent', revision, extraction: merged };
       }
     }
-    const official = merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) ? null : await this.officialSale(resolution.event, now);
+    // Prices are the answer: an open official sale is said inside the priced reply, never instead of it (live Oct 5:
+    // "Knicks vs. Orlando Magic is on general sale on Ticketmaster. I haven't seen its seats or prices", then "reply
+    // compare"). Only with no resale feed at all is the official sale the whole reply.
+    const official = this.env.SEATDATA_API_KEY || merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) ? null : await this.officialSale(resolution.event, now);
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
       await this.queueSend({
@@ -2526,7 +2529,7 @@ export class Concierge {
       const usage = finder.lastUsage;
       await settleBudget(this.db, r.ledgerId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0, toolCalls: out.searches, actualUsdMicros: estimateUsdMicros(model, usage?.inputTokens ?? 0, usage?.outputTokens ?? 0, out.searches * 0.01, this.env.modelPrices) });
       const host = (u: string) => { try { return new URL(u).hostname; } catch { return null; } };
-      await audit(this.db, { actor: 'system', action: 'web.event_search', entityKind: 'request', entityId: req.id, diff: { searches: out.searches, resultUrls: out.resultUrls, found: out.events.map((e) => ({ name: e.name, date: e.date, source: host(e.sourceUrl) })) } });
+      await audit(this.db, { actor: 'system', action: 'web.event_search', entityKind: 'request', entityId: req.id, diff: { searches: out.searches, resultUrls: out.resultUrls, queries: out.queries ?? [], urls: (out.urls ?? []).slice(0, 25), found: out.events.map((e) => ({ name: e.name, date: e.date, source: host(e.sourceUrl), url: e.sourceUrl })) } });
       // What was found, kept with the request so a follow-up about the same event is answered from it, not searched again.
       if (out.events.length) await audit(this.db, { actor: 'system', action: 'web.event_found', entityKind: 'request', entityId: req.id, diff: { query: sameEventKey(x.eventName ?? x.performerOrTeam), events: out.events } });
       return out.events;
@@ -2669,7 +2672,7 @@ export class Concierge {
    * Local catalog first; when it has nothing for this name, ask the provider once and look again. A provider
    * failure never fails the request — it is recorded and the customer gets the honest "not on file" answer.
    */
-  async resolveEventWithDiscovery(x: RequestExtraction, ctx: { receivedAt: Date; venueTimeZone: string | null; home?: Market | null; rules?: ResolveRules | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
+  async resolveEventWithDiscovery(x: RequestExtraction, ctx: { requestId?: string; receivedAt: Date; venueTimeZone: string | null; home?: Market | null; rules?: ResolveRules | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
     const local = await this.resolveEvent(x, ctx.home, ctx.rules);
     if (local.kind !== 'no_match' || local.reason === 'no_performer' || (local.reason === 'constraint_conflict' && local.conflict?.suggestion)) return local;
     const discovery = await this.discoveryAvailability();
@@ -2683,14 +2686,14 @@ export class Concierge {
     // A page of 100, as the other catalog searches ask: 20, sorted by date, ran out before a Sunday matinee (R1-HUMAN-02).
     const ask = (force: boolean) => syncFromDiscovery(this.db, discovery.adapter, { keyword, ...where, startDateTime: win.start, endDateTime: win.end, size: 100, trigger: 'interpret', dailyCallLimit: discovery.dailyCallLimit, now: this.now(), force });
     const sync = await ask(false);
-    await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win } });
+    await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: sync.status, eventsSeen: sync.eventsSeen, eventsUpserted: sync.eventsUpserted, window: win, requestId: ctx.requestId ?? null } });
     if (sync.status !== 'success' && sync.status !== 'skipped_fresh') return local; // provider trouble: say what we have, not what we could not check
     let again = await this.resolveEvent(x, ctx.home, ctx.rules);
     // "Recently searched" is no proof the date was in what came back: a miss on a cached search asks once more,
     // fresh, before anyone is told the event isn't on (R1-HUMAN-02). It's one call, inside the daily limit.
     if (sync.status === 'skipped_fresh' && again.kind === 'no_match' && again.reason !== 'no_performer') {
       const fresh = await ask(true);
-      await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: fresh.status, eventsSeen: fresh.eventsSeen, eventsUpserted: fresh.eventsUpserted, window: win, retry: 'after_cached_miss' } });
+      await audit(this.db, { actor: 'system', action: 'catalog.discovery_synced', entityKind: 'catalog', entityId: keyword.toLowerCase(), diff: { status: fresh.status, eventsSeen: fresh.eventsSeen, eventsUpserted: fresh.eventsUpserted, window: win, retry: 'after_cached_miss', requestId: ctx.requestId ?? null } });
       if (fresh.status === 'success') again = await this.resolveEvent(x, ctx.home, ctx.rules);
     }
     if (again.kind === 'no_match' && again.reason === 'constraint_conflict') return again;

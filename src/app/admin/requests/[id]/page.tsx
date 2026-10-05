@@ -17,6 +17,7 @@ import { marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker'
 import { env as appEnv } from '@/lib/config/env';
 import type { MarketContext } from '@/lib/market/series';
 import { TestMessageForm } from '@/components/TestMessageForm';
+import { requestTrace, traceSummary, TRACE_SOURCE_LABEL, type TraceStep } from '@/lib/admin/request-trace';
 import { TEST_PROVIDER, testModeOn } from '@/lib/email/test-mode';
 import { ago, briefLines, type Tone, reasonText, sendClassLabel, sendStateInfo, stateInfo, toneClass, whenLocal, whenStaff } from '@/lib/admin/labels';
 
@@ -66,6 +67,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   // one (that has the selected sources), else from the revision.
   const [lastRun] = await db.select({ servicePolicy: t.researchRuns.servicePolicy }).from(t.researchRuns).where(eq(t.researchRuns.requestId, id)).orderBy(desc(t.researchRuns.startedAt)).limit(1);
   const policy = (lastRun?.servicePolicy ?? versions.find((v) => v.servicePolicy)?.servicePolicy ?? null) as ServicePolicyView | null;
+  const trace = await requestTrace(db, req, { performer: typeof brief?.performerOrTeam === 'string' ? brief.performerOrTeam : null });
   const now = nowMs();
   const s = stateInfo(req.state);
   const [lastMove] = [...transitions].reverse();
@@ -186,6 +188,8 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
         </aside>
       </div>
 
+      <SourcesCard steps={trace} timeZone={event?.v.timezone ?? 'America/New_York'} />
+
       {req.eventId ? (
         <details className="rounded-lg border border-gray-200 p-4" open={handCheckOpen}>
           <summary className="cursor-pointer text-lg font-semibold">Check sellers by hand</summary>
@@ -283,6 +287,39 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
         <p className="mt-2 text-xs text-gray-500">AI cost ${spendUsd.toFixed(3)} · request {id} · version {req.currentRevision} · viewing as {staff.email} ({staff.role})</p>
       </details>
     </main>
+  );
+}
+
+const TRACE_TONE: Record<TraceStep['status'], string> = { ok: 'tg-badge-ok', none: 'tg-badge-muted', skipped: 'tg-badge-warn', error: 'tg-badge-danger' };
+const TRACE_STATUS: Record<TraceStep['status'], string> = { ok: 'used', none: 'nothing found', skipped: 'skipped', error: 'failed' };
+
+/** Which sources this request used, and every call in order (staff only): AI, Ticketmaster, web, SeatData, sellers, links. */
+function SourcesCard({ steps, timeZone }: { steps: TraceStep[]; timeZone: string }) {
+  const summary = traceSummary(steps);
+  return (
+    <details className="rounded-lg border border-gray-200 p-4" open>
+      <summary className="cursor-pointer text-lg font-semibold">Sources and process</summary>
+      <p className="mt-1 text-xs text-gray-500">Every outside call this request made, in order: AI models, Ticketmaster, web searches and the pages they returned, SeatData, sellers and the links we sent.</p>
+      <ul className="mt-2 flex flex-wrap gap-2 text-sm">
+        {summary.map((x) => <li key={x.source} className={`tg-badge ${x.used ? 'tg-badge-ok' : 'tg-badge-muted'}`}>{TRACE_SOURCE_LABEL[x.source]}: {x.used ? `${x.calls} ${x.calls === 1 ? 'step' : 'steps'}` : 'not used'}</li>)}
+      </ul>
+      {steps.length ? (
+        <ol className="mt-3 space-y-2 text-sm">
+          {steps.map((st, i) => (
+            <li key={i} className="rounded border border-gray-100 p-2">
+              <p><span className="text-xs text-gray-500">{whenLocal(st.at, timeZone)}</span> · <span className="font-medium">{TRACE_SOURCE_LABEL[st.source]}</span> · {st.title} <span className={`tg-badge ${TRACE_TONE[st.status]}`}>{TRACE_STATUS[st.status]}</span></p>
+              {st.details.length ? <ul className="mt-1 space-y-0.5 text-xs text-gray-600">{st.details.map((d, j) => <li key={j} className="break-words">{d}</li>)}</ul> : null}
+              {st.urls.length ? (
+                <details className="mt-1 text-xs" open={st.urls.length <= 5}>
+                  <summary className="cursor-pointer text-gray-600">{st.urls.length} URL{st.urls.length === 1 ? '' : 's'}</summary>
+                  <ul className="mt-1 space-y-0.5">{st.urls.map((u) => <li key={u} className="break-all"><a className="text-blue-700 underline" href={u} target="_blank" rel="noopener noreferrer">{u}</a></li>)}</ul>
+                </details>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : <p className="mt-2 text-sm text-gray-500">No outside calls recorded for this request yet.</p>}
+    </details>
   );
 }
 
