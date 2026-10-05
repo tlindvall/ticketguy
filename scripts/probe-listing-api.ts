@@ -15,6 +15,8 @@
  * sandbox hosts). The probe exchanges them for an app-only token (client credentials, scope read:events) and
  * searches the catalog: per github.com/viagogo/stubhub-api-docs that is events, venues and a `min_ticket_price`,
  * not other sellers' listings — inventory, sales and webhooks are seller-account APIs.
+ * A token StubHub issued directly (a "public" or "private" token from the portal) is tried instead with
+ * PROBE_STUBHUB_ACCESS_TOKEN: the OAuth exchange is skipped and the token is sent as the bearer.
  * For Ticket Evolution set PROBE_TICKETEVOLUTION_TOKEN and PROBE_TICKETEVOLUTION_SECRET (PROBE_TICKETEVOLUTION_SANDBOX=1
  * for api.sandbox.ticketevolution.com). Every request carries an X-Signature: base64 HMAC-SHA256, keyed by the secret,
  * of "GET host/path?query" with no scheme and the query parameters in alphabetical order. After the event search the
@@ -52,14 +54,15 @@ if (!target) {
   console.error(`usage: probe-listing-api.ts <${Object.keys(TARGETS).join('|')}>`);
   process.exit(1);
 }
-const secret = process.env[target.envKey];
+const preToken = name === 'stubhub' ? process.env.PROBE_STUBHUB_ACCESS_TOKEN : undefined;
+const secret = process.env[target.envKey] ?? (preToken ? 'unused' : undefined);
 if (!secret) {
   console.error(`[probe] ${target.envKey} is not set. Obtain credentials from ${target.docs} and export them for this shell only.`);
   process.exit(1);
 }
 const credential: string = secret;
 const sandbox = process.env.PROBE_STUBHUB_SANDBOX === '1';
-const hidden: string[] = [credential];
+const hidden: string[] = [credential, ...(preToken ? [preToken] : [])];
 
 /**
  * StubHub's catalog takes a bearer token, not the client id. The token response is reported by key names,
@@ -125,7 +128,8 @@ function tevoSigned(pathAndQuery: string, token: string, secret: string, host = 
   return { url: `https://${target}`, headers: { 'X-Token': token, 'X-Signature': signature, accept: 'application/json' } };
 }
 
-const bearer = name === 'stubhub' ? await stubhubToken(credential) : credential;
+if (preToken) console.log('[probe] using PROBE_STUBHUB_ACCESS_TOKEN as the bearer (no OAuth exchange)');
+const bearer = name === 'stubhub' ? (preToken ?? (await stubhubToken(credential))) : credential;
 // SeatGeek authenticates by query parameter; the secret is optional there and sent only when provided.
 const sgSecret = name === 'seatgeek' ? process.env.PROBE_SEATGEEK_CLIENT_SECRET : undefined;
 if (sgSecret) hidden.push(sgSecret);
