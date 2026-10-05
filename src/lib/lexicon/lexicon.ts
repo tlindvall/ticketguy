@@ -48,14 +48,15 @@ export const LEXICON: LexiconEntry[] = [
     field: 'intent',
     value: 'browse',
     meaning: 'Asks what is on, with nothing specific named — answered with a short list, not questions.',
-    phrases: ["what's on", "what's happening", 'what options do I have', 'what can I see', 'any good shows', 'anything fun on', 'recommendations', 'things to do'],
-    pattern: /\b(what(?:'s| is)? on|what(?:'s| is) happening|what (?:options|choices) (?:do i|are there)|what can (?:i|we) (?:see|go to)|what should (?:i|we) (?:see|go to)|any (?:good )?(?:shows|gigs|concerts|games)|anything (?:good|fun) (?:on|happening)|recommend(?:ations?)?|suggest(?:ions?)?|things to (?:do|see))\b/i,
+    phrases: ["what's on", "what's happening", 'what shows are happening', 'what options do I have', 'what can I see', 'any good shows', 'anything fun on', 'recommendations', 'things to do'],
+    pattern: /\b(what(?:'s| is)? on|what(?:'s| is) happening|what (?:shows|gigs|concerts|events|games) (?:are )?(?:on|happening|playing)|what (?:options|choices) (?:do i|are there)|what can (?:i|we) (?:see|go to)|what should (?:i|we) (?:see|go to)|any (?:good )?(?:shows|gigs|concerts|games)|anything (?:good|fun) (?:on|happening)|recommend(?:ations?)?|suggest(?:ions?)?|things to (?:do|see))\b/i,
     categories: ['any'],
     requestTypes: ['browse'],
     teachModel: true,
     examples: [
       { text: "I'm coming to New York and want to see some music gigs during the first week on october. What options do I have?", expect: { intent: 'browse', categoryHint: 'concert', performerOrTeam: null } },
       { text: "What's on at MSG next weekend?", expect: { intent: 'browse' } },
+      { text: 'What shows are happening at elsewhere in brooklyn this week?', expect: { intent: 'browse' } },
     ],
   },
   {

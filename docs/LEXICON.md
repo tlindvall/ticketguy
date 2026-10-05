@@ -16,7 +16,7 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |
 |---|---|---|---|---|---|
-| Asks what is on, with nothing specific named — answered with a short list, not questions. **model** | “what's on”, “what's happening”, “what options do I have”, “what can I see”, “any good shows”, “anything fun on”, “recommendations”, “things to do” | `intent="browse"` | any | browse | “I'm coming to New York and want to see some music gigs during the first week on october. What options do I have?” |
+| Asks what is on, with nothing specific named — answered with a short list, not questions. **model** | “what's on”, “what's happening”, “what shows are happening”, “what options do I have”, “what can I see”, “any good shows”, “anything fun on”, “recommendations”, “things to do” | `intent="browse"` | any | browse | “I'm coming to New York and want to see some music gigs during the first week on october. What options do I have?” |
 | Wants to be told when something changes, not a one-off answer. | “keep an eye”, “keep looking”, “let me know if”, “alert me”, “notify me”, “watch for” | `intent="watch_request"` | any | watch | “Knicks on October 24, 2 tickets, $300 total. Let me know if it drops.” |
 | Stop a watch that is running. | “stop the watch”, “cancel my alerts”, “stop looking” | `intent="cancel_watch"` | any | stop | “Please stop the watch, we bought tickets.” |
 
