@@ -80,7 +80,8 @@ describe('screenshot questions (A05–A09)', () => {
     expect(evidenceAsks('Can my friend use the other night?').split).toBe(true);
     expect(evidenceAsks('It says sold out — is a hotel package the only way?').soldOut).toBe(true);
     expect(evidenceAsks('Can you explain what each screenshot is offering?').explain).toBe(true);
-    expect(evidenceAsks('Great, thanks!')).toEqual({ times: false, admission: false, product: false, split: false, soldOut: false, explain: false, prices: false });
+    expect(evidenceAsks('Great, thanks!')).toEqual({ times: false, admission: false, product: false, split: false, soldOut: false, explain: false, prices: false, calendar: false });
+    expect(evidenceAsks('There are shows every day next week. Why are you not suggesting them?').calendar).toBe(true);
   });
 });
 

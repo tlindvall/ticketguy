@@ -11,6 +11,7 @@ import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
 import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
 import { shownPriceParts } from './shown-prices';
+import { capitalize, seatPhrase } from '@/lib/domain/event-noun';
 import type { AlternativesResult, ListingPicks, MarketListing } from '@/lib/market/alternatives';
 
 /**
@@ -752,7 +753,7 @@ function marketRead(a: BuildPacketArgs, timingAnswered = false): ClaimRecord | n
     else if (canWait && supplyKnown) parts.push(`Prices have been easing, and there were ${listingsWord(s.now!)}${q > 1 ? ` with ${countWord(q)} or more tickets` : ''} when I checked${q > 1 ? ' (some may not split into exactly your number or sit together)' : ''}. Waiting${deadline} is reasonable if you’re ok with the risk that the seats you want go; it isn’t a promise prices keep falling.`);
     else if (canWait) parts.push(`Prices have been easing, but I can’t see how many listings there are for a group your size, so that alone isn’t a reason to wait. If you do wait, it’s a risk that the seats you want go${deadline ? `, and I’d decide${deadline}` : ''}.`);
     else parts.push('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
-  } else if (trendKnown && c.direction === 'up') parts.push(`Prices have been climbing, so waiting hasn’t been paying off for this ${a.eventNoun ?? 'game'}.`);
+  } else if (trendKnown && c.direction === 'up') parts.push(`Prices have been climbing, so waiting hasn’t been paying off for this ${a.eventNoun ?? 'event'}.`);
   else if (trendKnown && c.direction === 'mixed') parts.push('Prices have gone both ways over the last few days, so they don’t point to waiting.');
   else if (!trendKnown && !timingAnswered && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
@@ -900,7 +901,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       out.push({
         id: 'C_MARKET_TYPICAL',
         kind: 'market_benchmark',
-        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} games at this venue, the cheapest listed ${m.basis === 'pair' ? 'price with two or more tickets' : 'ticket'} at this point before the game was typically ${formatUsd(c.typical.p25Cents)} to ${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
+        text: `For ${c.typical.events} past ${m.comparableLabel ?? 'comparable'} ${a.eventNoun ?? 'event'}s at this venue, the cheapest listed ${m.basis === 'pair' ? 'price with two or more tickets' : 'ticket'} at this point before the ${a.eventNoun ?? 'event'} was typically ${formatUsd(c.typical.p25Cents)} to ${formatUsd(c.typical.p75Cents)} (median ${formatUsd(c.typical.medianCents)}).`,
         values: { events: c.typical.events, p25Cents: c.typical.p25Cents, medianCents: c.typical.medianCents, p75Cents: c.typical.p75Cents },
         scope: { quantity: size, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: obs },
         limitations: ['listed_prices_before_fees', 'comparable_games_same_venue'],
@@ -926,7 +927,7 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     out.push({
       id: 'C_MARKET',
       kind: 'market_supply',
-      text: `There are about ${count(m.supply.now)} resale listings for this ${a.eventNoun ?? 'game'}${moved(m.supply)}. That counts all listings, not blocks of ${q} seats together.`,
+      text: `There are about ${count(m.supply.now)} resale listings for this ${a.eventNoun ?? 'event'}${moved(m.supply)}. That counts all listings, not blocks of ${q} seats together.`,
       values: { listings: m.supply.now, listingsBefore: m.supply.before, trend: m.supply.trend },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       limitations: ['all_listings_not_group_blocks'],
@@ -1317,8 +1318,9 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const q = a.quantity;
   const n = q === 1 ? 'one' : qtyWord(q);
   const seats = q === 1 ? 'one seat' : `${n} seats together`;
-  const seat = (x: (typeof p.picks)[number]) => [x.listing.section ? `Section ${x.listing.section}` : null, x.listing.row ? `Row ${x.listing.row}` : null].filter(Boolean).join(', ') || 'the cheapest listing';
-  const seatTitle = (x: (typeof p.picks)[number]) => [x.listing.section ? `Section ${x.listing.section}` : null, x.listing.row ? `Row ${x.listing.row}` : null].filter(Boolean).join(' · ') || 'Cheapest listing';
+  // "General admission", never "Section General Admission, Row GA" (live Oct 5).
+  const seat = (x: (typeof p.picks)[number]) => { const s = seatPhrase(x.listing.section, x.listing.row); return s ? (s.startsWith('general admission') ? `${s} tickets` : s) : 'the cheapest listing'; };
+  const seatTitle = (x: (typeof p.picks)[number]) => capitalize(seatPhrase(x.listing.section, x.listing.row, ' · ') ?? 'cheapest listing');
   const on = (x: (typeof p.picks)[number]) => (x.listing.marketplace === 'stubhub' ? 'StubHub' : x.listing.marketplace === 'vividseats' ? 'Vivid Seats' : null);
   const [first, ...rest] = p.picks;
   const est = formatUsd(roundToDollar(first!.estimatedTotalCents));
@@ -1344,7 +1346,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const others = p.fits ? rest.slice(0, 2).map((x) => `${seatTitle(x)}${on(x) ? ` on ${on(x)}` : ''}: ${formatUsd(x.listedTotalCents)}${q > 1 ? ` for ${n}` : ''} before fees.`) : [];
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
-  const after = u && p.fits ? [`Why not cheaper: ${u.listing.section ? `Section ${u.listing.section}` : 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : [];
+  const after = u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : [];
   const card = { head, title: `${seatTitle(first!)}${where ? ` on ${where}` : ''}`, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after };
   const items = [`${card.title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after];
   return { head, items, card };
@@ -1491,7 +1493,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       text: sameSeller
         ? ''
         : a.link && !a.link.eventPage && a.link.marketplace !== a.official.seller
-        ? `${a.official.seller} also sells this ${a.eventNoun ?? 'game'} directly. I can’t see its seats or prices, so check its total for ${a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity)} there against the one you found.`
+        ? `${a.official.seller} also sells this ${a.eventNoun ?? 'event'} directly. I can’t see its seats or prices, so check its total for ${a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity)} there against the one you found.`
         : a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
         // An open sale is the sale window, not stock: the official page can say sold out while the catalog still says
         // on sale (live Oct 2, Metallica at Sphere), so it is never said as seats being there.
@@ -1686,18 +1688,18 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // The market block's floor when it's shown, so one email never gives two "cheapest" prices; the fresh listings
   // read when there's no market at all (the Rangers link).
   const priced = lm && floor === null
-    ? `For ${party}${a.quantity > 1 ? ' together' : ''}, ${lm.marketplace} listings for this ${a.eventNoun ?? 'game'} start at ${formatUsd(lm.cheapest.priceCents)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(lm.cheapest.priceCents * a.quantity)} for ${party})` : ''}${lm.cheapest.section ? `, in section ${lm.cheapest.section}${lm.cheapest.row ? `, row ${lm.cheapest.row}` : ''}` : ''}, ${lm.age === 'undated' ? 'when I checked, though the resale data doesn’t say how recently it was refreshed' : typeof lm.age === 'number' ? `as of about ${lm.age} hours ago, when the resale data was last refreshed` : 'when I checked just now'}. ${lm.count === 1 ? 'That’s the only listing' : `There are ${lm.count} listings`} with ${a.quantity > 1 ? `${party} or more tickets` : 'a ticket'}.`
+    ? `For ${party}${a.quantity > 1 ? ' together' : ''}, ${lm.marketplace} listings for this ${a.eventNoun ?? 'event'} start at ${formatUsd(lm.cheapest.priceCents)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(lm.cheapest.priceCents * a.quantity)} for ${party})` : ''}${lm.cheapest.section ? `, in section ${lm.cheapest.section}${lm.cheapest.row ? `, row ${lm.cheapest.row}` : ''}` : ''}, ${lm.age === 'undated' ? 'when I checked, though the resale data doesn’t say how recently it was refreshed' : typeof lm.age === 'number' ? `as of about ${lm.age} hours ago, when the resale data was last refreshed` : 'when I checked just now'}. ${lm.count === 1 ? 'That’s the only listing' : `There are ${lm.count} listings`} with ${a.quantity > 1 ? `${party} or more tickets` : 'a ticket'}.`
     : floor !== null
       ? `For ${party}, the cheapest ${zoneOf(a) ? `listings ${zonePhrase(zoneOf(a)!)}` : 'listings'} I can see start at ${formatUsd(floor)} a ticket before fees${a.quantity > 1 ? ` (about ${formatUsd(floor * a.quantity)} for ${party})` : ''}, ${undatedFloor ? 'from listing data that doesn’t say how recent it is' : `from ${ctxAge !== null && ctxAge >= 2 ? `about ${ctxAge} hours ago` : 'a recent read'} and ${moving}`}. That’s where the market starts, not a verdict on yours.`
       : null;
   // "Can you find a cheaper pair?" with no listings to look through: said so, and the one ask is for any pair they
   // find, not the first reply's ask again with their question left unanswered (post-deploy QA Oct 2, PD-R1-02).
-  const noCheaper = a.link && a.asks?.cheaper && !priced ? `I can’t see resale listings for this ${a.eventNoun ?? 'game'} right now, so I can’t look for a cheaper pair myself. ` : '';
+  const noCheaper = a.link && a.asks?.cheaper && !priced ? `I can’t see resale listings for this ${a.eventNoun ?? 'event'} right now, so I can’t look for a cheaper pair myself. ` : '';
   const askListing = !a.link ? '' : noCheaper
     ? `${noCheaper}If you find one, or want me to check the one you picked, send its price for ${party} with fees and its section and row (a screenshot works), and I’ll compare.`
     // An event page names the game, not seats: "these tickets" are whichever they're looking at (live Oct 3).
     : a.link.eventPage
-      ? `That link is the game’s page, not particular seats, so reply with the price for ${party} with fees and the section and row of the ones you’re looking at (a screenshot works), and I’ll tell you straight whether they’re ${worthAsked ? 'worth it' : 'a good price'}.`
+      ? `That link is the ${a.eventNoun ?? 'event'}’s page, not particular seats, so reply with the price for ${party} with fees and the section and row of the ones you’re looking at (a screenshot works), and I’ll tell you straight whether they’re ${worthAsked ? 'worth it' : 'a good price'}.`
     // Not matched is all we know: never "the marketplace doesn't give prices" (launch LAUNCH-08).
     : `I couldn’t match the ${a.link.marketplace} listing you picked in the listing data I can see, so reply with its price for ${party} with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s ${worthAsked ? 'worth it' : 'a good price'}.`;
   const worth = a.link && ((!a.link.eventPage && !a.subject && !a.quote && !a.best) || worthAsked)
@@ -1723,7 +1725,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_DELIVERY',
       kind: 'catches',
-      text: `On delivery:${by} If the tickets might only arrive after you’ve set off, you could be travelling with nothing in hand, and a refund guarantee, if the seller offers one, gives the money back; it doesn’t get you into the ${a.eventNoun ?? 'game'}. So pick a listing that says it delivers before you leave, and keep the seller’s support details with you.`,
+      text: `On delivery:${by} If the tickets might only arrive after you’ve set off, you could be travelling with nothing in hand, and a refund guarantee, if the seller offers one, gives the money back; it doesn’t get you into the ${a.eventNoun ?? 'event'}. So pick a listing that says it delivers before you leave, and keep the seller’s support details with you.`,
       values: { deliveryBy: a.subject?.deliveryBy ?? null },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -1773,7 +1775,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_PARKING',
       kind: 'catches',
-      text: `No: a “parking only” listing is a parking pass, not a ticket to the ${a.eventNoun ?? 'game'}, so it won’t get ${q === 1 ? 'you' : q === 2 ? 'either of you' : 'any of you'} in. What you need is event admission, one ticket each${whole !== null ? `: at the ${formatUsd(p.admissionEachCents!)} each you found${p.admissionAllIn ? ', fees included' : ''}, that’s ${formatUsd(whole)} for ${q === 1 ? 'one' : q === 2 ? 'both' : `all ${countWord(q)}`}${p.admissionAllIn ? '' : ', plus fees'}` : ''}. If you do buy parking too, it only adds to that.`,
+      text: `No: a “parking only” listing is a parking pass, not a ticket to the ${a.eventNoun ?? 'event'}, so it won’t get ${q === 1 ? 'you' : q === 2 ? 'either of you' : 'any of you'} in. What you need is event admission, one ticket each${whole !== null ? `: at the ${formatUsd(p.admissionEachCents!)} each you found${p.admissionAllIn ? ', fees included' : ''}, that’s ${formatUsd(whole)} for ${q === 1 ? 'one' : q === 2 ? 'both' : `all ${countWord(q)}`}${p.admissionAllIn ? '' : ', plus fees'}` : ''}. If you do buy parking too, it only adds to that.`,
       values: { admissionEachCents: p.admissionEachCents, totalCents: whole },
       scope: { quantity: q, seatZone: null, feeBasis: p.admissionAllIn ? 'all_in' : null, observedAt: obs },
       evidenceIds: [],

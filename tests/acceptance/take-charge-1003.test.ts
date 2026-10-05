@@ -144,8 +144,11 @@ describe('take charge: the next home game and seats for the party, not questions
     // StubHub's event id (their link, or the feed's reply) and a StubHub listing number: opened on that listing.
     expect(pickLinksFor(l({ marketplace: 'stubhub', id: '6123456789' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'View Section 214 on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4&listingId=6123456789' }]);
     expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'Event page on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
-    expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null)).toEqual([{ label: 'Search Vivid Seats for this game', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
-    expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id').map((x) => x.label)).toEqual(['Search StubHub for this game', 'Search Vivid Seats for this game']);
+    expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null, 'game')).toEqual([{ label: 'Search Vivid Seats for this game', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
+    expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id', 'game').map((x) => x.label)).toEqual(['Search StubHub for this game', 'Search Vivid Seats for this game']);
+    // A concert is a show (live Oct 5: "Search StubHub for this game" under a Brooklyn Steel concert), and a GA listing is general admission.
+    expect(pickLinksFor(l({ section: 'General Admission', row: 'GA' }), 'Mind Enterprises', 2, null, 'show').map((x) => x.label)).toEqual(['Search StubHub for this show', 'Search Vivid Seats for this show']);
+    expect(pickLinksFor(l({ marketplace: 'stubhub', section: 'General Admission', row: 'GA', url: 'https://www.stubhub.com/event/1/?listingId=2' }), 'Mind Enterprises', 2, null, 'show')[0]!.label).toBe('View the general admission listing on StubHub');
   });
 
   it('a listing link from the feed is kept only for StubHub or Vivid Seats over https', () => {

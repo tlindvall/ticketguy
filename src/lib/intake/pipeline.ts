@@ -8,6 +8,7 @@ import { problemTypesFor } from '@/lib/domain/problem-types';
 import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
 import { raPointer } from '@/lib/sources/resident-advisor';
+import { venueCalendar } from '@/lib/sources/venue-calendars';
 import { and, asc, desc, eq, gte, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
@@ -24,6 +25,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
+import { eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
@@ -131,7 +133,7 @@ const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', .
  * With no integrated source and an empty catalog that is a claim about diligence we did not do, and the
  * same prohibition that stops us inventing availability stops us inventing a search.
  */
-function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | null {
+function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind: string | null = null): string | null {
   const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
   // "on Fri, Oct 2" when we know the day, not 'for "Friday"'.
   const when = brief.resolvedLocalDate ? ` on ${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${brief.resolvedLocalDate}T12:00:00Z`))}` : brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
@@ -141,7 +143,8 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | 
   // This one is earned: the official listings were actually queried for this name and window.
   // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
   // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
-  const game = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(brief.categoryHint ?? '') ? 'game' : 'performance';
+  // A team plays games, whatever the category hint says (live Oct 5: "a New York Rangers performance").
+  const game = entityKind === 'team' || ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(brief.categoryHint ?? '') ? 'game' : 'performance';
   if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} ${game}` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
@@ -585,7 +588,7 @@ export class Concierge {
     if (asksOutsideTickets(latestText)) {
       const venueWord = /\b(msg|madison square garden)\b/i.test(latestText) ? 'Madison Square Garden' : /\bbarclays\b/i.test(latestText) ? 'Barclays Center' : 'the venue';
       const line = `Restaurant and bar suggestions are outside what I do: I only help with tickets, so I don’t have anything reliable on places to eat near ${venueWord}.`;
-      const tail = /\b(?:already|have|bought|got)\b[^.?!]{0,30}\btickets?\b/i.test(latestText) ? 'Enjoy the game.' : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
+      const tail = /\b(?:already|have|bought|got)\b[^.?!]{0,30}\btickets?\b/i.test(latestText) ? 'Enjoy it.' : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
       const rev = priorVersion ? req.currentRevision + 1 : 1;
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
       await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
@@ -1144,7 +1147,7 @@ export class Concierge {
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
       const nearNote = nearDates.length ? `\n\nThe closest ${titleCaseName(merged.performerOrTeam!)} ${teamish || SPORT_HINTS.includes(nearDates[0]!.e.category) ? (nearDates.length === 1 ? 'game' : 'games') : nearDates.length === 1 ? 'date' : 'dates'} I have:\n${nearDates.map(({ e, v }) => `• ${friendlyWhen(e.localStartAt, v.timezone, this.now()).replace(/^./, (c) => c.toUpperCase())}: ${e.name}, ${v.name}`).join('\n')}` : '';
-      const noMatch = nearNote && resolution.kind === 'no_match' ? `${noMatchNote(resolution.reason, merged) ?? ''}${nearNote}`.trim() : elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? conflict.note ?? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const noMatch = nearNote && resolution.kind === 'no_match' ? `${noMatchNote(resolution.reason, merged, known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null) ?? ''}${nearNote}`.trim() : elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? conflict.note ?? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged, known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
@@ -1374,16 +1377,20 @@ export class Concierge {
     const items = rows.map((r) => ({ fields: r.fields as unknown as ListingFields, observedAt: r.observedAt, messageId: r.messageId }));
     if (!items.length) return null;
     const asks = evidenceAsks(flat(a.latestText));
-    const factsAsked = asks.times || asks.admission || asks.product || asks.split || asks.soldOut || asks.explain;
+    // A calendar of nights counts as a fact to answer only when the newest screenshot is one (a list of events, no rows).
+    const newest = items.filter((i) => i.messageId === items[items.length - 1]!.messageId);
+    const calendarShown = asks.calendar && newest.length === 1 && (newest[0]!.fields.events ?? []).filter((e) => !e.promoted).length >= 2 && !(newest[0]!.fields.offers ?? []).length;
+    const factsAsked = asks.times || asks.admission || asks.product || asks.split || asks.soldOut || asks.explain || calendarShown;
     if (a.mode === 'facts' && !factsAsked && !a.multiEvent) return null;
     if (a.mode === 'unmatched' && !factsAsked && !asks.prices) return null;
     const budget = wholePartyBudgetCents(a.merged.budgetCents, a.merged.budgetBasis, a.merged.quantity);
-    const answer = answerFromEvidence({ items, latest: flat(a.latestText), thread: flat(a.threadTexts.join('\n')), quantity: a.merged.quantity, budgetCents: budget, started: await this.evidenceStarted(items.map((i) => i.fields)), mode: a.mode });
+    const window = a.merged.dateExpression ? dateWindowFor(a.merged.dateExpression, a.msg.receivedAt, 'America/New_York') : a.merged.resolvedLocalDate ? { from: a.merged.resolvedLocalDate, to: a.merged.resolvedLocalDate } : null;
+    const answer = answerFromEvidence({ items, latest: flat(a.latestText), thread: flat(a.threadTexts.join('\n')), quantity: a.merged.quantity, budgetCents: budget, started: await this.evidenceStarted(items.map((i) => i.fields)), mode: a.mode, window });
     if (!answer) return null;
     const revision = a.mode === 'facts' ? await this.saveEvidenceRevision(a.req, a.merged, a.msg.id) : a.revision;
     const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const text = ['Hey,', answer.lead, ...answer.items].join('\n\n');
-    const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(answer.lead)}</strong></p>`, ...answer.items.map((x) => `<p style="margin:0 0 18px;">${esc(x)}</p>`)].join('\n');
+    const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(answer.lead)}</strong></p>`, ...answer.items.map((x) => `<p style="margin:0 0 18px;">${esc(x).replace(/\n/g, '<br>')}</p>`)].join('\n');
     await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: a.req.id, diff: { route: `evidence_${a.mode}`, revision, questions: answer.coverage } });
     await this.queueSend({ messageClass: 'acknowledgment', contactId: a.contact.id, conversationId: a.req.conversationId, requestId: a.req.id, revision, recipient: a.contact.emailOriginal, subject: reSubject(a.msg.subject, 'About your screenshot'), template: 'raw_auto', vars: { text, html }, inReplyTo: a.msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `evidence:${a.msg.id}` });
     await this.transition(a.req.id, 'recommendation_sent', `evidence_answer_${a.mode}`);
@@ -2040,9 +2047,15 @@ export class Concierge {
         // Candidates, not picks: nothing about their seats or totals is known yet (Research 1, rule 4).
         ? `${label} in ${place}, ${span}: ${options.length === 1 ? 'the one' : options.length === 2 ? 'two' : 'three'} I can check for you.`
         : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? (options.length === 1 ? '. Here’s the one I found:' : `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:`) : '.'}`;
+    // At a venue whose own calendar has more, the list is what Ticketmaster shows, never "there's one on".
+    const venueHeadline = rules.venueTerms && venueCalendar(rules.venueTerms) && options.length && !more ? `${label} at ${venueCalendar(rules.venueTerms)!.name}, ${span}. ${options.length === 1 ? 'The one' : `The ${options.length}`} Ticketmaster lists:` : null;
     // Most small venues sell outside the listings we read; saying so beats implying there is nothing on.
     const sceneNote = area?.independentScene && events.length < 3 ? `A lot of the smaller venues around ${area.label} sell through DICE, Eventbrite or Resident Advisor, which I can't see yet.` : null;
-    const ra = genre?.key === 'electronic' ? raPointer(market.id) : sceneNote ? raPointer(market.id, `${sceneNote} Resident Advisor lists many of them.`) : null;
+    // A venue that sells most nights itself: how much we can see, and its own calendar for the rest (live Oct 5).
+    const cal = venueCalendar(rules.venueTerms);
+    const venueSeen = cal ? events.length : 0;
+    const calendarPointer = cal ? { lead: `Ticketmaster lists ${venueSeen === 0 ? 'none' : venueSeen === 1 ? 'only one' : `only ${venueSeen}`} of ${cal.name}’s nights for ${span}. ${cal.name} sells most of its shows through ${cal.sells}, so its own calendar has the full list.`, label: `${cal.name}’s calendar`, url: cal.url } : null;
+    const ra = calendarPointer ?? (genre?.key === 'electronic' ? raPointer(market.id) : sceneNote ? raPointer(market.id, `${sceneNote} Resident Advisor lists many of them.`) : null);
     const assumptions = [assumedWindow ? 'the next two weeks' : null, assumedPlace ? market.label : null].filter(Boolean);
     const notes = [
       assumptions.length ? `I've looked at ${assumptions.join(', in ')}. Tell me if you had something else in mind.` : null,
@@ -2066,8 +2079,8 @@ export class Concierge {
     const emptyNote = scope ?? (unknownPlace
       ? `I couldn't find ${market.label} as a place in the official listings. Which city is it in or near? I'll look there.`
       : providerChecked
-      ? `${answer ? '' : `I checked the official listings and couldn't find any ${kindOf} in ${place} for ${span}${startsAfter}. `}${genre && !genreKept ? 'I checked the official listings; that’s what they show, not proof that nothing suitable is on.' : ''}`.trim()
-      : `${answer ? '' : `I don't have any ${kindOf} in ${place} on file for ${span}${startsAfter}. `}${genre && !genreKept ? 'That’s a gap in what I can see, not proof that nothing suitable is on.' : ''}`.trim());
+      ? `${answer || venueCalendar(rules.venueTerms) ? '' : `I checked the official listings and couldn't find any ${kindOf} in ${place} for ${span}${startsAfter}. `}${genre && !genreKept ? 'I checked the official listings; that’s what they show, not proof that nothing suitable is on.' : ''}`.trim()
+      : `${answer || venueCalendar(rules.venueTerms) ? '' : `I don't have any ${kindOf} in ${place} on file for ${span}${startsAfter}. `}${genre && !genreKept ? 'That’s a gap in what I can see, not proof that nothing suitable is on.' : ''}`.trim());
     // What this reply lists is remembered, so "the other 7" continues from here; a new question starts over.
     const listed = shown.map(({ e }) => e.id);
     await this.db.update(t.requests).set({ clarificationCount: count, browseShown: more ? [...req.browseShown, ...listed] : listed }).where(eq(t.requests.id, req.id));
@@ -2075,7 +2088,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { answer, corrections: [...corrections, ...(unchecked ? [unchecked] : []), ...(choice ? [choice] : [])], pickNext: toCheck.length && options.length && !single ? (choice && fit[0]! > Math.max(...fit.slice(1)) ? `Want me to check ${listAnd([...new Set(toCheck.map(shortRequirement))])} for ${readableTitle(shown[0]!.e.name)}? Reply and I will, or name the other one.` : broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : `Tell me which one, and I’ll check ${listAnd([...new Set(toCheck.map(shortRequirement))])}.`) : null, headline: answer && !events.length ? '' : headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length || asked ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate ?? (genre && !events.length && (merged.dateExpression || merged.resolvedLocalDate) ? `That’s everything I have on file for ${genreAsked} in ${place} that night. If the night or the area can change, tell me what and I’ll look again.`.replace(' that night', win.from === win.to ? ' that night' : ' those nights') : null), countryCheck: !contact.countryConfirmed && count === 1 && revision === 1, ra },
+      vars: { answer, corrections: [...corrections, ...(unchecked ? [unchecked] : []), ...(choice ? [choice] : [])], pickNext: toCheck.length && options.length && !single ? (choice && fit[0]! > Math.max(...fit.slice(1)) ? `Want me to check ${listAnd([...new Set(toCheck.map(shortRequirement))])} for ${readableTitle(shown[0]!.e.name)}? Reply and I will, or name the other one.` : broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : `Tell me which one, and I’ll check ${listAnd([...new Set(toCheck.map(shortRequirement))])}.`) : null, headline: answer && !events.length ? '' : venueHeadline ?? headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length || asked ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate ?? (genre && !events.length && (merged.dateExpression || merged.resolvedLocalDate) ? `That’s everything I have on file for ${genreAsked} in ${place} that night. If the night or the area can change, tell me what and I’ll look again.`.replace(' that night', win.from === win.to ? ' that night' : ' those nights') : null), countryCheck: !contact.countryConfirmed && count === 1 && revision === 1, ra },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };
@@ -3078,7 +3091,7 @@ export class Concierge {
     if (!shown && !best && !sentLink?.listingId && brief.intent !== 'watch_request' && licence.allows('tracking') && trackingOk && uses.display) {
       if (!around) around = await tracker.recentListings(event.id);
       const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT) : null;
-      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null)) };
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null), eventNounFor(event.category)) };
     }
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
@@ -3098,7 +3111,7 @@ export class Concierge {
       const reason = e.exclusions.includes('obstructed_view') ? 'obstructed_view' : e.exclusions.includes('accessible_only') ? 'accessible_only' : e.exclusions.includes('seats_not_together') ? 'seats_not_together' : e.exclusions.includes('section_not_acceptable') ? 'section_not_acceptable' : e.exclusions.includes('wrong_quantity') && e.offer.quantity > quantity ? 'bigger_block' : null;
       if (reason && !leftOut.some((l) => l.reason === reason && l.quantity === e.offer.quantity)) leftOut.push({ reason, quantity: e.offer.quantity });
     }
-    const eventNoun = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab'].includes(event.category) ? 'game' as const : 'show' as const;
+    const eventNoun = eventNounFor(event.category);
     // The staffed comparison pilot (DECISION_LOG #54): when nothing verified meets what they asked for, and a
     // named owner exists with room in the pilot, a person takes it on and the email says so.
     const requirements = unverifiedRequirements(brief, saidInThread);
@@ -4971,19 +4984,20 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  * game. Both marketplaces when the listings don't say which one the seats are on. Never a listing link: the feed's
  * listing numbers aren't confirmed to be the marketplace's own (DECISION_LOG #67).
  */
-export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null): Array<{ label: string; url: string }> {
+export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null, noun: EventNoun | 'event' = 'event'): Array<{ label: string; url: string }> {
   const marketplace = pick.marketplace ?? null;
   // Descriptive link text (personal-email design, Oct 3): "View Section 214 on StubHub" for the listing itself,
   // "Event page" when it is only the event, "Search ... for this game" when it is only a search.
-  const seat = pick.section ? `Section ${pick.section}` : 'this listing';
+  const where = seatPhrase(pick.section, null);
+  const seat = where ? (where.startsWith('general admission') ? `the ${where} listing` : where) : 'this listing';
   if (pick.url) return [{ label: `View ${seat} on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
   const q = encodeURIComponent(eventName);
   const sh = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId) ? stubHubEventId : null;
   // StubHub's event page opened on the listing: its event id and a StubHub listing number (the feed's StubHub ids
   // are StubHub's own; SDK 1.2 sales rows carry them as integers).
   if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: `View ${seat} on StubHub`, url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}&listingId=${pick.id}` }];
-  const stubhub = sh ? { label: 'Event page on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: 'Search StubHub for this game', url: `https://www.stubhub.com/search?q=${q}` };
-  const vivid = { label: 'Search Vivid Seats for this game', url: `https://www.vividseats.com/search?searchTerm=${q}` };
+  const stubhub = sh ? { label: 'Event page on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: `Search StubHub for this ${noun}`, url: `https://www.stubhub.com/search?q=${q}` };
+  const vivid = { label: `Search Vivid Seats for this ${noun}`, url: `https://www.vividseats.com/search?searchTerm=${q}` };
   if (marketplace === 'stubhub') return [stubhub];
   if (marketplace === 'vividseats') return [vivid];
   return [stubhub, vivid];
