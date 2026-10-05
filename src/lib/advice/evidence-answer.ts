@@ -15,7 +15,7 @@ export type CoverageStatus = 'answered' | 'needs_clarification' | 'unsupported' 
 export type Coverage = { question: string; status: CoverageStatus };
 export type EvidenceAnswer = { lead: string; items: string[]; coverage: Coverage[] };
 
-export type EvidenceAsks = { times: boolean; admission: boolean; product: boolean; split: boolean; soldOut: boolean; explain: boolean; prices: boolean };
+export type EvidenceAsks = { times: boolean; admission: boolean; product: boolean; split: boolean; soldOut: boolean; explain: boolean; prices: boolean; calendar: boolean };
 
 const T = (s: string) => s.replace(/[’‘]/g, "'");
 
@@ -30,6 +30,8 @@ export function evidenceAsks(text: string): EvidenceAsks {
     split: /\bother night\b|\bcovers both\b|\bboth nights\b|\bsplit\b|\bshare (?:it|the ticket)\b|\b(?:i|we)'?d go\b[^.?!]{0,60}\b(?:they|she|he)'?d go\b/i.test(t),
     soldOut: /\bsold out\b|\bhotel (?:package|bundle)\b|\bhave to buy a (?:hotel|package|bundle)\b|\banother way\b|\bonly way\b/i.test(t),
     explain: /\bexplain\b|\bwhat (?:each|is|are|does) (?:\w+ )?(?:screenshot|page|this|these|it)\b[^.?!]{0,30}\b(?:offer|show|mean)|\bwhat (?:each|they) (?:is|are) offering\b|\bwhat does (?:this|it) mean\b/i.test(t),
+    // "There are shows every day next week, why are you not suggesting them?" with a venue's calendar (live Oct 5).
+    calendar: /\b(?:shows?|events?|gigs?|concerts?|nights?|what'?s on|happening|suggest(?:ing|ed)?|line-?up|schedule|calendar)\b/i.test(t),
     prices: sq.whichCheaper || sq.fits || sq.afford || sq.taxAsked || /\bcheapest\b|\blowest\b|\bhow much\b|\bwhat would (?:we|i) pay\b|\bcost (?:for|us)\b/i.test(t),
   };
 }
@@ -91,7 +93,37 @@ export type EvidenceInput = {
   started: boolean;
   /** Why we're answering here: facts that need no catalog, or a screenshot with no upcoming event to match. */
   mode: 'facts' | 'unmatched';
+  /** The dates they asked about ("next week"), when the thread names them: a calendar's rows are kept to these. */
+  window?: { from: string; to: string } | null;
 };
+
+const shout = (s: string) => (s === s.toUpperCase() && /[A-Z]{3}/.test(s) ? s.toLowerCase().replace(/(^|[\s(,+/:-])([a-z])/g, (_m, p: string, c: string) => p + c.toUpperCase()) : s);
+
+/**
+ * A venue's calendar they sent ("there are shows every day next week, why are you not suggesting them?"): the
+ * nights it shows for the dates they asked about, said as what their screenshot shows. We can't price or check them.
+ */
+function calendarAnswer(x: EvidenceInput, f: ListingFields): EvidenceAnswer | null {
+  const rows = (f.events ?? []).filter((e) => !e.promoted);
+  if (rows.length < 2) return null;
+  const inWindow = x.window ? rows.filter((e) => e.date && e.date >= x.window!.from && e.date <= x.window!.to) : [];
+  const shown = inWindow.length ? inWindow : rows;
+  const venue = f.venue ?? rows.find((e) => e.venue)?.venue ?? null;
+  const missed = /\bwhy\b|\byou(?:'re| are) not\b|\bdidn'?t you\b|\bmissed\b|\bwhat about\b/i.test(T(x.latest));
+  const lead = missed
+    ? `You’re right, I missed these: I only see what Ticketmaster lists, and ${venue ?? 'this venue'} sells most of its nights itself.`
+    : `Here’s what ${venue ? `${venue}’s` : 'the'} calendar you sent shows${inWindow.length && x.window ? ` for ${dayLabel(x.window.from)} to ${dayLabel(x.window.to)}` : ''}.`;
+  const line = (e: (typeof rows)[number]) => `• ${e.date ? dayLabel(e.date) : 'Date not shown'}${e.time ? `, ${timeLabel(e.time)}` : ''}: ${shout(e.name)}`;
+  return {
+    lead,
+    items: [
+      `${missed ? `From the calendar you sent${inWindow.length && x.window ? `, ${dayLabel(x.window.from)} to ${dayLabel(x.window.to)}` : ''}:\n` : ''}${shown.map(line).join('\n')}`,
+      `These come from your screenshot, so I can’t see their prices or whether they’re sold out. Tickets are on ${venue ? `${venue}’s` : 'the venue’s'} own site.`,
+      'Tell me which night and how many tickets, and I’ll tell you what I can check.',
+    ],
+    coverage: [{ question: 'what’s on at the venue', status: 'answered' }, { question: 'prices for these nights', status: 'unsupported' }],
+  };
+}
 
 /**
  * The answer from their screenshots, or null when they asked nothing a screenshot can answer. Answers lead with the
@@ -101,6 +133,11 @@ export function answerFromEvidence(x: EvidenceInput): EvidenceAnswer | null {
   if (!x.items.length) return null;
   const asks = evidenceAsks(x.latest);
   const coverage: Coverage[] = [];
+  const newest = x.items.filter((i) => i.messageId === x.items[x.items.length - 1]!.messageId);
+  if (asks.calendar && newest.length === 1 && !(newest[0]!.fields.offers ?? []).length && !(newest[0]!.fields.products ?? []).length) {
+    const cal = calendarAnswer(x, newest[0]!.fields);
+    if (cal) return cal;
+  }
   const parts: string[] = [];
   const latestItems = x.items.filter((i) => i.messageId === x.items[x.items.length - 1]!.messageId);
   // Two different shows: each explained from its own screenshot, never one request (A08).
