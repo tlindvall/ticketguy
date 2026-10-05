@@ -24,6 +24,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
+import { eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
@@ -131,7 +132,7 @@ const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', .
  * With no integrated source and an empty catalog that is a claim about diligence we did not do, and the
  * same prohibition that stops us inventing availability stops us inventing a search.
  */
-function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | null {
+function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind: string | null = null): string | null {
   const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
   // "on Fri, Oct 2" when we know the day, not 'for "Friday"'.
   const when = brief.resolvedLocalDate ? ` on ${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${brief.resolvedLocalDate}T12:00:00Z`))}` : brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
@@ -141,7 +142,8 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction): string | 
   // This one is earned: the official listings were actually queried for this name and window.
   // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
   // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
-  const game = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(brief.categoryHint ?? '') ? 'game' : 'performance';
+  // A team plays games, whatever the category hint says (live Oct 5: "a New York Rangers performance").
+  const game = entityKind === 'team' || ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(brief.categoryHint ?? '') ? 'game' : 'performance';
   if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} ${game}` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
@@ -585,7 +587,7 @@ export class Concierge {
     if (asksOutsideTickets(latestText)) {
       const venueWord = /\b(msg|madison square garden)\b/i.test(latestText) ? 'Madison Square Garden' : /\bbarclays\b/i.test(latestText) ? 'Barclays Center' : 'the venue';
       const line = `Restaurant and bar suggestions are outside what I do: I only help with tickets, so I don’t have anything reliable on places to eat near ${venueWord}.`;
-      const tail = /\b(?:already|have|bought|got)\b[^.?!]{0,30}\btickets?\b/i.test(latestText) ? 'Enjoy the game.' : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
+      const tail = /\b(?:already|have|bought|got)\b[^.?!]{0,30}\btickets?\b/i.test(latestText) ? 'Enjoy it.' : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
       const rev = priorVersion ? req.currentRevision + 1 : 1;
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
       await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
@@ -1144,7 +1146,7 @@ export class Concierge {
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
       const nearNote = nearDates.length ? `\n\nThe closest ${titleCaseName(merged.performerOrTeam!)} ${teamish || SPORT_HINTS.includes(nearDates[0]!.e.category) ? (nearDates.length === 1 ? 'game' : 'games') : nearDates.length === 1 ? 'date' : 'dates'} I have:\n${nearDates.map(({ e, v }) => `• ${friendlyWhen(e.localStartAt, v.timezone, this.now()).replace(/^./, (c) => c.toUpperCase())}: ${e.name}, ${v.name}`).join('\n')}` : '';
-      const noMatch = nearNote && resolution.kind === 'no_match' ? `${noMatchNote(resolution.reason, merged) ?? ''}${nearNote}`.trim() : elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? conflict.note ?? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged) : null;
+      const noMatch = nearNote && resolution.kind === 'no_match' ? `${noMatchNote(resolution.reason, merged, known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null) ?? ''}${nearNote}`.trim() : elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? conflict.note ?? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged, known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
       // Their own questions about what we can do come first, answered as they stand (TGQA-R6 1011, 1012).
@@ -3078,7 +3080,7 @@ export class Concierge {
     if (!shown && !best && !sentLink?.listingId && brief.intent !== 'watch_request' && licence.allows('tracking') && trackingOk && uses.display) {
       if (!around) around = await tracker.recentListings(event.id);
       const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT) : null;
-      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null)) };
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null), eventNounFor(event.category)) };
     }
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
@@ -3098,7 +3100,7 @@ export class Concierge {
       const reason = e.exclusions.includes('obstructed_view') ? 'obstructed_view' : e.exclusions.includes('accessible_only') ? 'accessible_only' : e.exclusions.includes('seats_not_together') ? 'seats_not_together' : e.exclusions.includes('section_not_acceptable') ? 'section_not_acceptable' : e.exclusions.includes('wrong_quantity') && e.offer.quantity > quantity ? 'bigger_block' : null;
       if (reason && !leftOut.some((l) => l.reason === reason && l.quantity === e.offer.quantity)) leftOut.push({ reason, quantity: e.offer.quantity });
     }
-    const eventNoun = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab'].includes(event.category) ? 'game' as const : 'show' as const;
+    const eventNoun = eventNounFor(event.category);
     // The staffed comparison pilot (DECISION_LOG #54): when nothing verified meets what they asked for, and a
     // named owner exists with room in the pilot, a person takes it on and the email says so.
     const requirements = unverifiedRequirements(brief, saidInThread);
@@ -4971,19 +4973,20 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
  * game. Both marketplaces when the listings don't say which one the seats are on. Never a listing link: the feed's
  * listing numbers aren't confirmed to be the marketplace's own (DECISION_LOG #67).
  */
-export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null): Array<{ label: string; url: string }> {
+export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null, noun: EventNoun | 'event' = 'event'): Array<{ label: string; url: string }> {
   const marketplace = pick.marketplace ?? null;
   // Descriptive link text (personal-email design, Oct 3): "View Section 214 on StubHub" for the listing itself,
   // "Event page" when it is only the event, "Search ... for this game" when it is only a search.
-  const seat = pick.section ? `Section ${pick.section}` : 'this listing';
+  const where = seatPhrase(pick.section, null);
+  const seat = where ? (where.startsWith('general admission') ? `the ${where} listing` : where) : 'this listing';
   if (pick.url) return [{ label: `View ${seat} on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
   const q = encodeURIComponent(eventName);
   const sh = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId) ? stubHubEventId : null;
   // StubHub's event page opened on the listing: its event id and a StubHub listing number (the feed's StubHub ids
   // are StubHub's own; SDK 1.2 sales rows carry them as integers).
   if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: `View ${seat} on StubHub`, url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}&listingId=${pick.id}` }];
-  const stubhub = sh ? { label: 'Event page on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: 'Search StubHub for this game', url: `https://www.stubhub.com/search?q=${q}` };
-  const vivid = { label: 'Search Vivid Seats for this game', url: `https://www.vividseats.com/search?searchTerm=${q}` };
+  const stubhub = sh ? { label: 'Event page on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: `Search StubHub for this ${noun}`, url: `https://www.stubhub.com/search?q=${q}` };
+  const vivid = { label: `Search Vivid Seats for this ${noun}`, url: `https://www.vividseats.com/search?searchTerm=${q}` };
   if (marketplace === 'stubhub') return [stubhub];
   if (marketplace === 'vividseats') return [vivid];
   return [stubhub, vivid];

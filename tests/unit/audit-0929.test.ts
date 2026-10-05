@@ -74,7 +74,7 @@ describe('TG-B02: their own question is answered first', () => {
   it('A08: delivery at 6pm for a 7pm game with a noon departure is a delivery question, answered first', () => {
     const text = 'Two tickets $220 total for the game at 7pm. Seller says delivery by 6pm but we leave at noon to drive there. If they don’t arrive, is a refund enough?';
     expect(questionsAsked(text)).toEqual({ deliveryRisk: true, accessibleSpaces: false, salesAsked: false, parking: null, gapAgainst: null, worth: false, difference: false, cheaper: false, whichCheaper: false, fits: false, taxAsked: false, quotedRows: [] });
-    const p = buildPacket(args({ quantity: 2, asks: questionsAsked(text) }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
+    const p = buildPacket(args({ quantity: 2, asks: questionsAsked(text), eventNoun: 'game' }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const body = render(p);
     const opening = body.split('\n\n')[2]!;
     expect(opening).toMatch(/^On delivery:/);

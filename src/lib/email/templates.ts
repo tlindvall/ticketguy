@@ -315,7 +315,7 @@ function renderBody(
       const total = `about ${usd(v.estimatedTotalCents)} for ${n}`;
       const lead = `Heads-up: resale listings now come to ${total} with fees, inside your ${usd(v.targetTotalCents)}.`;
       const fit = `That’s for ${String(v.eventLabel)}: listings with ${q} or more tickets start at ${usd(v.listedPerTicketCents)} a ticket before fees, ${usd(v.listedTotalCents)} for ${n}${listings > 1 ? ` (${listings} listings could seat ${n})` : ''}, plus an assumed ${String(v.feeAllowancePct)}% for fees. Checkout fees can be higher.`;
-      const limits = `This is from resale market data (StubHub and Vivid Seats listings, seen ${String(v.observedAt)}), not a ticket I’ve checked: I don’t have a link to it, it may be gone when you look, and a listing of ${q} or more may not sell exactly ${n} or be seats together. If you want it, look up the game on StubHub and Vivid Seats now and check the all-in price at checkout.`;
+      const limits = `This is from resale market data (StubHub and Vivid Seats listings, seen ${String(v.observedAt)}), not a ticket I’ve checked: I don’t have a link to it, it may be gone when you look, and a listing of ${q} or more may not sell exactly ${n} or be seats together. If you want it, look it up on StubHub and Vivid Seats now and check the all-in price at checkout.`;
       const stop = 'Reply “stop” to end this watch.';
       const i = lead.indexOf(total);
       return wrap([lead, fit, limits, stop], [`<p style="margin:0 0 18px;">${esc(lead.slice(0, i))}<strong>${esc(total)}</strong>${esc(lead.slice(i + total.length))}</p>`, para(fit), para(limits), para(stop)]);
