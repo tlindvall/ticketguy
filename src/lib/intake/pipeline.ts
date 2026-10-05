@@ -1151,7 +1151,9 @@ export class Concierge {
       const alertsOff = !this.env.EVENT_ALERTS_ENABLED && (merged.notifyAsked || ON_SALE_ASKED.test(flat(latestText)));
       const capability = [
         alertsOff ? `I can’t email you when tickets go on sale: automatic on-sale alerts are switched off for now, so nothing is watching this for you. ${merged.performerOrTeam ? `Check ${possessive(titleCaseName(merged.performerOrTeam))} official website or Ticketmaster` : 'Check the official website or Ticketmaster'} for the on-sale date; I haven’t seen one announced.` : null,
-        TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I don’t have usable price history for ${merged.quantity && merged.quantity > 1 ? `${countWordLower(merged.quantity)} seats together` : 'these seats'} at ${merged.performerOrTeam ? `${titleCaseName(merged.performerOrTeam)} games` : 'these events'}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
+        // Nothing has been read yet on this path, so "no price history" would be a claim about data we never looked at
+        // (live Oct 5: said before any game was settled or SeatData asked). Say when it gets checked instead.
+        TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I haven’t looked at price history yet${resolution.kind === 'resolved' ? '' : ', because I don’t know which game it is'}. ${resolution.kind === 'resolved' ? 'I’ll' : 'Once you pick the game, I’ll'} check which way resale prices for it are moving and whether waiting is worth it.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
       ].filter(Boolean).join(' ');
       // The event is settled and only something else is missing (how many tickets): say which one, so "the next home
       // game" is answered, not just filed (TGQA-R6 1007).

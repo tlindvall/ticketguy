@@ -162,6 +162,19 @@ export async function requestTrace(db: Db, req: { id: string; conversationId: st
     }
   }
 
+  // No SeatData call at all is said, with why: it prices one game at a time, so nothing is asked until a game is settled
+  // (live Oct 5: "SeatData API: not used" with no reason, on a screenshot whose date matched no game).
+  if (!steps.some((s) => s.source === 'seatdata')) {
+    steps.push({
+      at: new Date(Math.min(to.getTime(), Math.max(from.getTime(), req.updatedAt.getTime()))),
+      source: 'seatdata',
+      title: 'SeatData not called',
+      status: 'skipped',
+      details: [req.eventId ? 'A game was matched, but no prices were read for it in this request: the resale feed may be off, the game not tracked yet, or the reply didn’t need prices.' : 'No game was matched yet, and SeatData prices one game at a time. It is asked once the customer picks the game.'],
+      urls: [],
+    });
+  }
+
   // Sellers checked by each research run: which source, the outcome and how many listings came back.
   const runs = await db.select().from(t.researchRuns).where(eq(t.researchRuns.requestId, req.id));
   if (runs.length) {
