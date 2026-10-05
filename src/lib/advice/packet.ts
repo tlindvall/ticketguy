@@ -1336,6 +1336,8 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const notes = [
     `${formatUsd(first!.listedTotalCents)}${q > 1 ? ` for ${n}` : ''} before fees (${formatUsd(first!.listing.priceCents)} each), plus a ${p.feeAllowancePct}% fee allowance.`,
     ...(first!.exactSplit ? [] : [`It’s a listing of ${first!.listing.quantity}, so check it sells as ${q}.`]),
+    // Where prices sit, so the pick has a frame (live Oct 5: "We need to show prices… what they range between").
+    ...(p.range && p.range.count > 1 && p.range.highCents > p.range.lowCents ? [`Right now ${p.range.count} listings have ${q === 1 ? 'a seat' : `${n} together`}, from ${formatUsd(p.range.lowCents)} to ${formatUsd(p.range.highCents)} a ticket before fees.`] : []),
     ...(where ? [] : ['On StubHub or Vivid Seats; my data doesn’t say which, so search both.']),
     `Not checked yet: that it’s still listed${q > 1 ? ' and the seats are together' : ''}, ${age}.`,
   ];

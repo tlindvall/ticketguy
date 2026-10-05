@@ -36,7 +36,8 @@ export type WebEventQuery = {
   today: string;
 };
 
-export type WebEventResult = { events: WebEvent[]; searches: number; resultUrls: number };
+/** queries: what the model searched for; urls: the pages the search returned (public pages, for the admin trace). */
+export type WebEventResult = { events: WebEvent[]; searches: number; resultUrls: number; queries?: string[]; urls?: string[] };
 
 export interface WebEventFinder {
   readonly name: string;
@@ -128,6 +129,7 @@ export class AnthropicWebEventFinder implements WebEventFinder {
     const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: ask }];
     const urls = new Set<string>();
     let searches = 0;
+    const queries: string[] = [];
     const usage: Usage = { inputTokens: 0, outputTokens: 0 };
     let text = '';
     for (let turn = 0; turn < 3; turn++) {
@@ -151,7 +153,11 @@ export class AnthropicWebEventFinder implements WebEventFinder {
       usage.inputTokens += res.usage?.input_tokens ?? 0;
       usage.outputTokens += res.usage?.output_tokens ?? 0;
       for (const block of res.content) {
-        if (block.type === 'server_tool_use') searches += 1;
+        if (block.type === 'server_tool_use') {
+          searches += 1;
+          const q = (block.input as { query?: unknown } | null)?.query;
+          if (typeof q === 'string') queries.push(q.slice(0, 200));
+        }
         // A failed search comes back as an error object, not a list (no exception).
         if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) for (const r of block.content) if (r.type === 'web_search_result') urls.add(r.url);
         if (block.type === 'text') text += block.text;
@@ -164,6 +170,6 @@ export class AnthropicWebEventFinder implements WebEventFinder {
       break;
     }
     this.lastUsage = usage;
-    return { events: groundedEvents(lastJsonObject(text), urls), searches, resultUrls: urls.size };
+    return { events: groundedEvents(lastJsonObject(text), urls), searches, resultUrls: urls.size, queries, urls: [...urls] };
   }
 }
