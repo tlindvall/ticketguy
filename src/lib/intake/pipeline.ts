@@ -1125,13 +1125,15 @@ export class Concierge {
       // who they named, then the category hint, and their own words only when nothing else says. Every "game" or "show"
       // below takes it (live Oct 6: "I don’t know which game it is" for Metallica, a word fixed in the template).
       const namedKind = known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null;
-      const noun: EventNoun = resolution.kind === 'resolved'
+      const noun: EventNoun | 'event' = resolution.kind === 'resolved'
         ? eventNounFor(resolution.event.category)
         : resolution.kind === 'ambiguous'
           ? resolution.candidates.some((c) => c.league) ? 'game' : 'show'
           : namedKind ? (namedKind === 'team' ? 'game' : 'show')
           : merged.categoryHint ? (SPORT_HINTS.includes(merged.categoryHint) ? 'game' : 'show')
-          : /\b(?:game|match)\b/i.test(flat(latestText)) && !/\bnot an? (?:game|match)\b/i.test(flat(latestText)) ? 'game' : 'show';
+          : /\b(?:game|match)\b/i.test(flat(latestText)) && !/\bnot an? (?:game|match)\b/i.test(flat(latestText)) ? 'game'
+          // Nothing named at all (a bare checkout link): neither word is known, so neither is said.
+          : merged.performerOrTeam || merged.eventName ? 'show' : 'event';
       const teamish = noun === 'game';
       // A team or act on file with no date that day: their nearest dates, so they can say which, never a dead end (live
       // Oct 4: "couldn't find a Rangers game on Sun, Oct 4", then "send me the link", to a screenshot of that game).
@@ -4441,6 +4443,12 @@ export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: stri
     out.dateExpression = dated.localDate;
     out.resolvedLocalDate = dated.localDate;
     out.ambiguities = out.ambiguities.filter((a) => !a.startsWith('date_'));
+  }
+  // A TickPick checkout carries its listed price a ticket: the price they are asking about, as if they had typed it.
+  const priced = links.find((l) => l.priceCents);
+  if (out.quotedPriceCents == null && priced) {
+    out.quotedPriceCents = priced.priceCents;
+    out.quotedPriceBasis = 'per_ticket';
   }
   const counted = links.find((l) => l.quantity);
   if (out.quantity == null && counted) {
