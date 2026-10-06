@@ -397,6 +397,44 @@ export const entities = pgTable('entities', {
   createdAt: createdAt(),
 });
 
+/**
+ * What a team, performer, show or venue looks like in an email: its logo or photo, its colours and a short name
+ * ("NYR"). Keyed by what the catalog already uses, so a row can exist before the entity does: an entity's slug, a
+ * venue's provider id ("ticketmaster:KovZpZA7AAEA"), or a category for the default ("concert").
+ *
+ * An image goes into a sent email only when its rights say we may use it: 'provider_terms' (staff confirmed the
+ * provider's API terms cover showing it) or 'licensed' (staff confirmed it for that image). 'unreviewed' shows in
+ * previews only; seeded logos and provider images start there. Colours and names are facts and are always used.
+ */
+export const brandAssets = pgTable(
+  'brand_assets',
+  {
+    id: id(),
+    kind: text('kind').notNull(), // team | performer | production | venue | category
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    shortName: text('short_name'),
+    league: text('league'),
+    imageUrl: text('image_url'),
+    imageKind: text('image_kind'), // logo | photo | artwork
+    imageWidth: integer('image_width'),
+    imageHeight: integer('image_height'),
+    primaryColor: text('primary_color'),
+    secondaryColor: text('secondary_color'),
+    source: text('source').notNull(), // seed | ticketmaster | staff
+    rights: text('rights').notNull().default('unreviewed'), // provider_terms | licensed | unreviewed
+    attribution: text('attribution'),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('brand_assets_kind_key_uq').on(t.kind, t.key),
+    check('brand_assets_kind_ck', sql`${t.kind} in ('team','performer','production','venue','category')`),
+    check('brand_assets_rights_ck', sql`${t.rights} in ('provider_terms','licensed','unreviewed')`),
+    check('brand_assets_image_https_ck', sql`${t.imageUrl} is null or ${t.imageUrl} like 'https://%'`),
+  ],
+);
+
 export const events = pgTable(
   'events',
   {
@@ -1404,7 +1442,7 @@ export const schema = {
   user, session, account, verification, twoFactor,
   contacts, contactPreferences, conversations, messages, mediaObjects, attachments, listingEvidence,
   requests, requestVersions, requestTransitions, requestOutcomes, trackedLinks,
-  venues, entities, events, eventSourceMappings, catalogSyncs,
+  venues, entities, brandAssets, events, eventSourceMappings, catalogSyncs,
   sourceRegistry, adapterConfigs, researchRuns, sourceChecks, offers, offerObservations,
   recommendations, watches, watchAlerts,
   interestTaxonomy, interestObservations, contactInterests, marketingPermissions, suppressions,

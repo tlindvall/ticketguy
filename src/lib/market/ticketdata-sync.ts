@@ -45,7 +45,7 @@ export async function ensureTicketDataDataset(db: DbOrTx): Promise<void> {
     .onConflictDoNothing();
 }
 
-export type TicketDataApi = Pick<TicketDataClient, 'getEvent' | 'getPriceHistory' | 'getSections'> & { calls: number; callCap: number | null };
+export type TicketDataApi = Pick<TicketDataClient, 'getEvent' | 'getPriceHistory' | 'getSections' | 'searchSuggestions'> & { calls: number; callCap: number | null };
 
 export function ticketDataClient(env: Env, opts: { fetchImpl?: typeof fetch; baseUrl?: string } = {}): TicketDataApi {
   if (env.APP_MODE === 'fixture') return new TicketDataFixtureClient() as unknown as TicketDataApi;

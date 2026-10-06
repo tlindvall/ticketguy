@@ -68,6 +68,7 @@ import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-st
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
+import { categoryLabel, loadBriefArt, venueKeys } from '@/lib/brand/assets';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -3207,7 +3208,11 @@ export class Concierge {
     const autoSend = packet.verifiedOfferObservationIds.length === 0 && quote !== null;
     // During testing every other draft is approved by the system too; it then says it wasn't reviewed.
     const autoApprove = !autoSend && autoApproveActive(this.env);
-    const renderOpts = { reviewed: !autoSend && !autoApprove };
+    // The ticket brief's artwork: the teams' colours, the show's image or our concert artwork. Decoration only, so a
+    // failed lookup sends the brief without it rather than holding the reply.
+    const [other] = event.opponentEntityId ? await this.db.select({ kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
+    const art = await loadBriefArt(this.db, { category: event.category, primary: ent ? { kind: ent.kind, slug: ent.slug, name: ent.name } : null, opponent: other ?? null, venueKeys: venueKeys(venue.externalIds) }, { mode: 'send', appUrl: this.env.APP_URL }).catch(() => null);
+    const renderOpts = { reviewed: !autoSend && !autoApprove, brief: { label: categoryLabel(event.category), art } };
     // Draft via drafter (fixture or model) with bounded retries → evidence-only fallback.
     let body: { textBody: string; htmlBody: string } | null = null;
     let draftNote: string | null = null;
