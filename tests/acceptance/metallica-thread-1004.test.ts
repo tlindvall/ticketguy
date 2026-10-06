@@ -104,6 +104,24 @@ describe('a show picked from the list we sent', () => {
     expect(r.all.slice(1).join('\n')).not.toMatch(/Which show/);
   });
 
+  // Live Oct 6: "how are metallica tickets trending in CT. can you use ticketdata." got "I haven’t looked at price history
+  // yet, because I don’t know which game it is. Once you pick the game…": the extractor had it right, the template
+  // said "game". A concert is a show in every sentence, with or without a category hint, and "it's not a game" in
+  // their reply never turns it into one.
+  it.each([
+    ['with the concert hint', 'concert'],
+    ['with no hint at all', null],
+  ] as const)('"how are metallica tickets trending in CT": which show, never which game (%s)', async (_, hint) => {
+    const ct: Partial<RequestExtraction> = { ...base, city: null, state: 'CT', dateExpression: null, categoryHint: hint };
+    const r = await thread([
+      { text: 'how are metallica tickets trending in CT. can you use ticketdata.', over: ct },
+      { text: 'It’s not a game, it’s a concert. you should know what Metallica is.', over: ct },
+    ], `m4-${hint ?? 'none'}@customer.example`);
+    expect(r.all[0]).toContain('because I don’t know which show it is. Once you pick the show, I’ll check');
+    expect(r.all[0]).toMatch(/Which show: Thu, Nov 19 at Mohegan Sun Arena or Sat, Nov 21 at Mohegan Sun Arena\?/);
+    for (const body of r.all) expect(body.replace(/It’s not a game/g, '')).not.toMatch(/\bgames?\b/i);
+  });
+
   it('reads price questions', () => {
     for (const q of ['what are tickets like?', 'How much are they?', "what's the price", 'how expensive is it', 'what do tickets go for']) expect(PRICE_ASKED.test(q)).toBe(true);
     expect(PRICE_ASKED.test('two tickets please')).toBe(false);

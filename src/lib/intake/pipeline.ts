@@ -25,7 +25,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
+import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
@@ -144,7 +144,7 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind
   // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
   // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
   // A team plays games, whatever the category hint says (live Oct 5: "a New York Rangers performance").
-  const game = entityKind === 'team' || ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(brief.categoryHint ?? '') ? 'game' : 'performance';
+  const game = entityKind === 'team' || SPORT_HINTS.includes(brief.categoryHint ?? '') ? 'game' : 'performance';
   if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} ${game}` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
@@ -917,7 +917,11 @@ export class Concierge {
             : `I checked ${dayLabel} too: I don’t have ${who} or another ${kindWords} night in ${altAsk.v.city ?? 'the area'} on file then, so ${shortWhen(altAsk.e.localStartAt, tzA, false)} is the one I have. That’s what I have on file, not proof nothing else is on.`;
       }
     }
-    const resolution = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found;
+    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found;
+    // A choice they already made is never asked again, whatever reopened it: a new request in the same thread, a
+    // revision that lost the event, a reply to an older email (live Oct 6: "Which show: Thu, Nov 19 … or Sat, Nov 21?"
+    // straight after the Nov 19 seats were sent).
+    const resolution = !picked && settled.kind === 'ambiguous' ? ((await this.rememberedEvent(contact!.id, settled.candidates)) ?? settled) : settled;
     if (altAsk) merged = { ...merged, resolvedLocalDate: eventLocalDate(altAsk.e.localStartAt, altAsk.v.timezone), dateExpression: null };
     const eventResolved = resolution.kind === 'resolved';
     if (resolution.kind === 'resolved' && resolution.assumed) assumptions.unshift(resolution.assumed);
@@ -932,6 +936,7 @@ export class Concierge {
 
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: unresolved, createdBy: 'system' });
     await this.db.update(t.requests).set({ currentRevision: revision, eventId: eventResolved ? resolution.event.id : null, category: eventResolved ? resolution.event.category : req.category, mode: merged.intent === 'watch_request' ? 'keep_looking' : merged.submittedUrls.length ? 'beat_offer' : 'find_options', updatedAt: now, deadlineAt: merged.decisionDeadline ? new Date(merged.decisionDeadline) : req.deadlineAt }).where(eq(t.requests.id, req.id));
+    if (eventResolved && resolution.event.id !== req.eventId) await audit(this.db, { actor: 'system', action: 'request.event_settled', entityKind: 'contact', entityId: contact!.id, revision, diff: { requestId: req.id, eventId: resolution.event.id } });
     if (revision > 1) await this.invalidateForRevision(req.id, revision);
 
     // Interest evidence (never marketing permission).
@@ -1108,7 +1113,7 @@ export class Concierge {
       // date are you looking at?" when we already know the dates they could mean (live Oct 4).
       const gameRows = resolution.kind === 'ambiguous' && !elsewhere.length && resolution.candidates.length > 3 && new Set(resolution.candidates.map((c) => c.entityName)).size === 1 ? await this.eventRows(resolution.candidates.map((c) => c.id)) : [];
       const gameNote = gameRows.length ? gameListNote(resolution.kind === 'ambiguous' ? resolution.candidates[0]! : null, gameRows, merged, this.now()) : null;
-      const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : gameNote ? `Which ${gameRows.some((r) => SPORT_HINTS.includes(r.e.category)) ? 'game' : 'show'} would you like? I’ll look for the best seats for it.` : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
+      const eventQuestion = elsewhere.length ? elsewhereQuestion(elsewhere, merged) : gameNote ? `Which ${gameRows.some((r) => eventNounFor(r.e.category) === 'game') ? 'game' : 'show'} would you like? I’ll look for the best seats for it.` : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
       const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')) && !(elsewhere.length && k === 'quantity'));
       if (ambiguities.includes('date_near_midnight') && !eventQuestion && !qKeys.includes('event')) qKeys.unshift('event');
       // They named the act, the date and the place and nothing is scheduled: asking "which date and venue?" asks
@@ -1116,7 +1121,18 @@ export class Concierge {
       const gaveWhenWhere = resolution.kind === 'no_match' && resolution.reason !== 'constraint_conflict' && !!merged.performerOrTeam && !!(merged.resolvedLocalDate || merged.dateExpression) && !!(merged.city || merged.state || merged.resolvedLocalDate) && !elsewhere.length;
       // No date announced and they said so: one next step, never "which date and venue?" for a show that doesn't exist yet.
       const noDateYet = resolution.kind === 'no_match' && resolution.reason !== 'constraint_conflict' && !!merged.performerOrTeam && (/\b(?:isn'?t|not|no)\s+(?:an?\s+)?(?:announced|on sale)\b|\bdoesn'?t exist yet\b/i.test(flat(latestText)) || !!merged.notifyAsked);
-      const teamish = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'].includes(merged.categoryHint ?? '') || /\b(?:game|match|home|away)\b/i.test(flat(latestText));
+      // One word for the event across this email, from the best evidence there is: the event or candidates on file, then
+      // who they named, then the category hint, and their own words only when nothing else says. Every "game" or "show"
+      // below takes it (live Oct 6: "I don’t know which game it is" for Metallica, a word fixed in the template).
+      const namedKind = known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null;
+      const noun: EventNoun = resolution.kind === 'resolved'
+        ? eventNounFor(resolution.event.category)
+        : resolution.kind === 'ambiguous'
+          ? resolution.candidates.some((c) => c.league) ? 'game' : 'show'
+          : namedKind ? (namedKind === 'team' ? 'game' : 'show')
+          : merged.categoryHint ? (SPORT_HINTS.includes(merged.categoryHint) ? 'game' : 'show')
+          : /\b(?:game|match)\b/i.test(flat(latestText)) && !/\bnot an? (?:game|match)\b/i.test(flat(latestText)) ? 'game' : 'show';
+      const teamish = noun === 'game';
       // A team or act on file with no date that day: their nearest dates, so they can say which, never a dead end (live
       // Oct 4: "couldn't find a Rangers game on Sun, Oct 4", then "send me the link", to a screenshot of that game).
       const nearDates = gaveWhenWhere && merged.resolvedLocalDate ? await this.nearestDates(merged, rules.imageEventName ?? null) : [];
@@ -1148,7 +1164,7 @@ export class Concierge {
       const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
-      const nearNote = nearDates.length ? `\n\nThe closest ${titleCaseName(merged.performerOrTeam!)} ${teamish || SPORT_HINTS.includes(nearDates[0]!.e.category) ? (nearDates.length === 1 ? 'game' : 'games') : nearDates.length === 1 ? 'date' : 'dates'} I have:\n${nearDates.map(({ e, v }) => `• ${friendlyWhen(e.localStartAt, v.timezone, this.now()).replace(/^./, (c) => c.toUpperCase())}: ${e.name}, ${v.name}`).join('\n')}` : '';
+      const nearNote = nearDates.length ? `\n\nThe closest ${titleCaseName(merged.performerOrTeam!)} ${eventNounFor(nearDates[0]?.e.category ?? null) === 'game' ? (nearDates.length === 1 ? 'game' : 'games') : nearDates.length === 1 ? 'date' : 'dates'} I have:\n${nearDates.map(({ e, v }) => `• ${friendlyWhen(e.localStartAt, v.timezone, this.now()).replace(/^./, (c) => c.toUpperCase())}: ${e.name}, ${v.name}`).join('\n')}` : '';
       const noMatch = nearNote && resolution.kind === 'no_match' ? `${noMatchNote(resolution.reason, merged, known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null) ?? ''}${nearNote}`.trim() : elsewhere.length ? elsewhereNote(titleCaseName(merged.performerOrTeam!), elsewhere, merged, this.now()) : conflict ? conflict.note ?? `${conflict.label}${/^None of/.test(conflict.label) ? ' fits' : " doesn't fit"}: ${conflict.why}.` : resolution.kind === 'no_match' ? noMatchNote(resolution.reason, merged, known.find((k) => k.name === merged.performerOrTeam)?.kind ?? null) : null;
       // Nothing scheduled at all (not merely on that date): offer to tell them when there is.
       const offerAlert = noMatch && this.env.EVENT_ALERTS_ENABLED && !!merged.performerOrTeam && (await this.nothingScheduled(merged, merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id)));
@@ -1158,7 +1174,7 @@ export class Concierge {
         alertsOff ? `I can’t email you when tickets go on sale: automatic on-sale alerts are switched off for now, so nothing is watching this for you. ${merged.performerOrTeam ? `Check ${possessive(titleCaseName(merged.performerOrTeam))} official website or Ticketmaster` : 'Check the official website or Ticketmaster'} for the on-sale date; I haven’t seen one announced.` : null,
         // Nothing has been read yet on this path, so "no price history" would be a claim about data we never looked at
         // (live Oct 5: said before any game was settled or SeatData asked). Say when it gets checked instead.
-        TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I haven’t looked at price history yet${resolution.kind === 'resolved' ? '' : ', because I don’t know which game it is'}. ${resolution.kind === 'resolved' ? 'I’ll' : 'Once you pick the game, I’ll'} check which way resale prices for it are moving and whether waiting is worth it.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
+        TREND_ASKED.test(flat(latestText)) ? `On buy or wait: I haven’t looked at price history yet${resolution.kind === 'resolved' ? '' : `, because I don’t know which ${noun} it is`}. ${resolution.kind === 'resolved' ? 'I’ll' : `Once you pick the ${noun}, I’ll`} check which way resale prices for it are moving and whether waiting is worth it.${NO_ALERTS.test(flat(latestText)) ? ' I haven’t set an alert.' : ''}` : null,
       ].filter(Boolean).join(' ');
       // The event is settled and only something else is missing (how many tickets): say which one, so "the next home
       // game" is answered, not just filed (TGQA-R6 1007).
@@ -2674,6 +2690,25 @@ export class Concierge {
   private async settledRow(eventId: string): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null } | null> {
     const [row] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
     return row && row.e.status === 'scheduled' ? row : null;
+  }
+
+  /**
+   * The event this contact already settled on, when a choice reopens between it and others: the most recent one from
+   * the last month, from a request still holding it or from the record of it being settled (a later revision may have
+   * cleared the request's event). Kept, and said in one line they can correct.
+   */
+  private async rememberedEvent(contactId: string, cands: EventCandidate[]): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
+    const ids = [...new Set(cands.map((c) => c.id))];
+    if (ids.length < 2) return null;
+    const since = new Date(this.now().getTime() - 30 * 86_400_000);
+    const [held] = await this.db.select({ eventId: t.requests.eventId, at: t.requests.updatedAt }).from(t.requests).where(and(eq(t.requests.contactId, contactId), inArray(t.requests.eventId, ids), gte(t.requests.updatedAt, since))).orderBy(desc(t.requests.updatedAt)).limit(1);
+    const logged = (await this.db.select({ diff: t.auditLog.diff, at: t.auditLog.createdAt }).from(t.auditLog).where(and(eq(t.auditLog.action, 'request.event_settled'), eq(t.auditLog.entityKind, 'contact'), eq(t.auditLog.entityId, contactId), gte(t.auditLog.createdAt, since))).orderBy(desc(t.auditLog.createdAt)).limit(50)).find((r) => ids.includes(String(r.diff?.eventId ?? '')));
+    const eventId = held && (!logged || held.at >= logged.at) ? held.eventId : logged ? String(logged.diff!.eventId) : null;
+    const row = eventId ? await this.settledRow(eventId) : null;
+    if (!row || row.e.localStartAt <= this.now() || row.v.country !== 'US') return null;
+    const noun = eventNounFor(row.e.category);
+    const others = cands.filter((c) => c.id !== row.e.id).map((c) => c.when);
+    return { kind: 'resolved', event: row.e, venue: row.v, label: eventLabel(row.e, row.v), entityKind: row.ent?.kind === 'team' ? 'team' : row.ent ? 'artist' : null, assumed: `I’ve stayed with ${eventLabel(row.e, row.v)}, the ${noun} we already looked at. Tell me if you meant a different one${others.length === 1 ? `, like ${others[0]}` : ''}.` };
   }
 
   private async keepSettledEvent(eventId: string, resolution: Awaited<ReturnType<Concierge['resolveEvent']>>, said: RequestExtraction, rules?: ResolveRules | null): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
@@ -4238,7 +4273,8 @@ export function ownedMiss(latestText: string): string | null {
     : 'You’re right, I missed that. Here’s what I have now.';
 }
 
-const SPORT_HINTS = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'ncaaf', 'ncaab', 'sports'];
+// The catalog's sport categories, plus the extractor's catch-all hint: one list, so a word never depends on which copy.
+const SPORT_HINTS = [...SPORT_CATEGORIES, 'sports'];
 
 /** One sentence playing back the request — "Two Rangers tickets next week, up to $200 total—got it." */
 export function acknowledgementLine(x: RequestExtraction): string {
