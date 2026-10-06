@@ -156,11 +156,20 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\n\nOther leads shown\nSection 215 · Row 8: $240 for two before fees.\nSection 210 · Row 4: $280 for two before fees.');
     // The card's links are on the card, once.
     expect(rec!.bodyText.match(/Search StubHub for this game/g)).toHaveLength(1);
-    // The card: cream with a lime edge, the estimate in larger type and said as estimated, the link on it.
+    // The ticket brief (Oct 6): the game on the card, a stub line, the pick in the cream half badged as an estimate,
+    // the estimate in large type, the first link as the button and the second beside it.
     expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>I’d buy Section 101, Row 10, the cheapest pair I can see: about $247 for both with fees (estimated).</strong></p>');
-    expect(rec!.bodyHtml).toContain('style="background:#f7f4ec;border-left:4px solid #d7f36b;');
-    expect(rec!.bodyHtml).toContain('<span style="font-size:20px;line-height:30px;font-weight:bold;">About $247 for two</span>, estimated');
-    expect(rec!.bodyHtml).toMatch(/<a href="https:\/\/www\.stubhub\.com\/search\?q=[^"]+" style="color:#142438;text-decoration:underline;font-weight:700;">Search StubHub for this game<\/a>/);
+    expect(rec!.bodyHtml).toContain('NBA · Your ticket brief</div>');
+    expect(rec!.bodyHtml).toContain('Metro Testers vs. Boston</div><div style="font-size:14px;line-height:22px;color:#536174;">Test Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets</div>');
+    expect(rec!.bodyHtml).toContain('border-top:1px dashed #cbd2d3');
+    expect(rec!.bodyHtml).toContain('My pick · estimate</span>');
+    expect(rec!.bodyHtml).toContain('About $247 for two <span style="font-size:15px;line-height:22px;font-weight:400;letter-spacing:0;color:#536174;">estimated</span>');
+    expect(rec!.bodyHtml).toMatch(/<a href="https:\/\/www\.stubhub\.com\/search\?q=[^"]+" style="display:block;[^"]*">Search StubHub for this game&nbsp;&#8599;<\/a>/);
+    expect(rec!.bodyHtml).toMatch(/<a href="https:\/\/www\.vividseats\.com\/search\?searchTerm=[^"]+" style="color:#142438;text-decoration:underline;font-weight:700;">Search Vivid Seats for this game<\/a>/);
+    // The event is said once, on the card, not again as a header above it.
+    expect(rec!.bodyHtml.match(/Metro Testers vs\. Boston</g)).toHaveLength(1);
+    // Neither team has a brand row here, so there is no artwork rather than a stand-in.
+    expect(rec!.bodyHtml).not.toContain('<img');
     // With no budget, the one next step is an offer to narrow it, on its own line, not a questionnaire.
     expect(rec!.bodyText).toContain('\n\nWant me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.');
     expect(rec!.bodyText).not.toMatch(/things that would help|One thing that would help|When do you need tickets sorted by/);

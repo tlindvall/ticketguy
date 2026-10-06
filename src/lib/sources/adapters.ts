@@ -152,7 +152,22 @@ export type DiscoveryQuery = { keyword: string; classificationName?: string | nu
 
 /** A performer's or team's own links as the provider lists them: listen (Spotify, Apple Music), watch (YouTube), official (homepage). */
 export type EntityLinks = { listen?: string; watch?: string; official?: string };
-export type DiscoveredAttraction = { providerId: string; name: string; url: string | null; segment: string | null; genre: string | null; subGenre: string | null; links?: EntityLinks };
+export type DiscoveredAttraction = { providerId: string; name: string; url: string | null; segment: string | null; genre: string | null; subGenre: string | null; links?: EntityLinks; image?: ProviderImage | null };
+export type ProviderImage = { url: string; width: number | null; height: number | null };
+
+/**
+ * The provider's own image for a performer, team or venue, for the ticket brief: the widest landscape one up to 1200px
+ * that isn't its generic stand-in ("fallback"), https only. Null when it lists none.
+ */
+export function bestImage(images: unknown): ProviderImage | null {
+  const list = (Array.isArray(images) ? images : []) as Array<{ url?: unknown; width?: unknown; height?: unknown; ratio?: unknown; fallback?: unknown }>;
+  const ok = list
+    .map((i) => ({ url: typeof i.url === 'string' ? i.url : '', width: Number(i.width) || null, height: Number(i.height) || null, ratio: i.ratio, fallback: i.fallback === true }))
+    .filter((i) => /^https:\/\/[^\s]+$/.test(i.url) && !i.fallback && (i.width ?? 0) >= 600 && (i.width ?? 0) <= 1200 && (i.ratio === '16_9' || i.ratio === '3_2' || (i.width && i.height && i.width > i.height)));
+  ok.sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
+  const top = ok[0];
+  return top ? { url: top.url, width: top.width, height: top.height } : null;
+}
 
 /** The first https URL the provider lists under each kind of external link; nothing is searched for or built. */
 export function attractionLinks(a: Record<string, unknown>): EntityLinks {
@@ -167,7 +182,7 @@ export function attractionLinks(a: Record<string, unknown>): EntityLinks {
   const out: EntityLinks = { listen: first('spotify', 'itunes'), watch: first('youtube'), official: first('homepage') };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v)) as EntityLinks;
 }
-export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null; latitude?: number | null; longitude?: number | null };
+export type DiscoveredVenue = { providerId: string; name: string; city: string | null; stateCode: string | null; countryCode: string | null; timezone: string | null; latitude?: number | null; longitude?: number | null; image?: ProviderImage | null };
 export type DiscoveredEvent = {
   providerEventId: string;
   name: string;
@@ -255,6 +270,7 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
         countryCode: str((v.country as { countryCode?: unknown } | undefined)?.countryCode),
         timezone: str(v.timezone) ?? str(dates.timezone),
         ...coordsOf(v.location),
+        image: bestImage(v.images),
       }
     : null;
   const attractions: DiscoveredAttraction[] = (embedded.attractions ?? [])
@@ -263,7 +279,7 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
       const aname = str(a.name);
       if (!aid || !aname) return null;
       const ac = (Array.isArray(a.classifications) ? (a.classifications as Array<Record<string, unknown>>) : [])[0] ?? {};
-      return { providerId: aid, name: aname, url: str(a.url), segment: nameOf(ac.segment), genre: nameOf(ac.genre), subGenre: nameOf(ac.subGenre), links: attractionLinks(a) };
+      return { providerId: aid, name: aname, url: str(a.url), segment: nameOf(ac.segment), genre: nameOf(ac.genre), subGenre: nameOf(ac.subGenre), links: attractionLinks(a), image: bestImage(a.images) };
     })
     .filter((a): a is DiscoveredAttraction => a !== null);
   // Some venues give the doors time as the event's start and the show time only in the notes ("Doors: 8PM Show: 9PM",
