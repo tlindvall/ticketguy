@@ -54,9 +54,28 @@ describe('a checkout link that names no event', () => {
 
   it('says the link names no game, what it does carry, and asks for the game, not for a link', async () => {
     const { text } = await send(TEXT, 'checkout-1@customer.example', null, FIXTURE_NOW);
-    expect(text).toContain('I can’t open StubHub pages, and that checkout link doesn’t say which game or show it is. It only has the listing number and 2 tickets. Which event and date is it?');
+    expect(text).toContain('I can’t open StubHub pages, and that checkout link doesn’t say which game or show it is. It does say 2 tickets, just not the event. Which event and date is it?');
     expect(text).toContain('A screenshot of the checkout page with the section, row and total works too.');
     expect(text).not.toMatch(/A link or screenshot works|A link works too|performer or team, city, and date/);
+  });
+
+  // Live, Oct 6 2026: a TickPick checkout link carries the price, section, row and count in its query, and the reply said
+  // "It only has the listing number and 2 tickets", plus "which game it is" for a link that names nothing.
+  const TP = 'https://www.tickpick.com/checkout/?listingId=6165862737&quantity=2&listingType=TP&price=101&dt=f&dv=4&e=8019631&s=General+Admission&r=GA';
+  it('a TickPick checkout: reads the price, seats, count and TickPick’s event number', () => {
+    expect(parseTicketLink(TP)).toMatchObject({ marketplace: 'tickpick', listingId: '6165862737', quantity: 2, priceCents: 10100, section: 'General Admission', row: 'GA', marketEventId: '8019631', eventId: null, slugText: null });
+    // Elsewhere the same short keys are not read as seats or a price.
+    expect(parseTicketLink('https://www.stubhub.com/x/event/123?s=1&r=2&price=5')).toMatchObject({ section: null, row: null, priceCents: null, marketEventId: null });
+  });
+
+  it('a TickPick checkout: says what the link carries, takes $101 as the price to check, and never says "game"', async () => {
+    const { text, requestId } = await send(`Are these tickets worth buying or should I hold off? do you think they will get cheaper? ${TP}`, 'checkout-tp@customer.example', null, FIXTURE_NOW);
+    expect(text).toContain('I can’t open TickPick pages, and that link doesn’t say which game or show it is. It does say 2 tickets, general admission and listed at $101 a ticket, just not the event. Which event and date is it? Then I’ll check that price against the market.');
+    expect(text).toContain('because I don’t know which event it is. Once you pick the event, I’ll check');
+    expect(text).not.toMatch(/only has the listing number|which game it is|pick the game|A screenshot of the checkout page/);
+    const versions = await h.db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, requestId));
+    const brief = versions.sort((a, b) => b.revision - a.revision)[0]!.brief as { quotedPriceCents: number | null; quotedPriceBasis: string | null; quantity: number | null };
+    expect(brief).toMatchObject({ quotedPriceCents: 10100, quotedPriceBasis: 'per_ticket', quantity: 2 });
   });
 
   it('once they name the game, the thread resolves it and keeps the two tickets and the link', async () => {

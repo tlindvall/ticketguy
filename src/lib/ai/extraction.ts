@@ -9,6 +9,8 @@ import { MARKETS } from '@/lib/domain/markets';
 import { neighbourhoodFor } from '@/lib/domain/neighbourhoods';
 import { stateCodeFor } from '@/lib/domain/us-states';
 import { MARKETPLACE_NAMES, ticketLinksIn, type TicketLink } from '@/lib/domain/ticket-links';
+import { seatPhrase } from '@/lib/domain/event-noun';
+import { formatUsd } from '@/lib/domain/money';
 import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
@@ -416,8 +418,13 @@ export function titleCaseName(name: string): string {
 function blindLinkQuestion(l: TicketLink, who: string | null, priceAsked: boolean): string {
   const site = MARKETPLACE_NAMES[l.marketplace];
   const kind = /\bcheckout\./i.test(l.url) ? 'checkout link' : 'link';
-  const read = l.listingId ? ` It only has the listing number${l.quantity ? ` and ${l.quantity === 1 ? 'one ticket' : `${l.quantity} tickets`}` : ''}.` : '';
-  return `I can’t open ${site} pages, and that ${kind} doesn’t say which ${who ? `${who} date` : 'game or show'} it is.${read} Which ${who ? 'date and venue' : 'event and date'} is it? ${priceAsked ? 'Then I’ll check that price against the market. ' : ''}A screenshot of the checkout page with the section, row and total works too.`;
+  // Everything the link does say is said back (live Oct 6: a TickPick checkout with the price, section, row and count
+  // in it got "It only has the listing number and 2 tickets").
+  const seats = seatPhrase(l.section, l.row);
+  const bits = [l.quantity ? (l.quantity === 1 ? 'one ticket' : `${l.quantity} tickets`) : null, seats, l.priceCents ? `listed at ${formatUsd(l.priceCents)} a ticket` : null].filter((b): b is string => !!b);
+  const read = bits.length ? ` It does say ${bits.length > 1 ? `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}` : bits[0]}, just not the event.` : l.listingId ? ' It only has the listing number.' : '';
+  const shot = l.priceCents && seats ? '' : ' A screenshot of the checkout page with the section, row and total works too.';
+  return `I can’t open ${site} pages, and that ${kind} doesn’t say which ${who ? `${who} date` : 'game or show'} it is.${read} Which ${who ? 'date and venue' : 'event and date'} is it?${priceAsked ? ' Then I’ll check that price against the market.' : ''}${shot}`;
 }
 
 export function clarificationQuestions(missing: string[], known: RequestExtraction): string[] {

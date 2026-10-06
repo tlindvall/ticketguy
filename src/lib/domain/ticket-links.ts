@@ -15,6 +15,15 @@ export type TicketLink = {
   /** The words of the path before the date: "new york rangers new york". */
   slugText: string | null;
   /**
+   * What a checkout link's query says about the seats, when it says it (TickPick:
+   * "?listingId=…&quantity=2&price=101&e=8019631&s=General+Admission&r=GA"): the listed price a ticket in cents,
+   * the section and row as written, and the marketplace's own event number. Read, never verified: the page isn't.
+   */
+  priceCents: number | null;
+  section: string | null;
+  row: string | null;
+  marketEventId: string | null;
+  /**
    * The link's encoding was broken ("%ZZ" from a phone's copy): the parts that decoded are read as usual, the broken
    * ones are left as they were, and the reply can say the link came through damaged (LAUNCH-05).
    */
@@ -94,6 +103,15 @@ export function parseTicketLink(raw: string): TicketLink | null {
   const quantity = qtyRaw && Number(qtyRaw) >= 1 && Number(qtyRaw) <= 20 ? Number(qtyRaw) : checkout && Number(checkout[2]) >= 1 && Number(checkout[2]) <= 20 ? Number(checkout[2]) : null;
   const listingId = LISTING_PARAMS.map((k) => params.get(k)).find((v) => v && /^[\w-]{3,40}$/.test(v)) ?? checkout?.[1] ?? null;
   const eventId = /\/(?:event|production|events)\/([\w-]{3,40})(?:\/|$)/.exec(path)?.[1] ?? null;
+  // TickPick's checkout spells the listing out ("price" a ticket, "s", "r", "e"); on other sites those keys could be
+  // filters or anything else, so they are read there only.
+  const tp = marketplace === 'tickpick';
+  const priceRaw = tp ? params.get('price') ?? null : null;
+  const priceCents = priceRaw && /^\d{1,5}(?:\.\d{1,2})?$/.test(priceRaw) && Number(priceRaw) >= 1 ? Math.round(Number(priceRaw) * 100) : null;
+  const words = (v: string | null | undefined) => (v && /^[\w .'&-]{1,40}$/.test(v.trim()) ? v.trim() : null);
+  const section = words(params.get('section') ?? (tp ? params.get('s') : null));
+  const row = words(params.get('row') ?? (tp ? params.get('r') : null));
+  const marketEventId = tp ? (params.get('e') && /^\d{3,12}$/.test(params.get('e')!) ? params.get('e')! : null) : null;
 
   // The first path segment carries the names: "new-york-rangers-new-york-tickets-10-1-2026".
   // A checkout, cart or account path names nothing ("/secure/buy/checkout" is not an event called "secure").
@@ -101,7 +119,7 @@ export function parseTicketLink(raw: string): TicketLink | null {
   const firstSeg = /^checkout\./.test(host) || /^(?:secure|checkout|cart|buy|order|orders|account|my|login|signin|purchase|payment)$/.test(segs[0] ?? '') ? '' : segs[0] ?? '';
   const slugText = firstSeg.replace(/-tickets?(?:-.*)?$/, '').replace(/-?\d{1,4}-\d{1,2}-\d{2,4}.*$/, '').replace(/[-_]+/g, ' ').trim() || null;
 
-  return { url: raw, marketplace, localDate, quantity, listingId, eventId, slugText: slugText && /[a-z]{3}/.test(slugText) ? slugText : null, malformed: decoded.malformed };
+  return { url: raw, marketplace, localDate, quantity, listingId, eventId, slugText: slugText && /[a-z]{3}/.test(slugText) ? slugText : null, priceCents, section, row, marketEventId, malformed: decoded.malformed };
 }
 
 /**

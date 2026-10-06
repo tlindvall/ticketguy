@@ -5,7 +5,7 @@ import { stripQuotedContent } from '@/lib/intake/threading';
 describe('ticket links', () => {
   it('reads the StubHub link a customer pasted: date, quantity, listing and event', () => {
     const l = parseTicketLink('https://www.stubhub.com/new-york-rangers-new-york-tickets-10-1-2026/event/161415566/?backUrl=%2Fnew-york-rangers-tickets%2Fperformer%2F2764&quantity=5&listingId=13718391146');
-    expect(l).toEqual({ url: expect.any(String), marketplace: 'stubhub', localDate: '2026-10-01', quantity: 5, listingId: '13718391146', eventId: '161415566', slugText: 'new york rangers new york', malformed: false });
+    expect(l).toEqual({ url: expect.any(String), marketplace: 'stubhub', localDate: '2026-10-01', quantity: 5, listingId: '13718391146', eventId: '161415566', slugText: 'new york rangers new york', priceCents: null, section: null, row: null, marketEventId: null, malformed: false });
   });
 
   it('reads Ticketmaster, SeatGeek and Vivid Seats paths', () => {
