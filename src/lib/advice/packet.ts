@@ -11,7 +11,9 @@ import type { PolicyResult, CustomerPriorities } from './policy';
 import type { Evaluated } from '@/lib/domain/comparison';
 import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
 import { shownPriceParts } from './shown-prices';
-import { capitalize, seatPhrase } from '@/lib/domain/event-noun';
+import { capitalize, categoryLabel, seatPhrase } from '@/lib/domain/event-noun';
+import { loadRegistry, sourceIdForHost } from '@/lib/sources/registry';
+import type { TicketBrief } from '@/lib/email/ticket-brief';
 import type { AlternativesResult, ListingPicks, MarketListing } from '@/lib/market/alternatives';
 
 /**
@@ -40,7 +42,7 @@ export type ClaimRecord = {
    * One offer laid out as a card (personal-email design, Oct 3): its seats, an estimated total said as estimated, what
    * the estimate is made of and what isn't checked; then other leads and one trade-off. The link is the claim's own.
    */
-  card?: { head: string; title: string; price: string; notes: string[]; others: string[]; after: string[] };
+  card?: { head: string; title: string; price: string; notes: string[]; others: string[]; after: string[]; brief?: TicketBrief };
 };
 
 export type AdvicePacket = {
@@ -185,6 +187,10 @@ export type BuildPacketArgs = {
   offerNeeds?: { noObstructed: boolean; togetherRequired: boolean; baseline: string | null; terms?: PartyTerms | null } | null;
   /** "game" for sports, "show" otherwise. */
   eventNoun?: 'game' | 'show';
+  /** The catalog category ("concert", "nhl"), for the brief's label. */
+  eventCategory?: string | null;
+  /** Decorative artwork for the brief: hosted, https, live music only, first reply only. */
+  artworkUrl?: string | null;
   /** Questions they asked that aren't about price, answered first (TG-B02). */
   /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
   askedText?: string;
@@ -803,7 +809,7 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
     return [];
   }
   // Seats already named: the one useful next step is narrowing them, not a questionnaire (live Oct 3).
-  if (a.picks?.picks.length && picksAnswer(a)) return a.priorities.budgetTotalCents === null ? ['Want me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.'] : [];
+  if (a.picks?.picks.length && picksAnswer(a)) return a.priorities.budgetTotalCents === null ? ['If you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.'] : [];
   const out: string[] = [];
   const sub = a.subject ?? null;
   // "Are they worth it?" has already asked for the price and section in its answer.
@@ -1308,48 +1314,139 @@ export function packetCoverage(a: { said: string; trendAsked: boolean; asks: { w
 }
 
 /**
- * "Four together for about $400 with fees, inside your $400: section 214, row 10 on StubHub, $77 a ticket before fees."
- * The answer first, then the next options, then what it is and isn't: listed before fees with the allowance added, a
- * listing of more than their number may not sell exactly that many, and nothing is checked as still there.
+ * The price lead (ticket brief, Oct 6): the lowest listing for their party from the licensed resale data, said as a
+ * lead with an estimated total, never "I'd buy": the seller, the checkout total and whether the seats are together
+ * aren't checked. The card names what's missing; the marketplace link is a search, not a purchase button.
  */
 function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card: NonNullable<ClaimRecord['card']> } | null {
   const p = a.picks;
   if (!p?.picks.length || a.subject || a.quote || (a.best && a.best.comparableTotalCents !== null) || (a.textOffers && a.textOffers.length >= 2)) return null;
   const q = a.quantity;
   const n = q === 1 ? 'one' : qtyWord(q);
-  const seats = q === 1 ? 'one seat' : `${n} seats together`;
   // "General admission", never "Section General Admission, Row GA" (live Oct 5).
-  const seat = (x: (typeof p.picks)[number]) => { const s = seatPhrase(x.listing.section, x.listing.row); return s ? (s.startsWith('general admission') ? `${s} tickets` : s) : 'the cheapest listing'; };
-  const seatTitle = (x: (typeof p.picks)[number]) => capitalize(seatPhrase(x.listing.section, x.listing.row, ' · ') ?? 'cheapest listing');
+  const seat = (x: (typeof p.picks)[number]) => { const s = seatPhrase(x.listing.section, x.listing.row); return s ? (s.startsWith('general admission') ? `${s} tickets` : s) : 'the lowest listing'; };
+  const seatTitle = (x: (typeof p.picks)[number]) => capitalize(seatPhrase(x.listing.section, x.listing.row, ' · ') ?? 'Lowest listing');
   const on = (x: (typeof p.picks)[number]) => (x.listing.marketplace === 'stubhub' ? 'StubHub' : x.listing.marketplace === 'vividseats' ? 'Vivid Seats' : null);
   const [first, ...rest] = p.picks;
   const est = formatUsd(roundToDollar(first!.estimatedTotalCents));
   const budget = p.budgetTotalCents;
-  const forAll = q === 1 ? '' : q === 2 ? ' for both' : ` for all ${q}`;
-  // One listing to buy, said first and in bold (live Oct 3: three equal options read as homework, not a
-  // recommendation). An estimated total says "estimated" beside the amount: the fee allowance isn't a checkout total.
-  const head = !p.fits && budget != null
-    ? `Nothing for ${seats} fits your ${formatUsd(budget)} with fees right now. The closest is ${seat(first!)}, about ${est}${forAll} with fees (estimated).`
-    : budget != null
-      ? `I’d buy ${seat(first!)}: ${seats} for about ${est} with fees (estimated), ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)}.`
-      : `I’d buy ${seat(first!)}, the cheapest ${q === 2 ? 'pair' : q === 1 ? 'seat' : `${n} together`} I can see: about ${est}${forAll} with fees (estimated).`;
+  const party = q === 1 ? 'one ticket' : `${n} tickets`;
   const where = on(first!);
-  const age = p.age === 'undated' ? 'the resale data doesn’t say how recent it is' : typeof p.age === 'number' ? `from resale data about ${p.age} hours old` : 'from resale data refreshed in the last couple of hours';
-  const notes = [
-    `${formatUsd(first!.listedTotalCents)}${q > 1 ? ` for ${n}` : ''} before fees (${formatUsd(first!.listing.priceCents)} each), plus a ${p.feeAllowancePct}% fee allowance.`,
+  const missing = q > 1 ? 'the seller’s total with fees, that it’s still listed and whether the seats are together' : 'the seller’s total with fees and that it’s still listed';
+  const over = budget != null && !p.fits;
+  const head = over
+    ? `Nothing for ${n} fits your ${formatUsd(budget)} yet.`
+    : budget != null
+      ? `A price lead inside your ${formatUsd(budget)}: about ${est} for ${n}.`
+      : `A price lead for ${n}: about ${est}.`;
+  const rationale = over
+    ? `The closest I can see is ${seat(first!)}${where ? ` on ${where}` : ''}, about ${est} for ${party} with fees, ${formatUsd(roundToDollar(first!.estimatedTotalCents - budget))} over. It’s a lead, not a checked offer: ${missing} still need confirming.`
+    : `The lowest listing I can see for ${party} is ${seat(first!)}${where ? ` on ${where}` : ''}${budget != null ? `, ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)} with fees` : ''}. It’s a lead, not a checked offer: ${missing} still need confirming.`;
+  const ageNote = p.age === 'undated' ? 'the data doesn’t say how recently it was refreshed' : typeof p.age === 'number' ? `refreshed about ${p.age} hours ago` : 'refreshed in the last couple of hours';
+  const basis = [
+    `${formatUsd(first!.listedTotalCents)} before fees (${formatUsd(first!.listing.priceCents)} each). Includes a ${p.feeAllowancePct}% fee allowance.`,
     ...(first!.exactSplit ? [] : [`It’s a listing of ${first!.listing.quantity}, so check it sells as ${q}.`]),
-    // Where prices sit, so the pick has a frame (live Oct 5: "We need to show prices… what they range between").
-    ...(p.range && p.range.count > 1 && p.range.highCents > p.range.lowCents ? [`Right now ${p.range.count} listings have ${q === 1 ? 'a seat' : `${n} together`}, from ${formatUsd(p.range.lowCents)} to ${formatUsd(p.range.highCents)} a ticket before fees.`] : []),
-    ...(where ? [] : ['On StubHub or Vivid Seats; my data doesn’t say which, so search both.']),
-    `Not checked yet: that it’s still listed${q > 1 ? ' and the seats are together' : ''}, ${age}.`,
   ];
-  const others = p.fits ? rest.slice(0, 2).map((x) => `${seatTitle(x)}${on(x) ? ` on ${on(x)}` : ''}: ${formatUsd(x.listedTotalCents)}${q > 1 ? ` for ${n}` : ''} before fees.`) : [];
+  const facts: Array<[string, string]> = [[q > 1 ? 'Seats together' : 'Seats', q > 1 ? 'Not confirmed' : 'Single seat'], ['Listed on', where ?? 'StubHub or Vivid Seats']];
+  const alternatives = p.fits
+    ? rest.slice(0, 2).map((x) => ({ label: `${seatTitle(x)}${on(x) ? ` on ${on(x)}` : ''}`, totalCents: x.listedTotalCents, basis: 'before fees' as const, note: `${formatUsd(x.listedTotalCents - first!.listedTotalCents)} more before fees; not checked either` }))
+    : [];
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
   const after = u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : [];
-  const card = { head, title: `${seatTitle(first!)}${where ? ` on ${where}` : ''}`, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after };
-  const items = [`${card.title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after];
+  const links = p.links ?? [];
+  const brief: TicketBrief = {
+    kind: 'price_lead',
+    headline: head,
+    rationale,
+    category: categoryLabel(a.eventCategory),
+    event: briefEvent(a),
+    artworkUrl: a.artworkUrl ?? null,
+    seatLine: seatTitle(first!),
+    total: `About ${est}`,
+    forWhom: q === 1 ? 'for one' : q === 2 ? 'for two' : `for all ${n}`,
+    basis,
+    facts,
+    action: links[0] ? { label: links[0].label, url: links[0].url } : null,
+    secondary: links[1] ? { label: links[1].label, url: links[1].url } : null,
+    actionNote: `Found it? Reply with the checkout screenshot and I’ll check the total${q > 1 ? ' and whether the seats are together' : ''}.`,
+    affiliate: false,
+    alternatives,
+    after,
+    evidenceNote: `Prices from StubHub and Vivid Seats listing data, ${ageNote}. Seller, availability${q > 1 ? ' and seats together' : ''} not checked yet.`,
+  };
+  const title = `${seatTitle(first!)}${where ? ` on ${where}` : ''}`;
+  const others = alternatives.map((x) => `${x.label}: ${formatUsd(x.totalCents)}${q > 1 ? ` for ${n}` : ''} before fees.`);
+  const notes = [...basis, `Not checked yet: ${missing}; prices ${ageNote}.`];
+  const card = { head, title, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after, brief };
+  const items = [rationale, `${title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after];
   return { head, items, card };
+}
+
+/** The event as the brief's card shows it: its name, where, and when in the same words as the header. */
+function briefEvent(a: BuildPacketArgs): TicketBrief['event'] {
+  const parts = a.eventParts;
+  if (!parts) return { name: a.eventLabel, where: '', when: '' };
+  return { name: parts.title, where: parts.where, when: friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)) };
+}
+
+/** Hosts a verified offer's purchase button may point at: the registry's own site for that source. */
+function sellerFor(offer: Evaluated['offer']): string | null {
+  let host: string;
+  try {
+    const u = new URL(offer.directPurchaseUrl);
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+    host = u.hostname;
+  } catch {
+    return null;
+  }
+  if (sourceIdForHost(host) !== offer.sourceId) return null;
+  return loadRegistry().sources.find((s) => s.id === offer.sourceId)?.name ?? null;
+}
+
+/** How old a checked offer may be when the brief calls it checked (design package: ten minutes by default). */
+export const VERIFIED_OFFER_MAX_AGE_MINUTES = 10;
+
+/**
+ * The verified offer as a brief, only when every fact the card states was checked: the seller's total with fees, the
+ * listing still available, the seats together for a group, the listing's own id and page on that seller's site and a check
+ * within the last ten minutes. Anything less keeps the plain claim, never a "checkout checked" badge.
+ */
+function verifiedBrief(a: BuildPacketArgs): TicketBrief | null {
+  const best = a.best;
+  if (!best || best.comparableTotalCents === null) return null;
+  const o = best.offer;
+  const q = a.quantity;
+  const age = (a.observedAt.getTime() - Date.parse(o.observedAt)) / 60_000;
+  const seller = sellerFor(o);
+  // The seller's own listing, by its id: a staff entry or event page could be the whole event, not these seats.
+  const listed = !!o.providerListingId;
+  if (o.priceCompleteness !== 'verified_total' || o.availability !== 'available' || !seller || !listed || (q > 1 && o.seatsTogether !== true) || !(age >= -1 && age <= VERIFIED_OFFER_MAX_AGE_MINUTES)) return null;
+  const total = best.comparableTotalCents;
+  const n = q === 1 ? 'one' : qtyWord(q);
+  const seatLine = capitalize(seatPhrase(o.section, o.row, ' · ') ?? (o.admissionType === 'general_admission' || o.admissionType === 'standing' ? 'general admission' : 'Seats as listed'));
+  const budget = a.priorities.budgetTotalCents;
+  const alts = a.alternatives.filter((x) => x.comparableTotalCents !== null && x.offer.priceCompleteness === 'verified_total').slice(0, 2);
+  return {
+    kind: 'verified_offer',
+    headline: q === 1 ? 'This is the one I’d take.' : `These are the ${n} I’d take.`,
+    rationale: `It’s the lowest checked total for ${q === 1 ? 'one ticket' : `${n} together`} among the offers I checked${budget != null && total <= budget ? `, ${formatUsd(budget - total)} inside your ${formatUsd(budget)}` : ''}. ${seller} showed the total with fees${q > 1 ? ' and the seats together' : ''} when I checked.`,
+    category: categoryLabel(a.eventCategory),
+    event: briefEvent(a),
+    artworkUrl: a.artworkUrl ?? null,
+    seatLine,
+    total: formatUsd(total),
+    forWhom: q === 1 ? 'for one' : q === 2 ? 'for two' : `for all ${n}`,
+    basis: [`${formatUsd(perPersonCents(total, q))} each · fees included`],
+    facts: [[q > 1 ? 'Seats together' : 'Seats', q > 1 ? 'Confirmed' : 'Single seat'], ['Seller', seller]],
+    action: { label: `View these ${q === 1 ? 'tickets' : 'seats'} on ${seller}`, url: o.directPurchaseUrl },
+    secondary: null,
+    actionNote: `Checked ${checkedAt(new Date(o.observedAt), a.timeZone)}. Not held; availability can change.`,
+    affiliate: !!o.affiliateUrl,
+    alternatives: alts.map((x) => ({ label: `${capitalize(seatPhrase(x.offer.section, x.offer.row, ' · ') ?? x.offer.seatClass ?? 'Another listing')}${sellerFor(x.offer) ? ` on ${sellerFor(x.offer)}` : ''}`, totalCents: x.comparableTotalCents!, basis: 'fees included' as const, note: `${formatUsd(x.comparableTotalCents! - total)} more${x.offer.seatClass && x.offer.seatClass !== o.seatClass ? ', a different part of the venue' : ''}` })),
+    after: [],
+    evidenceNote: `Total, availability${q > 1 ? ' and seats together' : ''} checked on ${seller} ${checkedAt(new Date(o.observedAt), a.timeZone)}. Prices can change before checkout.`,
+  };
 }
 
 /** Their "is that realistic?" about the cap they gave, from the cheapest pair the market shows; null when not asked. */
@@ -1530,6 +1627,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   if (a.best && a.best.comparableTotalCents !== null) {
     const total = a.best.comparableTotalCents;
     const pp = perPersonCents(total, q);
+    const vb = verifiedBrief(a);
     claims.push({
       id: 'C_BEST',
       kind: 'current_offer',
@@ -1541,6 +1639,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       limitations: a.best.flags,
       customerVisible: true,
       url: a.best.offer.directPurchaseUrl,
+      ...(vb ? { card: { head: vb.headline, title: vb.seatLine, price: vb.total, notes: vb.basis, others: [], after: [], brief: vb } } : {}),
     });
   }
   a.alternatives.slice(0, 2).forEach((alt, i) => {

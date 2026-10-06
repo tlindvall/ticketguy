@@ -150,28 +150,26 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Seats for two, named from the listings we can read, are the answer (live Oct 3: seats, not questions). They are
     // the one price summary: no venue floor or budget sum from it under them.
-    // One listing to buy, said first, then the game, then the offer as a card (personal-email design, Oct 3). The feed
-    // here names no marketplace, as live: both are searched, and it says why.
-    expect(rec!.bodyText).toContain('Hey,\n\nI’d buy Section 101, Row 10, the cheapest pair I can see: about $247 for both with fees (estimated).\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets\n\nSection 101 · Row 10\nAbout $247 for two, estimated\n$190 for two before fees ($95 each), plus a 30% fee allowance.\nRight now 4 listings have two together, from $95 to $155 a ticket before fees.\nOn StubHub or Vivid Seats; my data doesn’t say which, so search both.\nNot checked yet: that it’s still listed and the seats are together');
-    expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\n\nOther leads shown\nSection 215 · Row 8: $240 for two before fees.\nSection 210 · Row 4: $280 for two before fees.');
+    // The ticket brief (Oct 6): a price lead with its headline and reason, then the card with the event, the estimate
+    // said as estimated and what isn't checked. The feed here names no marketplace, as live: both are searched.
+    expect(rec!.bodyText).toContain('Hey,\n\nA price lead for two: about $247.\n\nThe lowest listing I can see for two tickets is Section 101, Row 10. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30, at 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two\n$190 before fees ($95 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
+    expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\nFound it? Reply with the checkout screenshot');
+    expect(rec!.bodyText).toContain('Other price leads\nSection 215 · Row 8: $240 before fees. $50 more before fees; not checked either\nSection 210 · Row 4: $280 before fees.');
+    expect(rec!.bodyText).toContain('Prices from StubHub and Vivid Seats listing data, refreshed in the last couple of hours. Seller, availability and seats together not checked yet.');
+    expect(rec!.bodyText).not.toMatch(/I’d buy|Other leads shown|cheapest available|narrow it down/);
     // The card's links are on the card, once.
     expect(rec!.bodyText.match(/Search StubHub for this game/g)).toHaveLength(1);
-    // The ticket brief (Oct 6): the game on the card, a stub line, the pick in the cream half badged as an estimate,
-    // the estimate in large type, the first link as the button and the second beside it.
-    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>I’d buy Section 101, Row 10, the cheapest pair I can see: about $247 for both with fees (estimated).</strong></p>');
-    expect(rec!.bodyHtml).toContain('NBA · Your ticket brief</div>');
-    expect(rec!.bodyHtml).toContain('Metro Testers vs. Boston</div><div style="font-size:14px;line-height:22px;color:#536174;">Test Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets</div>');
-    expect(rec!.bodyHtml).toContain('border-top:1px dashed #cbd2d3');
-    expect(rec!.bodyHtml).toContain('My pick · estimate</span>');
-    expect(rec!.bodyHtml).toContain('About $247 for two <span style="font-size:15px;line-height:22px;font-weight:400;letter-spacing:0;color:#536174;">estimated</span>');
-    expect(rec!.bodyHtml).toMatch(/<a href="https:\/\/www\.stubhub\.com\/search\?q=[^"]+" style="display:block;[^"]*">Search StubHub for this game&nbsp;&#8599;<\/a>/);
-    expect(rec!.bodyHtml).toMatch(/<a href="https:\/\/www\.vividseats\.com\/search\?searchTerm=[^"]+" style="color:#142438;text-decoration:underline;font-weight:700;">Search Vivid Seats for this game<\/a>/);
-    // The event is said once, on the card, not again as a header above it.
-    expect(rec!.bodyHtml.match(/Metro Testers vs\. Boston</g)).toHaveLength(1);
-    // Neither team has a brand row here, so there is no artwork rather than a stand-in.
+    // The card: headline, neutral badge (lime is for checked offers), the estimate large, the search as an outlined
+    // button, never a filled purchase button.
+    expect(rec!.bodyHtml).toContain('>A price lead for two: about $247.</h1>');
+    expect(rec!.bodyHtml).toContain('background:#e9e3d8;');
+    expect(rec!.bodyHtml).not.toContain('background:#d7f36b;');
+    expect(rec!.bodyHtml).toContain('About $247 <span');
+    expect(rec!.bodyHtml).toMatch(/<td bgcolor="#ffffff"[^>]*><a href="https:\/\/www\.stubhub\.com\/search\?q=[^"]+"[^>]*>Search StubHub for this game&nbsp;↗<\/a>/);
+    // No artwork on a game: the generic concert art is for live music only.
     expect(rec!.bodyHtml).not.toContain('<img');
-    // With no budget, the one next step is an offer to narrow it, on its own line, not a questionnaire.
-    expect(rec!.bodyText).toContain('\n\nWant me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.');
+    // With no budget, the one next step is a specific offer, on its own line, not a questionnaire.
+    expect(rec!.bodyText).toContain('\n\nIf you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.');
     expect(rec!.bodyText).not.toMatch(/things that would help|One thing that would help|When do you need tickets sorted by/);
     expect(rec!.bodyText).not.toContain('The resale market when I last checked');
     expect(rec!.bodyText).not.toContain('SeatData');
@@ -411,8 +409,9 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Five together, named: the $140 block is six tickets and would leave the seller one, so it's said and passed over.
-    expect(rec!.bodyText).toContain('I’d buy Section 112, Row 2, the cheapest five together I can see: about $1,008 for all 5 with fees (estimated).');
-    expect(rec!.bodyText).toContain('Section 112 · Row 2\nAbout $1,008 for five, estimated\n$775 for five before fees ($155 each), plus a 30% fee allowance.');
+    // Their buy-or-wait question leads; the brief's card follows it without naming the game a second time.
+    expect(rec!.bodyText).toContain('Price lead · still needs checking\nSection 112 · Row 2\nAbout $1,008 for all five\n$775 before fees ($155 each). Includes a 30% fee allowance.');
+    expect(rec!.bodyText.match(/Metro Testers vs\. Boston/g)).toHaveLength(1);
     expect(rec!.bodyText).toContain('Why not cheaper: Section 210 at $140 each is 6 tickets, and sellers rarely leave a single seat.');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');
     await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);

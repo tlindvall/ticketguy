@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AdvicePacket, ClaimRecord } from './packet';
-import type { BriefArt, MatchupSide } from '@/lib/brand/assets';
+import { briefCard, briefEvidence, briefTop, type TicketBrief } from '@/lib/email/ticket-brief';
 
 /**
  * Safe response renderer + validator (ADVICE_ENGINE §8 step 5–6).
@@ -127,6 +127,13 @@ function labelRich(s: string): string {
  */
 function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[], html: string[], withHead: boolean): void {
   const k = c.card!;
+  if (k.brief) {
+    // Leading, the card carries the event; after another answer, the header above already named it.
+    const card = briefCard(k.brief, { withEvent: !withHead });
+    lines.push(...card.text);
+    html.push(...card.html);
+    return;
+  }
   const links = [c, ...(alt?.customerVisible && alt.url ? [alt] : [])].filter((x) => x.url);
   if (withHead) {
     lines.push(k.head);
@@ -141,79 +148,13 @@ function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[]
       `</td></tr></table>`,
   );
   if (k.others.length) {
-    lines.push(['Other leads shown', ...k.others].join('\n'));
-    html.push(P(`<strong>Other leads shown</strong><br>${k.others.map(esc).join('<br>')}`));
+    lines.push(['Other price leads', ...k.others].join('\n'));
+    html.push(P(`<strong>Other price leads</strong><br>${k.others.map(esc).join('<br>')}`));
   }
   for (const a of k.after) {
     lines.push(a);
     html.push(P(esc(a)));
   }
-}
-
-/**
- * What the ticket brief card needs beyond the packet: the label over the title ("NHL") and the artwork chosen for the
- * event (brand/assets.ts). Resolved by the caller, since it reads the database; the renderer stays pure.
- */
-export type BriefContext = { label: string; art: BriefArt | null };
-
-const INK = '#142438';
-const MUTED = '#536174';
-const FONT = 'font-family:Arial,Helvetica,sans-serif;';
-
-/** The artwork row: two teams side by side in their colours, a 3:1 image, or a band in a show's colours. */
-function artRow(art: BriefArt): string {
-  if (art.kind === 'image') {
-    return `<tr><td style="font-size:0;line-height:0;background:${INK};"><img src="${esc(art.url)}" alt="" role="presentation" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;"></td></tr>`;
-  }
-  if (art.kind === 'band') {
-    return `<tr><td bgcolor="${art.color}" style="background:${art.color};padding:30px 24px 26px;${FONT}"><div style="width:36px;height:4px;background:${art.accent};font-size:0;line-height:0;margin:0 0 12px;">&nbsp;</div><div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-.4px;color:${art.textColor};">${esc(art.label)}</div></td></tr>`;
-  }
-  const cell = (s: MatchupSide, width: string, align: 'left' | 'right') => {
-    const logo = s.logoUrl ? `<img src="${esc(s.logoUrl)}" alt="" role="presentation" width="56" height="56" style="display:block;width:56px;height:56px;border:0;${align === 'right' ? 'margin-left:auto;' : ''}">` : '';
-    const short = s.shortName ? `<div style="font-size:26px;line-height:30px;font-weight:700;letter-spacing:.5px;color:${s.textColor};">${esc(s.shortName)}</div>` : '';
-    return `<td width="${width}" align="${align}" bgcolor="${s.color}" style="background:${s.color};padding:20px 20px 18px;vertical-align:middle;${FONT}">${logo}${logo && short ? '<div style="height:8px;line-height:8px;font-size:0;">&nbsp;</div>' : ''}${short}<div style="font-size:13px;line-height:18px;color:${s.textColor};">${esc(s.name)}</div></td>`;
-  };
-  if (!art.right) return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cell(art.left, '100%', 'left')}</tr></table></td></tr>`;
-  const vs = `<td width="44" align="center" bgcolor="${INK}" style="background:${INK};vertical-align:middle;${FONT}font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;color:#ffffff;">VS</td>`;
-  return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cell(art.left, '46%', 'left')}${vs}${cell(art.right, '46%', 'right')}</tr></table></td></tr>`;
-}
-
-/**
- * The ticket brief (ticket-brief design, Oct 6): the event as a ticket, its artwork on top, then what it is, where
- * and when, a stub-style dashed line, and the pick in the cream half with its estimate in large type and the link as
- * a button. Same facts as the plain card and the text body; only the layout changes. An estimate is never badged as
- * checked: the badge says it is an estimate, in a neutral colour (lime is kept for a checked offer).
- */
-function briefCard(c: ClaimRecord, alt: ClaimRecord | undefined, brief: BriefContext, header: { title: string; details: string } | null, html: string[]): void {
-  const k = c.card!;
-  const links = [c, ...(alt?.customerVisible && alt.url ? [alt] : [])].filter((x) => x.url);
-  const [first, ...more] = links;
-  const label = (s: string) => `<div style="${FONT}font-size:11px;line-height:17px;letter-spacing:1.1px;font-weight:700;text-transform:uppercase;color:${MUTED};">${esc(s)}</div>`;
-  // A band in the show's colours already names it; the title isn't said twice.
-  const named = brief.art?.kind === 'band' && header && brief.art.label === header.title;
-  const event = header
-    ? `<tr><td style="padding:22px 24px 20px;${FONT}">${label(`${brief.label} · Your ticket brief`)}${named ? '<div style="height:6px;line-height:6px;font-size:0;">&nbsp;</div>' : `<div style="margin:6px 0 6px;font-size:25px;line-height:32px;letter-spacing:-.5px;font-weight:700;color:${INK};">${esc(header.title)}</div>`}<div style="font-size:14px;line-height:22px;color:${MUTED};">${esc(header.details)}</div></td></tr><tr><td style="padding:0 24px;"><div style="border-top:1px dashed #cbd2d3;height:1px;line-height:1px;font-size:0;">&nbsp;</div></td></tr>`
-    : '';
-  const price = k.price.replace(/^About /, '');
-  const button = first
-    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 0;"><tr><td bgcolor="${INK}" style="background:${INK};border-radius:7px;text-align:center;"><a href="${esc(first.url!)}" style="display:block;padding:14px 18px;${FONT}font-size:15px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;">${esc(first.linkLabel ?? 'View this listing')}&nbsp;&#8599;</a></td></tr></table>`
-    : '';
-  const secondary = more.map((l) => `<a href="${esc(l.url!)}" style="color:${INK};text-decoration:underline;font-weight:700;">${esc(l.linkLabel ?? 'View this listing')}</a>`).join(' · ');
-  html.push(
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e0e4e4;border-radius:12px;border-collapse:separate;overflow:hidden;margin:0 0 22px;">` +
-      (brief.art ? artRow(brief.art) : '') +
-      event +
-      `<tr><td bgcolor="#f7f4ec" style="background:#f7f4ec;padding:20px 24px 22px;${FONT}font-size:16px;line-height:24px;color:${INK};">` +
-      `<span style="display:inline-block;background:#e9e3d8;color:${INK};padding:4px 9px;border-radius:4px;font-size:11px;line-height:17px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;">My pick · estimate</span>` +
-      `<div style="margin:14px 0 0;font-size:16px;line-height:24px;font-weight:700;">${esc(k.title)}</div>` +
-      `<div style="margin:4px 0 6px;font-size:30px;line-height:38px;font-weight:700;letter-spacing:-.8px;">About ${esc(price)} <span style="font-size:15px;line-height:22px;font-weight:400;letter-spacing:0;color:${MUTED};">estimated</span></div>` +
-      k.notes.map((n) => `<div style="font-size:14px;line-height:21px;color:${MUTED};margin:0 0 4px;">${esc(n)}</div>`).join('') +
-      button +
-      (secondary ? `<div style="margin:12px 0 0;font-size:14px;line-height:21px;">${secondary}</div>` : '') +
-      `</td></tr></table>`,
-  );
-  if (k.others.length) html.push(P(`<strong>Other options I saw</strong><br>${k.others.map(esc).join('<br>')}`));
-  for (const a of k.after) html.push(P(esc(a)));
 }
 
 /** A bold lead line and its bullets, in both bodies. */
@@ -234,7 +175,7 @@ export function restates(prose: string, claim: string): boolean {
   return shared / p.size >= 0.7;
 }
 
-export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean; brief?: BriefContext | null } = {}): ValidationResult {
+export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean } = {}): ValidationResult {
   const parsed = ResponseBlocksSchema.safeParse(blocks);
   if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) };
   const b = parsed.data;
@@ -291,18 +232,23 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   html.push(P(GREETING));
   // The header names the event, the party and the link they sent, so the opening line can be the answer.
   const head = header(packet);
-  // Named seats lead with the answer, then the event, then the offer (personal-email design, Oct 3).
+  // Named seats lead with the answer, then the event, then the offer (personal-email design, Oct 3). The ticket brief
+  // (Oct 6) puts its headline and reason first and carries the event on its card, so the header line isn't repeated.
   const pickCard = claim('C_PICKS')?.card ? claim('C_PICKS')! : undefined;
-  const picksFirst = !!pickCard && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER');
-  if (picksFirst) {
+  const bestBrief = claim('C_BEST')?.card?.brief ? claim('C_BEST')! : undefined;
+  const brief: TicketBrief | undefined = pickCard?.card?.brief ?? bestBrief?.card?.brief;
+  const picksFirst = !!(pickCard ?? bestBrief) && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER');
+  if (picksFirst && brief) {
+    const top = briefTop(brief);
+    lines.push(...top.text);
+    html.push(...top.html);
+  } else if (picksFirst) {
     lines.push(pickCard!.card!.head);
     html.push(P(`<strong>${esc(pickCard!.card!.head)}</strong>`));
   }
-  // With a ticket brief the event's name, place and time are on the card itself, so the header goes there, once.
-  const brief = opts.brief && pickCard ? opts.brief : null;
-  if (head) {
+  if (head && !(picksFirst && brief)) {
     lines.push(head.text);
-    if (!brief) html.push(head.html);
+    html.push(head.html);
   }
   // The answer to what they asked comes first: the verdict on their listing, the price they asked about, or,
   // with neither and nothing verified or on official sale to recommend, what the market means for them.
@@ -314,18 +260,10 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [claim('C_CORRECTION'), watch, claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PICKS'), claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [claim('C_CORRECTION'), watch, claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PICKS'), bestBrief, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
     if (c.card) {
-      if (brief) {
-        // The text body is the same either way; only the HTML card is the brief.
-        const textOnly: string[] = [];
-        offerCard(c, claimsById.get('C_PICKS_ALT'), lines, textOnly, !picksFirst);
-        if (!picksFirst) html.push(P(`<strong>${esc(c.card.head)}</strong>`));
-        briefCard(c, claimsById.get('C_PICKS_ALT'), brief, packet.headlineTitle && packet.headlineDetails ? { title: packet.headlineTitle, details: packet.headlineDetails } : packet.headline ? { title: packet.headline, details: '' } : null, html);
-        return;
-      }
       offerCard(c, claimsById.get('C_PICKS_ALT'), lines, html, !picksFirst);
       return;
     }
@@ -406,7 +344,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -421,7 +359,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(P(esc(coverage.text)));
   }
   // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')));
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
   // The offer card carries its own links.
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
@@ -444,9 +382,16 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n'));
     html.push(P(linked.map((c) => `<a href="${esc(c.url!)}" style="font-weight:600;">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>')));
   }
-  if (opts.affiliateDisclosure) {
+  // The card says it beside its own button; said again only for other links.
+  if (opts.affiliateDisclosure && !(brief?.affiliate && !linked.length)) {
     lines.push(opts.affiliateDisclosure);
     html.push(P(esc(opts.affiliateDisclosure)));
+  }
+  // Where the card's numbers came from and what isn't checked, in small print, last.
+  if (brief) {
+    const note = briefEvidence(brief);
+    lines.push(note.text);
+    html.push(note.html);
   }
   return { ok: true, textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
 }
