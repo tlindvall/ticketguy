@@ -8,8 +8,9 @@ import { JsonForm } from '@/components/JsonForm';
 import { formatUsd } from '@/lib/domain/money';
 import { nowMs } from '@/lib/util/clock';
 import { ago, whenStaff } from '@/lib/admin/labels';
-import { SEATDATA_PROVIDER } from '@/lib/market/series';
+import { SEATDATA_PROVIDER, TICKETDATA_PROVIDER } from '@/lib/market/series';
 import { ensureMarketDatasets, marketLicence } from '@/lib/market/tracker';
+import { ensureTicketDataDataset, ticketDataLicence } from '@/lib/market/ticketdata-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,7 @@ const USE_LABEL: Record<string, string> = {
 };
 
 const TRACK_STATE: Record<string, string> = { pending_match: 'Finding it on SeatData', requested: 'Asked SeatData to add it', active: 'Tracking', unmatched: 'Not on SeatData', ended: 'Event over' };
+const TD_TRACK_STATE: Record<string, string> = { pending_match: 'Finding it on TicketData', requested: 'Asked TicketData to add it', active: 'Tracking', unmatched: 'Not on TicketData', ended: 'Event over' };
 
 /**
  * Resale market data (SeatData, DECISION_LOG #44): the licence switches, what is being tracked and what it
@@ -33,6 +35,8 @@ export default async function Market() {
   const { db } = await getDb();
   await ensureMarketDatasets(db);
   const lic = await marketLicence(db);
+  await ensureTicketDataDataset(db);
+  const tdLic = await ticketDataLicence(db);
   const now = nowMs();
   const day = new Date(Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate()));
   const [calls] = await db.select({ n: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), gte(t.marketFetches.at, day)));
@@ -44,6 +48,12 @@ export default async function Market() {
   const [shape] = await db.select({ at: t.marketFetches.at, detail: t.marketFetches.detail }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.status, 'success'), sql`${t.marketFetches.kind} in ('listings', 'listings_compare', 'listings_watch')`, sql`${t.marketFetches.detail} like '%keys %'`)).orderBy(desc(t.marketFetches.at)).limit(1);
   const [history] = await db.select({ events: sql<number>`count(distinct ${t.marketHistory.providerEventId})::int`, points: sql<number>`count(*)::int` }).from(t.marketHistory);
   const [own] = await db.select({ points: sql<number>`count(*)::int` }).from(t.marketSnapshots).where(eq(t.marketSnapshots.sourceIds, sql`'["seatdata"]'::jsonb`));
+  // TicketData (investigational): same shapes, provider-scoped.
+  const [tdCalls] = await db.select({ n: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, TICKETDATA_PROVIDER), gte(t.marketFetches.at, day)));
+  const tdByState = await db.select({ state: t.trackedEvents.state, n: sql<number>`count(*)::int` }).from(t.trackedEvents).where(eq(t.trackedEvents.provider, TICKETDATA_PROVIDER)).groupBy(t.trackedEvents.state);
+  const tdTracked = await db.select({ tr: t.trackedEvents, name: t.events.name, at: t.events.localStartAt }).from(t.trackedEvents).innerJoin(t.events, eq(t.events.id, t.trackedEvents.eventId)).where(eq(t.trackedEvents.provider, TICKETDATA_PROVIDER)).orderBy(t.events.localStartAt).limit(60);
+  const tdErrors = await db.select().from(t.marketFetches).where(and(eq(t.marketFetches.provider, TICKETDATA_PROVIDER), eq(t.marketFetches.status, 'error'))).orderBy(desc(t.marketFetches.at)).limit(5);
+  const [tdPoints] = await db.select({ points: sql<number>`count(*)::int` }).from(t.marketSnapshots).where(eq(t.marketSnapshots.sourceIds, sql`'["ticketdata"]'::jsonb`));
 
   const scored = await db.select().from(t.shadowAdvice).where(isNotNull(t.shadowAdvice.scoredAt));
   const [pending] = await db.select({ n: sql<number>`count(*)::int` }).from(t.shadowAdvice).where(sql`${t.shadowAdvice.scoredAt} is null`);
@@ -105,6 +115,42 @@ export default async function Market() {
         ) : <p className="mt-2 text-sm text-gray-500">Admin role required to change the licence.</p>}
       </section>
 
+      <section className="rounded-lg border border-gray-200 p-4">
+        <h2 className="text-lg font-semibold">Licence (TicketData, investigational)</h2>
+        <p className="mt-1 text-sm">
+          Status <span className={`tg-badge ${tdLic.status === 'approved' ? 'tg-badge-ok' : 'tg-badge-warn'}`}>{tdLic.status}</span> · enabled {e.TICKETDATA_ENABLED ? <span className="tg-badge tg-badge-ok">yes</span> : <span className="tg-badge tg-badge-warn">no</span>} · calls today {tdCalls?.n ?? 0} of {e.TICKETDATA_DAILY_CALL_LIMIT}
+        </p>
+        <ul className="mt-2 space-y-1 text-sm">
+          {Object.entries(USE_LABEL).map(([k, label]) => (
+            <li key={k}>{tdLic.allows(k as never) ? '✓' : '✗'} {label}</li>
+          ))}
+        </ul>
+        <p className="mt-2 text-xs text-gray-600">
+          TicketData is a vendor lead for historical pricing (ADVICE_ENGINE §3), not an approved integration. Its get-in prices are all-in per ticket — a different basis from SeatData&rsquo;s listed-before-fees series, so the two are never mixed in one basket or trend. Request dataset documentation, coverage, fee basis and retention/derived-use rights before approving anything beyond quarantined. Nothing runs without both the enabled flag and tracking approval here.
+        </p>
+        {staff.role === 'admin' ? (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm font-medium">Change licence</summary>
+            <div className="mt-2">
+              <JsonForm
+                url="/api/admin/ticketdata-licence"
+                submitLabel="Save licence"
+                fields={[
+                  { name: 'status', label: 'Status', type: 'select', required: true, defaultValue: tdLic.status === 'missing' ? 'quarantined' : tdLic.status, options: [{ value: 'quarantined', label: 'Quarantined (nothing runs)' }, { value: 'approved', label: 'Approved for the uses ticked below' }, { value: 'revoked', label: 'Revoked' }] },
+                  { name: 'tracking', label: USE_LABEL.tracking!, type: 'checkbox', defaultValue: tdLic.uses.includes('tracking') },
+                  { name: 'benchmark', label: USE_LABEL.benchmark!, type: 'checkbox', defaultValue: tdLic.uses.includes('benchmark') },
+                  { name: 'advice', label: USE_LABEL.advice!, type: 'checkbox', defaultValue: tdLic.uses.includes('advice') },
+                  { name: 'customerDisplay', label: USE_LABEL.customer_display!, type: 'checkbox', defaultValue: tdLic.uses.includes('customer_display') },
+                  { name: 'alerts', label: USE_LABEL.alerts!, type: 'checkbox', defaultValue: tdLic.uses.includes('alerts') },
+                  { name: 'licenseReference', label: 'What allows it (licence version, TicketData contact date and sender, exact uses granted)', type: 'textarea', defaultValue: tdLic.row?.licenseReference ?? '' },
+                  { name: 'rawRetentionUntil', label: 'Keep data until (blank = no end date in the licence)', type: 'datetime' },
+                ]}
+              />
+            </div>
+          </details>
+        ) : <p className="mt-2 text-sm text-gray-500">Admin role required to change the licence.</p>}
+      </section>
+
       <section>
         <h2 className="text-lg font-semibold">What we follow</h2>
         <p className="mt-1 text-sm text-gray-600">
@@ -128,6 +174,29 @@ export default async function Market() {
         ) : null}
         {shape ? <p className="mt-2 text-xs text-gray-600">Last listings read ({whenStaff(shape.at)}): {shape.detail?.replace(/^.*?(?=top |keys )/, '')}</p> : null}
         {errors.length ? <p className="mt-2 text-xs text-rose-700">Recent errors: {errors.map((x) => `${whenStaff(x.at)} ${x.kind} ${x.detail ?? ''}`).join(' · ')}</p> : null}
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold">What we follow (TicketData)</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Staff-enrolled events only, while investigational — no auto-enrollment. One daily check per event; a get-in price plus a one-time history backfill per event. {tdByState.map((s) => `${TD_TRACK_STATE[s.state] ?? s.state}: ${s.n}`).join(' · ') || 'Nothing enrolled yet.'}
+        </p>
+        <p className="mt-1 text-sm text-gray-600">Our own TicketData history: {tdPoints?.points ?? 0} market points.</p>
+        {tdTracked.length ? (
+          <table className="tg-table mt-3">
+            <thead><tr><th>Event</th><th>Status</th><th>Latest data</th><th>Next check</th><th>Why</th></tr></thead>
+            <tbody>{tdTracked.map(({ tr, name, at }) => (
+              <tr key={tr.id}>
+                <td>{name}<div className="text-xs text-gray-500">{whenStaff(at)}</div></td>
+                <td>{TD_TRACK_STATE[tr.state] ?? tr.state}{tr.lastError ? <div className="text-xs text-rose-700">{tr.lastError}</div> : null}</td>
+                <td>{tr.lastObservedAt ? ago(tr.lastObservedAt.getTime(), now) : '—'}</td>
+                <td>{tr.state === 'active' || tr.state === 'pending_match' || tr.state === 'requested' ? whenStaff(tr.nextPollAt) : '—'}</td>
+                <td className="text-xs">{tr.reasons.join(', ')}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        ) : null}
+        {tdErrors.length ? <p className="mt-2 text-xs text-rose-700">Recent errors: {tdErrors.map((x) => `${whenStaff(x.at)} ${x.kind} ${x.detail ?? ''}`).join(' · ')}</p> : null}
       </section>
 
       <section>

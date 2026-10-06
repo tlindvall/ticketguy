@@ -10,6 +10,7 @@ import { detailFromWebhookPayload, fetchReceivedEmail, withAttachmentUrls, downl
 import { audit } from '@/lib/util/audit';
 import { prewarmCatalog } from '@/lib/catalog/prewarm';
 import { MarketTracker, purgeExpiredMarketData } from '@/lib/market/tracker';
+import { runTicketDataSync } from '@/lib/market/ticketdata-sync';
 
 /**
  * Durable workflows. Each step retrieves data by ID; nothing large is checkpointed. Handlers are idempotent
@@ -165,6 +166,25 @@ export async function runMarketTracking() {
   return r;
 }
 
+/**
+ * TicketData price-intelligence sync (investigational vendor lead, ADVICE_ENGINE §3): daily; does
+ * nothing until TICKETDATA_ENABLED and the TicketData licence is approved for tracking. Staff enroll
+ * tracked_events rows (provider 'ticketdata') while investigational — no auto-enrollment.
+ */
+export const trackTicketData = inngest.createFunction(
+  { id: 'track-ticketdata', concurrency: { limit: 1 }, triggers: [cron('23 6 * * *')] },
+  async ({ step }) => {
+    return step.run('track', async () => runTicketDataTracking());
+  },
+);
+
+export async function runTicketDataTracking() {
+  const { db } = await getDb();
+  const r = await runTicketDataSync(db, env(), { limit: 50 });
+  if (!r.skipped && r.polled) await audit(db, { actor: 'system', action: 'market.ticketdata_pass', entityKind: 'system', entityId: 'ticketdata', diff: r });
+  return r;
+}
+
 /** Retention: purge raw bodies/attachments past purge_at; expire media; observations past retention. */
 export const retentionSweep = inngest.createFunction(
   { id: 'retention-sweep', concurrency: { limit: 1 }, triggers: [cron('17 3 * * *')] },
@@ -213,4 +233,4 @@ export const sendFollowUps = inngest.createFunction(
   },
 );
 
-export const functions = [dispatchOutbox, evaluateWatches, evaluateEventAlerts, trackMarkets, retentionSweep, catalogPrewarm, sendFollowUps];
+export const functions = [dispatchOutbox, evaluateWatches, evaluateEventAlerts, trackMarkets, trackTicketData, retentionSweep, catalogPrewarm, sendFollowUps];
