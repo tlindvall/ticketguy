@@ -5,6 +5,7 @@ import * as t from '@/lib/db/schema';
 import { guardPage } from '@/lib/admin/guard';
 import { env } from '@/lib/config/env';
 import { JsonForm } from '@/components/JsonForm';
+import { TicketDataEnrollForm } from '@/components/TicketDataEnrollForm';
 import { formatUsd } from '@/lib/domain/money';
 import { nowMs } from '@/lib/util/clock';
 import { ago, whenStaff } from '@/lib/admin/labels';
@@ -54,6 +55,7 @@ export default async function Market() {
   const tdTracked = await db.select({ tr: t.trackedEvents, name: t.events.name, at: t.events.localStartAt }).from(t.trackedEvents).innerJoin(t.events, eq(t.events.id, t.trackedEvents.eventId)).where(eq(t.trackedEvents.provider, TICKETDATA_PROVIDER)).orderBy(t.events.localStartAt).limit(60);
   const tdErrors = await db.select().from(t.marketFetches).where(and(eq(t.marketFetches.provider, TICKETDATA_PROVIDER), eq(t.marketFetches.status, 'error'))).orderBy(desc(t.marketFetches.at)).limit(5);
   const [tdPoints] = await db.select({ points: sql<number>`count(*)::int` }).from(t.marketSnapshots).where(eq(t.marketSnapshots.sourceIds, sql`'["ticketdata"]'::jsonb`));
+  const enrollEvents = (await db.select({ id: t.events.id, name: t.events.name, at: t.events.localStartAt }).from(t.events).where(gte(t.events.localStartAt, new Date(now))).orderBy(t.events.localStartAt).limit(200)).map((e) => ({ id: e.id, label: `${e.name} — ${whenStaff(e.at)}` }));
 
   const scored = await db.select().from(t.shadowAdvice).where(isNotNull(t.shadowAdvice.scoredAt));
   const [pending] = await db.select({ n: sql<number>`count(*)::int` }).from(t.shadowAdvice).where(sql`${t.shadowAdvice.scoredAt} is null`);
@@ -197,6 +199,7 @@ export default async function Market() {
           </table>
         ) : null}
         {tdErrors.length ? <p className="mt-2 text-xs text-rose-700">Recent errors: {tdErrors.map((x) => `${whenStaff(x.at)} ${x.kind} ${x.detail ?? ''}`).join(' · ')}</p> : null}
+        {staff.role === 'admin' ? <TicketDataEnrollForm events={enrollEvents} /> : <p className="mt-2 text-sm text-gray-500">Admin role required to enroll events.</p>}
       </section>
 
       <section>
