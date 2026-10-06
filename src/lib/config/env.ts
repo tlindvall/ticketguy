@@ -235,6 +235,16 @@ const rawSchema = z.object({
   SEATDATA_API_KEY: z.string().optional(),
   SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(50),
   /**
+   * TicketData price intelligence (investigational vendor lead, ADVICE_ENGINE §3). No key: the public data
+   * API needs none. TICKETDATA_ENABLED alone enables nothing: sync runs only once the TicketData licence
+   * record in /admin/sources is approved for "tracking", and customer-facing use needs its own approved
+   * uses. Licence terms must be requested and confirmed before any production reliance. Calls per UTC day
+   * are capped; the base URL is overridable for probes.
+   */
+  TICKETDATA_ENABLED: explicitBoolean,
+  TICKETDATA_BASE_URL: z.string().url().optional(),
+  TICKETDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(100),
+  /**
    * Looking an event up on the open web when the catalog has nothing (Anthropic web search; live Oct 3, Soho House
    * Festival at Pier 17). "off" turns it off; the daily limit counts searches started, across all customers.
    */

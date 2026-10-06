@@ -16,6 +16,14 @@ export const MARKET_METHOD_VERSION = 'market-1.0';
 export const SEATDATA_PROVIDER = 'seatdata';
 /** Fixed id so the licence record survives re-seeding and every row can point at it. */
 export const SEATDATA_DATASET_ID = '5ea7da7a-0000-4000-8000-000000000001';
+/**
+ * TicketData price intelligence (investigational vendor lead, ADVICE_ENGINE §3): get-in prices are
+ * all-in, per ticket, with a full history and per-zone series. Kept strictly separate from SeatData's
+ * listed-before-fees basis: the two are never compared with each other.
+ */
+export const TICKETDATA_PROVIDER = 'ticketdata';
+/** Fixed id so the licence record survives re-seeding and every row can point at it. */
+export const TICKETDATA_DATASET_ID = '5ea7da7a-0000-4000-8000-000000000002';
 
 export type MarketBasis = 'single' | 'pair' | `group:${number}`;
 
