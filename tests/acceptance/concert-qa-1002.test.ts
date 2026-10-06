@@ -249,9 +249,12 @@ describe('jigitz with the live market: the row, the party total, then the contex
   });
 
   it('HF-C-05: an open sale is never said as seats being there', () => {
-    // Rows from another seller's page: the official sale is a place to compare, never seats.
-    const official = buildPacket(args({ ...subject('floor'), seller: 'StubHub' })).claimRecords.find((c) => c.id === 'C_OFFICIAL');
-    expect(official!.text).toBe('Ticketmaster also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check the all-in total and the seats there before you buy.');
+    // Rows from another seller's page, with nothing known about the official sale but that it's open: not suggested at
+    // all, never "I can't see whether it has seats left" (live Oct 6). With a face value it's a comparison, never seats.
+    expect(buildPacket(args({ ...subject('floor'), seller: 'StubHub' })).claimRecords.find((c) => c.id === 'C_OFFICIAL')).toBeUndefined();
+    const official = buildPacket(args({ ...subject('floor'), seller: 'StubHub' }, { faceValue: { minCents: 5000, maxCents: 9000 } })).claimRecords.find((c) => c.id === 'C_OFFICIAL');
+    expect(official!.text).toMatch(/^Ticketmaster’s face value is \$50 to \$90 a ticket before fees/);
+    expect(official!.text).not.toMatch(/seats left|are available|still available/i);
     // Rows from Ticketmaster's own page: only its link, nothing said about the sale (FV-R2-03).
     const own = buildPacket(args(subject('floor'))).claimRecords.find((c) => c.id === 'C_OFFICIAL');
     expect(own).toMatchObject({ text: '', values: { sameSeller: 1 }, linkLabel: 'Event page on Ticketmaster' });
