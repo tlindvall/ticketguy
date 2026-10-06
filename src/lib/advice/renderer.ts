@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AdvicePacket, ClaimRecord } from './packet';
+import type { BriefArt, MatchupSide } from '@/lib/brand/assets';
 
 /**
  * Safe response renderer + validator (ADVICE_ENGINE §8 step 5–6).
@@ -149,6 +150,72 @@ function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[]
   }
 }
 
+/**
+ * What the ticket brief card needs beyond the packet: the label over the title ("NHL") and the artwork chosen for the
+ * event (brand/assets.ts). Resolved by the caller, since it reads the database; the renderer stays pure.
+ */
+export type BriefContext = { label: string; art: BriefArt | null };
+
+const INK = '#142438';
+const MUTED = '#536174';
+const FONT = 'font-family:Arial,Helvetica,sans-serif;';
+
+/** The artwork row: two teams side by side in their colours, a 3:1 image, or a band in a show's colours. */
+function artRow(art: BriefArt): string {
+  if (art.kind === 'image') {
+    return `<tr><td style="font-size:0;line-height:0;background:${INK};"><img src="${esc(art.url)}" alt="" role="presentation" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;"></td></tr>`;
+  }
+  if (art.kind === 'band') {
+    return `<tr><td bgcolor="${art.color}" style="background:${art.color};padding:30px 24px 26px;${FONT}"><div style="width:36px;height:4px;background:${art.accent};font-size:0;line-height:0;margin:0 0 12px;">&nbsp;</div><div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-.4px;color:${art.textColor};">${esc(art.label)}</div></td></tr>`;
+  }
+  const cell = (s: MatchupSide, width: string, align: 'left' | 'right') => {
+    const logo = s.logoUrl ? `<img src="${esc(s.logoUrl)}" alt="" role="presentation" width="56" height="56" style="display:block;width:56px;height:56px;border:0;${align === 'right' ? 'margin-left:auto;' : ''}">` : '';
+    const short = s.shortName ? `<div style="font-size:26px;line-height:30px;font-weight:700;letter-spacing:.5px;color:${s.textColor};">${esc(s.shortName)}</div>` : '';
+    return `<td width="${width}" align="${align}" bgcolor="${s.color}" style="background:${s.color};padding:20px 20px 18px;vertical-align:middle;${FONT}">${logo}${logo && short ? '<div style="height:8px;line-height:8px;font-size:0;">&nbsp;</div>' : ''}${short}<div style="font-size:13px;line-height:18px;color:${s.textColor};">${esc(s.name)}</div></td>`;
+  };
+  if (!art.right) return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cell(art.left, '100%', 'left')}</tr></table></td></tr>`;
+  const vs = `<td width="44" align="center" bgcolor="${INK}" style="background:${INK};vertical-align:middle;${FONT}font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;color:#ffffff;">VS</td>`;
+  return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cell(art.left, '46%', 'left')}${vs}${cell(art.right, '46%', 'right')}</tr></table></td></tr>`;
+}
+
+/**
+ * The ticket brief (ticket-brief design, Oct 6): the event as a ticket, its artwork on top, then what it is, where
+ * and when, a stub-style dashed line, and the pick in the cream half with its estimate in large type and the link as
+ * a button. Same facts as the plain card and the text body; only the layout changes. An estimate is never badged as
+ * checked: the badge says it is an estimate, in a neutral colour (lime is kept for a checked offer).
+ */
+function briefCard(c: ClaimRecord, alt: ClaimRecord | undefined, brief: BriefContext, header: { title: string; details: string } | null, html: string[]): void {
+  const k = c.card!;
+  const links = [c, ...(alt?.customerVisible && alt.url ? [alt] : [])].filter((x) => x.url);
+  const [first, ...more] = links;
+  const label = (s: string) => `<div style="${FONT}font-size:11px;line-height:17px;letter-spacing:1.1px;font-weight:700;text-transform:uppercase;color:${MUTED};">${esc(s)}</div>`;
+  // A band in the show's colours already names it; the title isn't said twice.
+  const named = brief.art?.kind === 'band' && header && brief.art.label === header.title;
+  const event = header
+    ? `<tr><td style="padding:22px 24px 20px;${FONT}">${label(`${brief.label} · Your ticket brief`)}${named ? '<div style="height:6px;line-height:6px;font-size:0;">&nbsp;</div>' : `<div style="margin:6px 0 6px;font-size:25px;line-height:32px;letter-spacing:-.5px;font-weight:700;color:${INK};">${esc(header.title)}</div>`}<div style="font-size:14px;line-height:22px;color:${MUTED};">${esc(header.details)}</div></td></tr><tr><td style="padding:0 24px;"><div style="border-top:1px dashed #cbd2d3;height:1px;line-height:1px;font-size:0;">&nbsp;</div></td></tr>`
+    : '';
+  const price = k.price.replace(/^About /, '');
+  const button = first
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 0;"><tr><td bgcolor="${INK}" style="background:${INK};border-radius:7px;text-align:center;"><a href="${esc(first.url!)}" style="display:block;padding:14px 18px;${FONT}font-size:15px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;">${esc(first.linkLabel ?? 'View this listing')}&nbsp;&#8599;</a></td></tr></table>`
+    : '';
+  const secondary = more.map((l) => `<a href="${esc(l.url!)}" style="color:${INK};text-decoration:underline;font-weight:700;">${esc(l.linkLabel ?? 'View this listing')}</a>`).join(' · ');
+  html.push(
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e0e4e4;border-radius:12px;border-collapse:separate;overflow:hidden;margin:0 0 22px;">` +
+      (brief.art ? artRow(brief.art) : '') +
+      event +
+      `<tr><td bgcolor="#f7f4ec" style="background:#f7f4ec;padding:20px 24px 22px;${FONT}font-size:16px;line-height:24px;color:${INK};">` +
+      `<span style="display:inline-block;background:#e9e3d8;color:${INK};padding:4px 9px;border-radius:4px;font-size:11px;line-height:17px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;">My pick · estimate</span>` +
+      `<div style="margin:14px 0 0;font-size:16px;line-height:24px;font-weight:700;">${esc(k.title)}</div>` +
+      `<div style="margin:4px 0 6px;font-size:30px;line-height:38px;font-weight:700;letter-spacing:-.8px;">About ${esc(price)} <span style="font-size:15px;line-height:22px;font-weight:400;letter-spacing:0;color:${MUTED};">estimated</span></div>` +
+      k.notes.map((n) => `<div style="font-size:14px;line-height:21px;color:${MUTED};margin:0 0 4px;">${esc(n)}</div>`).join('') +
+      button +
+      (secondary ? `<div style="margin:12px 0 0;font-size:14px;line-height:21px;">${secondary}</div>` : '') +
+      `</td></tr></table>`,
+  );
+  if (k.others.length) html.push(P(`<strong>Other options I saw</strong><br>${k.others.map(esc).join('<br>')}`));
+  for (const a of k.after) html.push(P(esc(a)));
+}
+
 /** A bold lead line and its bullets, in both bodies. */
 function section(lines: string[], html: string[], lead: string, items: string[]): void {
   lines.push(lead, items.map((i) => `- ${i}`).join('\n'));
@@ -167,7 +234,7 @@ export function restates(prose: string, claim: string): boolean {
   return shared / p.size >= 0.7;
 }
 
-export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean } = {}): ValidationResult {
+export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean; brief?: BriefContext | null } = {}): ValidationResult {
   const parsed = ResponseBlocksSchema.safeParse(blocks);
   if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) };
   const b = parsed.data;
@@ -231,9 +298,11 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(pickCard!.card!.head);
     html.push(P(`<strong>${esc(pickCard!.card!.head)}</strong>`));
   }
+  // With a ticket brief the event's name, place and time are on the card itself, so the header goes there, once.
+  const brief = opts.brief && pickCard ? opts.brief : null;
   if (head) {
     lines.push(head.text);
-    html.push(head.html);
+    if (!brief) html.push(head.html);
   }
   // The answer to what they asked comes first: the verdict on their listing, the price they asked about, or,
   // with neither and nothing verified or on official sale to recommend, what the market means for them.
@@ -249,6 +318,14 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
     if (c.card) {
+      if (brief) {
+        // The text body is the same either way; only the HTML card is the brief.
+        const textOnly: string[] = [];
+        offerCard(c, claimsById.get('C_PICKS_ALT'), lines, textOnly, !picksFirst);
+        if (!picksFirst) html.push(P(`<strong>${esc(c.card.head)}</strong>`));
+        briefCard(c, claimsById.get('C_PICKS_ALT'), brief, packet.headlineTitle && packet.headlineDetails ? { title: packet.headlineTitle, details: packet.headlineDetails } : packet.headline ? { title: packet.headline, details: '' } : null, html);
+        return;
+      }
       offerCard(c, claimsById.get('C_PICKS_ALT'), lines, html, !picksFirst);
       return;
     }
