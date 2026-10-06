@@ -1,0 +1,344 @@
+[
+  {
+    "slug": "atlanta-united-fc",
+    "name": "Atlanta United FC",
+    "shortName": "ATL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#9D2235",
+    "secondaryColor": "#AA9767",
+    "logo": "/brand/logos/mls/atlanta-united-fc.png"
+  },
+  {
+    "slug": "austin-fc",
+    "name": "Austin FC",
+    "shortName": "ATX",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#00B140",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/mls/austin-fc.png"
+  },
+  {
+    "slug": "cf-montreal",
+    "name": "CF Montréal",
+    "shortName": "MTL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#003DA6",
+    "secondaryColor": "#C1C5C8",
+    "logo": "/brand/logos/mls/cf-montreal.png"
+  },
+  {
+    "slug": "charlotte-fc",
+    "name": "Charlotte FC",
+    "shortName": "CLT",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#0085CA",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/mls/charlotte-fc.png"
+  },
+  {
+    "slug": "chicago-fire-fc",
+    "name": "Chicago Fire FC",
+    "shortName": "CHI",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#7CCDEF",
+    "secondaryColor": "#FF0000",
+    "logo": "/brand/logos/mls/chicago-fire-fc.png"
+  },
+  {
+    "slug": "colorado-rapids",
+    "name": "Colorado Rapids",
+    "shortName": "COL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#8A2432",
+    "secondaryColor": "#8AB7E9",
+    "logo": "/brand/logos/mls/colorado-rapids.png"
+  },
+  {
+    "slug": "columbus-crew",
+    "name": "Columbus Crew",
+    "shortName": "CLB",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#000000",
+    "secondaryColor": "#FEDD00",
+    "logo": "/brand/logos/mls/columbus-crew.png"
+  },
+  {
+    "slug": "d-c-united",
+    "name": "D.C. United",
+    "shortName": "DC",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#000000",
+    "secondaryColor": "#D61018",
+    "logo": "/brand/logos/mls/d-c-united.png"
+  },
+  {
+    "slug": "fc-cincinnati",
+    "name": "FC Cincinnati",
+    "shortName": "CIN",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#003087",
+    "secondaryColor": "#FE5000",
+    "logo": "/brand/logos/mls/fc-cincinnati.png"
+  },
+  {
+    "slug": "fc-dallas",
+    "name": "FC Dallas",
+    "shortName": "DAL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#C6093B",
+    "secondaryColor": "#001F5B",
+    "logo": "/brand/logos/mls/fc-dallas.png"
+  },
+  {
+    "slug": "houston-dynamo-fc",
+    "name": "Houston Dynamo FC",
+    "shortName": "HOU",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#FF6B00",
+    "secondaryColor": "#101820",
+    "logo": "/brand/logos/mls/houston-dynamo-fc.png"
+  },
+  {
+    "slug": "inter-miami-cf",
+    "name": "Inter Miami CF",
+    "shortName": "MIA",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [
+      "inter-miami"
+    ],
+    "primaryColor": "#231F20",
+    "secondaryColor": "#F7B5CD",
+    "logo": "/brand/logos/mls/inter-miami-cf.png"
+  },
+  {
+    "slug": "la-galaxy",
+    "name": "LA Galaxy",
+    "shortName": "LA",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [
+      "los-angeles-galaxy"
+    ],
+    "primaryColor": "#00235D",
+    "secondaryColor": "#FFFFFF",
+    "logo": "/brand/logos/mls/la-galaxy.png"
+  },
+  {
+    "slug": "lafc",
+    "name": "LAFC",
+    "shortName": "LAFC",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [
+      "los-angeles-football-club",
+      "los-angeles-fc"
+    ],
+    "primaryColor": "#000000",
+    "secondaryColor": "#C7A36F",
+    "logo": "/brand/logos/mls/lafc.png"
+  },
+  {
+    "slug": "minnesota-united-fc",
+    "name": "Minnesota United FC",
+    "shortName": "MIN",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#000000",
+    "secondaryColor": "#9BCDE4",
+    "logo": "/brand/logos/mls/minnesota-united-fc.png"
+  },
+  {
+    "slug": "nashville-sc",
+    "name": "Nashville SC",
+    "shortName": "NSH",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#ECE83A",
+    "secondaryColor": "#1F1646",
+    "logo": "/brand/logos/mls/nashville-sc.png"
+  },
+  {
+    "slug": "new-england-revolution",
+    "name": "New England Revolution",
+    "shortName": "NE",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#022166",
+    "secondaryColor": "#CE0E2D",
+    "logo": "/brand/logos/mls/new-england-revolution.png"
+  },
+  {
+    "slug": "new-york-city-fc",
+    "name": "New York City FC",
+    "shortName": "NYC",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [
+      "nycfc"
+    ],
+    "primaryColor": "#9FD2FF",
+    "secondaryColor": "#000229",
+    "logo": "/brand/logos/mls/new-york-city-fc.png"
+  },
+  {
+    "slug": "orlando-city-sc",
+    "name": "Orlando City SC",
+    "shortName": "ORL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#60269E",
+    "secondaryColor": "#F0D283",
+    "logo": "/brand/logos/mls/orlando-city-sc.png"
+  },
+  {
+    "slug": "philadelphia-union",
+    "name": "Philadelphia Union",
+    "shortName": "PHI",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#051F31",
+    "secondaryColor": "#E0D0A6",
+    "logo": "/brand/logos/mls/philadelphia-union.png"
+  },
+  {
+    "slug": "portland-timbers",
+    "name": "Portland Timbers",
+    "shortName": "POR",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#2C5234",
+    "secondaryColor": "#C99700",
+    "logo": "/brand/logos/mls/portland-timbers.png"
+  },
+  {
+    "slug": "real-salt-lake",
+    "name": "Real Salt Lake",
+    "shortName": "RSL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#A32035",
+    "secondaryColor": "#DAA900",
+    "logo": "/brand/logos/mls/real-salt-lake.png"
+  },
+  {
+    "slug": "red-bull-new-york",
+    "name": "Red Bull New York",
+    "shortName": "RBNY",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [
+      "new-york-red-bulls",
+      "ny-red-bulls"
+    ],
+    "primaryColor": "#BA0C2F",
+    "secondaryColor": "#FFC72C",
+    "logo": "/brand/logos/mls/red-bull-new-york.png"
+  },
+  {
+    "slug": "san-diego-fc",
+    "name": "San Diego FC",
+    "shortName": "SD",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#697A7C",
+    "secondaryColor": "#F89E1A",
+    "logo": "/brand/logos/mls/san-diego-fc.png"
+  },
+  {
+    "slug": "san-jose-earthquakes",
+    "name": "San Jose Earthquakes",
+    "shortName": "SJ",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#003DA6",
+    "secondaryColor": "#FFFFFF",
+    "logo": "/brand/logos/mls/san-jose-earthquakes.png"
+  },
+  {
+    "slug": "seattle-sounders-fc",
+    "name": "Seattle Sounders FC",
+    "shortName": "SEA",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#2DC84D",
+    "secondaryColor": "#0033A0",
+    "logo": "/brand/logos/mls/seattle-sounders-fc.png"
+  },
+  {
+    "slug": "sporting-kansas-city",
+    "name": "Sporting Kansas City",
+    "shortName": "SKC",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#A7C6ED",
+    "secondaryColor": "#0A2240",
+    "logo": "/brand/logos/mls/sporting-kansas-city.png"
+  },
+  {
+    "slug": "st-louis-city-sc",
+    "name": "St. Louis CITY SC",
+    "shortName": "STL",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#EC1458",
+    "secondaryColor": "#001544",
+    "logo": "/brand/logos/mls/st-louis-city-sc.png"
+  },
+  {
+    "slug": "toronto-fc",
+    "name": "Toronto FC",
+    "shortName": "TOR",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#AA182C",
+    "secondaryColor": "#A2A9AD",
+    "logo": "/brand/logos/mls/toronto-fc.png"
+  },
+  {
+    "slug": "vancouver-whitecaps",
+    "name": "Vancouver Whitecaps",
+    "shortName": "VAN",
+    "league": "MLS",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#12284C",
+    "secondaryColor": "#FFFFFF",
+    "logo": "/brand/logos/mls/vancouver-whitecaps.png"
+  }
+]

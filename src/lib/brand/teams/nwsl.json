@@ -1,0 +1,181 @@
+[
+  {
+    "slug": "angel-city-fc",
+    "name": "Angel City FC",
+    "shortName": "LA",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#202121",
+    "secondaryColor": "#898C8F",
+    "logo": "/brand/logos/nwsl/angel-city-fc.png"
+  },
+  {
+    "slug": "bay-fc",
+    "name": "Bay FC",
+    "shortName": "BAY",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#FF5049",
+    "secondaryColor": "#0D2032",
+    "logo": "/brand/logos/nwsl/bay-fc.png"
+  },
+  {
+    "slug": "boston-legacy-fc",
+    "name": "Boston Legacy FC",
+    "shortName": "BOS",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#00FF00",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/nwsl/boston-legacy-fc.png"
+  },
+  {
+    "slug": "chicago-stars-fc",
+    "name": "Chicago Stars FC",
+    "shortName": "CHI",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#C7102E",
+    "secondaryColor": "#3AB5E8",
+    "logo": "/brand/logos/nwsl/chicago-stars-fc.png"
+  },
+  {
+    "slug": "denver-summit-fc",
+    "name": "Denver Summit FC",
+    "shortName": "DEN",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#20604E",
+    "secondaryColor": "#E4B83E",
+    "logo": "/brand/logos/nwsl/denver-summit-fc.png"
+  },
+  {
+    "slug": "gotham-fc",
+    "name": "Gotham FC",
+    "shortName": "GFC",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [
+      "nj-ny-gotham-fc",
+      "njny-gotham-fc"
+    ],
+    "primaryColor": "#000000",
+    "secondaryColor": "#A9F1FD",
+    "logo": "/brand/logos/nwsl/gotham-fc.png"
+  },
+  {
+    "slug": "houston-dash",
+    "name": "Houston Dash",
+    "shortName": "HOU",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#FF6900",
+    "secondaryColor": "#8AB7E9",
+    "logo": "/brand/logos/nwsl/houston-dash.png"
+  },
+  {
+    "slug": "kansas-city-current",
+    "name": "Kansas City Current",
+    "shortName": "KC",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#CF3339",
+    "secondaryColor": "#62CBC9",
+    "logo": "/brand/logos/nwsl/kansas-city-current.png"
+  },
+  {
+    "slug": "north-carolina-courage",
+    "name": "North Carolina Courage",
+    "shortName": "NC",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#AB0033",
+    "secondaryColor": "#00416B",
+    "logo": "/brand/logos/nwsl/north-carolina-courage.png"
+  },
+  {
+    "slug": "orlando-pride",
+    "name": "Orlando Pride",
+    "shortName": "ORL",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#C5B5F2",
+    "secondaryColor": "#14002F",
+    "logo": "/brand/logos/nwsl/orlando-pride.png"
+  },
+  {
+    "slug": "portland-thorns-fc",
+    "name": "Portland Thorns FC",
+    "shortName": "POR",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#000000",
+    "secondaryColor": "#99242B",
+    "logo": "/brand/logos/nwsl/portland-thorns-fc.png"
+  },
+  {
+    "slug": "racing-louisville-fc",
+    "name": "Racing Louisville FC",
+    "shortName": "LOU",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#C5B5F2",
+    "secondaryColor": "#14002F",
+    "logo": "/brand/logos/nwsl/racing-louisville-fc.png"
+  },
+  {
+    "slug": "san-diego-wave-fc",
+    "name": "San Diego Wave FC",
+    "shortName": "SD",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#032E62",
+    "secondaryColor": "#21C6D9",
+    "logo": "/brand/logos/nwsl/san-diego-wave-fc.png"
+  },
+  {
+    "slug": "seattle-reign-fc",
+    "name": "Seattle Reign FC",
+    "shortName": "SEA",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#292431",
+    "secondaryColor": "#2E407A",
+    "logo": "/brand/logos/nwsl/seattle-reign-fc.png"
+  },
+  {
+    "slug": "utah-royals",
+    "name": "Utah Royals",
+    "shortName": "UTA",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#AE122A",
+    "secondaryColor": "#FDB71A",
+    "logo": "/brand/logos/nwsl/utah-royals.png"
+  },
+  {
+    "slug": "washington-spirit",
+    "name": "Washington Spirit",
+    "shortName": "WAS",
+    "league": "NWSL",
+    "sport": "soccer",
+    "aliases": [],
+    "primaryColor": "#000000",
+    "secondaryColor": "#EDE939",
+    "logo": "/brand/logos/nwsl/washington-spirit.png"
+  }
+]

@@ -402,9 +402,10 @@ export const entities = pgTable('entities', {
  * ("NYR"). Keyed by what the catalog already uses, so a row can exist before the entity does: an entity's slug, a
  * venue's provider id ("ticketmaster:KovZpZA7AAEA"), or a category for the default ("concert").
  *
- * An image goes into a sent email only when its rights say we may use it: 'provider_terms' (staff confirmed the
- * provider's API terms cover showing it) or 'licensed' (staff confirmed it for that image). 'unreviewed' shows in
- * previews only; seeded logos and provider images start there. Colours and names are facts and are always used.
+ * An image goes into a sent email only when its rights say we may use it: 'approved' (the owner's decision, e.g. our
+ * self-hosted team logos, 2026-10-06), 'provider_terms' (staff confirmed the provider's API terms cover showing it) or
+ * 'licensed' (staff confirmed it for that image). 'unreviewed' shows in previews only; provider images start there.
+ * Colours and names are facts and are always used. Teams come from src/lib/brand/teams (syncTeamBrands).
  */
 export const brandAssets = pgTable(
   'brand_assets',
@@ -415,14 +416,18 @@ export const brandAssets = pgTable(
     name: text('name').notNull(),
     shortName: text('short_name'),
     league: text('league'),
+    /** football | basketball | hockey | baseball | soccer; null for a school (the event says which sport). */
+    sport: text('sport'),
+    /** Other slugs a provider may name it by ("los-angeles-clippers" for "la-clippers"). */
+    aliases: jsonb('aliases').$type<string[]>().notNull().default([]),
     imageUrl: text('image_url'),
     imageKind: text('image_kind'), // logo | photo | artwork
     imageWidth: integer('image_width'),
     imageHeight: integer('image_height'),
     primaryColor: text('primary_color'),
     secondaryColor: text('secondary_color'),
-    source: text('source').notNull(), // seed | ticketmaster | staff
-    rights: text('rights').notNull().default('unreviewed'), // provider_terms | licensed | unreviewed
+    source: text('source').notNull(), // seed | team_file | ticketmaster | staff
+    rights: text('rights').notNull().default('unreviewed'), // approved | provider_terms | licensed | unreviewed
     attribution: text('attribution'),
     updatedAt: ts('updated_at').notNull().defaultNow(),
     createdAt: createdAt(),
@@ -430,8 +435,10 @@ export const brandAssets = pgTable(
   (t) => [
     uniqueIndex('brand_assets_kind_key_uq').on(t.kind, t.key),
     check('brand_assets_kind_ck', sql`${t.kind} in ('team','performer','production','venue','category')`),
-    check('brand_assets_rights_ck', sql`${t.rights} in ('provider_terms','licensed','unreviewed')`),
-    check('brand_assets_image_https_ck', sql`${t.imageUrl} is null or ${t.imageUrl} like 'https://%'`),
+    check('brand_assets_rights_ck', sql`${t.rights} in ('approved','provider_terms','licensed','unreviewed')`),
+    // An https image elsewhere, or a path to one we host ("/brand/logos/nhl/new-york-rangers.png").
+    check('brand_assets_image_url_ck', sql`${t.imageUrl} is null or ${t.imageUrl} like 'https://%' or ${t.imageUrl} like '/%'`),
+    index('brand_assets_aliases_idx').using('gin', t.aliases),
   ],
 );
 
