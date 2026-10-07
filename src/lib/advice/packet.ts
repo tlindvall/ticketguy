@@ -203,6 +203,8 @@ export type BuildPacketArgs = {
   /** Offers from earlier in the thread they've told us to ignore: the one left is judged alone (R05-F1). */
   offersSetAside?: string[];
   /** `market`: a SeatData watch, on listed resale prices with a fee allowance, not a seller's verified totals (DECISION_LOG #62). */
+  /** A watch would start if they asked now (same gates as creating one); offered when nothing fits their budget. */
+  watchOffer?: { until: Date } | null;
   watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false; reason?: string | null } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
@@ -1398,7 +1400,10 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     : [];
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
-  const after = u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : [];
+  const after = [
+    ...(u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : []),
+    ...(over ? budgetGapNotes(a, budget, n) : []),
+  ];
   const links = p.links ?? [];
   const brief: TicketBrief = {
     kind: 'price_lead',
@@ -1426,6 +1431,27 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const card = { head, title, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after, brief };
   const items = [rationale, `${title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after];
   return { head, items, card };
+}
+
+/**
+ * Over their budget, what happens next (live Oct 6: "Nothing for two fits your $200 yet." and then nothing): which way
+ * the price has been moving for their party, or that we can't tell yet, and a watch when one could actually start.
+ * Past movement only, never a forecast.
+ */
+function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[] {
+  const target = `${formatUsd(budget)} for ${n}`;
+  const t = marketTrendAnswer(a);
+  const trend = t
+    ? t.direction === 'down'
+      ? `${t.facts}. That’s the direction you need, but it doesn’t mean they’ll keep falling to ${target}.`
+      : t.direction === 'up'
+        ? `${t.facts}, so waiting for ${target} hasn’t been paying off so far.`
+        : t.direction === 'mixed'
+          ? `${t.facts}, with no clear fall toward ${target}.`
+          : `${t.facts}, so nothing yet points toward ${target}.`
+    : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
+  const offer = a.watchOffer ? `If ${target} is firm, reply “watch it” and I’ll keep checking until ${checkedAt(a.watchOffer.until, a.timeZone)} and email you if listings for ${n} come in at about ${formatUsd(budget)} or less with fees.` : null;
+  return [trend, ...(offer ? [offer] : [])];
 }
 
 /** The event as the brief's card shows it: its name, where, and when in the same words as the header. */

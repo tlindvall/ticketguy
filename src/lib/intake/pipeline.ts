@@ -68,6 +68,7 @@ import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-st
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
+import { categoryLabel, loadBriefArt, venueKeys } from '@/lib/brand/assets';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -3142,6 +3143,9 @@ export class Concierge {
       const [why] = w ? [] : await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.entityId, req.id), eq(t.auditLog.action, 'watch.not_created'))).orderBy(desc(t.auditLog.createdAt)).limit(1);
       watchStatus = w && this.env.WATCH_SEND_ENABLED && w.targetTotalCents != null ? { running: true, quantity: w.quantity, targetTotalCents: w.targetTotalCents, togetherRequired: w.togetherRequired, expiresAt: w.expiresAt, market: (w.constraints as { monitor?: string } | null)?.monitor === 'market' ? { feeAllowancePct: this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT } : null } : { running: false, reason: (why?.diff as { reason?: string } | null)?.reason ?? null };
     }
+    // Nothing for their party inside the budget: offer to keep watching, only when a watch could actually start now
+    // (live Oct 6: "Nothing for two fits your $200 yet." and then nothing to do about it).
+    const watchOffer = picks && !picks.fits && constraints.budgetTotalCents != null && !watchStatus ? await this.watchOffer({ requestId: req.id, revision: args.revision, contactId: req.contactId, eventId: event.id, eventStartAt: event.localStartAt, brief }) : null;
     // Cheaper offers the comparison rejected for a hard requirement: named with the reason, never offered.
     const perSeat = (o: Offer) => { const tot = o.payableTotalCents ?? o.baseTotalCents; return tot === null ? null : tot / o.quantity; };
     const ref = best?.comparableTotalCents != null ? best.comparableTotalCents / quantity : constraints.budgetTotalCents != null ? constraints.budgetTotalCents / quantity : Infinity;
@@ -3181,7 +3185,7 @@ export class Concierge {
     // concert art, never a picture of this act, venue or seat (ticket brief design package, Oct 6).
     const [recsBefore] = isLiveMusic(event.category) ? await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, req.conversationId), sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`)) : [];
     const artworkUrl = isLiveMusic(event.category) && (recsBefore?.n ?? 0) === 0 ? `${this.env.APP_URL.replace(/\/$/, '')}/email/ticket-brief-concert.jpg` : null;
-    const packet = buildPacket({ eventCategory: event.category, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ eventCategory: event.category, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -3204,7 +3208,11 @@ export class Concierge {
     const autoSend = packet.verifiedOfferObservationIds.length === 0 && quote !== null;
     // During testing every other draft is approved by the system too; it then says it wasn't reviewed.
     const autoApprove = !autoSend && autoApproveActive(this.env);
-    const renderOpts = { reviewed: !autoSend && !autoApprove };
+    // The ticket brief's artwork: the teams' colours, the show's image or our concert artwork. Decoration only, so a
+    // failed lookup sends the brief without it rather than holding the reply.
+    const [other] = event.opponentEntityId ? await this.db.select({ kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
+    const art = await loadBriefArt(this.db, { category: event.category, primary: ent ? { kind: ent.kind, slug: ent.slug, name: ent.name } : null, opponent: other ?? null, venueKeys: venueKeys(venue.externalIds) }, { mode: 'send', appUrl: this.env.APP_URL }).catch(() => null);
+    const renderOpts = { reviewed: !autoSend && !autoApprove, brief: { label: categoryLabel(event.category), art } };
     // Draft via drafter (fixture or model) with bounded retries → evidence-only fallback.
     let body: { textBody: string; htmlBody: string } | null = null;
     let draftNote: string | null = null;
@@ -3613,6 +3621,23 @@ export class Concierge {
    * The full constraint basket for a request revision, read from that revision and its own thread, never from a
    * newer request (F04). Used when a watch is stored, and to rebuild one for a row stored before baskets existed.
    */
+  /**
+   * Whether a watch would start if they asked for one now: the gates `maybeCreateWatch` applies, read-only (no paid
+   * refresh, no audit), so a reply never offers a watch that couldn't run. Null when it couldn't.
+   */
+  private async watchOffer(a: { requestId: string; revision: number; contactId: string; eventId: string; eventStartAt: Date; brief: RequestExtraction }): Promise<{ until: Date } | null> {
+    if (!this.env.WATCH_SEND_ENABLED || !a.brief.quantity || wholePartyBudgetCents(a.brief.budgetCents, a.brief.budgetBasis, a.brief.quantity) === null) return null;
+    const now = this.now();
+    if (cadenceMinutes(a.eventStartAt, now, { lastMinuteApproved: false }) === null) return null;
+    const [active] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.watches).where(and(eq(t.watches.contactId, a.contactId), eq(t.watches.state, 'active')));
+    if ((active?.n ?? 0) >= WATCH_MAX_ACTIVE_PER_CONTACT) return null;
+    const snap = await policyForEvent(this.db, this.env, a.eventId, now);
+    const cap = snap ? capability(snap, 'price_watch') : null;
+    if (!cap || cap.state !== 'available') return null;
+    if (isMarketWatch(cap.sourceIds) && marketWatchable(await this.basketFor(a.requestId, a.revision, a.brief, a.eventStartAt, a.eventId))) return null;
+    return { until: watchExpiry({ now, eventStartAt: a.eventStartAt, purchaseDeadline: a.brief.decisionDeadline ? new Date(a.brief.decisionDeadline) : null }) };
+  }
+
   private async basketFor(requestId: string, revision: number, brief: RequestExtraction, eventStartAt: Date, eventId: string): Promise<ConstraintBasket> {
     const [req] = await this.db.select({ conversationId: t.requests.conversationId }).from(t.requests).where(eq(t.requests.id, requestId));
     const [ver] = await this.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, requestId), eq(t.requestVersions.revision, revision)));

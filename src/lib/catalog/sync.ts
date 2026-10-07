@@ -4,6 +4,7 @@ import * as t from '@/lib/db/schema';
 import type { DiscoveredAttraction, DiscoveredEvent, DiscoveredVenue, DiscoveryQuery, TicketmasterDiscoveryAdapter } from '@/lib/sources/adapters';
 import type { SourceStatus } from '@/lib/domain/types';
 import { localTimeInstants } from '@/lib/domain/dates';
+import { upsertProviderImage } from '@/lib/brand/assets';
 import { inMarket, teamHomeMarket } from '@/lib/domain/markets';
 
 /**
@@ -203,7 +204,23 @@ function leagueFor(a: DiscoveredAttraction): string | null {
   return hit ?? a.genre ?? null;
 }
 
+/**
+ * The provider's image for the venue or performer, kept for the ticket brief (brand/assets.ts). A failure here is
+ * never a failed sync: the catalog row matters, the picture doesn't.
+ */
+async function keepImage(db: DbOrTx, a: { kind: string; key: string; name: string; image: DiscoveredVenue['image'] }): Promise<void> {
+  // Checked here, not left to the table's constraints: inside a transaction a rejected insert would abort the sync.
+  if (!a.image || !['team', 'performer', 'production', 'venue'].includes(a.kind) || !/^https:\/\//.test(a.image.url)) return;
+  await upsertProviderImage(db, { kind: a.kind, key: a.key, name: a.name, source: DISCOVERY_SOURCE_ID, image: a.image }).catch(() => undefined);
+}
+
 async function upsertVenue(db: DbOrTx, v: DiscoveredVenue): Promise<string | null> {
+  const id = await upsertVenueRow(db, v);
+  if (id) await keepImage(db, { kind: 'venue', key: `${DISCOVERY_SOURCE_ID}:${v.providerId}`, name: v.name, image: v.image ?? null });
+  return id;
+}
+
+async function upsertVenueRow(db: DbOrTx, v: DiscoveredVenue): Promise<string | null> {
   if (!v.timezone) return null; // a venue with no timezone cannot host a date-resolvable event
   const coords = v.latitude != null && v.longitude != null ? { latitude: v.latitude, longitude: v.longitude } : {};
   const byExternal = await db.select({ id: t.venues.id }).from(t.venues).where(sql`${t.venues.externalIds} ->> ${DISCOVERY_SOURCE_ID} = ${v.providerId}`);
@@ -221,6 +238,15 @@ async function upsertVenue(db: DbOrTx, v: DiscoveredVenue): Promise<string | nul
 }
 
 async function upsertEntity(db: DbOrTx, a: DiscoveredAttraction): Promise<string> {
+  const id = await upsertEntityRow(db, a);
+  if (a.image) {
+    const [e] = await db.select({ kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(eq(t.entities.id, id));
+    if (e) await keepImage(db, { kind: e.kind, key: e.slug, name: e.name, image: a.image });
+  }
+  return id;
+}
+
+async function upsertEntityRow(db: DbOrTx, a: DiscoveredAttraction): Promise<string> {
   const kind = entityKindFor(a.segment);
   const aliases = kind === 'team' ? teamAliases(a.name) : [];
   const league = leagueFor(a);
