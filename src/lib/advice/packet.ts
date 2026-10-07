@@ -116,8 +116,8 @@ export type BuildPacketArgs = {
   basketKey: string;
   watchConsentReference: string | null;
   isFixture: boolean;
-  /** The official general sale when it is open now (DECISION_LOG #36). */
-  official?: { seller: string; url: string } | null;
+  /** The official general sale when it is open now (DECISION_LOG #36); `saleEndsAt`, the provider's general-sale close. */
+  official?: { seller: string; url: string; saleEndsAt?: Date | null } | null;
   /** The provider's published face-value range per ticket, before fees. A reference, never an offer. */
   faceValue?: { minCents: number; maxCents: number } | null;
   /** A price the customer saw and asked about, per ticket; `assumedPerTicket` when they did not say. */
@@ -206,6 +206,8 @@ export type BuildPacketArgs = {
   /** Offers from earlier in the thread they've told us to ignore: the one left is judged alone (R05-F1). */
   offersSetAside?: string[];
   /** `market`: a SeatData watch, on listed resale prices with a fee allowance, not a seller's verified totals (DECISION_LOG #62). */
+  /** A watch would start if they asked now (same gates as creating one); offered when nothing fits their budget. */
+  watchOffer?: { until: Date } | null;
   watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false; reason?: string | null } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
@@ -1316,6 +1318,51 @@ export function packetCoverage(a: { said: string; trendAsked: boolean; asks: { w
   return { questions: q, gaps };
 }
 
+/** The resale price in this email to set the official sale against, for the whole party before fees; null when none is. */
+function resaleBeforeFees(a: BuildPacketArgs): { cents: number; label: string } | null {
+  const pick = picksAnswer(a) ? a.picks!.picks[0] : undefined;
+  if (pick) return { cents: pick.listedTotalCents, label: 'the price lead above' };
+  if (a.best?.offer.baseTotalCents != null) return { cents: a.best.offer.baseTotalCents, label: 'the offer above' };
+  const sub = a.subject;
+  if (sub?.perTicketCents != null && sub.feeBasis === 'before_fees') return { cents: sub.perTicketCents * a.quantity, label: 'the listing you found' };
+  const cur = a.market?.visible ? a.market.context?.current : null;
+  if (cur) return { cents: cur.priceCents * a.quantity, label: 'the cheapest resale listing I can see' };
+  return null;
+}
+
+/**
+ * The official sale beside resale, from what we hold about it: the provider's face value set against the resale price
+ * (before fees on both sides, for the whole party), and when its general sale closes if that's well before the event.
+ * Null with neither: the email then doesn't send them there (live Oct 6: "I can't see whether it has seats left, or what
+ * they cost" under a Rangers price lead). Face value is what the seller charges, not stock: never said as seats left.
+ */
+function officialComparison(a: BuildPacketArgs): { text: string; link: boolean; faceValue: boolean } | null {
+  const o = a.official!;
+  const q = a.quantity;
+  const n = q === 1 ? 'one ticket' : `${q === 2 ? 'two' : countWord(q)} tickets`;
+  const day = 86_400_000;
+  const ends = o.saleEndsAt;
+  const closes = ends && ends.getTime() > a.observedAt.getTime() && (!a.eventStartAt || ends.getTime() < a.eventStartAt.getTime() - day)
+    ? new Intl.DateTimeFormat('en-US', { timeZone: a.timeZone ?? 'America/New_York', weekday: 'long', month: 'long', day: 'numeric' }).format(ends)
+    : null;
+  const also = listJoin([...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['where the seats are'] : [])]);
+  const close = closes ? ` Its general sale closes ${closes}.` : '';
+  const face = a.faceValue;
+  if (!face) return closes ? { text: `${o.seller}’s general sale for this ${a.eventNoun ?? 'event'} closes ${closes}, so if you’d rather buy from the official seller, check there before then.`, link: true, faceValue: false } : null;
+  const range = face.minCents === face.maxCents ? formatUsd(face.minCents) : `${formatUsd(face.minCents)} to ${formatUsd(face.maxCents)}`;
+  const low = face.minCents * q;
+  const ref = resaleBeforeFees(a);
+  const lead = `${o.seller}’s face value is ${range} a ticket before fees`;
+  if (ref && low >= ref.cents) return { text: `${lead}, so ${n} there start at ${formatUsd(low)} before fees, no cheaper than ${ref.label} at ${formatUsd(ref.cents)} before fees. Resale is the cheaper place to look.`, link: false, faceValue: true };
+  return {
+    text: ref
+      ? `${lead}: ${n} at the low end come to ${formatUsd(low)} before fees, against ${formatUsd(ref.cents)} before fees for ${ref.label}. If it still has seats near that price, they’d be cheaper, so check there first${also ? `, along with ${also}` : ''}.${close}`
+      : `${lead} (${formatUsd(low)} for ${n} at the low end). If it still has seats near that price, check there before paying more on resale${also ? `, along with ${also}` : ''}.${close}`,
+    link: true,
+    faceValue: true,
+  };
+}
+
 /**
  * The price lead (ticket brief, Oct 6): the lowest listing for their party from the licensed resale data, said as a
  * lead with an estimated total, never "I'd buy": the seller, the checkout total and whether the seats are together
@@ -1356,7 +1403,10 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     : [];
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
-  const after = u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : [];
+  const after = [
+    ...(u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : []),
+    ...(over ? budgetGapNotes(a, budget, n) : []),
+  ];
   const links = p.links ?? [];
   const brief: TicketBrief = {
     kind: 'price_lead',
@@ -1384,6 +1434,27 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const card = { head, title, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after, brief };
   const items = [rationale, `${title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after];
   return { head, items, card };
+}
+
+/**
+ * Over their budget, what happens next (live Oct 6: "Nothing for two fits your $200 yet." and then nothing): which way
+ * the price has been moving for their party, or that we can't tell yet, and a watch when one could actually start.
+ * Past movement only, never a forecast.
+ */
+function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[] {
+  const target = `${formatUsd(budget)} for ${n}`;
+  const t = marketTrendAnswer(a);
+  const trend = t
+    ? t.direction === 'down'
+      ? `${t.facts}. That’s the direction you need, but it doesn’t mean they’ll keep falling to ${target}.`
+      : t.direction === 'up'
+        ? `${t.facts}, so waiting for ${target} hasn’t been paying off so far.`
+        : t.direction === 'mixed'
+          ? `${t.facts}, with no clear fall toward ${target}.`
+          : `${t.facts}, so nothing yet points toward ${target}.`
+    : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
+  const offer = a.watchOffer ? `If ${target} is firm, reply “watch it” and I’ll keep checking until ${checkedAt(a.watchOffer.until, a.timeZone)} and email you if listings for ${n} come in at about ${formatUsd(budget)} or less with fees.` : null;
+  return [trend, ...(offer ? [offer] : [])];
 }
 
 /** The event as the brief's card shows it: its name, where, and when in the same words as the header. */
@@ -1587,35 +1658,40 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // Rows from the official seller's own page: its link is where to buy them, and saying the sale is open adds
     // nothing to what they're looking at (FV-R2-03), so only the link is placed.
     const sameSeller = !!a.subject && a.subject.source === 'screenshot' && !!shownRowLead(a, a.subject) && a.subject.seller?.trim().toLowerCase() === a.official.seller.toLowerCase();
-    claims.push({
+    // Beside resale, the official sale is said only with something to act on: its face value against the resale price,
+    // or when its sale closes. "I can't see whether it has seats left" on its own told them nothing (live Oct 6, Rangers).
+    const besideResale = !sameSeller && !!(picksText || a.best || a.subject || (a.link && !a.link.eventPage) || (a.market?.visible && a.market.context?.current));
+    const compared = besideResale ? officialComparison(a) : null;
+    if (!besideResale || compared) claims.push({
       id: 'C_OFFICIAL',
       kind: 'official_sale',
-      // "Unless resale is cheaper" only when there is resale in the email to be cheaper; otherwise it reads as a hedge we can't back.
-      // The sale being open says nothing about seats: with a budget, access needs or a seat preference, it's a
-      // place to look, not a recommendation (TG-B01).
-      // So is a watch they asked for: they want to wait for a price, so "that's where I'd buy" would answer a
-      // question they didn't ask, and the link stays an event page (PW-EMAIL-FOCUS-01, L01).
-      // A resale listing they asked about: the box office is the thing to compare it with, not a different answer to
-      // their question (live Oct 2, Rangers: "that's where I'd buy" under "is this a good deal?").
+      // Never said as seats being there: an open sale is the sale window, not stock (live Oct 2, Metallica at Sphere).
       text: sameSeller
         ? ''
-        : a.link && !a.link.eventPage && a.link.marketplace !== a.official.seller
-        ? `${a.official.seller} also sells this ${a.eventNoun ?? 'event'} directly. I can’t see its seats or prices, so check its total for ${a.quantity === 1 ? 'one' : a.quantity === 2 ? 'two' : countWord(a.quantity)} there against the one you found.`
+        : compared
+        ? compared.text
+        // No resale in the email: the official sale is the answer. With a budget, access needs, a seat preference or a
+        // watch it's a place to look, not a recommendation (TG-B01, PW-EMAIL-FOCUS-01).
         : a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
-        // An open sale is the sale window, not stock: the official page can say sold out while the catalog still says
-        // on sale (live Oct 2, Metallica at Sphere), so it is never said as seats being there.
         ? `${a.official.seller} also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
-        : a.best || (a.market?.visible && a.market.context?.current) ? `It’s still on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy unless a resale seat is clearly cheaper.` : `It’s on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy.`,
+        : `It’s on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy.`,
       values: { seller: a.official.seller, sameSeller: sameSeller ? 1 : 0 },
-      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      scope: { quantity: q, seatZone: null, feeBasis: compared?.faceValue ? 'face_value_before_fees' : null, observedAt: obs },
       evidenceIds: [],
       methodVersion: null,
-      limitations: ['sale_window_not_inventory'],
+      limitations: ['sale_window_not_inventory', ...(compared?.faceValue ? ['face_value_is_before_fees'] : [])],
       customerVisible: true,
-      url: a.official.url,
-      // An event page, never "Buy": no seats or prices behind it have been checked (post-deploy QA Oct 2, R1-2327-02).
-      linkLabel: `Event page on ${a.official.seller}`,
+      // Resale already cheaper than face value: nothing to go and check there, so no link.
+      ...(compared && !compared.link
+        ? {}
+        : // An event page, never "Buy": no seats or prices behind it have been checked (post-deploy QA Oct 2, R1-2327-02).
+          { url: a.official.url, linkLabel: `Event page on ${a.official.seller}` }),
     });
+    // The comparison says the face value; the standalone face-value line would say it twice.
+    if (compared?.faceValue) {
+      const i = claims.findIndex((c) => c.id === 'C_FACE');
+      if (i >= 0) claims.splice(i, 1);
+    }
   }
   // Where they started, if it's the show's own site: kept, said as what it is, and linked as an event page (L04).
   if (a.officialReference) {
