@@ -68,9 +68,9 @@ describe('FV-R2-03: a results page answer, then only what helps', () => {
     expect(text).not.toMatch(/Those figures|resale market when I last checked|\$81\.95/);
   });
 
-  it('rows from another seller’s page keep the open-sale comparison, never said as seats', async () => {
+  it('rows from another seller’s page: no open-sale line with nothing known about it, never said as seats', async () => {
     const text = await body(args({ ...subject("We'd rather be on the floor."), seller: 'StubHub' }));
-    expect(text).toContain('Ticketmaster also lists it as on general sale, but I can’t see whether it has seats left, or what they cost');
+    expect(text).not.toMatch(/also lists it as on general sale|can’t see whether it has seats left|Event page on Ticketmaster/);
   });
 });
 
@@ -99,7 +99,8 @@ describe('FV-R1-03: a listing link with no market, asked buy or wait', () => {
     expect(text).toContain('I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works)');
     expect(text).not.toMatch(/What follows is|resale market when I last checked|haven’t been able to check this against|can’t see live resale listings|most you’d pay|I can’t open StubHub/);
     expect(text.match(/screenshot/g)).toHaveLength(1);
-    expect(text).toContain('Ticketmaster also sells this game directly.');
+    // Nothing known about Ticketmaster's sale but that it's open: not sent there (live Oct 6).
+    expect(text).not.toMatch(/Ticketmaster also sells|can’t see its seats/);
   });
 });
 
