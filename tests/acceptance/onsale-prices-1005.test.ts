@@ -95,7 +95,8 @@ describe('an open official sale is said inside the priced reply, never instead o
     expect(r.req.eventId).toBe(games[0]!.id);
     expect(r.emails).toMatch(/The lowest listing I can see for four tickets is Section 214, Row 10/);
     expect(r.emails).toMatch(/\$\d+/);
-    expect(r.emails).toMatch(/Ticketmaster also lists it as on general sale/);
+    // No face value or sale close for this game: the open sale isn't suggested beside the lead (live Oct 6).
+    expect(r.emails).not.toMatch(/also lists it as on general sale|can’t see whether it has seats left/);
     expect(r.emails).not.toMatch(/I haven’t seen its seats or prices|reply "compare"/);
     // The admin trace names every outside call: the SeatData listings read, the sellers and the link we sent.
     const trace = await requestTrace(h.db, r.req, { performer: 'Metro Knicks' });
