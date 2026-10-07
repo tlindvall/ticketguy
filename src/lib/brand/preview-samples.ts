@@ -1,93 +1,58 @@
-import type { AdvicePacket, ClaimRecord } from '@/lib/advice/packet';
-import { validateAndRender, type BriefContext } from '@/lib/advice/renderer';
-import type { TicketBrief } from '@/lib/email/ticket-brief';
-import { categoryLabel, loadBriefArt, type ArtMode, type ArtSubject } from '@/lib/brand/assets';
+import { briefCard, briefEvidence, briefTop, type TicketBrief } from '@/lib/email/ticket-brief';
+import { sportStart } from '@/lib/advice/packet';
+import { categoryLabel } from '@/lib/domain/event-noun';
+import { loadBriefArtwork, sportFor, type ArtSubject } from '@/lib/brand/assets';
 import type { DbOrTx } from '@/lib/db';
 
 /**
- * Made-up recommendations for the ticket brief preview (/preview/ticket-brief): the real renderer and the real
- * artwork lookup, fed an invented pick. Nothing here is a listing or a price anyone saw; it is never sent.
+ * Made-up price leads for the ticket brief preview (/preview/ticket-brief): the live card (email/ticket-brief.ts) and
+ * the real artwork lookup, one per banner template. Nothing here is a listing or a price anyone saw; it is never sent.
  */
-type Sample = { id: string; title: string; subject: ArtSubject; eventTitle: string; details: string; seat: string; price: string; notes: string[]; head: string; rationale: string; others: string[] };
+type Sample = { id: string; title: string; subject: ArtSubject; name: string; where: string; when: string; seat: string; total: string; party: string; basis: string };
 
+const team = (slug: string, name: string) => ({ kind: 'team', slug, name });
 const SAMPLES: Sample[] = [
-  {
-    id: 'rangers', title: 'A game, both teams known',
-    subject: { category: 'nhl', primary: { kind: 'team', slug: 'new-york-rangers', name: 'New York Rangers' }, opponent: { kind: 'team', slug: 'new-jersey-devils', name: 'New Jersey Devils' }, venueKeys: [] },
-    eventTitle: 'New York Rangers vs. New Jersey Devils', details: 'Madison Square Garden, New York · Saturday, November 14, at 7 p.m. · 2 tickets · up to $500 in total',
-    head: 'A price lead inside your $500: about $412 for two.', rationale: 'The lowest listing I can see for two tickets is Section 217, Row 6 on StubHub, $88 under your $500 with fees. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.',
-    seat: 'Section 217 · Row 6 on StubHub', price: 'About $412 for two',
-    notes: ['$317 for two before fees ($158.50 each), plus a 30% fee allowance.', 'Right now 14 listings have two together, from $139 to $410 a ticket before fees.', 'Not checked yet: that it’s still listed and the seats are together, from resale data refreshed in the last couple of hours.'],
-    others: ['Section 224 · Row 3 on Vivid Seats: $330 for two before fees.'],
-  },
-  {
-    id: 'knicks', title: 'A game, NBA',
-    subject: { category: 'nba', primary: { kind: 'team', slug: 'new-york-knicks', name: 'New York Knicks' }, opponent: { kind: 'team', slug: 'boston-celtics', name: 'Boston Celtics' }, venueKeys: [] },
-    eventTitle: 'New York Knicks vs. Boston Celtics', details: 'Madison Square Garden, New York · Friday, October 23, at 7:30 p.m. · 4 tickets',
-    head: 'A price lead for four: about $1,180.', rationale: 'The lowest listing I can see for four tickets is Section 204, Row 12. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.',
-    seat: 'Section 204 · Row 12', price: 'About $1,180 for four',
-    notes: ['$908 for four before fees ($227 each), plus a 30% fee allowance.', 'On StubHub or Vivid Seats; my data doesn’t say which, so search both.', 'Not checked yet: that it’s still listed and the seats are together, from resale data refreshed in the last couple of hours.'],
-    others: [],
-  },
-  {
-    id: 'concert', title: 'A concert, no performer image yet (our artwork)',
-    subject: { category: 'concert', primary: { kind: 'performer', slug: 'dua-lipa', name: 'Dua Lipa' }, opponent: null, venueKeys: [] },
-    eventTitle: 'Dua Lipa', details: 'Barclays Center, Brooklyn · Thursday, November 19, at 8 p.m. · 2 tickets',
-    head: 'A price lead for two: about $386.', rationale: 'The lowest listing I can see for two tickets is Section 106, Row 9 on Vivid Seats. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.',
-    seat: 'Section 106 · Row 9 on Vivid Seats', price: 'About $386 for two',
-    notes: ['$297 for two before fees ($148.50 each), plus a 30% fee allowance.', 'Not checked yet: that it’s still listed and the seats are together, from resale data about 3 hours old.'],
-    others: [],
-  },
-  {
-    id: 'wicked', title: 'A Broadway show, its colours',
-    subject: { category: 'broadway', primary: { kind: 'production', slug: 'wicked', name: 'Wicked' }, opponent: null, venueKeys: [] },
-    eventTitle: 'Wicked', details: 'Gershwin Theatre, New York · Sunday, November 8, at 2 p.m. · 3 tickets',
-    head: 'A price lead for three: about $402.', rationale: 'The lowest listing I can see for three tickets is Rear Mezzanine, Row C on StubHub. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.',
-    seat: 'Rear Mezzanine · Row C on StubHub', price: 'About $402 for three',
-    notes: ['$309 for three before fees ($103 each), plus a 30% fee allowance.', 'Not checked yet: that it’s still listed and the seats are together, from resale data refreshed in the last couple of hours.'],
-    others: [],
-  },
+  { id: 'hockey', title: 'Hockey', subject: { category: 'nhl', primary: team('new-york-rangers', 'New York Rangers'), opponent: team('new-york-islanders', 'New York Islanders'), venueKeys: [] }, name: 'New York Rangers vs. New York Islanders', where: 'Madison Square Garden, New York', when: 'Tonight at 7:30 p.m.', seat: 'Section 415 · Row 4', total: 'About $220', party: 'for two', basis: '$169.38 before fees ($84.69 each). Includes a 30% fee allowance.' },
+  { id: 'basketball', title: 'Basketball', subject: { category: 'nba', primary: team('new-york-knicks', 'New York Knicks'), opponent: team('boston-celtics', 'Boston Celtics'), venueKeys: [] }, name: 'New York Knicks vs. Boston Celtics', where: 'Madison Square Garden, New York', when: 'Friday, October 23, at 7:30 p.m.', seat: 'Section 204 · Row 12', total: 'About $1,180', party: 'for all four', basis: '$908 before fees ($227 each). Includes a 30% fee allowance.' },
+  { id: 'baseball', title: 'Baseball', subject: { category: 'mlb', primary: team('new-york-yankees', 'New York Yankees'), opponent: team('boston-red-sox', 'Boston Red Sox'), venueKeys: [] }, name: 'New York Yankees vs. Boston Red Sox', where: 'Yankee Stadium, Bronx', when: 'Saturday, April 11, at 1:05 p.m.', seat: 'Section 214B · Row 9', total: 'About $186', party: 'for two', basis: '$143 before fees ($71.50 each). Includes a 30% fee allowance.' },
+  { id: 'football', title: 'Football', subject: { category: 'nfl', primary: team('new-york-giants', 'New York Giants'), opponent: team('philadelphia-eagles', 'Philadelphia Eagles'), venueKeys: [] }, name: 'New York Giants vs. Philadelphia Eagles', where: 'MetLife Stadium, East Rutherford', when: 'Sunday, November 22, at 1 p.m.', seat: 'Section 312 · Row 18', total: 'About $412', party: 'for two', basis: '$317 before fees ($158.50 each). Includes a 30% fee allowance.' },
+  { id: 'soccer', title: 'Soccer', subject: { category: 'soccer', primary: team('new-york-city-fc', 'New York City FC'), opponent: team('new-york-red-bulls', 'New York Red Bulls'), venueKeys: [] }, name: 'New York City FC vs. New York Red Bulls', where: 'Yankee Stadium, Bronx', when: 'Saturday, October 17, at 7:30 p.m.', seat: 'Section 133 · Row 20', total: 'About $96', party: 'for two', basis: '$74 before fees ($37 each). Includes a 30% fee allowance.' },
+  { id: 'college', title: 'College football (a provider name with "Football" on the end)', subject: { category: 'ncaa_regular', genre: 'Football', primary: team('michigan-wolverines-football', 'Michigan Wolverines Football'), opponent: team('ohio-state-buckeyes-football', 'Ohio State Buckeyes Football'), venueKeys: [] }, name: 'Michigan Wolverines vs. Ohio State Buckeyes', where: 'Michigan Stadium, Ann Arbor', when: 'Saturday, November 28, at noon', seat: 'Section 24 · Row 61', total: 'About $640', party: 'for two', basis: '$492 before fees ($246 each). Includes a 30% fee allowance.' },
+  { id: 'wnba', title: 'WNBA', subject: { category: 'wnba', primary: team('new-york-liberty', 'New York Liberty'), opponent: team('las-vegas-aces', 'Las Vegas Aces'), venueKeys: [] }, name: 'New York Liberty vs. Las Vegas Aces', where: 'Barclays Center, Brooklyn', when: 'Thursday, June 11, at 7:30 p.m.', seat: 'Section 22 · Row 7', total: 'About $158', party: 'for two', basis: '$122 before fees ($61 each). Includes a 30% fee allowance.' },
+  { id: 'concert', title: 'Concert (our artwork until a performer image is approved)', subject: { category: 'concert', primary: { kind: 'performer', slug: 'dua-lipa', name: 'Dua Lipa' }, opponent: null, venueKeys: [] }, name: 'Dua Lipa', where: 'Barclays Center, Brooklyn', when: 'Thursday, November 19, at 8 p.m.', seat: 'Section 106 · Row 9', total: 'About $386', party: 'for two', basis: '$297 before fees ($148.50 each). Includes a 30% fee allowance.' },
+  { id: 'theater', title: 'Broadway (a stage in the show’s colours)', subject: { category: 'broadway', primary: { kind: 'production', slug: 'wicked', name: 'Wicked' }, opponent: null, venueKeys: [] }, name: 'Wicked', where: 'Gershwin Theatre, New York', when: 'Sunday, November 8, at 2 p.m.', seat: 'Rear Mezzanine · Row C', total: 'About $402', party: 'for all three', basis: '$309 before fees ($103 each). Includes a 30% fee allowance.' },
 ];
 
-/** The sample as the ticket brief the packet builds for a price lead (packet.ts picksAnswer), so the preview is the real card. */
-function briefFor(s: Sample): TicketBrief {
-  const [where = '', when = ''] = s.details.split(' · ');
-  const [, total = s.price, forWhom = ''] = /^(About \$[\d,]+) (for .+)$/.exec(s.price) ?? [];
-  const on = / on (StubHub|Vivid Seats)$/.exec(s.seat)?.[1] ?? null;
-  const noun = s.subject.category === 'nhl' || s.subject.category === 'nba' ? 'game' : 'show';
-  return {
-    kind: 'price_lead', headline: s.head, rationale: s.rationale, category: categoryLabel(s.subject.category), event: { name: s.eventTitle, where, when }, artworkUrl: null,
-    seatLine: s.seat.replace(/ on (?:StubHub|Vivid Seats)$/, ''), total, forWhom, basis: s.notes.filter((n) => !/^Not checked yet/.test(n)),
-    facts: [['Seats together', 'Not confirmed'], ['Listed on', on ?? 'StubHub or Vivid Seats']],
-    action: { label: `Search StubHub for this ${noun}`, url: 'https://www.stubhub.com/' }, secondary: null,
-    actionNote: 'Found it? Reply with the checkout screenshot and I’ll check the total and whether the seats are together.', affiliate: false, alternatives: [], after: [],
-    evidenceNote: 'Made-up preview data. Seller, availability and seats together not checked.',
-  };
-}
-
-function packetFor(s: Sample): AdvicePacket {
-  const picks: ClaimRecord = {
-    id: 'C_PICKS', kind: 'market_price', text: `${s.head}\n${s.seat}: ${s.price}, estimated.`, items: [`${s.seat}: ${s.price}, estimated.`, ...s.notes],
-    card: { head: s.head, title: s.seat, price: s.price, notes: s.notes, others: s.others, after: [], brief: briefFor(s) },
-    url: 'https://www.stubhub.com/', linkLabel: `Search StubHub for this ${s.subject.category === 'nhl' || s.subject.category === 'nba' ? 'game' : 'show'}`,
-    values: {}, scope: { quantity: null, seatZone: null, feeBasis: 'listed_before_fees', observedAt: null }, evidenceIds: [], methodVersion: 'preview', limitations: ['not_a_verified_offer'], customerVisible: true,
-  };
-  return {
-    requestId: 'preview', revision: 1, verifiedOfferObservationIds: [], basketKey: 'preview', basketVersion: 1, benchmarkRunId: null, trendRunId: null,
-    historicalAdequacy: 'insufficient', trendAdequacy: 'insufficient', customerPriorities: {}, policyVersion: 'preview', decision: 'insufficient_evidence', reasonCodes: [], abstentions: [],
-    claimRecords: [picks], followUps: ['Want me to narrow it down? Tell me your budget, fees included, or where you’d like to sit.'],
-    headline: `${s.eventTitle} · ${s.details}`, headlineTitle: s.eventTitle, headlineDetails: s.details,
-    evidenceExpiresAt: null, nextCheckpointAt: null, stopConditions: [], watchConsentReference: null, isFixture: true,
-  };
-}
-
-export async function renderPreviewSamples(db: DbOrTx, mode: ArtMode, appUrl: string): Promise<Array<{ id: string; title: string; html: string; text: string }>> {
+export async function renderPreviewSamples(db: DbOrTx): Promise<Array<{ id: string; title: string; artwork: string | null; html: string; text: string }>> {
   const out = [];
   for (const s of SAMPLES) {
-    const brief: BriefContext = { label: categoryLabel(s.subject.category), art: await loadBriefArt(db, s.subject, { mode, appUrl }) };
-    const r = validateAndRender(packetFor(s), { decision: 'insufficient_evidence', opening: '', paragraphs: [{ claimIds: ['C_PICKS'], prose: '' }], closing: '' }, { brief });
-    if (!r.ok) throw new Error(`preview sample ${s.id}: ${r.errors.join('; ')}`);
-    out.push({ id: s.id, title: s.title, html: r.htmlBody, text: r.textBody });
+    const artwork = await loadBriefArtwork(db, s.subject);
+    const brief: TicketBrief = {
+      kind: 'price_lead',
+      headline: `A price lead ${s.party}: ${s.total.toLowerCase()}.`,
+      rationale: `The lowest listing I can see is ${s.seat.replace(' · ', ', ')}. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.`,
+      category: categoryLabel(s.subject.category),
+      event: { name: s.name, where: s.where, when: sportStart(s.when, sportFor(s.subject.category, s.subject.genre)) },
+      artworkUrl: artwork,
+      seatLine: s.seat,
+      total: s.total,
+      forWhom: s.party,
+      basis: [s.basis],
+      facts: [['Seats together', 'Not confirmed'], ['Listed on', 'StubHub']],
+      action: { label: 'Search StubHub for these seats', url: 'https://www.stubhub.com/' },
+      secondary: null,
+      actionNote: 'From resale data refreshed in the last couple of hours. Not held; availability can change.',
+      affiliate: false,
+      alternatives: [],
+      after: [],
+      evidenceNote: 'Preview: made-up prices, never sent.',
+    };
+    // A relative artwork path works in the preview, which is served by this app; the live card takes https only.
+    const top = briefTop(brief);
+    const card = briefCard({ ...brief, artworkUrl: artwork?.startsWith('/') ? `https://preview.invalid${artwork}` : artwork });
+    const ev = briefEvidence(brief);
+    const html = [`<p style="margin:0 0 16px;font-size:16px;line-height:25px;">Hey,</p>`, ...top.html, ...card.html, ev.html].join('\n').replaceAll('https://preview.invalid/', '/');
+    out.push({ id: s.id, title: s.title, artwork, html, text: ['Hey,', ...top.text, ...card.text, ev.text].join('\n\n') });
   }
   return out;
 }

@@ -24,6 +24,7 @@
     "simulate:inbound": "tsx scripts/simulate-inbound.ts",
     "demo": "tsx scripts/demo.ts",
     "registry:build": "node scripts/build-registry.mjs",
+    "brand:build": "tsx scripts/build-team-brands.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
     "watches:evaluate": "tsx scripts/evaluate-watches.ts",
     "service-depth:reconcile": "tsx scripts/reconcile-service-depth.ts",

@@ -14,6 +14,7 @@ import { shownPriceParts } from './shown-prices';
 import { capitalize, categoryLabel, seatPhrase } from '@/lib/domain/event-noun';
 import { loadRegistry, sourceIdForHost } from '@/lib/sources/registry';
 import type { TicketBrief } from '@/lib/email/ticket-brief';
+import type { Sport } from '@/lib/brand/teams';
 import type { AlternativesResult, ListingPicks, MarketListing } from '@/lib/market/alternatives';
 
 /**
@@ -189,7 +190,9 @@ export type BuildPacketArgs = {
   eventNoun?: 'game' | 'show';
   /** The catalog category ("concert", "nhl"), for the brief's label. */
   eventCategory?: string | null;
-  /** Decorative artwork for the brief: hosted, https, live music only, first reply only. */
+  /** The sport a game is played in, for the brief's start word ("puck drop 7 p.m."); null for anything else. */
+  eventSport?: Sport | null;
+  /** Decorative artwork for the brief: a team banner, a show's image or our concert art; first reply only. */
   artworkUrl?: string | null;
   /** Questions they asked that aren't about price, answered first (TG-B02). */
   /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
@@ -1455,10 +1458,17 @@ function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[]
 }
 
 /** The event as the brief's card shows it: its name, where, and when in the same words as the header. */
+/** What a game's start is called, on the brief's card: "Tonight · puck drop 7:30 p.m.". */
+const SPORT_START: Record<Sport, string> = { hockey: 'puck drop', basketball: 'tip-off', baseball: 'first pitch', football: 'kickoff', soccer: 'kickoff' };
+export function sportStart(when: string, sport: Sport | null | undefined): string {
+  if (!sport) return when;
+  return when.replace(/,? at (\d{1,2}(?::\d{2})? [ap]\.m\.)/, (_m, t: string) => ` · ${SPORT_START[sport]} ${t}`);
+}
+
 function briefEvent(a: BuildPacketArgs): TicketBrief['event'] {
   const parts = a.eventParts;
   if (!parts) return { name: a.eventLabel, where: '', when: '' };
-  return { name: parts.title, where: parts.where, when: friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)) };
+  return { name: parts.title, where: parts.where, when: sportStart(friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)), a.eventSport) };
 }
 
 /** Hosts a verified offer's purchase button may point at: the registry's own site for that source. */

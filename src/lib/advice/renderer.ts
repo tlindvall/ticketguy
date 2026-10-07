@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { AdvicePacket, ClaimRecord } from './packet';
 import { briefCard, briefEvidence, briefTop, type TicketBrief } from '@/lib/email/ticket-brief';
-import type { BriefArt } from '@/lib/brand/assets';
 
 /**
  * Safe response renderer + validator (ADVICE_ENGINE §8 step 5–6).
@@ -126,11 +125,11 @@ function labelRich(s: string): string {
  * total in larger type with "estimated" beside it, what the estimate is made of and what isn't checked, and the
  * link to it on the card itself. Then other leads and the one trade-off. The plain text carries the same facts.
  */
-function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[], html: string[], withHead: boolean, art: BriefArt | null = null): void {
+function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[], html: string[], withHead: boolean): void {
   const k = c.card!;
   if (k.brief) {
-    // Leading, the card carries the event and its artwork; after another answer, the header above already named it.
-    const card = briefCard(k.brief, { withEvent: !withHead, art });
+    // Leading, the card carries the event; after another answer, the header above already named it.
+    const card = briefCard(k.brief, { withEvent: !withHead });
     lines.push(...card.text);
     html.push(...card.html);
     return;
@@ -158,12 +157,6 @@ function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[]
   }
 }
 
-/**
- * What the ticket brief card needs beyond the packet: the label over the title ("NHL") and the artwork chosen for the
- * event (brand/assets.ts). Resolved by the caller, since it reads the database; the renderer stays pure.
- */
-export type BriefContext = { label: string; art: BriefArt | null };
-
 /** A bold lead line and its bullets, in both bodies. */
 function section(lines: string[], html: string[], lead: string, items: string[]): void {
   lines.push(lead, items.map((i) => `- ${i}`).join('\n'));
@@ -182,7 +175,7 @@ export function restates(prose: string, claim: string): boolean {
   return shared / p.size >= 0.7;
 }
 
-export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean; brief?: BriefContext | null } = {}): ValidationResult {
+export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: { affiliateDisclosure?: string | null; reviewed?: boolean } = {}): ValidationResult {
   const parsed = ResponseBlocksSchema.safeParse(blocks);
   if (!parsed.success) return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) };
   const b = parsed.data;
@@ -271,7 +264,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
     if (c.card) {
-      offerCard(c, claimsById.get('C_PICKS_ALT'), lines, html, !picksFirst, opts.brief?.art ?? null);
+      offerCard(c, claimsById.get('C_PICKS_ALT'), lines, html, !picksFirst);
       return;
     }
     const fmt = lead || c.id === 'C_PICKS' ? leadRich : rich;

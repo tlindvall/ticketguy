@@ -25,7 +25,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
-import { SPORT_CATEGORIES, eventNounFor, isLiveMusic, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
+import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
@@ -68,7 +68,7 @@ import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-st
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
-import { categoryLabel, loadBriefArt, venueKeys } from '@/lib/brand/assets';
+import { loadBriefArtwork, sportFor, venueKeys } from '@/lib/brand/assets';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -3181,11 +3181,16 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    // The brief's artwork decorates the first recommendation in a conversation only, and only live music: it's generic
-    // concert art, never a picture of this act, venue or seat (ticket brief design package, Oct 6).
-    const [recsBefore] = isLiveMusic(event.category) ? await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, req.conversationId), sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`)) : [];
-    const artworkUrl = isLiveMusic(event.category) && (recsBefore?.n ?? 0) === 0 ? `${this.env.APP_URL.replace(/\/$/, '')}/email/ticket-brief-concert.jpg` : null;
-    const packet = buildPacket({ eventCategory: event.category, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // The brief's artwork decorates the first recommendation in a conversation only (ticket brief design, Oct 6): a
+    // banner of both teams for a game, the show's own image or our concert art, never a picture of the seat. It is
+    // decoration, so a failed lookup sends the brief without it rather than holding the reply.
+    const [recsBefore] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, req.conversationId), sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
+    const [other] = event.opponentEntityId ? await this.db.select({ kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
+    const artSubject = { category: event.category, genre: event.classification?.genre ?? null, primary: ent ? { kind: ent.kind, slug: ent.slug, name: ent.name } : null, opponent: other ?? null, venueKeys: venueKeys(venue.externalIds) };
+    const artPath = (recsBefore?.n ?? 0) === 0 ? await loadBriefArtwork(this.db, artSubject).catch(() => null) : null;
+    const artworkUrl = artPath?.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${artPath}` : artPath;
+    const eventSport = sportFor(event.category, event.classification?.genre ?? null);
+    const packet = buildPacket({ eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -3208,11 +3213,7 @@ export class Concierge {
     const autoSend = packet.verifiedOfferObservationIds.length === 0 && quote !== null;
     // During testing every other draft is approved by the system too; it then says it wasn't reviewed.
     const autoApprove = !autoSend && autoApproveActive(this.env);
-    // The ticket brief's artwork: the teams' colours, the show's image or our concert artwork. Decoration only, so a
-    // failed lookup sends the brief without it rather than holding the reply.
-    const [other] = event.opponentEntityId ? await this.db.select({ kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
-    const art = await loadBriefArt(this.db, { category: event.category, primary: ent ? { kind: ent.kind, slug: ent.slug, name: ent.name } : null, opponent: other ?? null, venueKeys: venueKeys(venue.externalIds) }, { mode: 'send', appUrl: this.env.APP_URL }).catch(() => null);
-    const renderOpts = { reviewed: !autoSend && !autoApprove, brief: { label: categoryLabel(event.category), art } };
+    const renderOpts = { reviewed: !autoSend && !autoApprove };
     // Draft via drafter (fixture or model) with bounded retries → evidence-only fallback.
     let body: { textBody: string; htmlBody: string } | null = null;
     let draftNote: string | null = null;

@@ -1,117 +1,103 @@
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { DbOrTx } from '@/lib/db';
 import { brandAssets } from '@/lib/db/schema';
-import { SPORT_CATEGORIES } from '@/lib/domain/event-noun';
+import { isLiveMusic } from '@/lib/domain/event-noun';
+import type { Sport } from './teams';
 
 /**
- * The artwork at the top of a ticket brief (ticket-brief design, Oct 6): what the event looks like, never where the
- * seats are. A game is its two teams side by side in their colours; a show is its performer's or production's
- * image, else the venue's, else our own category artwork; with none of those there is no artwork, not a stand-in.
+ * The artwork at the top of a ticket brief (design of Oct 6): what the event looks like, never where the seats are.
+ * A game is a banner we draw for its sport with both teams' colours and logos (banner.ts, served at /brief-art/…);
+ * a show is its performer's or production's image, else the venue's, else a band in a show's colours, else our
+ * concert artwork. With none of those there is no artwork, not a stand-in.
  *
- * Only an image whose rights allow it goes into a sent email ('provider_terms' or 'licensed'). An 'unreviewed' one
- * shows in previews only, so staff can see what approving it would look like. Colours and names are facts and
- * appear either way.
+ * An image is used only when its rights allow it in a sent email ('approved', 'provider_terms', 'licensed').
+ * 'unreviewed' ones (provider images until staff confirm the terms) are left out; colours and names are facts.
  */
-export type BrandAsset = Pick<typeof brandAssets.$inferSelect, 'kind' | 'key' | 'name' | 'shortName' | 'league' | 'imageUrl' | 'imageKind' | 'imageWidth' | 'imageHeight' | 'primaryColor' | 'secondaryColor' | 'rights'>;
+export type BrandAsset = Pick<typeof brandAssets.$inferSelect, 'kind' | 'key' | 'name' | 'shortName' | 'league' | 'sport' | 'aliases' | 'imageUrl' | 'imageKind' | 'primaryColor' | 'secondaryColor' | 'rights'>;
 
-export type MatchupSide = { name: string; shortName: string | null; color: string; textColor: string; logoUrl: string | null };
-export type BriefArt =
-  | { kind: 'matchup'; left: MatchupSide; right: MatchupSide | null }
-  | { kind: 'image'; url: string }
-  | { kind: 'band'; color: string; accent: string; textColor: string; label: string };
+export const SENDABLE_RIGHTS = ['approved', 'provider_terms', 'licensed'] as const;
+export const sendable = (a: Pick<BrandAsset, 'rights' | 'imageUrl'> | undefined): boolean => !!a?.imageUrl && (SENDABLE_RIGHTS as readonly string[]).includes(a.rights);
 
-export type ArtMode = 'send' | 'preview';
+/** Our concert artwork, served by the app itself (public/email). */
+export const CONCERT_ARTWORK_PATH = '/email/ticket-brief-concert.jpg';
+/** Bumped when the banner design changes, so mail clients and caches fetch the new one. */
+export const BANNER_VERSION = 'v1';
+export const BANNER_SPORTS: readonly Sport[] = ['football', 'basketball', 'hockey', 'baseball', 'soccer'];
 
-/** The small caps label over the event title: the league for a game, the kind of show otherwise. */
-const CATEGORY_LABELS: Record<string, string> = {
-  nhl: 'NHL', nba: 'NBA', wnba: 'WNBA', nfl: 'NFL', mlb: 'MLB', soccer: 'Soccer', mls: 'MLS',
-  concert: 'Concert', club_concert: 'Concert', festival: 'Festival', electronic_nightlife: 'Nightlife',
-  broadway: 'Broadway', touring_theater: 'Theater', classical: 'Classical', comedy: 'Comedy', family: 'Family',
-};
-export function categoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? 'Event';
-}
+const LEAGUE_SPORT: Record<string, Sport> = { nfl: 'football', ncaaf: 'football', nba: 'basketball', wnba: 'basketball', ncaab: 'basketball', nhl: 'hockey', mlb: 'baseball', mls: 'soccer', soccer: 'soccer' };
 
-/** Which category default applies: our own artwork exists for concerts; the others are colour only. */
-function categoryGroup(category: string): 'sports' | 'concert' | 'theater' | 'comedy' | null {
-  if (SPORT_CATEGORIES.includes(category) || category === 'wnba') return 'sports';
-  if (['concert', 'club_concert', 'festival', 'electronic_nightlife'].includes(category)) return 'concert';
-  if (['broadway', 'touring_theater', 'classical'].includes(category)) return 'theater';
-  if (category === 'comedy') return 'comedy';
+/**
+ * The sport a game is played in: the category when it names a league, else the provider's genre ("Football" for a
+ * college game filed as ncaa_regular). Null when neither says: no banner is better than the wrong sport's.
+ */
+export function sportFor(category: string, genre: string | null | undefined): Sport | null {
+  const byLeague = LEAGUE_SPORT[category];
+  if (byLeague) return byLeague;
+  const g = (genre ?? '').toLowerCase();
+  if (/\bfootball\b/.test(g) && !/soccer/.test(g)) return 'football';
+  if (/basketball/.test(g)) return 'basketball';
+  if (/hockey/.test(g)) return 'hockey';
+  if (/baseball/.test(g)) return 'baseball';
+  if (/soccer/.test(g)) return 'soccer';
   return null;
 }
 
-/** Our generated concert artwork, served by the app itself (public/email). */
-export const CONCERT_ARTWORK_PATH = '/email/concert-artwork.jpg';
-
-const HEX = /^#[0-9a-f]{6}$/i;
-/** White or ink on a colour, whichever reads (WCAG relative luminance). */
-export function textOn(hex: string): string {
-  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
-  const lum = 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
-  return lum > 0.4 ? '#142438' : '#ffffff';
-}
-
-function usable(a: BrandAsset | undefined, mode: ArtMode, kinds: string[]): string | null {
-  if (!a?.imageUrl || !a.imageKind || !kinds.includes(a.imageKind)) return null;
-  if (mode === 'send' && a.rights === 'unreviewed') return null;
-  return /^https:\/\//.test(a.imageUrl) ? a.imageUrl : null;
-}
-
-function side(a: BrandAsset | undefined, fallbackName: string | null, mode: ArtMode): MatchupSide | null {
-  const color = a?.primaryColor && HEX.test(a.primaryColor) ? a.primaryColor : null;
-  if (!color) return null;
-  return { name: a?.name ?? fallbackName ?? '', shortName: a?.shortName ?? null, color, textColor: textOn(color), logoUrl: usable(a, mode, ['logo']) };
+/** "Michigan Wolverines Men's Basketball" → "michigan-wolverines": a school is one row whatever the sport. */
+const SPORT_SUFFIX = /-(?:mens|womens|men-s|women-s)?-?(?:football|basketball|baseball|softball|hockey|ice-hockey|soccer|volleyball|lacrosse)$/;
+export function teamKeys(slug: string): string[] {
+  const bare = slug.replace(SPORT_SUFFIX, '');
+  return bare && bare !== slug ? [slug, bare] : [slug];
 }
 
 export type ArtSubject = {
   category: string;
+  genre?: string | null;
   primary: { kind: string; slug: string; name: string } | null;
   opponent: { kind: string; slug: string; name: string } | null;
   /** The venue's asset keys, e.g. "ticketmaster:KovZpZA7AAEA". */
   venueKeys: string[];
 };
 
-/** Pure choice from the rows already loaded; see loadBriefArt for the query. */
-export function chooseArt(assets: BrandAsset[], s: ArtSubject, opts: { mode: ArtMode; appUrl: string }): BriefArt | null {
-  const find = (kind: string, key: string) => assets.find((a) => a.kind === kind && a.key === key);
-  const primary = s.primary ? find(s.primary.kind, s.primary.slug) : undefined;
-  const group = categoryGroup(s.category);
-  if (group === 'sports') {
-    const left = side(primary, s.primary?.name ?? null, opts.mode);
-    const right = s.opponent ? side(find(s.opponent.kind, s.opponent.slug), s.opponent.name, opts.mode) : null;
-    // One known side still makes a banner; with neither team's colours there is nothing to draw.
-    if (left) return { kind: 'matchup', left, right };
-    if (right) return { kind: 'matchup', left: right, right: null };
-    return null;
+/** Finds a team by its slug or any alias, with a sport suffix stripped for a school. */
+function findTeam(rows: BrandAsset[], slug: string): BrandAsset | undefined {
+  const keys = teamKeys(slug);
+  return rows.find((r) => r.kind === 'team' && keys.includes(r.key)) ?? rows.find((r) => r.kind === 'team' && r.aliases.some((a) => keys.includes(a)));
+}
+
+/**
+ * The artwork's URL: a path on this app ("/brief-art/v1/hockey/new-york-rangers/new-york-islanders.jpg") or an https
+ * image elsewhere. Pure: the rows are loaded by loadBriefArtwork.
+ */
+export function chooseArtwork(rows: BrandAsset[], s: ArtSubject): string | null {
+  const sport = sportFor(s.category, s.genre);
+  if (sport) {
+    const left = s.primary ? findTeam(rows, s.primary.slug) : undefined;
+    const right = s.opponent ? findTeam(rows, s.opponent.slug) : undefined;
+    // The customer's team first; one known side still makes a banner, in its colours.
+    const [a, b] = left ? [left, right] : [right, undefined];
+    if (!a) return null;
+    return `/brief-art/${BANNER_VERSION}/${sport}/${a.key}/${b?.key ?? '_'}.jpg`;
   }
-  const own = usable(primary, opts.mode, ['photo', 'artwork', 'logo']);
-  if (own) return { kind: 'image', url: own };
+  const own = s.primary ? rows.find((r) => r.kind === s.primary!.kind && r.key === s.primary!.slug) : undefined;
+  if (own && sendable(own) && own.imageKind !== 'logo') return own.imageUrl;
   for (const key of s.venueKeys) {
-    const v = usable(find('venue', key), opts.mode, ['photo', 'artwork']);
-    if (v) return { kind: 'image', url: v };
+    const v = rows.find((r) => r.kind === 'venue' && r.key === key);
+    if (v && sendable(v)) return v.imageUrl;
   }
-  // A show with its own colours (a Broadway production) gets a band in them, named; better than generic art.
-  if (primary?.primaryColor && HEX.test(primary.primaryColor)) {
-    const accent = primary.secondaryColor && HEX.test(primary.secondaryColor) ? primary.secondaryColor : '#d7f36b';
-    return { kind: 'band', color: primary.primaryColor, accent, textColor: textOn(primary.primaryColor), label: primary.name };
-  }
-  if (group === 'concert') {
-    const base = opts.appUrl.replace(/\/$/, '');
-    // A sent email needs an absolute https URL. An empty base is a page on this app (the preview), where the path works.
-    if (base === '' || /^https:\/\//.test(base)) return { kind: 'image', url: `${base}${CONCERT_ARTWORK_PATH}` };
-  }
+  // A production with its own colours (a Broadway show) gets a stage banner in them.
+  if (own?.kind === 'production' && own.primaryColor) return `/brief-art/${BANNER_VERSION}/theater/${own.key}/_.jpg`;
+  if (isLiveMusic(s.category)) return CONCERT_ARTWORK_PATH;
   return null;
 }
 
-export async function loadBriefArt(db: DbOrTx, s: ArtSubject, opts: { mode: ArtMode; appUrl: string }): Promise<BriefArt | null> {
-  const ents = [s.primary, s.opponent].filter((x): x is NonNullable<typeof x> => !!x);
+export async function loadBriefArtwork(db: DbOrTx, s: ArtSubject): Promise<string | null> {
+  const slugs = [s.primary, s.opponent].filter((x): x is NonNullable<typeof x> => !!x).flatMap((e) => teamKeys(e.slug));
   const conds = [
-    ...ents.map((e) => and(eq(brandAssets.kind, e.kind), eq(brandAssets.key, e.slug))),
+    ...(slugs.length ? [inArray(brandAssets.key, slugs), sql`${brandAssets.aliases} ?| array[${sql.join(slugs.map((k) => sql`${k}`), sql`, `)}]::text[]`] : []),
     ...(s.venueKeys.length ? [and(eq(brandAssets.kind, 'venue'), inArray(brandAssets.key, s.venueKeys))] : []),
   ];
-  const rows = conds.length ? await db.select().from(brandAssets).where(or(...conds, sql`false`)) : [];
-  return chooseArt(rows, s, opts);
+  const rows = conds.length ? await db.select().from(brandAssets).where(or(...conds)) : [];
+  return chooseArtwork(rows, s);
 }
 
 /** A venue's asset keys from its provider ids: { ticketmaster: 'KovZpZA7AAEA' } → ['ticketmaster:KovZpZA7AAEA']. */
@@ -120,9 +106,9 @@ export function venueKeys(externalIds: Record<string, string> | null | undefined
 }
 
 /**
- * A provider's image for a team, performer or venue, kept for the brief. It never replaces a row staff or the seed
- * wrote: only an earlier provider row is refreshed. Stored 'unreviewed' until staff confirm the provider's terms cover
- * showing it in our email (one update per source, see docs).
+ * A provider's image for a team, performer or venue. It never replaces a row staff, the seed or the team file wrote:
+ * only an earlier row from the same provider is refreshed. Stored 'unreviewed' until staff confirm the provider's
+ * terms cover showing it in our email.
  */
 export async function upsertProviderImage(db: DbOrTx, a: { kind: string; key: string; name: string; source: string; image: { url: string; width: number | null; height: number | null } }): Promise<void> {
   await db

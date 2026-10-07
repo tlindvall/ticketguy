@@ -1,0 +1,167 @@
+[
+  {
+    "slug": "atlanta-dream",
+    "name": "Atlanta Dream",
+    "shortName": "ATL",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#E31837",
+    "secondaryColor": "#5091CC",
+    "logo": "/brand/logos/wnba/atlanta-dream.png"
+  },
+  {
+    "slug": "chicago-sky",
+    "name": "Chicago Sky",
+    "shortName": "CHI",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#5091CD",
+    "secondaryColor": "#FFD520",
+    "logo": "/brand/logos/wnba/chicago-sky.png"
+  },
+  {
+    "slug": "connecticut-sun",
+    "name": "Connecticut Sun",
+    "shortName": "CON",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#F05023",
+    "secondaryColor": "#0A2240",
+    "logo": "/brand/logos/wnba/connecticut-sun.png"
+  },
+  {
+    "slug": "dallas-wings",
+    "name": "Dallas Wings",
+    "shortName": "DAL",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#002B5C",
+    "secondaryColor": "#C4D600",
+    "logo": "/brand/logos/wnba/dallas-wings.png"
+  },
+  {
+    "slug": "golden-state-valkyries",
+    "name": "Golden State Valkyries",
+    "shortName": "GS",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#B38FCF",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/wnba/golden-state-valkyries.png"
+  },
+  {
+    "slug": "indiana-fever",
+    "name": "Indiana Fever",
+    "shortName": "IND",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#002D62",
+    "secondaryColor": "#E03A3E",
+    "logo": "/brand/logos/wnba/indiana-fever.png"
+  },
+  {
+    "slug": "las-vegas-aces",
+    "name": "Las Vegas Aces",
+    "shortName": "LV",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#A7A8AA",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/wnba/las-vegas-aces.png"
+  },
+  {
+    "slug": "los-angeles-sparks",
+    "name": "Los Angeles Sparks",
+    "shortName": "LA",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#552583",
+    "secondaryColor": "#FDB927",
+    "logo": "/brand/logos/wnba/los-angeles-sparks.png"
+  },
+  {
+    "slug": "minnesota-lynx",
+    "name": "Minnesota Lynx",
+    "shortName": "MIN",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#266092",
+    "secondaryColor": "#79BC43",
+    "logo": "/brand/logos/wnba/minnesota-lynx.png"
+  },
+  {
+    "slug": "new-york-liberty",
+    "name": "New York Liberty",
+    "shortName": "NY",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#86CEBC",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/wnba/new-york-liberty.png"
+  },
+  {
+    "slug": "phoenix-mercury",
+    "name": "Phoenix Mercury",
+    "shortName": "PHX",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#3C286E",
+    "secondaryColor": "#FA4B0A",
+    "logo": "/brand/logos/wnba/phoenix-mercury.png"
+  },
+  {
+    "slug": "portland-fire",
+    "name": "Portland Fire",
+    "shortName": "POR",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#CEE5EB",
+    "secondaryColor": "#000000",
+    "logo": "/brand/logos/wnba/portland-fire.png"
+  },
+  {
+    "slug": "seattle-storm",
+    "name": "Seattle Storm",
+    "shortName": "SEA",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#2C5235",
+    "secondaryColor": "#FEE11A",
+    "logo": "/brand/logos/wnba/seattle-storm.png"
+  },
+  {
+    "slug": "toronto-tempo",
+    "name": "Toronto Tempo",
+    "shortName": "TOR",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#33476D",
+    "secondaryColor": "#7B1B38",
+    "logo": "/brand/logos/wnba/toronto-tempo.png"
+  },
+  {
+    "slug": "washington-mystics",
+    "name": "Washington Mystics",
+    "shortName": "WSH",
+    "league": "WNBA",
+    "sport": "basketball",
+    "aliases": [],
+    "primaryColor": "#E03A3E",
+    "secondaryColor": "#002B5C",
+    "logo": "/brand/logos/wnba/washington-mystics.png"
+  }
+]

@@ -152,7 +152,7 @@ describe('resale market tracking', () => {
     // the one price summary: no venue floor or budget sum from it under them.
     // The ticket brief (Oct 6): a price lead with its headline and reason, then the card with the event, the estimate
     // said as estimated and what isn't checked. The feed here names no marketplace, as live: both are searched.
-    expect(rec!.bodyText).toContain('Hey,\n\nA price lead for two: about $247.\n\nThe lowest listing I can see for two tickets is Section 101, Row 10. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30, at 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two\n$190 before fees ($95 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
+    expect(rec!.bodyText).toContain('Hey,\n\nA price lead for two: about $247.\n\nThe lowest listing I can see for two tickets is Section 101, Row 10. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30 · tip-off 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two\n$190 before fees ($95 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
     expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\nFound it? Reply with the checkout screenshot');
     expect(rec!.bodyText).toContain('Other price leads\nSection 215 · Row 8: $240 before fees. $50 more before fees; not checked either\nSection 210 · Row 4: $280 before fees.');
     expect(rec!.bodyText).toContain('Prices from StubHub and Vivid Seats listing data, refreshed in the last couple of hours. Seller, availability and seats together not checked yet.');
@@ -178,6 +178,20 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText).not.toContain('no need to rush');
     // No homework: seats were named, so it doesn't ask them to go and find some.
     expect(rec!.bodyText).not.toMatch(/Found seats you like\? Send me/);
+  });
+
+  it('a known team gets its sport’s banner on the first brief of a conversation', async () => {
+    await setLicence('approved', ['tracking', 'benchmark', 'advice', 'customer_display']);
+    await h.db.insert(t.brandAssets).values({ kind: 'team', key: 'metro-testers', name: 'Metro Testers', shortName: 'MET', league: 'NBA', sport: 'basketball', primaryColor: '#1D428A', secondaryColor: '#FFC72C', source: 'team_file', rights: 'approved' }).onConflictDoNothing();
+    // A sent email takes https images only, as live (APP_URL is the Render https address).
+    const c = new Concierge({ db: h.db, env: { ...env(), APP_URL: 'https://ticketguy.example' }, extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: null, marketFetch: fetchImpl });
+    const requestId = await ask(c, '2 Testers tickets Oct 30 — is resale cheaper?', 'banner@customer.example');
+    await c.research({ requestId, revision: 1 });
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
+    // Drawn by this app at an absolute URL, the customer's team first; the facts stay text under it.
+    expect(rec!.bodyHtml).toMatch(/<img src="https:\/\/ticketguy\.example\/brief-art\/v1\/basketball\/metro-testers\/(?:_|[a-z0-9-]+)\.jpg" alt="" role="presentation"/);
+    expect(rec!.bodyText).not.toContain('brief-art');
+    await h.db.delete(t.brandAssets).where(eq(t.brandAssets.key, 'metro-testers'));
   });
 
   // Live, Oct 1 2026: "I like the tickets I sent. are they worth it?" about a StubHub link got the market summary

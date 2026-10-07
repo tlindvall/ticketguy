@@ -61,24 +61,3 @@ describe('over budget: which way the price is going, and a watch when one can ru
   });
 });
 
-describe('the ticket brief card carries the event’s own artwork (brand assets, #116) when it has approved art', () => {
-  const a = args(ctx({ direction: 'down', h72: { hours: 72, fromCents: 11000, toCents: 8469, changeCents: -2531, pct: -0.23 } }), null);
-  const render = (art: Parameters<typeof validateAndRender>[2] extends infer O ? O extends { brief?: infer B } ? B : never : never) => {
-    const p = buildPacket(a);
-    const r = validateAndRender(p, { decision: p.decision, opening: '', paragraphs: [{ claimIds: [], prose: '' }], closing: '' }, { brief: art });
-    if (!r.ok) throw new Error(r.errors.join('; '));
-    return r;
-  };
-  it('a matchup: both teams in their colours, VS between them, on the card above the event', () => {
-    const r = render({ label: 'NHL', art: { kind: 'matchup', left: { name: 'New York Rangers', shortName: 'NYR', color: '#0038a8', textColor: '#ffffff', logoUrl: null }, right: { name: 'New York Islanders', shortName: 'NYI', color: '#00539b', textColor: '#ffffff', logoUrl: null } } });
-    expect(r.htmlBody).toContain('bgcolor="#0038a8"');
-    expect(r.htmlBody).toContain('>NYR</div>');
-    expect(r.htmlBody).toContain('>VS</td>');
-    expect(r.htmlBody.indexOf('>VS</td>')).toBeLessThan(r.htmlBody.indexOf('New York Rangers vs. New York Islanders</h2>'));
-    // Decoration only: the plain text is the same with or without it.
-    expect(r.textBody).toBe(render(null).textBody);
-  });
-  it('no approved art: no artwork row, no image', () => {
-    expect(render({ label: 'NHL', art: null }).htmlBody).not.toMatch(/<img|>VS</);
-  });
-});
