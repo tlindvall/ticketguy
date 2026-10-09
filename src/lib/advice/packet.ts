@@ -1462,7 +1462,32 @@ function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[]
           ? `${t.facts}, with no clear fall toward ${target}.`
           : `${t.facts}, so nothing yet points toward ${target}.`
     : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
-  return [trend, ...(offer ? [offer] : [])];
+  const past = lateMoveNote(a);
+  return [past ? `${trend} ${past.text}` : trend, ...(offer ? [offer] : [])];
+}
+
+/**
+ * What past comparable events did from this point to their final day (series.ts `lateMoveFrom`): the counts, the
+ * middle result and what that does and doesn't say. Past events only, listed prices before fees, never a forecast.
+ */
+function lateMoveNote(a: BuildPacketArgs): { text: string; mostlyFell: boolean } | null {
+  const m = a.market;
+  const l = m?.context?.late;
+  if (!m?.visible || !l) return null;
+  const noun = a.eventNoun ?? 'event';
+  const who = noun === 'game' ? 'games here with the same team' : noun === 'show' ? 'shows here by the same act' : 'events like this one here';
+  const what = m.basis === 'pair' ? 'the cheapest price for two or more tickets' : 'the cheapest ticket';
+  const counts = [`fell in ${l.fell}`, ...(l.rose ? [`rose in ${l.rose}`] : []), ...(l.held ? [`stayed about the same in ${l.held}`] : [])];
+  const list = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0]!;
+  const pct = Math.round(Math.abs(l.medianPct) * 100);
+  const middle = pct === 0 ? 'no change' : `${l.medianPct > 0 ? 'up' : 'down'} ${pct}%`;
+  const mostlyFell = l.fell * 2 > l.events;
+  const so = mostlyFell
+    ? 'So late drops have been the usual pattern here, though not every time, and the seats you want could go.'
+    : l.rose * 2 > l.events
+      ? 'So waiting has usually cost more here, not less.'
+      : 'So there’s no reliable late drop to count on.';
+  return { text: `Looking at the last ${l.events} ${who}: from this point to the day of the ${noun}, ${what} ${list} (listed before fees; the middle result was ${middle}). ${so}`, mostlyFell };
 }
 
 /** A watch they could start now on their budget, as the offer the reply makes. */
@@ -2153,8 +2178,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     const late = !!a.trendAsked.history;
     const pastShown = claims.some((c) => c.id === 'C_BENCH' && c.customerVisible);
     const noun = a.eventNoun ?? 'event';
-    const pastNote = late && !pastShown ? ` I don’t have prices from past ${noun}s like this one at the same point before the ${noun}, so I can’t tell you whether they usually drop closer to the day.` : '';
-    const answer = late && mt?.why && !view?.lead ? `I wouldn’t count on a drop. ${mt.facts}, so ${mt.why}.${risk}${view?.after ?? ''}` : text;
+    // Past games here, when we hold them: what prices did from this point to the day itself (SeatData history).
+    const past = late ? lateMoveNote(a) : null;
+    const pastNote = past ? ` ${past.text}` : late && !pastShown ? ` I don’t have prices from past ${noun}s like this one at the same point before the ${noun}, so I can’t tell you whether they usually drop closer to the day.` : '';
+    const answer = late && mt?.why && !view?.lead ? `${past?.mostlyFell ? 'A late drop is possible.' : 'I wouldn’t count on a drop.'} ${mt.facts}, so ${mt.why}.${risk}${view?.after ?? ''}` : text;
     claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${answer}${pastNote}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
   }
 
