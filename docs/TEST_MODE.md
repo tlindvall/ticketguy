@@ -88,5 +88,5 @@ curl -sX POST $BASE/api/test/inbound -H "$AUTH" -H 'content-type: application/js
 ## Limits
 
 - The AI daily budget (`AI_GLOBAL_DAILY_BUDGET_USD`, $10 by default) still applies, and heavy testing is what will hit it next. The spend so far today is shown on /admin/operations. Raise the budget for the testing period if needed.
-- Drafts are approved automatically only while `AUTO_APPROVE_WHILE_TESTING` is on and the tester allowlist is non-empty, as before. Otherwise they wait on the request page, and the API reports them as `draftAwaitingApproval`.
+- Drafts are approved automatically while `AUTO_APPROVE_WHILE_TESTING` is on and the tester allowlist is non-empty, or for everyone when `AUTO_SEND_RECOMMENDATIONS=true`. Otherwise they wait on the request page, and the API reports them as `draftAwaitingApproval`.
 - Delivery events (delivered, bounced) never arrive for recorded sends. Their send state stays `provider_accepted`, with a provider id starting `test_`.

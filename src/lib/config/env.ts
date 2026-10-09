@@ -139,6 +139,13 @@ const rawSchema = z.object({
     .optional()
     .transform((v) => (v === undefined ? true : v.trim().toLowerCase() !== 'false' && v.trim() !== '0')),
   EMAIL_TEST_RECIPIENT_ALLOWLIST: csv,
+  /**
+   * Open to everyone, with drafts approved by the system as they're written, for every sender, as during testing
+   * (owner's decision, Oct 9). Without it, emptying the allowlist puts every recommendation in the review queue,
+   * which no one is staffing. Auto-approved emails keep the "AI-assisted" disclosure, never "human-reviewed", and the
+   * send gate (kill switches, suppressions, stale evidence) still has the last word. Off unless set to "true".
+   */
+  AUTO_SEND_RECOMMENDATIONS: explicitBoolean,
 
   /** 'rules' runs the deterministic extractor/drafter deliberately; it is never a silent fallback. */
   EXTRACTION_PROVIDER: z.enum(['anthropic', 'openai', 'rules']).default('anthropic'),

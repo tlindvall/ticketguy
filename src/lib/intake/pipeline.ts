@@ -153,9 +153,12 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind
 /** Who approves a draft when review is off during testing; its emails carry the automated disclosure. */
 export const AUTO_APPROVER = 'system:auto-approve';
 
-/** Drafts approve themselves while only named testers can be emailed (env AUTO_APPROVE_WHILE_TESTING). */
-export function autoApproveActive(e: Pick<Env, 'AUTO_APPROVE_WHILE_TESTING' | 'EMAIL_TEST_RECIPIENT_ALLOWLIST'>): boolean {
-  return e.AUTO_APPROVE_WHILE_TESTING && e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0;
+/**
+ * Drafts approve themselves while only named testers can be emailed (env AUTO_APPROVE_WHILE_TESTING), or for everyone
+ * once the owner has opened it up with AUTO_SEND_RECOMMENDATIONS.
+ */
+export function autoApproveActive(e: Pick<Env, 'AUTO_APPROVE_WHILE_TESTING' | 'EMAIL_TEST_RECIPIENT_ALLOWLIST' | 'AUTO_SEND_RECOMMENDATIONS'>): boolean {
+  return e.AUTO_SEND_RECOMMENDATIONS || (e.AUTO_APPROVE_WHILE_TESTING && e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0);
 }
 
 export class Concierge {
