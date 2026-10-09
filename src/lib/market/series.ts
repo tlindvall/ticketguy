@@ -167,6 +167,11 @@ export type MarketContext = {
   direction: 'down' | 'up' | 'flat' | 'mixed' | 'insufficient';
   supply: { trend: SupplyTrend; now: number | null; before: number | null; hours: number | null };
   typical: { events: number; p25Cents: number; medianCents: number; p75Cents: number; leadBucket: string } | null;
+  /**
+   * What happened next in past comparable events: from this lead time to their final day, how many fell, rose or held,
+   * and the median change. Past games only, never a forecast for this one.
+   */
+  late?: LateMove;
   points: number;
   observations?: MarketObservations;
 };
@@ -216,6 +221,39 @@ function quantile(sorted: number[], p: number): number {
   return sorted[lo]! + (h - lo) * ((sorted[Math.min(lo + 1, sorted.length - 1)] ?? sorted[lo]!) - sorted[lo]!);
 }
 
+export type LateMove = { events: number; fell: number; rose: number; held: number; medianPct: number; leadBucket: string } | null;
+
+/**
+ * "Do prices drop nearer the game?", from past comparable events: each one's cheapest listed price nearest this lead
+ * time (same bucket) against its last price in the final day before it started. One value per event, so a heavily
+ * sampled game counts once; a move is a move by the same rule as the live trend. Null when it's already the final two
+ * days (nothing left to compare) or fewer than TYPICAL_MIN_EVENTS past events have both points.
+ */
+export function lateMoveFrom(comparables: Array<{ eventKey: string; leadMinutes: number; priceCents: number }>, leadMinutes: number): LateMove {
+  if (leadMinutes <= 48 * 60) return null;
+  const bucket = leadBucketFor(leadMinutes);
+  const now = new Map<string, { d: number; price: number }>();
+  const last = new Map<string, { lead: number; price: number }>();
+  for (const c of comparables) {
+    if (leadBucketFor(c.leadMinutes) === bucket) {
+      const d = Math.abs(c.leadMinutes - leadMinutes);
+      const prev = now.get(c.eventKey);
+      if (!prev || d < prev.d) now.set(c.eventKey, { d, price: c.priceCents });
+    }
+    if (c.leadMinutes >= 0 && c.leadMinutes < 24 * 60) {
+      const prev = last.get(c.eventKey);
+      if (!prev || c.leadMinutes < prev.lead) last.set(c.eventKey, { lead: c.leadMinutes, price: c.priceCents });
+    }
+  }
+  const moves = [...now].filter(([k, v]) => last.has(k) && v.price > 0).map(([k, v]) => ({ changeCents: last.get(k)!.price - v.price, pct: (last.get(k)!.price - v.price) / v.price }));
+  if (moves.length < TYPICAL_MIN_EVENTS) return null;
+  const isMove = (m: { changeCents: number; pct: number }) => Math.abs(m.pct) >= MARKET_MOVE_PCT && Math.abs(m.changeCents) >= MARKET_MOVE_CENTS;
+  const fell = moves.filter((m) => isMove(m) && m.pct < 0).length;
+  const rose = moves.filter((m) => isMove(m) && m.pct > 0).length;
+  const pcts = moves.map((m) => m.pct).sort((a, b) => a - b);
+  return { events: moves.length, fell, rose, held: moves.length - fell - rose, medianPct: Math.round(quantile(pcts, 0.5) * 100) / 100, leadBucket: bucket };
+}
+
 /**
  * The typical cheapest listed price at this lead time for past comparable events: one value per event (its
  * point nearest the same lead time, within the same bucket), so a heavily sampled game counts once.
@@ -248,6 +286,7 @@ export function computeMarketContext(a: { basis: MarketBasis; zone: string | nul
   const base: MarketContext = { methodVersion: MARKET_METHOD_VERSION, basis: a.basis, zone: a.zone, adequacy: 'insufficient', reasons, current: current ? { priceCents: current.priceCents, at: current.observedAt, activeListings: current.activeListings, timeKnown: true } : null, h24: null, h72: null, direction: 'insufficient', supply: { trend: 'unknown', now: null, before: null, hours: null }, typical: null, points: pts.length, observations };
   const lead = Math.round((a.eventStartAt.getTime() - a.now.getTime()) / 60_000);
   base.typical = a.comparables?.length ? typicalAtLead(a.comparables, lead) : null;
+  base.late = a.comparables?.length ? lateMoveFrom(a.comparables, lead) : null;
   if (!current) {
     if (lastUntimed) {
       // The price is real, its age isn't known: said as "when I checked", never as a trend or as current.
