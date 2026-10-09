@@ -188,6 +188,51 @@ const NUMBER_WORDS = ['a', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'
 const wordNumber = (w: string): number | null => (/^\d{1,2}$/.test(w) ? Number(w) : w === 'a' || w === 'an' ? 1 : NUMBER_WORDS.indexOf(w) > 0 ? NUMBER_WORDS.indexOf(w) : null);
 export const WEEKS_AHEAD_RE = /\b(\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(weeks?|months?)\s+(?:from\s+(?:now|today)|out|away)\b|\bin\s+(?:about\s+|around\s+|roughly\s+)?(\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(weeks?|months?)(?:'|’)?(?:\s+time)?\b/i;
 
+/**
+ * "Before Christmas", "by Thanksgiving", "before the end of the year", "before November 15", "until December": from
+ * today up to then (live Oct 9: "what upcoming Rangers game … before christmas" was read as no window at all). "Before"
+ * a day stops the day before it; "by" or "until" a day includes it; "before November" ends with October.
+ */
+export const BEFORE_RE = new RegExp(`\\b(before|by|until|till|til|ahead of|prior to)\\s+(?:the\\s+)?(christmas eve|christmas|xmas|x-mas|thanksgiving|new year(?:'|’)?s(?:\\s+eve|\\s+day)?|new year|end of (?:the )?year|year[- ]end|${MONTH_RE}(?:\\s+(\\d{1,2})(?:st|nd|rd|th)?)?)(?![a-z])`, 'i');
+
+export function beforeWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
+  const b = BEFORE_RE.exec(expression.trim().toLowerCase());
+  if (!b) return null;
+  const now = localDateParts(receivedAt, timeZone);
+  const today = toIsoDate(now.y, now.m, now.d);
+  const inclusive = !/^(?:before|ahead of|prior to)$/.test(b[1]!);
+  const what = b[2]!;
+  // The next one still to come: Christmas asked about on Dec 28 is next year's.
+  const upcoming = (m: number, d: number) => (toIsoDate(now.y, m, d) >= today ? now.y : now.y + 1);
+  let y: number;
+  let m: number;
+  let d: number;
+  if (/christmas eve/.test(what)) [y, m, d] = [upcoming(12, 24), 12, 24];
+  else if (/christmas|xmas|x-mas/.test(what)) [y, m, d] = [upcoming(12, 25), 12, 25];
+  else if (/thanksgiving/.test(what)) {
+    const fourthThu = (yr: number) => { const dow = new Date(Date.UTC(yr, 10, 1)).getUTCDay(); return 1 + ((4 - dow + 7) % 7) + 21; };
+    const yr = toIsoDate(now.y, 11, fourthThu(now.y)) >= today ? now.y : now.y + 1;
+    [y, m, d] = [yr, 11, fourthThu(yr)];
+  } else if (/new year(?:'|’)?s\s+eve/.test(what)) [y, m, d] = [now.y, 12, 31];
+  else if (/new year/.test(what)) return { from: today, to: toIsoDate(now.y, 12, 31) };
+  else if (/end of|year[- ]end/.test(what)) return { from: today, to: toIsoDate(now.y, 12, 31) };
+  else {
+    const month = monthIndex(b[3]!);
+    if (!month) return null;
+    const year = yearFor(month, receivedAt);
+    if (!b[4]) {
+      // "Before November": through October. "By/until November" is read the same way: the month itself isn't promised.
+      const t = addDaysToCalendar(year, month, 1, -1);
+      const to = toIsoDate(t.y, t.m, t.d);
+      return to >= today ? { from: today, to } : null;
+    }
+    [y, m, d] = [year, month, Math.min(Number(b[4]), lastDayOf(year, month))];
+  }
+  const end = inclusive ? { y, m, d } : addDaysToCalendar(y, m, d, -1);
+  const to = toIsoDate(end.y, end.m, end.d);
+  return to >= today ? { from: today, to } : null;
+}
+
 export function spanWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
   const e = expression.trim().toLowerCase();
   const now = localDateParts(receivedAt, timeZone);
@@ -196,6 +241,8 @@ export function spanWindowFor(expression: string, receivedAt: Date, timeZone: st
     const t = addDaysToCalendar(now.y, now.m, now.d, days);
     return toIsoDate(t.y, t.m, t.d);
   };
+  const before = beforeWindowFor(e, receivedAt, timeZone);
+  if (before) return before;
 
   // "About six weeks from now", "in 3 weeks", "a month from now": a week either side of that day, so a team that
   // plays twice that fortnight is a choice of date, never the next game three weeks earlier.
