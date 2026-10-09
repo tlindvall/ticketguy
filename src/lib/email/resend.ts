@@ -11,13 +11,21 @@ import { normalizeMessageId, normalizeReferencesHeader } from '@/lib/intake/thre
  * authenticated API, then downloaded with a bounded, URL-validated fetcher (never credential-forwarding).
  * Field names follow the Resend receiving docs at research time; validate against the live payload in staging.
  */
+/**
+ * Resend rejects a subject with a line break ("The `\n` is not allowed in the `subject` field"), and a subject can carry
+ * one: a staff alert's reason text, or a customer's folded subject line. Breaks become spaces, so the email still goes.
+ */
+export function oneLineSubject(subject: string): string {
+  return subject.replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+}
+
 export class ResendProvider implements EmailProvider {
   private readonly client: Resend;
   constructor(apiKey: string) {
     this.client = new Resend(apiKey);
   }
   async send(args: { idempotencyKey: string; from: string; to: string; subject: string; text: string; html: string; headers: Record<string, string> }): Promise<{ providerMessageId: string }> {
-    const { data, error } = await this.client.emails.send({ from: args.from, to: [args.to], subject: args.subject, text: args.text, html: args.html, headers: args.headers }, { idempotencyKey: args.idempotencyKey });
+    const { data, error } = await this.client.emails.send({ from: args.from, to: [args.to], subject: oneLineSubject(args.subject), text: args.text, html: args.html, headers: args.headers }, { idempotencyKey: args.idempotencyKey });
     if (error || !data) throw new Error(`resend_send_failed: ${error?.name ?? 'unknown'}: ${error?.message ?? ''}`);
     return { providerMessageId: data.id };
   }
