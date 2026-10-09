@@ -25,6 +25,8 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
+import { correctToKnown } from '@/lib/domain/name-correction';
+import { ROSTER_NAMES, rosterTeam } from '@/lib/domain/team-names';
 import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
@@ -45,7 +47,8 @@ import { SEATDATA_DATASET_ID, listingAge } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
-import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
+import { MARKETS, geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
+import { homeByVotes, homeFromStatement, marketOfVenue } from '@/lib/domain/home-market';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, displayVenue, eventConstraints, localStart, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
@@ -134,7 +137,7 @@ const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', .
  * With no integrated source and an empty catalog that is a claim about diligence we did not do, and the
  * same prohibition that stops us inventing availability stops us inventing a search.
  */
-function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind: string | null = null): string | null {
+export function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind: string | null = null): string | null {
   const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
   // "on Fri, Oct 2" when we know the day, not 'for "Friday"'.
   const when = brief.resolvedLocalDate ? ` on ${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${brief.resolvedLocalDate}T12:00:00Z`))}` : brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
@@ -145,7 +148,9 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind
   // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
   // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
   // A team plays games, whatever the category hint says (live Oct 5: "a New York Rangers performance").
-  const game = entityKind === 'team' || SPORT_HINTS.includes(brief.categoryHint ?? '') ? 'game' : 'performance';
+  // A matchup ("Notre Dame vs Miami") is a game whatever else is known about either side (live Oct 8: "a Norte Dane
+  // performance" for a college football game).
+  const game = entityKind === 'team' || SPORT_HINTS.includes(brief.categoryHint ?? '') || !!splitMatchup(brief.eventName) ? 'game' : 'performance';
   if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} ${game}` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
@@ -460,6 +465,16 @@ export class Concierge {
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    // What fans call a team ("Bolts", "Habs", "Bama", "Notre Dame") is that team, by its full name, when the name isn't
+    // already one in the catalog and only one team answers to it (the league they named narrows "Rangers").
+    const typed = extraction.performerOrTeam?.trim().toLowerCase() ?? '';
+    const inCatalog = !!typed && known.some((k) => k.name.toLowerCase().includes(typed) || k.aliases.some((a) => a.toLowerCase() === typed));
+    const rostered = !inCatalog ? rosterTeam(extraction.performerOrTeam, merged.categoryHint) : null;
+    if (rostered && extraction.performerOrTeam) merged = { ...merged, performerOrTeam: rostered, eventName: merged.eventName ? merged.eventName.replace(extraction.performerOrTeam, rostered) : merged.eventName };
+    // A typo in a name we know is read as that name, and said so (live Oct 8: "Norte Dane vs Miami" was searched as typed).
+    const typo = rostered || inCatalog ? null : correctToKnown(extraction.performerOrTeam, [...known, ...ROSTER_NAMES]);
+    if (typo) merged = { ...merged, performerOrTeam: typo.to, eventName: merged.eventName ? merged.eventName.replace(typo.from, typo.to) : merged.eventName };
+    const typoNote = typo ? `I’ve read “${typo.from}” as ${typo.to}. Tell me if you meant someone else.` : null;
     // A checkout link with only a listing number, seen in the resale feed at one event: that is the event they mean,
     // as surely as if they had named it (live Oct 2: "Are these a good deal?" with a StubHub checkout link).
     if (!merged.performerOrTeam && !merged.eventName && !merged.resolvedLocalDate) {
@@ -625,6 +640,10 @@ export class Concierge {
       // by "reply if you're not in the US".
       contact!.countryConfirmed = isUs ? 'US' : 'NON_US';
       await this.db.update(t.requests).set({ countryConfirmed: isUs ? 'US' : 'NON_US' }).where(eq(t.requests.id, req.id));
+      // "I live in Dallas" is kept with the contact: next month's bare "Rangers" is Texas, and it outranks where
+      // the events they asked about happened to be.
+      const said = isUs ? homeFromStatement(extraction.countryStatement) : null;
+      if (said) await this.rememberHome(contact!.id, said);
       if (!isUs) {
         await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
         await this.db.update(t.requests).set({ currentRevision: revision }).where(eq(t.requests.id, req.id));
@@ -832,7 +851,7 @@ export class Concierge {
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
-    const assumptions = [...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+    const assumptions = [...(typoNote ? [typoNote] : []), ...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
@@ -1094,8 +1113,8 @@ export class Concierge {
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
         const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
-        const text = ['Hey,', lead, ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
+        const text = ['Hey,', lead, ...(typoNote ? [typoNote] : []), ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(typoNote ? [`<p style="margin:0 0 18px;">${esc(typoNote)}</p>`] : []), ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
         if (merged.intent === 'watch_request') await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: `policy:${snap.decision.reasons.includes('operator_blocked') ? 'operator_blocked' : 'guide_official_only'}` } });
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'guide_official_route');
@@ -1293,14 +1312,35 @@ export class Concierge {
     return { market: (await this.contactMarket(contactId)) ?? marketById(this.env.DEFAULT_MARKET), assumed: true };
   }
 
-  /** The market of this customer's most recent request that named a US place, if any. */
+  /**
+   * Where this customer is based: where they said they live, else the place most of their recent requests were
+   * in (the event's venue once one was settled, else the city they named). Null for a new customer.
+   */
   private async contactMarket(contactId: string): Promise<Market | null> {
-    const rows = await this.db.select({ brief: t.requestVersions.brief }).from(t.requestVersions).innerJoin(t.requests, eq(t.requests.id, t.requestVersions.requestId)).where(eq(t.requests.contactId, contactId)).orderBy(desc(t.requestVersions.createdAt)).limit(20);
-    for (const r of rows) {
-      const b = r.brief as { city?: string | null; state?: string | null };
-      if (b.city && !isOutsideUs(b.city)) return marketFor(b.city, b.state ?? null);
-    }
-    return null;
+    const [pref] = await this.db.select({ region: t.contactPreferences.region }).from(t.contactPreferences).where(eq(t.contactPreferences.contactId, contactId));
+    const said = pref?.region ? MARKETS.find((mk) => mk.id === pref.region) : null;
+    if (said) return said;
+    const recent = await this.db.select({ id: t.requests.id, v: t.venues }).from(t.requests).leftJoin(t.events, eq(t.events.id, t.requests.eventId)).leftJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.requests.contactId, contactId)).orderBy(desc(t.requests.createdAt)).limit(10);
+    if (!recent.length) return null;
+    const open = recent.filter((r) => !r.v).map((r) => r.id);
+    const briefs = open.length ? await this.db.select({ requestId: t.requestVersions.requestId, brief: t.requestVersions.brief }).from(t.requestVersions).where(inArray(t.requestVersions.requestId, open)).orderBy(desc(t.requestVersions.revision)) : [];
+    const named = (requestId: string): Market | null => {
+      for (const r of briefs) {
+        if (r.requestId !== requestId) continue;
+        const b = r.brief as { city?: string | null; state?: string | null };
+        if (b.city && !isOutsideUs(b.city)) return marketFor(b.city, b.state ?? null);
+      }
+      return null;
+    };
+    return homeByVotes(recent.map((r) => (r.v ? marketOfVenue(r.v) : named(r.id))));
+  }
+
+  /** Keeps where the customer said they live; a later statement replaces it. */
+  private async rememberHome(contactId: string, market: Market): Promise<void> {
+    const [pref] = await this.db.select({ region: t.contactPreferences.region }).from(t.contactPreferences).where(eq(t.contactPreferences.contactId, contactId));
+    if (pref?.region === market.id) return;
+    await this.db.insert(t.contactPreferences).values({ contactId, region: market.id }).onConflictDoUpdate({ target: t.contactPreferences.contactId, set: { region: market.id, updatedAt: new Date() } });
+    await audit(this.db, { actor: 'customer', action: 'contact.home_said', entityKind: 'contact', entityId: contactId, diff: { from: pref?.region ?? null, to: market.id } });
   }
 
   /**
@@ -2376,7 +2416,17 @@ export class Concierge {
       // Two different teams both have a game in the window: name them, one candidate each.
       return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => candidateFrom(entity, cands[0]!.e, cands[0]!.v, `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}`)) };
     }
-    const { entity, cands } = withEvents[0]!;
+    const { entity } = withEvents[0]!;
+    let { cands } = withEvents[0]!;
+    // An act playing several cities and no city named: the shows near where this customer is based, said in a line
+    // they can correct (they said where they live, or most of what they've asked about was there).
+    if (cands.length > 1 && entity.kind !== 'team' && home && !x.city && !x.state && !rules?.venueTerms) {
+      const near = cands.filter(({ v }) => inMarket(v, home));
+      if (near.length && near.length < cands.length) {
+        cands = near;
+        if (near.length === 1) assumed = [assumed, `I've gone with the ${home.label} show. Tell me if you meant another city.`].filter(Boolean).join(' ');
+      }
+    }
     if (cands.length > 1) {
       // A team and no exact date: take charge. The next game that fits, a home game first, said in one line they can
       // correct, never "Which game?" (live Oct 3: "4 tickets to the new home game for new york rangers, max $400" was
