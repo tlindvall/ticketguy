@@ -36,7 +36,7 @@ describe('the verified-offer brief', () => {
     const { textBody, htmlBody } = render(checked());
     expect(textBody.startsWith('Hey,\n\nThese are the two I’d take.\n\nIt’s the lowest checked total for two together among the offers I checked, $316 inside your $2,500. StubHub showed the total with fees and the seats together when I checked.')).toBe(true);
     expect(textBody).toContain('Metallica\nMohegan Sun Arena, Uncasville\n');
-    expect(textBody).toContain('My pick · checkout checked\nSection 111 · Row L\n$2,184 for two\n$1,092 each · fees included\nSeats together: Confirmed\nSeller: StubHub');
+    expect(textBody).toContain('My pick · checkout checked\nSection 111 · Row L\n$2,184 for two\n$1,092 a ticket, fees included\nThe seller’s checkout total, fees included.\nSeats together: Confirmed\nSeller: StubHub');
     expect(textBody).toContain('View these seats on StubHub: https://www.stubhub.com/metallica-uncasville-tickets-11-19-2026/event/1559/?listingId=L-8812');
     expect(textBody).toContain('Not held; availability can change.');
     expect(textBody).not.toContain('Estimated total');
