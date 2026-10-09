@@ -29,8 +29,9 @@ export async function renderPreviewSamples(db: DbOrTx): Promise<Array<{ id: stri
     const artwork = await loadBriefArtwork(db, s.subject);
     const brief: TicketBrief = {
       kind: 'price_lead',
-      headline: `A price lead ${s.party}: ${s.total.toLowerCase()}.`,
-      rationale: `The lowest listing I can see is ${s.seat.replace(' · ', ', ')}. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.`,
+      // The packet's own wording (picksAnswer), so the preview shows what a customer reads.
+      headline: `${s.total} ${s.party}, with fees.`,
+      rationale: `That’s the lowest listing I can see: ${s.seat.replace(' · ', ', ')}. I haven’t checked it at checkout yet, so the final price, whether it’s still available and whether the seats are together still need confirming.`,
       category: categoryLabel(s.subject.category),
       event: { name: s.name, where: s.where, when: sportStart(s.when, sportFor(s.subject.category, s.subject.genre)) },
       artworkUrl: artwork,

@@ -152,7 +152,7 @@ describe('resale market tracking', () => {
     // the one price summary: no venue floor or budget sum from it under them.
     // The ticket brief (Oct 6): a price lead with its headline and reason, then the card with the event, the estimate
     // said as estimated and what isn't checked. The feed here names no marketplace, as live: both are searched.
-    expect(rec!.bodyText).toContain('Hey,\n\nA price lead for two: about $247.\n\nThe lowest listing I can see for two tickets is Section 101, Row 10. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30 · tip-off 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two\n$190 before fees ($95 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
+    expect(rec!.bodyText).toContain('Hey,\n\nAbout $247 for two, with fees.\n\nThat’s the lowest listing I can see for two tickets: Section 101, Row 10. I haven’t checked it at checkout yet, so the final price, whether it’s still available and whether the seats are together still need confirming.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30 · tip-off 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two\n$190 before fees ($95 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
     expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\nFound it? Reply with the checkout screenshot');
     expect(rec!.bodyText).toContain('Other price leads\nSection 215 · Row 8: $240 before fees. $50 more before fees; not checked either\nSection 210 · Row 4: $280 before fees.');
     expect(rec!.bodyText).toContain('Prices from StubHub and Vivid Seats listing data, refreshed in the last couple of hours. Seller, availability and seats together not checked yet.');
@@ -161,7 +161,7 @@ describe('resale market tracking', () => {
     expect(rec!.bodyText.match(/Search StubHub for this game/g)).toHaveLength(1);
     // The card: headline, neutral badge (lime is for checked offers), the estimate large, the search as an outlined
     // button, never a filled purchase button.
-    expect(rec!.bodyHtml).toContain('>A price lead for two: about $247.</h1>');
+    expect(rec!.bodyHtml).toContain('>About $247 for two, with fees.</h1>');
     expect(rec!.bodyHtml).toContain('background:#e9e3d8;');
     expect(rec!.bodyHtml).not.toContain('background:#d7f36b;');
     expect(rec!.bodyHtml).toContain('About $247 <span');

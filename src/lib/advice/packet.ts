@@ -1382,16 +1382,18 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const budget = p.budgetTotalCents;
   const party = q === 1 ? 'one ticket' : `${n} tickets`;
   const where = on(first!);
-  const missing = q > 1 ? 'the seller’s total with fees, that it’s still listed and whether the seats are together' : 'the seller’s total with fees and that it’s still listed';
+  const missing = q > 1 ? 'the final price, whether it’s still available and whether the seats are together' : 'the final price and whether it’s still available';
   const over = budget != null && !p.fits;
+  // Plain words, the price first (live Oct 9: "A price lead for two: about $1,840." read oddly). Still never "I'd buy".
   const head = over
     ? `Nothing for ${n} fits your ${formatUsd(budget)} yet.`
     : budget != null
-      ? `A price lead inside your ${formatUsd(budget)}: about ${est} for ${n}.`
-      : `A price lead for ${n}: about ${est}.`;
+      ? `About ${est} for ${n}, inside your ${formatUsd(budget)}.`
+      : `About ${est} for ${n}, with fees.`;
+  const unchecked = `I haven’t checked it at checkout yet, so ${missing} still need confirming.`;
   const rationale = over
-    ? `The closest I can see is ${seat(first!)}${where ? ` on ${where}` : ''}, about ${est} for ${party} with fees, ${formatUsd(roundToDollar(first!.estimatedTotalCents - budget))} over. It’s a lead, not a checked offer: ${missing} still need confirming.`
-    : `The lowest listing I can see for ${party} is ${seat(first!)}${where ? ` on ${where}` : ''}${budget != null ? `, ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)} with fees` : ''}. It’s a lead, not a checked offer: ${missing} still need confirming.`;
+    ? `The closest is ${seat(first!)}${where ? ` on ${where}` : ''}: about ${est} for ${party} with fees, ${formatUsd(roundToDollar(first!.estimatedTotalCents - budget))} over your budget. ${unchecked}`
+    : `That’s the lowest listing I can see for ${party}: ${seat(first!)}${where ? ` on ${where}` : ''}. ${unchecked}`;
   const ageNote = p.age === 'undated' ? 'the data doesn’t say how recently it was refreshed' : typeof p.age === 'number' ? `refreshed about ${p.age} hours ago` : 'refreshed in the last couple of hours';
   const basis = [
     `${formatUsd(first!.listedTotalCents)} before fees (${formatUsd(first!.listing.priceCents)} each). Includes a ${p.feeAllowancePct}% fee allowance.`,
@@ -1412,7 +1414,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     kind: 'price_lead',
     headline: head,
     rationale,
-    category: categoryLabel(a.eventCategory),
+    category: briefCategory(a),
     event: briefEvent(a),
     artworkUrl: a.artworkUrl ?? null,
     seatLine: seatTitle(first!),
@@ -1465,10 +1467,24 @@ export function sportStart(when: string, sport: Sport | null | undefined): strin
   return when.replace(/,? at (\d{1,2}(?::\d{2})? [ap]\.m\.)/, (_m, t: string) => ` · ${SPORT_START[sport]} ${t}`);
 }
 
+/**
+ * The event's name without a sport repeated after each team: "Notre Dame Fighting Irish Football vs. Miami Hurricanes
+ * Football" is "Notre Dame Fighting Irish vs. Miami Hurricanes" (live Oct 9); the label above it says the sport. A
+ * "Men's" or "Women's" team keeps its whole name, since that's the difference between two teams.
+ */
+export function briefTitle(name: string): string {
+  return name.replace(/(?<!(?:Men|Women)['’]s) (?:Football|Basketball|Baseball|Softball|Hockey|Ice Hockey|Soccer|Volleyball|Lacrosse)(?=\s+(?:vs\.?|at|v\.?)\s|\s*$)/g, '').trim();
+}
+
+/** "College football" for a college game whose sport we know; otherwise the category's own label. */
+function briefCategory(a: BuildPacketArgs): string {
+  return a.eventCategory?.startsWith('ncaa') && a.eventSport ? `College ${a.eventSport}` : categoryLabel(a.eventCategory);
+}
+
 function briefEvent(a: BuildPacketArgs): TicketBrief['event'] {
   const parts = a.eventParts;
   if (!parts) return { name: a.eventLabel, where: '', when: '' };
-  return { name: parts.title, where: parts.where, when: sportStart(friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)), a.eventSport) };
+  return { name: briefTitle(parts.title), where: parts.where, when: sportStart(friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)), a.eventSport) };
 }
 
 /** Hosts a verified offer's purchase button may point at: the registry's own site for that source. */
@@ -1512,7 +1528,7 @@ function verifiedBrief(a: BuildPacketArgs): TicketBrief | null {
     kind: 'verified_offer',
     headline: q === 1 ? 'This is the one I’d take.' : `These are the ${n} I’d take.`,
     rationale: `It’s the lowest checked total for ${q === 1 ? 'one ticket' : `${n} together`} among the offers I checked${budget != null && total <= budget ? `, ${formatUsd(budget - total)} inside your ${formatUsd(budget)}` : ''}. ${seller} showed the total with fees${q > 1 ? ' and the seats together' : ''} when I checked.`,
-    category: categoryLabel(a.eventCategory),
+    category: briefCategory(a),
     event: briefEvent(a),
     artworkUrl: a.artworkUrl ?? null,
     seatLine,

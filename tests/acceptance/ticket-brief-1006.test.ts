@@ -104,3 +104,13 @@ describe('labels', () => {
     expect(isLiveMusic('nhl')).toBe(false);
   });
 });
+
+describe('the brief’s title and headline read plainly (live Oct 9)', () => {
+  it('a college game’s title drops the sport after each team, and keeps Men’s or Women’s', async () => {
+    const { briefTitle } = await import('@/lib/advice/packet');
+    expect(briefTitle('Notre Dame Fighting Irish Football vs. Miami Hurricanes Football')).toBe('Notre Dame Fighting Irish vs. Miami Hurricanes');
+    expect(briefTitle("UConn Huskies Women's Basketball vs. South Carolina Gamecocks Women's Basketball")).toBe("UConn Huskies Women's Basketball vs. South Carolina Gamecocks Women's Basketball");
+    expect(briefTitle('New York Rangers vs. New York Islanders')).toBe('New York Rangers vs. New York Islanders');
+    expect(briefTitle('Metallica')).toBe('Metallica');
+  });
+});

@@ -92,7 +92,7 @@ describe('take charge: the next home game and seats for the party, not questions
     // The answer first, then the game, then the offer as a card with its link, the estimate said as estimated
     // (personal-email design, Oct 3).
     // The ticket brief (Oct 6): a price lead, never "I'd buy"; the estimate said as estimated, what isn't checked named.
-    expect(r.emails).toContain('Hey,\n\nA price lead inside your $400: about $364 for four.\n\nThe lowest listing I can see for four tickets is Section 214, Row 10 on StubHub, $36 under your $400 with fees. It’s a lead, not a checked offer:');
+    expect(r.emails).toContain('Hey,\n\nAbout $364 for four, inside your $400.\n\nThat’s the lowest listing I can see for four tickets: Section 214, Row 10 on StubHub. I haven’t checked it at checkout yet, so the final price');
     expect(r.emails).toContain('Price lead · still needs checking\nSection 214 · Row 10\nAbout $364 for all four\n$280 before fees ($70 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub');
     expect(r.emails).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Rangers%20vs.%20Team%205');
     expect(r.emails).toContain('Other price leads\nSection 220 · Row 4 on Vivid Seats: $296 before fees.');
@@ -116,7 +116,7 @@ describe('take charge: the next home game and seats for the party, not questions
     const r = await ask('4 metro rangers tickets please, $400 max total');
     expect(r.req.eventId).toBe(games[0]!.id);
     expect(r.emails).toContain("I've gone with the next home game, Monday, October 5. Tell me if you meant a different one.");
-    expect(r.emails).toContain('A price lead inside your $400: about $364 for four.');
+    expect(r.emails).toContain('About $364 for four, inside your $400.');
     expect(r.emails).not.toMatch(/Which date|Which game/);
   });
 
