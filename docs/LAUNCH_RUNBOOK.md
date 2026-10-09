@@ -117,6 +117,8 @@ Verify all of the following:
 - Outbox recovery cadence is running.
 - The kill switch has been tested on and back off.
 - `EMAIL_TEST_RECIPIENT_ALLOWLIST` and `AUTO_APPROVE_WHILE_TESTING` are changed deliberately for real customers. Removing the allowlist changes approval behaviour.
+- To answer anyone who emails: empty `EMAIL_TEST_RECIPIENT_ALLOWLIST` and set `AUTO_SEND_RECOMMENDATIONS=true`. Without the second, every recommendation waits in the review queue. Auto-sent emails say "AI-assisted", never "human-reviewed".
+- Emptying the allowlist also ends the testing exemption for SeatData: resale prices appear in replies only if the licence in `/admin/sources` has `advice` and `customer_display`, and alerts only with `alerts`. Check before opening up, or replies lose their prices.
 - A named operator covers manual attention within the posted hours.
 - SeatData and AI budgets are set.
 - Landing copy describes only what is available: a second opinion and a staffed check, not automated cheapest-ticket sourcing.

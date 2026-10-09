@@ -6,6 +6,8 @@ import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import { AUTO_APPROVER, autoApproveActive } from '@/lib/intake/pipeline';
+import { parseEnv } from '@/lib/config/env';
+import { evaluateGate } from '@/lib/email/send-gate';
 
 /**
  * During testing (the recipient allowlist is in force) the owner turned the review step off: a draft is
@@ -38,6 +40,26 @@ describe('auto-approval while testing', () => {
     expect(autoApproveActive(testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: 'a@customer.example' }))).toBe(true);
     expect(autoApproveActive(testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: '' }))).toBe(false);
     expect(autoApproveActive(testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: 'a@customer.example', AUTO_APPROVE_WHILE_TESTING: 'false' }))).toBe(false);
+    // Opened to everyone (Oct 9): on with no allowlist, and only when set on purpose.
+    expect(autoApproveActive(testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: '', AUTO_SEND_RECOMMENDATIONS: 'true' }))).toBe(true);
+    expect(autoApproveActive(testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: '', AUTO_SEND_RECOMMENDATIONS: 'false' }))).toBe(false);
+  });
+
+  it('open to everyone: anyone who emails gets an auto-approved reply, and no address is turned away at the gate', async () => {
+    const c = makeConcierge(h, { env: testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: '', AUTO_SEND_RECOMMENDATIONS: 'true' }) });
+    const r = (await c.ingestInbound(inbound({ text: TEXT, from: 'stranger@somewhere.example', subject: 'Rangers' }))) as { requestId: string };
+    await drain(c);
+    const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
+    expect(rec).toMatchObject({ reviewStatus: 'approved', reviewerUserId: AUTO_APPROVER });
+    const [intent] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.approvalId, rec!.id));
+    expect(intent!.recipient).toBe('stranger@somewhere.example');
+    expect(intent!.bodyText).toContain('AI-assisted ticket advice.');
+    expect(intent!.bodyText).not.toContain('human-reviewed');
+    // A live, open configuration lets a stranger's approved recommendation through; the other checks still apply.
+    const open = parseEnv({ NODE_ENV: 'test', APP_MODE: 'live', EMAIL_SEND_ENABLED: 'true', RESEND_API_KEY: 're_x', EXTRACTION_PROVIDER: 'rules', EMAIL_TEST_RECIPIENT_ALLOWLIST: '', AUTO_SEND_RECOMMENDATIONS: 'true' });
+    const send = { messageClass: 'recommendation' as const, recipientLookup: 'stranger@somewhere.example', approved: true, approvalHashMatches: true, revisionCurrent: true, evidenceFresh: true, containsFixtureData: false, marketingPermission: false };
+    expect(evaluateGate(open, {}, new Set(), send)).toEqual({ allowed: true });
+    expect(evaluateGate(open, { recommendations: false }, new Set(), send)).toEqual({ allowed: false, reasons: ['kill_switch_recommendations'] });
   });
 
   it('a draft is approved by the system when written, and the email says it was not reviewed', async () => {
