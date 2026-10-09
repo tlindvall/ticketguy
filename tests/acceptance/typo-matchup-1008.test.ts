@@ -51,9 +51,10 @@ describe('"Norte Dane vs Miami": the name they meant, and a game', () => {
     return { req: req!, text: sends.map((s) => s.bodyText).join('\n----\n') };
   };
 
-  it('nothing on file for that day: it is called a game, never a performance', async () => {
+  it('not in the catalog yet: the team roster still reads it as Notre Dame, and it is a game, never a performance', async () => {
     const r = await ask('nd-1@customer.example');
-    expect(r.text).not.toMatch(/performance/);
+    expect(r.text).toContain('I’ve read “Norte Dane” as Notre Dame Fighting Irish.');
+    expect(r.text).not.toMatch(/performance|Norte Dane (?:game|tickets)/);
   });
 
   it('Notre Dame on file: read as Notre Dame, said so, and the game is found', async () => {

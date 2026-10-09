@@ -26,6 +26,7 @@ import { type Extractor, FixtureExtractor, missingMandatoryFields, clarification
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { correctToKnown } from '@/lib/domain/name-correction';
+import { ROSTER_NAMES, rosterTeam } from '@/lib/domain/team-names';
 import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
@@ -460,8 +461,14 @@ export class Concierge {
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    // What fans call a team ("Bolts", "Habs", "Bama", "Notre Dame") is that team, by its full name, when the name isn't
+    // already one in the catalog and only one team answers to it (the league they named narrows "Rangers").
+    const typed = extraction.performerOrTeam?.trim().toLowerCase() ?? '';
+    const inCatalog = !!typed && known.some((k) => k.name.toLowerCase().includes(typed) || k.aliases.some((a) => a.toLowerCase() === typed));
+    const rostered = !inCatalog ? rosterTeam(extraction.performerOrTeam, merged.categoryHint) : null;
+    if (rostered && extraction.performerOrTeam) merged = { ...merged, performerOrTeam: rostered, eventName: merged.eventName ? merged.eventName.replace(extraction.performerOrTeam, rostered) : merged.eventName };
     // A typo in a name we know is read as that name, and said so (live Oct 8: "Norte Dane vs Miami" was searched as typed).
-    const typo = correctToKnown(extraction.performerOrTeam, known);
+    const typo = rostered || inCatalog ? null : correctToKnown(extraction.performerOrTeam, [...known, ...ROSTER_NAMES]);
     if (typo) merged = { ...merged, performerOrTeam: typo.to, eventName: merged.eventName ? merged.eventName.replace(typo.from, typo.to) : merged.eventName };
     const typoNote = typo ? `I’ve read “${typo.from}” as ${typo.to}. Tell me if you meant someone else.` : null;
     // A checkout link with only a listing number, seen in the resale feed at one event: that is the event they mean,
