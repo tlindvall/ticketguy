@@ -1,4 +1,4 @@
-import { briefCard, briefEvidence, briefTop, type TicketBrief } from '@/lib/email/ticket-brief';
+import { briefCard, briefDollars, briefEvidence, briefTop, type BriefTrend, type TicketBrief } from '@/lib/email/ticket-brief';
 import { sportStart } from '@/lib/advice/packet';
 import { categoryLabel } from '@/lib/domain/event-noun';
 import { loadBriefArtwork, sportFor, type ArtSubject } from '@/lib/brand/assets';
@@ -9,6 +9,18 @@ import type { DbOrTx } from '@/lib/db';
  * the real artwork lookup, one per banner template. Nothing here is a listing or a price anyone saw; it is never sent.
  */
 type Sample = { id: string; title: string; subject: ArtSubject; name: string; where: string; when: string; seat: string; total: string; party: string; basis: string };
+
+/** One made-up rising series, on the first sample, so the price-movement module can be seen. */
+const SAMPLE_TREND: BriefTrend = {
+  direction: 'up',
+  nowCents: 8469,
+  windows: [
+    { label: '1 day ago', fromCents: 7920, changeCents: 549, pct: 549 / 7920, moved: true },
+    { label: '3 days ago', fromCents: 7100, changeCents: 1369, pct: 1369 / 7100, moved: true },
+  ],
+  meaning: 'For two, that’s $27.38 more than three days ago. Waiting has cost money so far.',
+  basis: 'Cheapest listed price for two or more tickets, a ticket before fees, from StubHub and Vivid Seats.',
+};
 
 const team = (slug: string, name: string) => ({ kind: 'team', slug, name });
 const SAMPLES: Sample[] = [
@@ -23,20 +35,24 @@ const SAMPLES: Sample[] = [
   { id: 'theater', title: 'Broadway (a stage in the show’s colours)', subject: { category: 'broadway', primary: { kind: 'production', slug: 'wicked', name: 'Wicked' }, opponent: null, venueKeys: [] }, name: 'Wicked', where: 'Gershwin Theatre, New York', when: 'Sunday, November 8, at 2 p.m.', seat: 'Rear Mezzanine · Row C', total: 'About $402', party: 'for all three', basis: '$309 before fees ($103 each). Includes a 30% fee allowance.' },
 ];
 
+const partySize = (p: string) => ({ 'for two': 2, 'for all three': 3, 'for all four': 4 } as Record<string, number>)[p] ?? 1;
+
 export async function renderPreviewSamples(db: DbOrTx): Promise<Array<{ id: string; title: string; artwork: string | null; html: string; text: string }>> {
   const out = [];
-  for (const s of SAMPLES) {
+  for (const [i, s] of SAMPLES.entries()) {
     const artwork = await loadBriefArtwork(db, s.subject);
     const brief: TicketBrief = {
       kind: 'price_lead',
-      headline: `A price lead ${s.party}: ${s.total.toLowerCase()}.`,
-      rationale: `The lowest listing I can see is ${s.seat.replace(' · ', ', ')}. It’s a lead, not a checked offer: the seller’s total with fees, that it’s still listed and whether the seats are together still need confirming.`,
+      // The packet's own wording (picksAnswer), so the preview shows what a customer reads.
+      headline: `${s.total} ${s.party}, with fees.`,
+      rationale: `That’s the lowest listing I can see: ${s.seat.replace(' · ', ', ')}.${i === 0 ? ' Listed prices are up $13.69 a ticket in three days.' : ''}`,
       category: categoryLabel(s.subject.category),
       event: { name: s.name, where: s.where, when: sportStart(s.when, sportFor(s.subject.category, s.subject.genre)) },
       artworkUrl: artwork,
       seatLine: s.seat,
       total: s.total,
       forWhom: s.party,
+      each: s.party === 'for one' ? null : `About ${briefDollars(Math.round(Number(s.total.replace(/[^\d]/g, '')) * 100 / partySize(s.party)))} a ticket, with fees`,
       basis: [s.basis],
       facts: [['Seats together', 'Not confirmed'], ['Listed on', 'StubHub']],
       action: { label: 'Search StubHub for these seats', url: 'https://www.stubhub.com/' },
@@ -44,6 +60,8 @@ export async function renderPreviewSamples(db: DbOrTx): Promise<Array<{ id: stri
       actionNote: 'From resale data refreshed in the last couple of hours. Not held; availability can change.',
       affiliate: false,
       alternatives: [],
+      // One made-up series on the first sample, so the price-movement module can be seen.
+      trend: i === 0 ? SAMPLE_TREND : null,
       after: [],
       evidenceNote: 'Preview: made-up prices, never sent.',
     };

@@ -32,6 +32,17 @@ describe('the ticket brief artwork', () => {
     expect(teamKeys('st-john-s-red-storm-mens-basketball')).toEqual(['st-john-s-red-storm-mens-basketball', 'st-john-s-red-storm']);
   });
 
+  it('the provider’s colourless photo row for a team never becomes the banner (live Oct 9: a broken image)', () => {
+    // Ticketmaster's sync keeps a photo row under the event's own slug, with no colours; the route can't draw it.
+    const photo = (key: string) => asset({ kind: 'team', key, name: key, imageUrl: 'https://img.example/x.jpg', imageKind: 'photo' });
+    const nd = asset({ kind: 'team', key: 'notre-dame-fighting-irish', name: 'Notre Dame Fighting Irish', primaryColor: '#0C2340' });
+    const miami = asset({ kind: 'team', key: 'miami-hurricanes', name: 'Miami Hurricanes', primaryColor: '#F47321' });
+    const rows = [photo('notre-dame-fighting-irish-football'), photo('miami-hurricanes-football'), nd, miami];
+    expect(chooseArtwork(rows, { category: 'ncaa_regular', genre: 'Football', primary: team('notre-dame-fighting-irish-football'), opponent: team('miami-hurricanes-football'), venueKeys: [] })).toBe('/brief-art/v1/football/notre-dame-fighting-irish/miami-hurricanes.jpg');
+    // With only the photo rows there is nothing to draw: no artwork, never a URL that 404s.
+    expect(chooseArtwork([photo('notre-dame-fighting-irish-football')], { category: 'ncaa_regular', genre: 'Football', primary: team('notre-dame-fighting-irish-football'), opponent: null, venueKeys: [] })).toBeNull();
+  });
+
   it('a show uses its own approved image, then the venue’s, then a stage in its colours, then our concert art', () => {
     const show = { category: 'concert', primary: { kind: 'performer', slug: 'dua-lipa', name: 'Dua Lipa' }, opponent: null, venueKeys: ['ticketmaster:KovZpZA7AAEA'] };
     const own = asset({ kind: 'performer', key: 'dua-lipa', name: 'Dua Lipa', imageUrl: 'https://img.example/dua.jpg', imageKind: 'photo', rights: 'provider_terms' });

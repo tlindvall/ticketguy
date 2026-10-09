@@ -13,7 +13,7 @@ import { areaOf, type ListingFields } from '@/lib/ai/listing-evidence';
 import { shownPriceParts } from './shown-prices';
 import { capitalize, categoryLabel, seatPhrase } from '@/lib/domain/event-noun';
 import { loadRegistry, sourceIdForHost } from '@/lib/sources/registry';
-import type { TicketBrief } from '@/lib/email/ticket-brief';
+import type { BriefTrend, TicketBrief } from '@/lib/email/ticket-brief';
 import type { Sport } from '@/lib/brand/teams';
 import type { AlternativesResult, ListingPicks, MarketListing } from '@/lib/market/alternatives';
 
@@ -1388,16 +1388,23 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const budget = p.budgetTotalCents;
   const party = q === 1 ? 'one ticket' : `${n} tickets`;
   const where = on(first!);
-  const missing = q > 1 ? 'the seller’s total with fees, that it’s still listed and whether the seats are together' : 'the seller’s total with fees and that it’s still listed';
+  const missing = q > 1 ? 'the final price, whether it’s still available and whether the seats are together' : 'the final price and whether it’s still available';
   const over = budget != null && !p.fits;
+  // Plain words, the price first (live Oct 9: "A price lead for two: about $1,840." read oddly). Still never "I'd buy".
+  // The price a ticket said plainly next to the party total (live Oct 9: "super important").
+  const each = q > 1 ? formatUsd(roundToDollar(first!.estimatedTotalCents / q)) : null;
   const head = over
     ? `Nothing for ${n} fits your ${formatUsd(budget)} yet.`
     : budget != null
-      ? `A price lead inside your ${formatUsd(budget)}: about ${est} for ${n}.`
-      : `A price lead for ${n}: about ${est}.`;
+      ? `${each ? `About ${each} a ticket, ${est} for ${n}` : `About ${est} for ${n}`}, inside your ${formatUsd(budget)}.`
+      : `${each ? `About ${each} a ticket, ${est} for ${n}` : `About ${est} for ${n}`}, with fees.`;
+  // What isn't checked is on the card and in the small print; said again here it was noise (live Oct 9). Which way
+  // the price has moved is what they act on, so it's said here and drawn under the card.
+  const trend = trendModule(a, over ? `${formatUsd(budget)} for ${n}` : null);
+  const moved = trend ? ` ${trend.sentence}` : '';
   const rationale = over
-    ? `The closest I can see is ${seat(first!)}${where ? ` on ${where}` : ''}, about ${est} for ${party} with fees, ${formatUsd(roundToDollar(first!.estimatedTotalCents - budget))} over. It’s a lead, not a checked offer: ${missing} still need confirming.`
-    : `The lowest listing I can see for ${party} is ${seat(first!)}${where ? ` on ${where}` : ''}${budget != null ? `, ${formatUsd(roundToDollar(budget - first!.estimatedTotalCents))} under your ${formatUsd(budget)} with fees` : ''}. It’s a lead, not a checked offer: ${missing} still need confirming.`;
+    ? `The closest is ${seat(first!)}${where ? ` on ${where}` : ''}: about ${est} for ${party} with fees${each ? ` (${each} a ticket)` : ''}, ${formatUsd(roundToDollar(first!.estimatedTotalCents - budget))} over your budget.${moved}`
+    : `That’s the lowest listing I can see for ${party}: ${seat(first!)}${where ? ` on ${where}` : ''}.${moved}`;
   const ageNote = p.age === 'undated' ? 'the data doesn’t say how recently it was refreshed' : typeof p.age === 'number' ? `refreshed about ${p.age} hours ago` : 'refreshed in the last couple of hours';
   const basis = [
     `${formatUsd(first!.listedTotalCents)} before fees (${formatUsd(first!.listing.priceCents)} each). Includes a ${p.feeAllowancePct}% fee allowance.`,
@@ -1405,25 +1412,26 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   ];
   const facts: Array<[string, string]> = [[q > 1 ? 'Seats together' : 'Seats', q > 1 ? 'Not confirmed' : 'Single seat'], ['Listed on', where ?? 'StubHub or Vivid Seats']];
   const alternatives = p.fits
-    ? rest.slice(0, 2).map((x) => ({ label: `${seatTitle(x)}${on(x) ? ` on ${on(x)}` : ''}`, totalCents: x.listedTotalCents, basis: 'before fees' as const, note: `${formatUsd(x.listedTotalCents - first!.listedTotalCents)} more before fees; not checked either` }))
+    ? rest.slice(0, 2).map((x) => ({ label: `${seatTitle(x)}${on(x) ? ` on ${on(x)}` : ''}`, totalCents: x.listedTotalCents, eachCents: q > 1 ? x.listing.priceCents : null, basis: 'before fees' as const, note: `${formatUsd(x.listedTotalCents - first!.listedTotalCents)} more before fees; not checked either` }))
     : [];
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
   const after = [
     ...(u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : []),
-    ...(over ? budgetGapNotes(a, budget, n) : []),
+    ...(over ? budgetGapNotes(a, budget, n, !!trend) : []),
   ];
   const links = p.links ?? [];
   const brief: TicketBrief = {
     kind: 'price_lead',
     headline: head,
     rationale,
-    category: categoryLabel(a.eventCategory),
+    category: briefCategory(a),
     event: briefEvent(a),
     artworkUrl: a.artworkUrl ?? null,
     seatLine: seatTitle(first!),
     total: `About ${est}`,
     forWhom: q === 1 ? 'for one' : q === 2 ? 'for two' : `for all ${n}`,
+    each: each ? `About ${each} a ticket, with fees` : null,
     basis,
     facts,
     action: links[0] ? { label: links[0].label, url: links[0].url } : null,
@@ -1431,6 +1439,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     actionNote: `Found it? Reply with the checkout screenshot and I’ll check the total${q > 1 ? ' and whether the seats are together' : ''}.`,
     affiliate: false,
     alternatives,
+    trend: trend?.brief ?? null,
     after,
     evidenceNote: `Prices from StubHub and Vivid Seats listing data, ${ageNote}. Seller, availability${q > 1 ? ' and seats together' : ''} not checked yet.`,
   };
@@ -1438,7 +1447,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const others = alternatives.map((x) => `${x.label}: ${formatUsd(x.totalCents)}${q > 1 ? ` for ${n}` : ''} before fees.`);
   const notes = [...basis, `Not checked yet: ${missing}; prices ${ageNote}.`];
   const card = { head, title, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after, brief };
-  const items = [rationale, `${title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after];
+  const items = [rationale, `${title}: ${card.price}, estimated.`, ...notes, ...(trend ? [trend.brief.meaning] : []), ...others.map((o) => `Also: ${o}`), ...after];
   return { head, items, card };
 }
 
@@ -1447,23 +1456,69 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
  * the price has been moving for their party, or that we can't tell yet, and a watch when one could actually start.
  * Past movement only, never a forecast.
  */
-function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[] {
+function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string, trendShown = false): string[] {
   const offer = watchOfferLine(a, budget, n);
   // Asked which way prices are going, the answer to that already says it: not a second time under the seats.
   if (a.trendAsked) return offer ? [offer] : [];
   const target = `${formatUsd(budget)} for ${n}`;
-  const t = marketTrendAnswer(a);
-  const trend = t
-    ? t.direction === 'down'
-      ? `${t.facts}. That’s the direction you need, but it doesn’t mean they’ll keep falling to ${target}.`
-      : t.direction === 'up'
-        ? `${t.facts}, so waiting for ${target} hasn’t been paying off so far.`
-        : t.direction === 'mixed'
-          ? `${t.facts}, with no clear fall toward ${target}.`
-          : `${t.facts}, so nothing yet points toward ${target}.`
-    : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
+  // With the price-movement module on the card, its meaning line already says this against their target.
+  const t = trendShown ? null : marketTrendAnswer(a);
+  const trend = trendShown
+    ? null
+    : t
+      ? t.direction === 'down'
+        ? `${t.facts}. That’s the direction you need, but it doesn’t mean they’ll keep falling to ${target}.`
+        : t.direction === 'up'
+          ? `${t.facts}, so waiting for ${target} hasn’t been paying off so far.`
+          : t.direction === 'mixed'
+            ? `${t.facts}, with no clear fall toward ${target}.`
+            : `${t.facts}, so nothing yet points toward ${target}.`
+      : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
+  // What past games here did from this point to the day itself, when we hold them (SeatData history).
   const past = lateMoveNote(a);
-  return [past ? `${trend} ${past.text}` : trend, ...(offer ? [offer] : [])];
+  const said = [trend, past?.text].filter((x): x is string => !!x).join(' ');
+  return [...(said ? [said] : []), ...(offer ? [offer] : [])];
+}
+
+/**
+ * Which way the price has moved, as the brief's module and one sentence for the rationale (live Oct 9: "this is the
+ * product"). The cheapest listed price a ticket now, a day ago and three days ago, from the series marketTrendAnswer
+ * reads and under the same gate: fresh, dated by the provider, a real window, the seats they asked about. The meaning
+ * says what the movement has done so far, against their target when they're over budget; never where it goes next.
+ */
+function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefTrend; sentence: string } | null {
+  const m = a.market;
+  const c = m?.context;
+  if (!m?.visible || !trendReady(c) || !scopeFits(a) || c.direction === 'insufficient') return null;
+  const w = c.h72 ?? c.h24;
+  if (!w) return null;
+  const q = a.quantity;
+  const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
+  const what = m.basis === 'pair' ? 'for two or more tickets' : group !== null ? `for ${group} or more tickets` : 'for a single ticket';
+  const z = zoneOf(a);
+  const usd = (cents: number) => formatUsd(Math.abs(cents));
+  const since = (x: NonNullable<Change>) => (x.hours >= 72 ? 'in three days' : 'since yesterday');
+  const then = (x: NonNullable<Change>) => (x.hours >= 72 ? 'three days ago' : 'yesterday');
+  const leg = (x: NonNullable<Change>) => (marketMoved(x) ? `${x.changeCents > 0 ? 'up' : 'down'} ${usd(x.changeCents)} a ticket ${since(x)}` : `about the same as ${then(x)}`);
+  const sentence =
+    c.direction === 'up' ? `Listed prices are up ${usd(w.changeCents)} a ticket ${since(w)}.`
+    : c.direction === 'down' ? `Listed prices are down ${usd(w.changeCents)} a ticket ${since(w)}.`
+    : c.direction === 'flat' ? `Listed prices have held at about ${formatUsd(c.current.priceCents)} a ticket ${w.hours >= 72 ? 'for three days' : 'since yesterday'}.`
+    : c.h24 && c.h72 ? `Listed prices are ${leg(c.h24)} but ${leg(c.h72)}.` : `Listed prices are ${leg(w)}.`;
+  const party = q > 1 && marketMoved(w) ? `For ${qtyWord(q)}, that’s ${usd(w.changeCents * q)} ${w.changeCents > 0 ? 'more' : 'less'} than ${then(w)}. ` : '';
+  const meaning =
+    c.direction === 'up' ? (target ? `Waiting for ${target} hasn’t paid off so far.` : `${party}Waiting has cost money so far.`)
+    : c.direction === 'down' ? (target ? `That’s the direction you need, but it’s no promise they reach ${target}.` : `${party}That’s no promise they keep falling, and the seats you want could go.`)
+    : c.direction === 'flat' ? (target ? `Nothing yet points toward ${target}.` : 'No fall to wait for so far.')
+    : target ? `No clear fall toward ${target}.` : 'They’ve gone both ways, so there’s no clear fall to wait for.';
+  const windows = [
+    ...(c.h24 ? [{ label: '1 day ago', fromCents: c.h24.fromCents, changeCents: c.h24.changeCents, pct: c.h24.pct, moved: marketMoved(c.h24) }] : []),
+    ...(c.h72 ? [{ label: '3 days ago', fromCents: c.h72.fromCents, changeCents: c.h72.changeCents, pct: c.h72.pct, moved: marketMoved(c.h72) }] : []),
+  ];
+  return {
+    sentence,
+    brief: { direction: c.direction, nowCents: c.current.priceCents, windows, meaning, basis: `Cheapest listed price ${what}${z ? ` ${zonePhrase(z)}` : ''}, a ticket before fees, from StubHub and Vivid Seats.` },
+  };
 }
 
 /**
@@ -1503,10 +1558,24 @@ export function sportStart(when: string, sport: Sport | null | undefined): strin
   return when.replace(/,? at (\d{1,2}(?::\d{2})? [ap]\.m\.)/, (_m, t: string) => ` · ${SPORT_START[sport]} ${t}`);
 }
 
+/**
+ * The event's name without a sport repeated after each team: "Notre Dame Fighting Irish Football vs. Miami Hurricanes
+ * Football" is "Notre Dame Fighting Irish vs. Miami Hurricanes" (live Oct 9); the label above it says the sport. A
+ * "Men's" or "Women's" team keeps its whole name, since that's the difference between two teams.
+ */
+export function briefTitle(name: string): string {
+  return name.replace(/(?<!(?:Men|Women)['’]s) (?:Football|Basketball|Baseball|Softball|Hockey|Ice Hockey|Soccer|Volleyball|Lacrosse)(?=\s+(?:vs\.?|at|v\.?)\s|\s*$)/g, '').trim();
+}
+
+/** "College football" for a college game whose sport we know; otherwise the category's own label. */
+function briefCategory(a: BuildPacketArgs): string {
+  return a.eventCategory?.startsWith('ncaa') && a.eventSport ? `College ${a.eventSport}` : categoryLabel(a.eventCategory);
+}
+
 function briefEvent(a: BuildPacketArgs): TicketBrief['event'] {
   const parts = a.eventParts;
   if (!parts) return { name: a.eventLabel, where: '', when: '' };
-  return { name: parts.title, where: parts.where, when: sportStart(friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)), a.eventSport) };
+  return { name: briefTitle(parts.title), where: parts.where, when: sportStart(friendlyHeaderWhen(a, parts.when, sameDay(a.eventStartAt, a.observedAt, a.timeZone)), a.eventSport) };
 }
 
 /** Hosts a verified offer's purchase button may point at: the registry's own site for that source. */
@@ -1550,19 +1619,20 @@ function verifiedBrief(a: BuildPacketArgs): TicketBrief | null {
     kind: 'verified_offer',
     headline: q === 1 ? 'This is the one I’d take.' : `These are the ${n} I’d take.`,
     rationale: `It’s the lowest checked total for ${q === 1 ? 'one ticket' : `${n} together`} among the offers I checked${budget != null && total <= budget ? `, ${formatUsd(budget - total)} inside your ${formatUsd(budget)}` : ''}. ${seller} showed the total with fees${q > 1 ? ' and the seats together' : ''} when I checked.`,
-    category: categoryLabel(a.eventCategory),
+    category: briefCategory(a),
     event: briefEvent(a),
     artworkUrl: a.artworkUrl ?? null,
     seatLine,
     total: formatUsd(total),
     forWhom: q === 1 ? 'for one' : q === 2 ? 'for two' : `for all ${n}`,
-    basis: [`${formatUsd(perPersonCents(total, q))} each · fees included`],
+    each: q > 1 ? `${formatUsd(perPersonCents(total, q))} a ticket, fees included` : null,
+    basis: [q > 1 ? 'The seller’s checkout total, fees included.' : 'Fees included.'],
     facts: [[q > 1 ? 'Seats together' : 'Seats', q > 1 ? 'Confirmed' : 'Single seat'], ['Seller', seller]],
     action: { label: `View these ${q === 1 ? 'tickets' : 'seats'} on ${seller}`, url: o.directPurchaseUrl },
     secondary: null,
     actionNote: `Checked ${checkedAt(new Date(o.observedAt), a.timeZone)}. Not held; availability can change.`,
     affiliate: !!o.affiliateUrl,
-    alternatives: alts.map((x) => ({ label: `${capitalize(seatPhrase(x.offer.section, x.offer.row, ' · ') ?? x.offer.seatClass ?? 'Another listing')}${sellerFor(x.offer) ? ` on ${sellerFor(x.offer)}` : ''}`, totalCents: x.comparableTotalCents!, basis: 'fees included' as const, note: `${formatUsd(x.comparableTotalCents! - total)} more${x.offer.seatClass && x.offer.seatClass !== o.seatClass ? ', a different part of the venue' : ''}` })),
+    alternatives: alts.map((x) => ({ label: `${capitalize(seatPhrase(x.offer.section, x.offer.row, ' · ') ?? x.offer.seatClass ?? 'Another listing')}${sellerFor(x.offer) ? ` on ${sellerFor(x.offer)}` : ''}`, totalCents: x.comparableTotalCents!, eachCents: q > 1 ? perPersonCents(x.comparableTotalCents!, q) : null, basis: 'fees included' as const, note: `${formatUsd(x.comparableTotalCents! - total)} more${x.offer.seatClass && x.offer.seatClass !== o.seatClass ? ', a different part of the venue' : ''}` })),
     after: [],
     evidenceNote: `Total, availability${q > 1 ? ' and seats together' : ''} checked on ${seller} ${checkedAt(new Date(o.observedAt), a.timeZone)}. Prices can change before checkout.`,
   };

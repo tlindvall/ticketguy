@@ -61,7 +61,10 @@ export type ArtSubject = {
 /** Finds a team by its slug or any alias, with a sport suffix stripped for a school. */
 function findTeam(rows: BrandAsset[], slug: string): BrandAsset | undefined {
   const keys = teamKeys(slug);
-  return rows.find((r) => r.kind === 'team' && keys.includes(r.key)) ?? rows.find((r) => r.kind === 'team' && r.aliases.some((a) => keys.includes(a)));
+  // Only a row with the team's colours can be drawn. The provider's photo row for the same team ("notre-dame-fighting-
+  // irish-football", no colours) matched first and the banner route 404'd on it: a broken image in the email (live Oct 9).
+  const teams = rows.filter((r) => r.kind === 'team' && r.primaryColor);
+  return teams.find((r) => keys.includes(r.key)) ?? teams.find((r) => r.aliases.some((a) => keys.includes(a)));
 }
 
 /**

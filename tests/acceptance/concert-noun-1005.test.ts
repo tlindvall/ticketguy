@@ -70,7 +70,7 @@ describe('a concert is a show, and GA is general admission', () => {
     const recs = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId));
     const text = [...sends, ...recs].map((x) => x.bodyText).join('\n----\n');
     const html = [...sends, ...recs].map((x) => x.bodyHtml ?? '').join('\n');
-    expect(text).toContain('The lowest listing I can see for two tickets is general admission tickets');
+    expect(text).toContain('That’s the lowest listing I can see for two tickets: general admission tickets');
     expect(text).toContain('Price lead · still needs checking\nGeneral admission\n');
     expect(text).not.toMatch(/I’d buy|cheapest available/);
     expect(text).toMatch(/for this show/);
