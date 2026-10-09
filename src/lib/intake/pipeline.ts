@@ -25,6 +25,7 @@ import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
+import { correctToKnown } from '@/lib/domain/name-correction';
 import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
@@ -134,7 +135,7 @@ const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', .
  * With no integrated source and an empty catalog that is a claim about diligence we did not do, and the
  * same prohibition that stops us inventing availability stops us inventing a search.
  */
-function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind: string | null = null): string | null {
+export function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind: string | null = null): string | null {
   const who = brief.performerOrTeam ? titleCaseName(brief.performerOrTeam) : null;
   // "on Fri, Oct 2" when we know the day, not 'for "Friday"'.
   const when = brief.resolvedLocalDate ? ` on ${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${brief.resolvedLocalDate}T12:00:00Z`))}` : brief.dateExpression ? ` for "${brief.dateExpression}"` : '';
@@ -145,7 +146,9 @@ function noMatchNote(reason: NoMatchReason, brief: RequestExtraction, entityKind
   // Said as what we searched, never as a fact about the event: "not in Ticketmaster's listings" is what we know, "no
   // scheduled event" isn't (R1-HUMAN-02: the Sunday matinee existed; our search had missed it).
   // A team plays games, whatever the category hint says (live Oct 5: "a New York Rangers performance").
-  const game = entityKind === 'team' || SPORT_HINTS.includes(brief.categoryHint ?? '') ? 'game' : 'performance';
+  // A matchup ("Notre Dame vs Miami") is a game whatever else is known about either side (live Oct 8: "a Norte Dane
+  // performance" for a college football game).
+  const game = entityKind === 'team' || SPORT_HINTS.includes(brief.categoryHint ?? '') || !!splitMatchup(brief.eventName) ? 'game' : 'performance';
   if (reason === 'discovery_no_results') return `I searched Ticketmaster's listings and couldn't find ${who ? `a ${who} ${game}` : 'a matching event'}${where}${when}. That's what I can search, not proof there isn't one, so I haven't looked at prices yet.`;
   return `We don't have a scheduled ${who ?? 'matching'} event${where}${when} on file, so we haven't looked at prices yet.`;
 }
@@ -457,6 +460,10 @@ export class Concierge {
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
     let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    // A typo in a name we know is read as that name, and said so (live Oct 8: "Norte Dane vs Miami" was searched as typed).
+    const typo = correctToKnown(extraction.performerOrTeam, known);
+    if (typo) merged = { ...merged, performerOrTeam: typo.to, eventName: merged.eventName ? merged.eventName.replace(typo.from, typo.to) : merged.eventName };
+    const typoNote = typo ? `I’ve read “${typo.from}” as ${typo.to}. Tell me if you meant someone else.` : null;
     // A checkout link with only a listing number, seen in the resale feed at one event: that is the event they mean,
     // as surely as if they had named it (live Oct 2: "Are these a good deal?" with a StubHub checkout link).
     if (!merged.performerOrTeam && !merged.eventName && !merged.resolvedLocalDate) {
@@ -829,7 +836,7 @@ export class Concierge {
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
-    const assumptions = [...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+    const assumptions = [...(typoNote ? [typoNote] : []), ...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
@@ -1091,8 +1098,8 @@ export class Concierge {
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
         const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
-        const text = ['Hey,', lead, ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
+        const text = ['Hey,', lead, ...(typoNote ? [typoNote] : []), ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(typoNote ? [`<p style="margin:0 0 18px;">${esc(typoNote)}</p>`] : []), ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
         if (merged.intent === 'watch_request') await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: `policy:${snap.decision.reasons.includes('operator_blocked') ? 'operator_blocked' : 'guide_official_only'}` } });
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'guide_official_route');
