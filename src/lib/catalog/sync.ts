@@ -130,7 +130,19 @@ export function subtypeFor(e: { name: string; timeTba: boolean }): string | null
  * leaves these out unless the customer's own words name them. Deliberately narrow — "tour" or "experience"
  * would also catch concerts and premium seats — and applied to teams only.
  */
-export const NON_GAME_PATTERN = /\b(alumni|fan\s?fest|fanfest|watch party|viewing party|open practice|practice|skills (?:competition|challenge)|clinic|camp|draft party|gala|luncheon|autograph)\b/i;
+export const NON_GAME_PATTERN = /\b(alumni|fan\s?fest|fanfest|watch party|viewing party|open practice|practice|skills (?:competition|challenge)|clinic|camp|draft party|gala|luncheon|autograph|tours?|museum)\b/i;
+
+/**
+ * A tour of the building, not an event in it (live Oct 9: "Classic Tour at Yankee Stadium" was the first of three
+ * "games" for "what sports games are on?", with "6 more games" that were its other tour dates). Filed under the
+ * team's sport by the provider; never a game, a show or a pick.
+ */
+// "Tour at" is how concerts are named ("The Eras Tour at MetLife Stadium"); a building's tour is a "stadium tour", a
+// "classic tour" or a "tour of" it.
+const VENUE_TOUR_PATTERN = /\b(?:stadium|ballpark|arena|garden|field|park|classic|guided|behind[- ]the[- ]scenes|venue|building)\s+tours?\b|\btours?\s+of\s+(?:the\s+)?(?:[\w'’.]+\s+){0,3}(?:stadium|ballpark|arena|garden|field|park)\b/i;
+export function isVenueTour(name: string): boolean {
+  return VENUE_TOUR_PATTERN.test(name);
+}
 
 /**
  * The genre and sub-genre, lowercased ("rock / indie rock"), from the headliner's classification or, when

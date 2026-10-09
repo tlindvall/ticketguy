@@ -1,4 +1,4 @@
-import { dateWindowFor, localDateParts, toIsoDate, WEEKS_AHEAD_RE } from './dates';
+import { BEFORE_RE, dateWindowFor, localDateParts, toIsoDate, WEEKS_AHEAD_RE } from './dates';
 
 /**
  * The hard rules a customer puts on which event they mean, read from their own words across the thread: the
@@ -186,6 +186,12 @@ function windowIn(t: string, receivedAt: Date, timeZone: string): EventConstrain
     const g = pair.groups;
     const w = dateWindowFor(g.m2 && g.m2.slice(0, 3).toLowerCase() !== g.m1!.slice(0, 3).toLowerCase() ? `${g.m1} ${g.d1} - ${g.m2} ${g.d2}` : `${g.m1} ${g.d1}-${g.d2}`, receivedAt, timeZone);
     if (w && Date.parse(w.to) - Date.parse(w.from) <= 7 * 86_400_000) return { ...w, source: 'range' };
+  }
+  // "Before Christmas", "by Thanksgiving", "before December 15": from today up to then.
+  const before = BEFORE_RE.exec(t);
+  if (before) {
+    const w = dateWindowFor(before[0], receivedAt, timeZone);
+    if (w) return { ...w, source: 'range' };
   }
   // "About six weeks from now", "in three weeks".
   const ahead = WEEKS_AHEAD_RE.exec(t);

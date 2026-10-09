@@ -6,6 +6,7 @@ import { openTestDb, makeConcierge, inbound } from '../harness';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW, FX } from '@/lib/fixtures';
 import { TicketmasterDiscoveryAdapter } from '@/lib/sources/adapters';
+import { isVenueTour } from '@/lib/catalog/sync';
 
 /**
  * The first real "what's on" email — "I'm coming to New York and want to see some music gigs during the first
@@ -238,6 +239,31 @@ describe('browsing: "what’s on?" gets what’s on', () => {
     const counted = (await lastSend(withCount)).bodyText;
     expect(counted).toContain('Reply with the one you want, and I’ll check prices for 3 tickets.'); // the number they gave is not asked again
     expect(counted).not.toContain('how many tickets');
+  });
+
+  it('a stadium tour is never one of the games (live Oct 9: "Classic Tour at Yankee Stadium" led the list)', async () => {
+    const STADIUM = '10000000-0000-4000-8000-0000000000c3';
+    const GARDEN = FX.venues.msg;
+    const row = (name: string, category: string, venueId: string, at: string) => ({ name, category, venueId, primaryEntityId: null, isHome: null, localStartAt: new Date(at), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true });
+    await h.db.insert(t.events).values([
+      // The provider files the tour under baseball, once a day.
+      ...[12, 13, 14, 15, 16, 17, 18].map((d) => row('Classic Tour at Yankee Stadium', 'mlb', STADIUM, `2026-11-${d}T15:00:00Z`)),
+      row('New York Rangers vs. Tampa Bay Lightning', 'nhl', GARDEN, '2026-11-13T23:00:00Z'),
+    ]);
+    const c = makeConcierge(h);
+    const requestId = await ask(c, 'My family is coming to New York Nov 12-18. What sports games are on?', 'tour@customer.example');
+    const body = (await lastSend(requestId)).bodyText;
+    expect(body).toContain('New York Rangers vs. Tampa Bay Lightning');
+    expect(body).not.toMatch(/Classic Tour|Yankee Stadium/);
+  });
+
+  it('a tour of the building, not a concert tour', () => {
+    expect(isVenueTour('Classic Tour at Yankee Stadium')).toBe(true);
+    expect(isVenueTour('Yankee Stadium Tours')).toBe(true);
+    expect(isVenueTour('Guided Tour of Madison Square Garden')).toBe(true);
+    expect(isVenueTour('Taylor Swift | The Eras Tour')).toBe(false);
+    expect(isVenueTour('Coldplay: Music of the Spheres Tour at MetLife Stadium')).toBe(false);
+    expect(isVenueTour('PBR: Unleash the Beast Tour')).toBe(false);
   });
 
   it('suggests a team, not an artist, when no games are on file', async () => {

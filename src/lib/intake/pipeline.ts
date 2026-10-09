@@ -32,7 +32,7 @@ import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrow
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { BEFORE_RE, dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
@@ -41,11 +41,11 @@ import { planSources } from '@/lib/sources/routing';
 import { adapterFacts, capability, coveredSourceIds, gate as policyGate, loadEventRows, policyForEvent, storedPolicy } from '@/lib/intake/service-policy';
 import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolveServicePolicy, type Operation, type OutsideIntent } from '@/lib/domain/service-depth';
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
-import { MarketTracker, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
+import { MarketTracker, loadMarketContext, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
-import { SEATDATA_DATASET_ID, listingAge } from '@/lib/market/series';
+import { SEATDATA_DATASET_ID, basisForQuantity, listingAge } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
-import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
+import { syncFromDiscovery, isNonAdmission, isNonGameName, isVenueTour, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { MARKETS, geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
 import { homeByVotes, homeFromStatement, marketOfVenue } from '@/lib/domain/home-market';
@@ -112,7 +112,20 @@ type NoMatchReason = 'no_performer' | 'unknown_performer' | 'no_scheduled_event'
  * strip (live Oct 4: a Rangers page's "Oct 4 vs. [logo]"), so on a date the screenshot also gives it never rules out
  * that day's game.
  */
-export type ResolveRules = EventConstraints & { linkedEventIds: string[]; imageEventName?: string | null };
+export type ResolveRules = EventConstraints & { linkedEventIds: string[]; imageEventName?: string | null; /** This message asks which game is cheapest. */ cheapest?: boolean };
+
+/** A stored price older than this is no comparison; one listings read is taken for it instead, at most this many. */
+const CHEAPEST_GAME_FRESH_MS = 36 * 3_600_000;
+const CHEAPEST_GAME_MAX_READS = 6;
+
+/**
+ * "What upcoming Rangers game … with the lowest prices", "the cheapest Knicks game in November": a choice between games
+ * made on price (live Oct 9: answered with the game from an earlier email instead). A price word and a game choice;
+ * "the cheapest seats for Saturday's game" names its game and never gets here.
+ */
+const PRICE_LOW = /\b(?:cheapest|cheaper|least expensive|most affordable|affordable|lowest(?:[- ]priced)?|low(?:est)? prices?|best (?:price|deal|value)s?|cheap)\b/i;
+const GAME_CHOICE = /\b(?:which|what)\s+(?:\S+\s+){0,5}?(?:game|games|match|matches|date|dates|night|show|shows|one)\b|\b(?:cheapest|least expensive|most affordable|lowest[- ]priced|cheaper)\s+(?:\S+\s+){0,4}?(?:game|games|match|date|night|show)\b/i;
+export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && GAME_CHOICE.test(text);
 /** Events that matched the name and date but break one of their rules, and the nearest one that doesn't. */
 export type ConstraintConflict = {
   label: string;
@@ -873,6 +886,7 @@ export class Concierge {
     // Their rules on which event, from the whole thread (venue, home only, time, days, "the next one"), the
     // performance their link or screenshot names, checked before any event is chosen (TGQA-R6 1001, 1007).
     const rules = await this.resolveRules(req, merged, venueTz, msg.receivedAt);
+    rules.cheapest = !picked && asksCheapestGame(flat(latestText));
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
@@ -940,11 +954,15 @@ export class Concierge {
             : `I checked ${dayLabel} too: I don’t have ${who} or another ${kindWords} night in ${altAsk.v.city ?? 'the area'} on file then, so ${shortWhen(altAsk.e.localStartAt, tzA, false)} is the one I have. That’s what I have on file, not proof nothing else is on.`;
       }
     }
-    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found;
+    // "Which game has the lowest prices?": the games compared on price and the cheapest taken, said with the others. The
+    // game from an earlier email is no answer to it (live Oct 9), so neither the settled nor the remembered game is kept.
+    const cheapestAsk = !picked && !altAsk && !!rules.cheapest && found.kind === 'ambiguous';
+    const compared = cheapestAsk && found.kind === 'ambiguous' ? await this.cheapestGame(req.id, found.candidates, merged, flat(latestText)) : null;
+    const settled = compared ?? (altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !cheapestAsk && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found);
     // A choice they already made is never asked again, whatever reopened it: a new request in the same thread, a
     // revision that lost the event, a reply to an older email (live Oct 6: "Which show: Thu, Nov 19 … or Sat, Nov 21?"
     // straight after the Nov 19 seats were sent).
-    const resolution = !picked && settled.kind === 'ambiguous' ? ((await this.rememberedEvent(contact!.id, settled.candidates)) ?? settled) : settled;
+    const resolution = !picked && !cheapestAsk && settled.kind === 'ambiguous' ? ((await this.rememberedEvent(contact!.id, settled.candidates)) ?? settled) : settled;
     if (altAsk) merged = { ...merged, resolvedLocalDate: eventLocalDate(altAsk.e.localStartAt, altAsk.v.timezone), dateExpression: null };
     const eventResolved = resolution.kind === 'resolved';
     if (resolution.kind === 'resolved' && resolution.assumed) assumptions.unshift(resolution.assumed);
@@ -1949,8 +1967,8 @@ export class Concierge {
       const inWindow = rows.filter(({ e, v }) => {
         if (!inMarket(v, market)) return false;
 
-        if (isNonAdmission(e)) return false;
-        if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
+        if (isNonAdmission(e) || isVenueTour(e.name)) return false;
+        if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'minor_league', 'ncaa_regular'].includes(e.category)) return false;
         const d = eventLocalDate(e.localStartAt, v.timezone);
         if (d < w.from || d > w.to) return false;
         // Start time ("after 7pm" is later than 7pm), days, venue: the same rules the resolver keeps.
@@ -2259,7 +2277,7 @@ export class Concierge {
         if (homeMk) return inMarket(v, homeMk) ? (entity?.homeVenueId ? null : true) : false;
         return entity?.homeVenueId ? false : null;
       };
-      let cands = rows.filter(({ e }) => !isNonAdmission(e)); // parking and packages are not "tickets to the game"
+      let cands = rows.filter(({ e }) => !isNonAdmission(e) && (!isVenueTour(e.name) || isVenueTour(asked))); // parking, packages and stadium tours are not "tickets to the game"
       if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
       // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else. A renamed
       // team is the same opponent by its place ("Utah Hockey Club" is the Utah Mammoth now).
@@ -2438,6 +2456,11 @@ export class Concierge {
       const isHome = ({ e, v }: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => e.isHome === true || entity.homeVenueId === v.id;
       const homes = cands.filter(isHome);
       const named = !!ruleWindow || (!!x.dateExpression && !rules?.next);
+      // Asked which is cheapest: the games are compared on price (cheapestGame), never one taken by date.
+      if (rules?.cheapest) {
+        const pool = homes.length >= 2 ? homes : cands;
+        return { kind: 'ambiguous', candidates: pool.slice(0, 12).map(({ e, v }) => candidateFrom(entity, e, v, eventLabel(e, v))) };
+      }
       if (entity.kind === 'team' && !x.resolvedLocalDate && !oneDay && (!named || homes.length === 1)) {
         const pick = homes[0] ?? cands[0]!;
         if (pick.v.country === 'US') {
@@ -2746,6 +2769,63 @@ export class Concierge {
   private async settledRow(eventId: string): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null } | null> {
     const [row] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
     return row && row.e.status === 'scheduled' ? row : null;
+  }
+
+  /**
+   * "Which game has the lowest prices?" answered (live Oct 9): each candidate's cheapest listed price a ticket for their
+   * party, from the stored resale series when it's fresh, otherwise one listings read for a game already matched to
+   * SeatData (at most six, under the daily allowance). The cheapest becomes the game, said first with the next two and
+   * any we couldn't price. Prices are said only where the licence lets them be shown; null when nothing could be priced
+   * or market data may not steer advice, and the customer is asked which game instead.
+   */
+  private async cheapestGame(requestId: string, cands: EventCandidate[], x: RequestExtraction, said: string): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'team' | 'artist' | null; assumed: string } | null> {
+    const lic = await marketLicence(this.db);
+    const uses = marketUses(lic, this.env);
+    if (!uses.advice) return null;
+    const now = this.now();
+    const q = x.quantity && x.quantity > 0 ? x.quantity : 2;
+    const basis = basisForQuantity(q);
+    const rows = (await this.eventRows([...new Set(cands.map((c) => c.id))])).filter(({ e }) => e.status === 'scheduled' && e.localStartAt > now);
+    if (rows.length < 2) return null;
+    const tracker = this.env.SEATDATA_API_KEY ? new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }) : null;
+    let reads = 0;
+    const priced: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; cents: number | null }> = [];
+    for (const { e, v } of rows) {
+      const ctx = await loadMarketContext(this.db, { eventId: e.id, basis, eventStartAt: e.localStartAt, now });
+      const c = ctx.current;
+      let cents = c && c.timeKnown !== false && now.getTime() - c.at.getTime() <= CHEAPEST_GAME_FRESH_MS ? c.priceCents : null;
+      if (cents === null && tracker && reads < CHEAPEST_GAME_MAX_READS) {
+        reads += 1;
+        const r = await tracker.currentListings(e.id).catch(() => null);
+        const fits = (r?.listings ?? []).filter((l) => l.quantity >= q).map((l) => l.priceCents);
+        cents = fits.length ? Math.min(...fits) : null;
+      }
+      priced.push({ e, v, cents });
+    }
+    const ranked = priced.filter((p): p is typeof p & { cents: number } => p.cents !== null).sort((a, b) => a.cents - b.cents || a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
+    await audit(this.db, { actor: 'system', action: 'request.games_compared', entityKind: 'request', entityId: requestId, diff: { quantity: q, basis, games: priced.map((p) => ({ eventId: p.e.id, cents: p.cents })) } });
+    const best = ranked[0];
+    if (!best) return null;
+    const team = cands[0]?.entityName ?? x.performerOrTeam ?? '';
+    const day = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => new Intl.DateTimeFormat('en-US', { timeZone: r.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(r.e.localStartAt);
+    const game = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => { const opp = opponentFor(team, r.e.name); return `${day(r)}${opp ? ` vs. ${titleCaseName(opp)}` : ` (${r.e.name})`}`; };
+    const price = (cents: number) => (uses.display ? formatUsd(cents) : null);
+    const party = q === 1 ? 'one' : countWords(q);
+    // The resolver hands over home games only when there are two or more of them: one arena is that.
+    const home = new Set(rows.map(({ v }) => v.id)).size === 1 || rows.every(({ e }) => e.isHome === true) ? 'home ' : '';
+    // "before christmas" as they wrote it, with the day's capital back.
+    const words = x.dateExpression?.trim() || BEFORE_RE.exec(said)?.[0] || '';
+    const span = words ? ` ${words.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\b(christmas|xmas|thanksgiving|new year|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)\b/gi, (w) => (/^xmas$/i.test(w) ? 'Christmas' : w[0]!.toUpperCase() + w.slice(1).toLowerCase()))}` : '';
+    const shortTeam = titleCaseName(team);
+    const lead = ranked.length === 1
+      ? `Of the ${countWords(rows.length)} ${shortTeam} ${home}games${span}, ${game(best)} is the only one I have current prices for${price(best.cents) ? `: from ${price(best.cents)} a ticket before fees for ${party}` : ''}.`
+      : `Of the ${countWords(ranked.length)} ${shortTeam} ${home}games${span} I can compare, ${game(best)} is the cheapest for ${party} right now${price(best.cents) ? `, from ${price(best.cents)} a ticket before fees` : ''}.`;
+    const next = ranked.slice(1, 3);
+    const nextLine = next.length ? ` Next cheapest: ${next.map((r) => `${game(r)}${price(r.cents) ? ` (${price(r.cents)})` : ''}`).join(next.length === 2 ? ' and ' : ', ')}.` : '';
+    const unpriced = priced.length - ranked.length;
+    const gap = ranked.length > 1 && unpriced ? ` I don’t have current prices for ${countWords(unpriced)} other${unpriced === 1 ? '' : 's'}.` : '';
+    const assumed = `${lead}${nextLine}${gap} I’m looking at seats for ${day(best)} now; tell me if you’d rather one of the others.`;
+    return { kind: 'resolved', event: best.e, venue: best.v, label: eventLabel(best.e, best.v), entityKind: 'team', assumed };
   }
 
   /**
@@ -4193,7 +4273,7 @@ export function namedAbroadEvent(text: string, city: string | null): RegExpExecA
   return null;
 }
 
-const countWords = (n: number) => ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][n] ?? String(n);
+const countWords = (n: number) => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'][n] ?? String(n);
 
 /** "London, UK" as they'd write it, for the reply. */
 function placeName(x: Pick<RequestExtraction, 'city' | 'state'>): string {
@@ -5195,6 +5275,7 @@ export function acknowledgedFacts(e: { name: string; category: string; localStar
     ? `whether ${formatUsd(x.quotedPriceCents)} is a good price`
     : /\b(buy now|hold off|wait (?:until|till|for|closer)|should i (?:buy|wait)|good time to buy|now or later|buy or wait)\b/i.test(text)
       ? 'whether to buy now or hold off'
+      : asksCheapestGame(text) ? `which ${sports ? 'game' : 'show'} has the lowest prices`
       : x.resaleAsked ? 'whether resale is cheaper' : null;
   if (question) out.push(`You asked: ${question}`);
   return out;
