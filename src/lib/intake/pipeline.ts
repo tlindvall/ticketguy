@@ -45,7 +45,7 @@ import { MarketTracker, loadMarketContext, marketForGroup, marketLicence, market
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
 import { SEATDATA_DATASET_ID, basisForQuantity, listingAge } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
-import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
+import { syncFromDiscovery, isNonAdmission, isNonGameName, isVenueTour, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
 import { MARKETS, geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
 import { homeByVotes, homeFromStatement, marketOfVenue } from '@/lib/domain/home-market';
@@ -1967,8 +1967,8 @@ export class Concierge {
       const inWindow = rows.filter(({ e, v }) => {
         if (!inMarket(v, market)) return false;
 
-        if (isNonAdmission(e)) return false;
-        if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl'].includes(e.category)) return false;
+        if (isNonAdmission(e) || isVenueTour(e.name)) return false;
+        if (isNonGameName(e.name) && ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer', 'minor_league', 'ncaa_regular'].includes(e.category)) return false;
         const d = eventLocalDate(e.localStartAt, v.timezone);
         if (d < w.from || d > w.to) return false;
         // Start time ("after 7pm" is later than 7pm), days, venue: the same rules the resolver keeps.
@@ -2277,7 +2277,7 @@ export class Concierge {
         if (homeMk) return inMarket(v, homeMk) ? (entity?.homeVenueId ? null : true) : false;
         return entity?.homeVenueId ? false : null;
       };
-      let cands = rows.filter(({ e }) => !isNonAdmission(e)); // parking and packages are not "tickets to the game"
+      let cands = rows.filter(({ e }) => !isNonAdmission(e) && (!isVenueTour(e.name) || isVenueTour(asked))); // parking, packages and stadium tours are not "tickets to the game"
       if (isTeam && !isNonGameName(asked)) cands = cands.filter(({ e }) => !isNonGameName(e.name));
       // A named opponent is a hard filter: "vs Lightning" never resolves to the game against someone else. A renamed
       // team is the same opponent by its place ("Utah Hockey Club" is the Utah Mammoth now).
