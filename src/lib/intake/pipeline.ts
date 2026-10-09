@@ -47,7 +47,8 @@ import { SEATDATA_DATASET_ID, listingAge } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
-import { geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
+import { MARKETS, geohash, inMarket, isOutsideUs, marketById, marketFor, milesBetween, teamHomeMarket, type Market } from '@/lib/domain/markets';
+import { homeByVotes, homeFromStatement, marketOfVenue } from '@/lib/domain/home-market';
 import { normalizePlace, stateCodeFor, stateOnly, US_STATES } from '@/lib/domain/us-states';
 import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms, sameOffer, statedFeeBasis, timeLabel, withFinalFeeStatement, type TextOffer } from '@/lib/advice/text-offers';
 import { breaks, displayVenue, eventConstraints, localStart, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
@@ -636,6 +637,10 @@ export class Concierge {
       // by "reply if you're not in the US".
       contact!.countryConfirmed = isUs ? 'US' : 'NON_US';
       await this.db.update(t.requests).set({ countryConfirmed: isUs ? 'US' : 'NON_US' }).where(eq(t.requests.id, req.id));
+      // "I live in Dallas" is kept with the contact: next month's bare "Rangers" is Texas, and it outranks where
+      // the events they asked about happened to be.
+      const said = isUs ? homeFromStatement(extraction.countryStatement) : null;
+      if (said) await this.rememberHome(contact!.id, said);
       if (!isUs) {
         await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
         await this.db.update(t.requests).set({ currentRevision: revision }).where(eq(t.requests.id, req.id));
@@ -1304,14 +1309,35 @@ export class Concierge {
     return { market: (await this.contactMarket(contactId)) ?? marketById(this.env.DEFAULT_MARKET), assumed: true };
   }
 
-  /** The market of this customer's most recent request that named a US place, if any. */
+  /**
+   * Where this customer is based: where they said they live, else the place most of their recent requests were
+   * in (the event's venue once one was settled, else the city they named). Null for a new customer.
+   */
   private async contactMarket(contactId: string): Promise<Market | null> {
-    const rows = await this.db.select({ brief: t.requestVersions.brief }).from(t.requestVersions).innerJoin(t.requests, eq(t.requests.id, t.requestVersions.requestId)).where(eq(t.requests.contactId, contactId)).orderBy(desc(t.requestVersions.createdAt)).limit(20);
-    for (const r of rows) {
-      const b = r.brief as { city?: string | null; state?: string | null };
-      if (b.city && !isOutsideUs(b.city)) return marketFor(b.city, b.state ?? null);
-    }
-    return null;
+    const [pref] = await this.db.select({ region: t.contactPreferences.region }).from(t.contactPreferences).where(eq(t.contactPreferences.contactId, contactId));
+    const said = pref?.region ? MARKETS.find((mk) => mk.id === pref.region) : null;
+    if (said) return said;
+    const recent = await this.db.select({ id: t.requests.id, v: t.venues }).from(t.requests).leftJoin(t.events, eq(t.events.id, t.requests.eventId)).leftJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.requests.contactId, contactId)).orderBy(desc(t.requests.createdAt)).limit(10);
+    if (!recent.length) return null;
+    const open = recent.filter((r) => !r.v).map((r) => r.id);
+    const briefs = open.length ? await this.db.select({ requestId: t.requestVersions.requestId, brief: t.requestVersions.brief }).from(t.requestVersions).where(inArray(t.requestVersions.requestId, open)).orderBy(desc(t.requestVersions.revision)) : [];
+    const named = (requestId: string): Market | null => {
+      for (const r of briefs) {
+        if (r.requestId !== requestId) continue;
+        const b = r.brief as { city?: string | null; state?: string | null };
+        if (b.city && !isOutsideUs(b.city)) return marketFor(b.city, b.state ?? null);
+      }
+      return null;
+    };
+    return homeByVotes(recent.map((r) => (r.v ? marketOfVenue(r.v) : named(r.id))));
+  }
+
+  /** Keeps where the customer said they live; a later statement replaces it. */
+  private async rememberHome(contactId: string, market: Market): Promise<void> {
+    const [pref] = await this.db.select({ region: t.contactPreferences.region }).from(t.contactPreferences).where(eq(t.contactPreferences.contactId, contactId));
+    if (pref?.region === market.id) return;
+    await this.db.insert(t.contactPreferences).values({ contactId, region: market.id }).onConflictDoUpdate({ target: t.contactPreferences.contactId, set: { region: market.id, updatedAt: new Date() } });
+    await audit(this.db, { actor: 'customer', action: 'contact.home_said', entityKind: 'contact', entityId: contactId, diff: { from: pref?.region ?? null, to: market.id } });
   }
 
   /**
@@ -2387,7 +2413,17 @@ export class Concierge {
       // Two different teams both have a game in the window: name them, one candidate each.
       return { kind: 'ambiguous', candidates: withEvents.slice(0, 5).map(({ entity, cands }) => candidateFrom(entity, cands[0]!.e, cands[0]!.v, `${entity.name}${entity.league ? ` (${entity.league})` : ''}: ${eventLabel(cands[0]!.e, cands[0]!.v)}`)) };
     }
-    const { entity, cands } = withEvents[0]!;
+    const { entity } = withEvents[0]!;
+    let { cands } = withEvents[0]!;
+    // An act playing several cities and no city named: the shows near where this customer is based, said in a line
+    // they can correct (they said where they live, or most of what they've asked about was there).
+    if (cands.length > 1 && entity.kind !== 'team' && home && !x.city && !x.state && !rules?.venueTerms) {
+      const near = cands.filter(({ v }) => inMarket(v, home));
+      if (near.length && near.length < cands.length) {
+        cands = near;
+        if (near.length === 1) assumed = [assumed, `I've gone with the ${home.label} show. Tell me if you meant another city.`].filter(Boolean).join(' ');
+      }
+    }
     if (cands.length > 1) {
       // A team and no exact date: take charge. The next game that fits, a home game first, said in one line they can
       // correct, never "Which game?" (live Oct 3: "4 tickets to the new home game for new york rangers, max $400" was

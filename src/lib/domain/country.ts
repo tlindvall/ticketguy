@@ -4,6 +4,8 @@
  * a wrong null only leaves the "country unconfirmed" flag a reviewer already sees. So 'NON_US' needs a named
  * non-US place or an explicit "not in the US"; anything unrecognised is null and changes nothing.
  */
+import { homeFromStatement } from './home-market';
+
 export type Residence = 'US' | 'NON_US';
 
 const US_STATES =
@@ -27,7 +29,7 @@ export function classifyResidence(statement: string | null | undefined): Residen
   if (!statement) return null;
   if (NOT_US.test(statement)) return 'NON_US';
   if (NON_US.test(statement) && !US.test(statement)) return 'NON_US';
-  if (US.test(statement)) return 'US';
+  if (US.test(statement) || homeFromStatement(statement)) return 'US';
   return null;
 }
 
@@ -50,7 +52,8 @@ export function findResidenceStatement(text: string): string | null {
     const prep = m[2]!.toLowerCase();
     const place = m[3]!;
     if (NON_US_AT_START.test(place)) return m[0].trim();
-    if (!US_AT_START.test(place)) continue;
+    // A metro we serve is a US place too ("I live in Dallas", "we're based in the Bay Area").
+    if (!US_AT_START.test(place) && !homeFromStatement(m[0])) continue;
     // "I'm in NYC" is residence for a New Yorker and a hotel address for a tourist; only the second mentions travel.
     const weak = (verb === "i'm" || verb === 'i am' || verb === "we're" || verb === 'we are') && prep === 'in';
     if (verb === 'visiting' || (weak && TRAVEL_CUE.test(text))) continue;
