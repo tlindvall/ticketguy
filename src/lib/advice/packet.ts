@@ -202,12 +202,18 @@ export type BuildPacketArgs = {
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
-  trendAsked?: { noAlerts: boolean; riskOk: boolean } | null;
+  /** `history`: they asked what usually happens nearer the date, or what past events show. */
+  trendAsked?: { noAlerts: boolean; riskOk: boolean; history?: boolean } | null;
   /** Offers from earlier in the thread they've told us to ignore: the one left is judged alone (R05-F1). */
   offersSetAside?: string[];
   /** `market`: a SeatData watch, on listed resale prices with a fee allowance, not a seller's verified totals (DECISION_LOG #62). */
   /** A watch would start if they asked now (same gates as creating one); offered when nothing fits their budget. */
   watchOffer?: { until: Date } | null;
+  /**
+   * A reply in a thread whose seats we already sent, about the same event: a question there gets its answer, not the
+   * event, the party and the seat card again.
+   */
+  followUp?: boolean;
   watchStatus?: { running: true; quantity: number; targetTotalCents: number; togetherRequired: boolean; expiresAt: Date; market?: { feeAllowancePct: number } | null } | { running: false; reason?: string | null } | null;
   /** Cheaper market listings around the customer's listing (market data, before fees, never verified offers). */
   marketAround?: AlternativesResult | null;
@@ -1442,6 +1448,9 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
  * Past movement only, never a forecast.
  */
 function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[] {
+  const offer = watchOfferLine(a, budget, n);
+  // Asked which way prices are going, the answer to that already says it: not a second time under the seats.
+  if (a.trendAsked) return offer ? [offer] : [];
   const target = `${formatUsd(budget)} for ${n}`;
   const t = marketTrendAnswer(a);
   const trend = t
@@ -1453,8 +1462,12 @@ function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string): string[]
           ? `${t.facts}, with no clear fall toward ${target}.`
           : `${t.facts}, so nothing yet points toward ${target}.`
     : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
-  const offer = a.watchOffer ? `If ${target} is firm, reply “watch it” and I’ll keep checking until ${checkedAt(a.watchOffer.until, a.timeZone)} and email you if listings for ${n} come in at about ${formatUsd(budget)} or less with fees.` : null;
   return [trend, ...(offer ? [offer] : [])];
+}
+
+/** A watch they could start now on their budget, as the offer the reply makes. */
+function watchOfferLine(a: BuildPacketArgs, budget: number, n: string): string | null {
+  return a.watchOffer ? `If ${formatUsd(budget)} for ${n} is firm, reply “watch it” and I’ll keep checking until ${checkedAt(a.watchOffer.until, a.timeZone)} and email you if listings for ${n} come in at about ${formatUsd(budget)} or less with fees.` : null;
 }
 
 /** The event as the brief's card shows it: its name, where, and when in the same words as the header. */
@@ -1560,6 +1573,9 @@ function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
     why: `you don’t want to miss the ${a.eventNoun ?? 'event'}${when ? ` on ${when}` : ''}`,
   };
 }
+
+/** Claims that answer a question asked in the thread; with one of them, a follow-up reply is just the answer. */
+const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
 
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A before-fees listing is not "cheaper" than an all-in price just by being lower: its fees are still to come.
@@ -2132,7 +2148,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // price, the face-value line and the market section all over again (live Oct 2 C02 turn 2: 468 words).
     // The line naming the market's source goes with the market it describes ("Those figures are…" under nothing).
     if (sub && shownRowLead(a, sub)) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
-    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${text}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
+    // "Could they drop nearer the game, what do you see historically?": the direct answer, and, without past events to
+    // show, that we can't say what usually happens late (never a generic "prices drop on game day").
+    const late = !!a.trendAsked.history;
+    const pastShown = claims.some((c) => c.id === 'C_BENCH' && c.customerVisible);
+    const noun = a.eventNoun ?? 'event';
+    const pastNote = late && !pastShown ? ` I don’t have prices from past ${noun}s like this one at the same point before the ${noun}, so I can’t tell you whether they usually drop closer to the day.` : '';
+    const answer = late && mt?.why && !view?.lead ? `I wouldn’t count on a drop. ${mt.facts}, so ${mt.why}.${risk}${view?.after ?? ''}` : text;
+    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${answer}${pastNote}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
   }
 
   // Seats named for them are the price summary: the venue floor, its source line and a read worked out from that floor
@@ -2206,6 +2229,20 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // coverage note after it only repeat or contradict it (live M03: "On delivery…" under a pick that already
   // enforced the deadline).
   if (comparing) for (const c of claims) if (!['C_OFFERS', 'C_SALES', 'C_WATCH', 'C_LINK_UNREAD'].includes(c.id)) c.customerVisible = false;
+  // A question in the thread about the event we already sent seats for gets its answer, not the brief again (live
+  // Oct 9: "could there be a drop nearer the game?" got the game, venue, date, party, budget and the same seat card).
+  const answered = !!a.followUp && claims.some((c) => FOLLOW_UP_ANSWERS.includes(c.id) && c.customerVisible);
+  if (answered) {
+    const picked = claims.some((c) => c.id === 'C_PICKS' && c.customerVisible);
+    for (const c of claims) if (['C_PICKS', 'C_PICKS_ALT'].includes(c.id)) c.customerVisible = false;
+    // Over budget, the watch they could start is still the next step: said after the answer, not lost with the card.
+    const p = a.picks;
+    const offer = picked && p && !p.fits && p.budgetTotalCents != null ? watchOfferLine(a, p.budgetTotalCents, q === 1 ? 'one' : qtyWord(q)) : null;
+    const trend = claims.find((c) => c.id === 'C_TREND_ANSWER' && c.customerVisible);
+    if (offer && trend) trend.text = `${trend.text} ${offer}`;
+    // Resale figures in the answer keep the line that says what they are.
+    if (picked && trend?.values.source === 'resale_series') for (const c of claims) if (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text)) c.customerVisible = true;
+  }
   return {
     requestId: a.requestId,
     revision: a.revision,
@@ -2225,7 +2262,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     followUps: a.synthetic || a.asks?.parking || comparing ? [] : followUpQuestions(a),
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
-    ...headlineFor(a),
+    ...(answered ? {} : headlineFor(a)),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,
