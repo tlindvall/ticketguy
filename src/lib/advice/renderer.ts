@@ -129,7 +129,8 @@ function offerCard(c: ClaimRecord, alt: ClaimRecord | undefined, lines: string[]
   const k = c.card!;
   if (k.brief) {
     // Leading, the card carries the event; after another answer, the header above already named it.
-    const card = briefCard(k.brief, { withEvent: !withHead });
+    // Leading, the top above already showed how prices are moving; after another answer, the card carries it.
+    const card = briefCard(k.brief, { withEvent: !withHead, trend: withHead });
     lines.push(...card.text);
     html.push(...card.html);
     return;

@@ -152,24 +152,23 @@ describe('resale market tracking', () => {
     // the one price summary: no venue floor or budget sum from it under them.
     // The ticket brief (Oct 6): a price lead with its headline and reason, then the card with the event, the estimate
     // said as estimated and what isn't checked. The feed here names no marketplace, as live: both are searched.
-    expect(rec!.bodyText).toContain('Hey,\n\nAbout $124 a ticket, $247 for two, with fees.\n\nThat’s the lowest listing I can see for two tickets: Section 101, Row 10. Listed prices are down $30 a ticket in three days.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30 · tip-off 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two\nAbout $124 a ticket, with fees\n$190 before fees ($95 each). Includes a 30% fee allowance.\nEstimated total; checkout price unconfirmed.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
+    // What I'd do, why, the next action (Oct 9 review): falling, five weeks out, other pairs too, so another day.
+    expect(rec!.bodyText).toContain('Hey,\n\nI’d give it another day.\n\nSection 101, Row 10 is about $247 for two tickets, including estimated fees, and two other options fit too. The checkout total and whether the seats are together haven’t been confirmed.\n\nComparable pairs have fallen 19% over three days. Waiting could improve the price, although this particular pair may go.\n\nHow prices are moving: falling\n3 days ago: $320\nYesterday: $280 (▼ $40)\nNow: $260 (▼ $20)\nThe cheapest listed pair, before fees, from StubHub and Vivid Seats.\n\nMetro Testers vs. Boston\nTest Garden, New York\nFriday, October 30 · tip-off 7:30 p.m.\n\nPrice lead · still needs checking\nSection 101 · Row 10\nAbout $247 for two · estimated fees included\nAbout $124 a ticket\n$190 before fees ($95 each). Includes a 30% fee allowance.\nSeats together: Not confirmed\nListed on: StubHub or Vivid Seats');
     expect(rec!.bodyText).toContain('Search StubHub for this game: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston\nSearch Vivid Seats for this game: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston\nFound it? Reply with the checkout screenshot');
-    // Which way the price has moved, drawn under the card: now, a day ago, three days ago, the exact difference (live Oct 9).
-    expect(rec!.bodyText).toContain('How prices are moving: falling\nNow: $130 a ticket\n1 day ago: $140, down $10 (7%) since\n3 days ago: $160, down $30 (19%) since\nFor two, that’s $60 less than three days ago. That’s no promise they keep falling, and the seats you want could go.\nCheapest listed price for two or more tickets, a ticket before fees, from StubHub and Vivid Seats.');
     expect(rec!.bodyHtml).toContain('▼ Falling');
-    expect(rec!.bodyHtml).toContain('▼ $30 (19%) since');
     expect(rec!.bodyText).toContain('Other price leads\nSection 215 · Row 8: $240 before fees ($120 each). $50 more before fees; not checked either\nSection 210 · Row 4: $280 before fees ($140 each).');
-    expect(rec!.bodyText).toContain('Prices from StubHub and Vivid Seats listing data, refreshed in the last couple of hours. Seller, availability and seats together not checked yet.');
+    expect(rec!.bodyText).toContain('Prices from StubHub and Vivid Seats listing data, refreshed in the last couple of hours.');
     expect(rec!.bodyText).not.toMatch(/I’d buy|Other leads shown|cheapest available|narrow it down/);
     // The card's links are on the card, once.
     expect(rec!.bodyText.match(/Search StubHub for this game/g)).toHaveLength(1);
     // The card: headline, neutral badge (lime is for checked offers), the estimate large, the search as an outlined
     // button, never a filled purchase button.
-    expect(rec!.bodyHtml).toContain('>About $124 a ticket, $247 for two, with fees.</h1>');
+    expect(rec!.bodyHtml).toContain('>I’d give it another day.</h1>');
     expect(rec!.bodyHtml).toContain('background:#e9e3d8;');
     expect(rec!.bodyHtml).not.toContain('background:#d7f36b;');
     expect(rec!.bodyHtml).toContain('About $247 <span');
-    expect(rec!.bodyHtml).toMatch(/<td bgcolor="#ffffff"[^>]*><a href="https:\/\/www\.stubhub\.com\/search\?q=[^"]+"[^>]*>Search StubHub for this game&nbsp;↗<\/a>/);
+    // Not knowing which marketplace has the seats, neither gets a button: both are plain links.
+    expect(rec!.bodyHtml).not.toContain('&nbsp;↗');
     // No artwork on a game: the generic concert art is for live music only.
     expect(rec!.bodyHtml).not.toContain('<img');
     // With no budget, the one next step is a specific offer, on its own line, not a questionnaire.
@@ -428,7 +427,7 @@ describe('resale market tracking', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     // Five together, named: the $140 block is six tickets and would leave the seller one, so it's said and passed over.
     // Their buy-or-wait question leads; the brief's card follows it without naming the game a second time.
-    expect(rec!.bodyText).toContain('Price lead · still needs checking\nSection 112 · Row 2\nAbout $1,008 for all five\nAbout $202 a ticket, with fees\n$775 before fees ($155 each). Includes a 30% fee allowance.');
+    expect(rec!.bodyText).toContain('Price lead · still needs checking\nSection 112 · Row 2\nAbout $1,008 for all five · estimated fees included\nAbout $202 a ticket\n$775 before fees ($155 each). Includes a 30% fee allowance.');
     expect(rec!.bodyText.match(/Metro Testers vs\. Boston/g)).toHaveLength(1);
     expect(rec!.bodyText).toContain('Why not cheaper: Section 210 at $140 each is 6 tickets, and sellers rarely leave a single seat.');
     expect(rec!.bodyText).not.toContain('I can’t see live resale listings');

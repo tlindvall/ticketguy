@@ -93,7 +93,7 @@ describe('an open official sale is said inside the priced reply, never instead o
   it('four tickets for a game on general sale: the seats to buy with the price, and the open sale said; never "reply compare"', async () => {
     const r = await ask('4 tickets to Metro Knicks vs Team 5, max $400 total');
     expect(r.req.eventId).toBe(games[0]!.id);
-    expect(r.emails).toMatch(/That’s the lowest listing I can see for four tickets: Section 214, Row 10/);
+    expect(r.emails).toMatch(/I’d go for these if checkout comes to about \$\d+ for four\.\n\nSection 214, Row 10/);
     expect(r.emails).toMatch(/\$\d+/);
     // No face value or sale close for this game: the open sale isn't suggested beside the lead (live Oct 6).
     expect(r.emails).not.toMatch(/also lists it as on general sale|can’t see whether it has seats left/);

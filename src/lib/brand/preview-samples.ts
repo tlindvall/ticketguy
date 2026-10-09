@@ -13,13 +13,12 @@ type Sample = { id: string; title: string; subject: ArtSubject; name: string; wh
 /** One made-up rising series, on the first sample, so the price-movement module can be seen. */
 const SAMPLE_TREND: BriefTrend = {
   direction: 'up',
-  nowCents: 8469,
-  windows: [
-    { label: '1 day ago', fromCents: 7920, changeCents: 549, pct: 549 / 7920, moved: true },
-    { label: '3 days ago', fromCents: 7100, changeCents: 1369, pct: 1369 / 7100, moved: true },
+  rows: [
+    { label: '3 days ago', cents: 14200 },
+    { label: 'Yesterday', cents: 15840 },
+    { label: 'Now', cents: 16938 },
   ],
-  meaning: 'For two, that’s $27.38 more than three days ago. Waiting has cost money so far.',
-  basis: 'Cheapest listed price for two or more tickets, a ticket before fees, from StubHub and Vivid Seats.',
+  basis: 'The cheapest listed pair, before fees, from StubHub and Vivid Seats.',
 };
 
 const team = (slug: string, name: string) => ({ kind: 'team', slug, name });
@@ -45,7 +44,8 @@ export async function renderPreviewSamples(db: DbOrTx): Promise<Array<{ id: stri
       kind: 'price_lead',
       // The packet's own wording (picksAnswer), so the preview shows what a customer reads.
       headline: `${s.total} ${s.party}, with fees.`,
-      rationale: `That’s the lowest listing I can see: ${s.seat.replace(' · ', ', ')}.${i === 0 ? ' Listed prices are up $13.69 a ticket in three days.' : ''}`,
+      rationale: `That’s the lowest listing I can see: ${s.seat.replace(' · ', ', ')}.`,
+      points: i === 0 ? ['Prices are rising. The cheapest listed pair is up 19% since three days ago. Waiting has cost money so far.'] : [],
       category: categoryLabel(s.subject.category),
       event: { name: s.name, where: s.where, when: sportStart(s.when, sportFor(s.subject.category, s.subject.genre)) },
       artworkUrl: artwork,
@@ -67,7 +67,7 @@ export async function renderPreviewSamples(db: DbOrTx): Promise<Array<{ id: stri
     };
     // A relative artwork path works in the preview, which is served by this app; the live card takes https only.
     const top = briefTop(brief);
-    const card = briefCard({ ...brief, artworkUrl: artwork?.startsWith('/') ? `https://preview.invalid${artwork}` : artwork });
+    const card = briefCard({ ...brief, artworkUrl: artwork?.startsWith('/') ? `https://preview.invalid${artwork}` : artwork }, { trend: false });
     const ev = briefEvidence(brief);
     const html = [`<p style="margin:0 0 16px;font-size:16px;line-height:25px;">Hey,</p>`, ...top.html, ...card.html, ev.html].join('\n').replaceAll('https://preview.invalid/', '/');
     out.push({ id: s.id, title: s.title, artwork, html, text: ['Hey,', ...top.text, ...card.text, ev.text].join('\n\n') });
