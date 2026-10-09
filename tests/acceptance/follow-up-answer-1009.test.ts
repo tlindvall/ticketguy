@@ -145,7 +145,7 @@ describe('a follow-up question gets its answer, not the brief again', () => {
     const next = await turn('Do you think there could be a drop in the prices nearer the game or what do you see historically?', from, first.m);
     expect(first.text).toContain('Section 119 · Row 26');
     expect(next.text).toContain('A late drop is possible.');
-    expect(next.text).toContain('Looking at the last 6 games here with the same team: from this point to the day of the game, the cheapest price for two or more tickets fell in 4, rose in 1 and stayed about the same in 1 (listed before fees; the middle result was down 20%). So late drops have been the usual pattern here, though not every time, and the seats you want could go.');
+    expect(next.text).toContain('Late drops happened in 4 of 6 previous games here we tracked. That’s the cheapest listed pair across the venue, not these seats, so it’s a reason to keep watching, not a promise they’ll get cheaper.');
     expect(next.text).not.toContain('I don’t have prices from past games');
   });
 });

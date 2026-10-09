@@ -1390,40 +1390,96 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const where = on(first!);
   const missing = q > 1 ? 'the final price, whether it’s still available and whether the seats are together' : 'the final price and whether it’s still available';
   const over = budget != null && !p.fits;
-  // Plain words, the price first (live Oct 9: "A price lead for two: about $1,840." read oddly). Still never "I'd buy".
   // The price a ticket said plainly next to the party total (live Oct 9: "super important").
   const each = q > 1 ? formatUsd(roundToDollar(first!.estimatedTotalCents / q)) : null;
-  const head = over
-    ? `Nothing for ${n} fits your ${formatUsd(budget)} yet.`
-    : budget != null
-      ? `${each ? `About ${each} a ticket, ${est} for ${n}` : `About ${est} for ${n}`}, inside your ${formatUsd(budget)}.`
-      : `${each ? `About ${each} a ticket, ${est} for ${n}` : `About ${est} for ${n}`}, with fees.`;
-  // What isn't checked is on the card and in the small print; said again here it was noise (live Oct 9). Which way
-  // the price has moved is what they act on, so it's said here and drawn under the card.
   const trend = trendModule(a, over ? `${formatUsd(budget)} for ${n}` : null);
-  const moved = trend ? ` ${trend.sentence}` : '';
-  const rationale = over
-    ? `The closest is ${seat(first!)}${where ? ` on ${where}` : ''}: about ${est} for ${party} with fees${each ? ` (${each} a ticket)` : ''}, ${formatUsd(roundToDollar(first!.estimatedTotalCents - budget))} over your budget.${moved}`
-    : `That’s the lowest listing I can see for ${party}: ${seat(first!)}${where ? ` on ${where}` : ''}.${moved}`;
+  const past = lateMoveLine(a);
+  const late = a.market?.context?.late ?? null;
+  // General admission has no seats to be together: only the total is unchecked.
+  const ga = (seatPhrase(first!.listing.section, first!.listing.row) ?? '').startsWith('general admission');
+  const unconfirmed = q > 1 && !ga ? 'The checkout total and whether the seats are together haven’t been confirmed.' : 'The checkout total hasn’t been confirmed.';
+  const lead = `${seat(first!)}${where ? ` on ${where}` : ''}`;
+  const priceLine = `about ${est} for ${party}, including estimated fees`;
+  // What I'd do → why → the next action (live Oct 9 review). Budget fit, value and timing are separate: over budget is
+  // not overpriced, a fall is not automatically "wait" and a rise not automatically "buy". A lead is unchecked, so a
+  // buy is said against the checkout total, never as a sure thing.
+  const dir = trend?.direction ?? null;
+  const daysLeft = a.eventStartAt ? (a.eventStartAt.getTime() - a.observedAt.getTime()) / 86_400_000 : Infinity;
+  const deadline = a.priorities.decisionDeadline ? (a.priorities.decisionDeadline.getTime() - a.observedAt.getTime()) / 86_400_000 : null;
+  const noTime = daysLeft < 3 || (deadline !== null && deadline < 2);
+  const fitting = p.picks.filter((x) => budget == null || x.estimatedTotalCents <= budget).length;
+  const gap = over ? formatUsd(roundToDollar(first!.estimatedTotalCents - budget)) : null;
+  const under = budget != null && !over ? formatUsd(roundToDollar(budget - first!.estimatedTotalCents)) : null;
+  // Over budget: hold off only with evidence a drop could come (falling now, or past games here usually fell late) and a
+  // watch that can actually run; otherwise no indefinite waiting, one question that unlocks a way forward instead.
+  const dropEvidence = dir === 'down' || (!!late && late.fell * 2 > late.events);
+  type Outcome = 'take' | 'buy_rising' | 'wait_falling' | 'take_falling' | 'hold_watch' | 'ask';
+  const outcome: Outcome = over
+    ? dropEvidence && a.watchOffer && !noTime ? 'hold_watch' : 'ask'
+    : dir === 'up' ? 'buy_rising'
+    : dir === 'down' ? (fitting >= 2 && !noTime ? 'wait_falling' : 'take_falling')
+    : 'take';
+  const comparable = trend?.comparable ?? null;
+  const head = {
+    take: `I’d go for these if checkout comes to about ${est} for ${n}.`,
+    buy_rising: `I’d buy these if you’re set on going.`,
+    wait_falling: `I’d give it another day.`,
+    take_falling: noTime ? `I’d buy these now: there isn’t much time left to wait.` : `I’d take these: they’re the only ${q === 2 ? 'pair' : 'option'} ${budget != null ? 'inside your budget' : 'I can see for you'}.`,
+    hold_watch: `I’d hold off: you don’t need to stretch your budget yet.`,
+    ask: `I haven’t found a confirmed ${q === 2 ? 'pair' : q === 1 ? 'ticket' : `set of ${n}`} under ${formatUsd(budget ?? 0)}.`,
+  }[outcome];
+  const rationale = {
+    take: `${capitalize(lead)}: ${priceLine}${under ? `, ${under} under your ${formatUsd(budget!)}` : ''}. ${unconfirmed}`,
+    buy_rising: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${formatUsd(budget)}` : ''}. ${unconfirmed}`,
+    wait_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${formatUsd(budget)}` : ''}, and ${fitting === 2 ? 'another option fits' : `${qtyWord(fitting - 1)} other options fit`} too. ${unconfirmed}`,
+    take_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${formatUsd(budget)}` : ''}. ${unconfirmed}`,
+    hold_watch: `The closest lead is ${lead}: ${priceLine}, against your ${formatUsd(budget ?? 0)} cap. ${unconfirmed}`,
+    ask: `The closest lead is ${lead}: ${priceLine}, ${gap} over. ${unconfirmed}`,
+  }[outcome];
+  // The trend only where it answers the question: the reason to buy, to wait or to hold off; not under every pick.
+  const why = {
+    take: [],
+    buy_rising: comparable ? [`${comparable}. That supports buying; it doesn’t prove tomorrow will cost more.`] : [],
+    wait_falling: comparable ? [`${comparable}. Waiting could improve the price, although this particular ${q === 2 ? 'pair' : 'listing'} may go.`] : [],
+    take_falling: comparable ? [`${comparable}, but waiting means risking these seats.`] : [],
+    hold_watch: [...(trend ? [trend.sentence] : []), ...(past ? [past] : [])],
+    ask: [
+      dir === 'down' ? `${comparable ?? 'Prices are falling'}, but ${noTime ? `there isn’t time to wait for ${formatUsd(budget ?? 0)}` : `they haven’t reached ${formatUsd(budget ?? 0)}, and I can’t keep watching for you here`}.`
+      : trend ? `${trend.sentence}` : `I don’t have enough price history to expect a drop to ${formatUsd(budget ?? 0)}.`,
+      `Would you go up to about ${est} for these, or should I look at other seats or another date?`,
+    ],
+  }[outcome];
+  const trendShown = !!trend && ['buy_rising', 'wait_falling', 'take_falling', 'hold_watch'].includes(outcome);
+  const points = why;
+  const headline = head;
+  // The next action follows the advice: a direct listing link to buy; the watch when holding off and one can run; the
+  // question when asking. A big button to one marketplace when we don't know which one has the seats claims a confidence
+  // we don't have, so seller searches are plain links.
+  const watchLine = outcome === 'hold_watch' ? watchOfferLine(a, budget!, n) : null;
+  const watch = outcome === 'hold_watch' && a.watchOffer ? { title: `Want me to watch your ${formatUsd(budget!)} target?`, body: `Reply “watch it” and I’ll keep checking until ${checkedAt(a.watchOffer.until, a.timeZone)} and email you if listings for ${n} come in at about ${formatUsd(budget!)} or less with fees.` } : null;
+  const buying = ['take', 'buy_rising', 'take_falling'].includes(outcome);
   const ageNote = p.age === 'undated' ? 'the data doesn’t say how recently it was refreshed' : typeof p.age === 'number' ? `refreshed about ${p.age} hours ago` : 'refreshed in the last couple of hours';
   const basis = [
     `${formatUsd(first!.listedTotalCents)} before fees (${formatUsd(first!.listing.priceCents)} each). Includes a ${p.feeAllowancePct}% fee allowance.`,
     ...(first!.exactSplit ? [] : [`It’s a listing of ${first!.listing.quantity}, so check it sells as ${q}.`]),
   ];
   const facts: Array<[string, string]> = [[q > 1 ? 'Seats together' : 'Seats', q > 1 ? 'Not confirmed' : 'Single seat'], ['Listed on', where ?? 'StubHub or Vivid Seats']];
-  const alternatives = p.fits
+  // Only alternatives that change the decision: the other options that make waiting reasonable, not pricier seats
+  // under a pick we'd buy.
+  const alternatives = p.fits && outcome === 'wait_falling'
     ? rest.slice(0, 2).map((x) => ({ label: `${seatTitle(x)}${on(x) ? ` on ${on(x)}` : ''}`, totalCents: x.listedTotalCents, eachCents: q > 1 ? x.listing.priceCents : null, basis: 'before fees' as const, note: `${formatUsd(x.listedTotalCents - first!.listedTotalCents)} more before fees; not checked either` }))
     : [];
   // A cheaper block passed over is said, so the lower price isn't a mystery: it would leave the seller one ticket.
   const u = p.cheaperUnsplit;
   const after = [
     ...(u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : []),
-    ...(over ? budgetGapNotes(a, budget, n, !!trend) : []),
+    ...(over && outcome === 'hold_watch' && !trendShown ? budgetGapNotes(a, budget, n, false, true) : []),
   ];
   const links = p.links ?? [];
+  const sure = !!links[0] && /^View /.test(links[0].label) && buying;
   const brief: TicketBrief = {
     kind: 'price_lead',
-    headline: head,
+    headline,
     rationale,
     category: briefCategory(a),
     event: briefEvent(a),
@@ -1431,24 +1487,29 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     seatLine: seatTitle(first!),
     total: `About ${est}`,
     forWhom: q === 1 ? 'for one' : q === 2 ? 'for two' : `for all ${n}`,
-    each: each ? `About ${each} a ticket, with fees` : null,
+    totalNote: 'estimated fees included',
+    each: each ? `About ${each} a ticket` : null,
     basis,
     facts,
-    action: links[0] ? { label: links[0].label, url: links[0].url } : null,
-    secondary: links[1] ? { label: links[1].label, url: links[1].url } : null,
+    action: sure ? { label: links[0]!.label, url: links[0]!.url } : null,
+    secondary: sure ? (links[1] ? { label: links[1].label, url: links[1].url } : null) : null,
+    links: sure ? [] : links.map((l) => ({ label: l.label, url: l.url })),
+    points,
+    watch,
     actionNote: `Found it? Reply with the checkout screenshot and I’ll check the total${q > 1 ? ' and whether the seats are together' : ''}.`,
     affiliate: false,
     alternatives,
-    trend: trend?.brief ?? null,
+    trend: trendShown ? trend!.brief : null,
     after,
-    evidenceNote: `Prices from StubHub and Vivid Seats listing data, ${ageNote}. Seller, availability${q > 1 ? ' and seats together' : ''} not checked yet.`,
+    // The caveat is said once, beside the price; the small print says only where the numbers came from.
+    evidenceNote: `Prices from StubHub and Vivid Seats listing data, ${ageNote}.`,
   };
   const title = `${seatTitle(first!)}${where ? ` on ${where}` : ''}`;
   const others = alternatives.map((x) => `${x.label}: ${formatUsd(x.totalCents)}${q > 1 ? ` for ${n}` : ''} before fees.`);
   const notes = [...basis, `Not checked yet: ${missing}; prices ${ageNote}.`];
-  const card = { head, title, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after, brief };
-  const items = [rationale, `${title}: ${card.price}, estimated.`, ...notes, ...(trend ? [trend.brief.meaning] : []), ...others.map((o) => `Also: ${o}`), ...after];
-  return { head, items, card };
+  const card = { head: headline, title, price: `About ${est}${q === 1 ? '' : ` for ${n}`}`, notes, others, after, brief };
+  const items = [rationale, ...points, `${title}: ${card.price}, estimated.`, ...notes, ...others.map((o) => `Also: ${o}`), ...after, ...(watchLine ? [watchLine] : [])];
+  return { head: headline, items, card };
 }
 
 /**
@@ -1456,28 +1517,22 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
  * the price has been moving for their party, or that we can't tell yet, and a watch when one could actually start.
  * Past movement only, never a forecast.
  */
-function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string, trendShown = false): string[] {
-  const offer = watchOfferLine(a, budget, n);
+function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string, trendShown = false, pastShown = false): string[] {
   // Asked which way prices are going, the answer to that already says it: not a second time under the seats.
-  if (a.trendAsked) return offer ? [offer] : [];
+  if (a.trendAsked || trendShown) return [];
   const target = `${formatUsd(budget)} for ${n}`;
-  // With the price-movement module on the card, its meaning line already says this against their target.
-  const t = trendShown ? null : marketTrendAnswer(a);
-  const trend = trendShown
-    ? null
-    : t
-      ? t.direction === 'down'
-        ? `${t.facts}. That’s the direction you need, but it doesn’t mean they’ll keep falling to ${target}.`
-        : t.direction === 'up'
-          ? `${t.facts}, so waiting for ${target} hasn’t been paying off so far.`
-          : t.direction === 'mixed'
-            ? `${t.facts}, with no clear fall toward ${target}.`
-            : `${t.facts}, so nothing yet points toward ${target}.`
-      : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
-  // What past games here did from this point to the day itself, when we hold them (SeatData history).
-  const past = lateMoveNote(a);
-  const said = [trend, past?.text].filter((x): x is string => !!x).join(' ');
-  return [...(said ? [said] : []), ...(offer ? [offer] : [])];
+  const t = marketTrendAnswer(a);
+  const trend = t
+    ? t.direction === 'down'
+      ? `${t.facts}. That’s the direction you need, but it doesn’t mean they’ll keep falling to ${target}.`
+      : t.direction === 'up'
+        ? `${t.facts}, so waiting for ${target} hasn’t been paying off so far.`
+        : t.direction === 'mixed'
+          ? `${t.facts}, with no clear fall toward ${target}.`
+          : `${t.facts}, so nothing yet points toward ${target}.`
+    : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
+  const past = pastShown ? null : lateMoveLine(a);
+  return [past ? `${trend} ${past}` : trend];
 }
 
 /**
@@ -1486,39 +1541,67 @@ function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string, trendShow
  * reads and under the same gate: fresh, dated by the provider, a real window, the seats they asked about. The meaning
  * says what the movement has done so far, against their target when they're over budget; never where it goes next.
  */
-function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefTrend; sentence: string } | null {
+function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefTrend; sentence: string; direction: 'up' | 'down' | 'flat' | 'mixed'; comparable: string | null } | null {
   const m = a.market;
   const c = m?.context;
   if (!m?.visible || !trendReady(c) || !scopeFits(a) || c.direction === 'insufficient') return null;
   const w = c.h72 ?? c.h24;
   if (!w) return null;
-  const q = a.quantity;
-  const group = isGroupBasis(m.basis) ? basisSize(m.basis!) : null;
-  const what = m.basis === 'pair' ? 'for two or more tickets' : group !== null ? `for ${group} or more tickets` : 'for a single ticket';
+  const size = m.basis === 'single' ? 1 : m.basis === 'pair' ? 2 : isGroupBasis(m.basis) ? basisSize(m.basis!) : 1;
+  const unit = size === 1 ? 'the cheapest listed ticket' : size === 2 ? 'the cheapest listed pair' : `the cheapest listing for ${qtyWord(size)}`;
   const z = zoneOf(a);
-  const usd = (cents: number) => formatUsd(Math.abs(cents));
-  const since = (x: NonNullable<Change>) => (x.hours >= 72 ? 'in three days' : 'since yesterday');
+  // "8.5%", "1.5%", "23%": a tenth below ten, whole above, so a small move isn't rounded into a bigger one.
+  const pct = (x: NonNullable<Change>) => { const v = Math.abs(x.pct) * 100; return `${v < 10 ? Math.round(v * 10) / 10 : Math.round(v)}%`; };
   const then = (x: NonNullable<Change>) => (x.hours >= 72 ? 'three days ago' : 'yesterday');
-  const leg = (x: NonNullable<Change>) => (marketMoved(x) ? `${x.changeCents > 0 ? 'up' : 'down'} ${usd(x.changeCents)} a ticket ${since(x)}` : `about the same as ${then(x)}`);
-  const sentence =
-    c.direction === 'up' ? `Listed prices are up ${usd(w.changeCents)} a ticket ${since(w)}.`
-    : c.direction === 'down' ? `Listed prices are down ${usd(w.changeCents)} a ticket ${since(w)}.`
-    : c.direction === 'flat' ? `Listed prices have held at about ${formatUsd(c.current.priceCents)} a ticket ${w.hours >= 72 ? 'for three days' : 'since yesterday'}.`
-    : c.h24 && c.h72 ? `Listed prices are ${leg(c.h24)} but ${leg(c.h72)}.` : `Listed prices are ${leg(w)}.`;
-  const party = q > 1 && marketMoved(w) ? `For ${qtyWord(q)}, that’s ${usd(w.changeCents * q)} ${w.changeCents > 0 ? 'more' : 'less'} than ${then(w)}. ` : '';
+  const d24 = c.h24;
+  const d72 = c.h72;
+  // A dip that came back is what "up and down" usually was (live Oct 9 review): said as that, in words.
+  const reversal = c.direction === 'mixed' && d24 && d72 ? (d24.changeCents > 0 && d24.fromCents < d72.fromCents ? 'Yesterday’s dip has reversed.' : d24.changeCents < 0 && d24.fromCents > d72.fromCents ? 'Yesterday’s rise has eased off.' : null) : null;
+  const title = c.direction === 'up' ? 'Prices are rising.' : c.direction === 'down' ? 'Prices are falling.' : c.direction === 'flat' ? 'Prices have held steady.' : reversal ?? 'Prices have gone both ways.';
+  const detail =
+    c.direction === 'flat' ? `${capitalize(unit)} is about the same as ${then(w)}.`
+    : c.direction === 'mixed' && d24 && d72
+      ? `${capitalize(unit)} is ${d24.changeCents > 0 ? 'up' : 'down'} ${pct(d24)} since yesterday, but ${marketMoved(d72) ? `${d72.changeCents > 0 ? 'up' : 'down'} ${pct(d72)} on three days ago` : `only ${pct(d72)} ${d72.changeCents >= 0 ? 'above' : 'below'} three days ago`}.`
+      : `${capitalize(unit)} is ${w.changeCents > 0 ? 'up' : 'down'} ${pct(w)} since ${then(w)}.`;
   const meaning =
-    c.direction === 'up' ? (target ? `Waiting for ${target} hasn’t paid off so far.` : `${party}Waiting has cost money so far.`)
-    : c.direction === 'down' ? (target ? `That’s the direction you need, but it’s no promise they reach ${target}.` : `${party}That’s no promise they keep falling, and the seats you want could go.`)
+    c.direction === 'up' ? (target ? `Waiting for ${target} hasn’t paid off so far.` : 'Waiting has cost money so far.')
+    : c.direction === 'down' ? (target ? `That’s the direction you need, but it’s no promise they reach ${target}.` : 'That’s no promise they keep falling, and the seats you want could go.')
     : c.direction === 'flat' ? (target ? `Nothing yet points toward ${target}.` : 'No fall to wait for so far.')
-    : target ? `No clear fall toward ${target}.` : 'They’ve gone both ways, so there’s no clear fall to wait for.';
-  const windows = [
-    ...(c.h24 ? [{ label: '1 day ago', fromCents: c.h24.fromCents, changeCents: c.h24.changeCents, pct: c.h24.pct, moved: marketMoved(c.h24) }] : []),
-    ...(c.h72 ? [{ label: '3 days ago', fromCents: c.h72.fromCents, changeCents: c.h72.changeCents, pct: c.h72.pct, moved: marketMoved(c.h72) }] : []),
+    : 'There’s no sustained fall yet.';
+  // Oldest first, each the whole basis (a pair is two tickets), the same quantity and fee basis on every row.
+  const rows = [
+    ...(d72 ? [{ label: '3 days ago', cents: d72.fromCents * size }] : []),
+    ...(d24 ? [{ label: 'Yesterday', cents: d24.fromCents * size }] : []),
+    { label: 'Now', cents: c.current.priceCents * size },
   ];
+  const badge = c.direction === 'mixed' ? (reversal?.startsWith('Yesterday’s dip') ? 'Dip reversed' : reversal ? 'Rise eased' : 'Both ways') : null;
+  // "Comparable pairs have risen 8% since yesterday": the movement alone, for a reply where it's one reason among others.
+  const plural = size === 1 ? 'tickets' : size === 2 ? 'pairs' : `listings for ${qtyWord(size)}`;
+  const comparable = c.direction === 'up' || c.direction === 'down' ? `Comparable ${plural} have ${c.direction === 'up' ? 'risen' : 'fallen'} ${pct(w)} ${w.hours >= 72 ? 'over three days' : 'since yesterday'}` : null;
   return {
-    sentence,
-    brief: { direction: c.direction, nowCents: c.current.priceCents, windows, meaning, basis: `Cheapest listed price ${what}${z ? ` ${zonePhrase(z)}` : ''}, a ticket before fees, from StubHub and Vivid Seats.` },
+    direction: c.direction,
+    comparable,
+    sentence: `${title} ${detail} ${meaning}`,
+    brief: { direction: c.direction, badge, rows, basis: `${capitalize(unit)}${z ? ` ${zonePhrase(z)}` : ''}, before fees, from StubHub and Vivid Seats.` },
   };
+}
+
+/**
+ * What past comparable events did from this point to their final day (series.ts `lateMoveFrom`), in two short sentences:
+ * how often prices dropped late, and what the comparison is (the venue's cheapest pair, not these seats). Past events
+ * only, never a promise these seats will fall.
+ */
+function lateMoveLine(a: BuildPacketArgs): string | null {
+  const m = a.market;
+  const l = m?.context?.late;
+  if (!m?.visible || !l) return null;
+  const noun = a.eventNoun ?? 'event';
+  const where = noun === 'game' ? 'previous games here' : noun === 'show' ? 'previous shows here by the same act' : 'previous events like this one here';
+  const unit = m.basis === 'pair' ? 'the cheapest listed pair across the venue' : 'the cheapest listed ticket across the venue';
+  const lead = l.fell * 2 > l.events
+    ? `Late drops happened in ${l.fell} of ${l.events} ${where} we tracked.`
+    : `Late drops happened in only ${l.fell} of ${l.events} ${where} we tracked${l.rose ? `; in ${l.rose} the price went up` : ''}.`;
+  return `${lead} That’s ${unit}, not these seats, so it’s a reason to keep watching, not a promise they’ll get cheaper.`;
 }
 
 /**
@@ -1526,23 +1609,9 @@ function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefT
  * middle result and what that does and doesn't say. Past events only, listed prices before fees, never a forecast.
  */
 function lateMoveNote(a: BuildPacketArgs): { text: string; mostlyFell: boolean } | null {
-  const m = a.market;
-  const l = m?.context?.late;
-  if (!m?.visible || !l) return null;
-  const noun = a.eventNoun ?? 'event';
-  const who = noun === 'game' ? 'games here with the same team' : noun === 'show' ? 'shows here by the same act' : 'events like this one here';
-  const what = m.basis === 'pair' ? 'the cheapest price for two or more tickets' : 'the cheapest ticket';
-  const counts = [`fell in ${l.fell}`, ...(l.rose ? [`rose in ${l.rose}`] : []), ...(l.held ? [`stayed about the same in ${l.held}`] : [])];
-  const list = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0]!;
-  const pct = Math.round(Math.abs(l.medianPct) * 100);
-  const middle = pct === 0 ? 'no change' : `${l.medianPct > 0 ? 'up' : 'down'} ${pct}%`;
-  const mostlyFell = l.fell * 2 > l.events;
-  const so = mostlyFell
-    ? 'So late drops have been the usual pattern here, though not every time, and the seats you want could go.'
-    : l.rose * 2 > l.events
-      ? 'So waiting has usually cost more here, not less.'
-      : 'So there’s no reliable late drop to count on.';
-  return { text: `Looking at the last ${l.events} ${who}: from this point to the day of the ${noun}, ${what} ${list} (listed before fees; the middle result was ${middle}). ${so}`, mostlyFell };
+  const text = lateMoveLine(a);
+  const l = a.market?.context?.late;
+  return text && l ? { text, mostlyFell: l.fell * 2 > l.events } : null;
 }
 
 /** A watch they could start now on their budget, as the offer the reply makes. */
