@@ -22,7 +22,7 @@ import { inspectImage, selectProcessableImages } from '@/lib/media/image-validat
 import { createMediaStore } from '@/lib/media/storage';
 import { areaIntent, areaOf, chooseShownOffer, distinctActs, fieldsFromRead, looksLikeListingText, usableEvidence, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
+import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice, withoutDeadline } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { correctToKnown } from '@/lib/domain/name-correction';
@@ -414,7 +414,8 @@ export class Concierge {
       const entityHome = team ? entities.find(({ e }) => [e.name, ...e.aliases].some((n) => n.toLowerCase() === team))?.v : null;
       const tz = venueTz ?? entityHome?.timezone ?? (extraction.performerOrTeam ? teamHomeMarket(extraction.performerOrTeam)?.timezone : null) ?? marketById(this.env.DEFAULT_MARKET).timezone;
       const own = extraction.dateExpression ? readDate(unglue(extraction.dateExpression), msg.receivedAt, tz) : null;
-      const read = own?.resolvedLocalDate ? own : !extraction.dateExpression ? readDate(unglue(msg.sanitizedText ?? ''), msg.receivedAt, tz) : null;
+      // "By Friday" answering "By when do you need to decide?" is their deadline, not a Friday game (audit gap 12).
+      const read = own?.resolvedLocalDate ? own : !extraction.dateExpression ? readDate(withoutDeadline(unglue(msg.sanitizedText ?? ''), msg.receivedAt, tz), msg.receivedAt, tz) : null;
       // A weekday out of "Saturday or Sunday, not Monday" is a kind of day, not a date to pin.
       const source = own?.resolvedLocalDate ? extraction.dateExpression! : msg.sanitizedText ?? '';
       const kindOfDay = /^(?:this |next |on )?(?:sun|mon|tues|wednes|thurs|fri|satur)day$/i.test(read?.dateExpression?.trim() ?? '') && ((source.match(/\b(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?)(?:day)?s?\b/gi)?.length ?? 0) >= 2 || /\bweekends?\b|\bany\s+(?:sun|mon|tue|wed|thu|fri|sat)/i.test(source));
@@ -3352,7 +3353,9 @@ export class Concierge {
     // A link to one listing is theirs to judge: its answer, not someone else's seats.
     if (!shown && !best && !sentLink?.listingId && brief.intent !== 'watch_request' && licence.allows('tracking') && trackingOk && uses.display) {
       if (!around) around = await tracker.recentListings(event.id);
-      const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT) : null;
+      // Ordered by what "best" means to them (audit gap 28), and a budget they gave before fees held against listed
+      // prices, not against the fee estimate (audit gap 10).
+      const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT, 3, { goal: brief.rankingGoal, budgetFeeBasis: brief.budgetFeeBasis }) : null;
       if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null), eventNounFor(event.category)) };
     }
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
@@ -5299,7 +5302,10 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
     const v = next[k];
     if (k === 'evidence' || k === 'submittedUrls' || k === 'negatedEntities') (out as Record<string, unknown>)[k] = [...(prior[k] as unknown[]), ...(v as unknown[])];
     else if (k === 'ambiguities') out.ambiguities = next.ambiguities;
-    else if (k === 'intent') out.intent = next.intent === 'clarification' ? prior.intent : next.intent;
+    // An answer to our question ('clarification') or a message about nothing ('other': "thanks!") leaves the request what it
+    // was; so does a terse follow-up the rules read as a plain search ("4 tickets, $300 total") on a watch request, when it
+    // names nothing new (audit gap 43: it turned the watch into a search).
+    else if (k === 'intent') out.intent = next.intent === 'clarification' || next.intent === 'other' || (prior.intent === 'watch_request' && next.intent === 'new_search' && !next.performerOrTeam && !next.eventName && !next.categoryHint && !next.submittedUrls.length) ? prior.intent : next.intent;
     else if (k === 'wantsMore') out.wantsMore = next.wantsMore; // about this message's list, never the next one's
     else if (k === 'notifyAsked') out.notifyAsked = next.notifyAsked; // this message's ask; a later reply must not re-arm a cancelled or sent alert
     else if (k === 'city' || k === 'state') continue; // a place is moved as one, below

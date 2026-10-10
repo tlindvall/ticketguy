@@ -1,7 +1,7 @@
 import { unglue } from '@/lib/domain/event-constraints';
 import { z } from 'zod';
 import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/types';
-import { dateWindowFor, resolveRelativeDate } from '@/lib/domain/dates';
+import { dateWindowFor, deadlineInstant, localDateParts, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
@@ -11,12 +11,14 @@ import { stateCodeFor } from '@/lib/domain/us-states';
 import { MARKETPLACE_NAMES, ticketLinksIn, type TicketLink } from '@/lib/domain/ticket-links';
 import { seatPhrase } from '@/lib/domain/event-noun';
 import { formatUsd } from '@/lib/domain/money';
-import { lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
+import { lexiconFeeBasis, lexiconGenre, lexiconPriceCheck, lexiconQuantity, lexiconRankingGoal, lexiconResaleAsked, lexiconNotifyAsked, lexiconVagueQuantity, lexiconWantsMore } from '@/lib/lexicon/lexicon';
 
 /**
  * Stage 1: classify + extract. Two implementations share one strict schema:
- *  - FixtureExtractor: deterministic rules for local demos/tests (no network, no cost).
- *  - AnthropicExtractor: Messages API structured output (src/lib/ai/anthropic.ts).
+ *  - FixtureExtractor: deterministic rules, for tests and as the fallback when the AI budget is spent or the provider
+ *    refuses the call (pipeline runExtractor).
+ *  - ModelExtractor (src/lib/ai/model-client.ts): structured output from whichever provider EXTRACTION_PROVIDER names
+ *    (src/lib/ai/openai.ts in production, src/lib/ai/anthropic.ts).
  * Both return null for unknown facts; nothing is invented.
  */
 export type ExtractionInput = {
@@ -147,8 +149,10 @@ function matchupPhrase(t: string): string | null {
   if (!m) return null;
   // "For New York Rangers vs Tampa Bay at MSG on October 1": the teams, without the words around them (A10).
   const stop = /\s+(?:(?:on|at|in|for|this|next|tonight|tomorrow|please)\b.*|\d.*)$/i;
-  const lead = /^(?:(?:for|the|tickets?|seats?|to|at|on|in|about|is|are|of|and|see|watch|game|a|an)\s+)+/i;
-  const a = m[1]!.replace(lead, '').replace(stop, '').trim();
+  // A count and the ticket noun are the request, not a team: "Two tickets vs Lightning" names one side only, and "4
+  // Knicks tickets vs Celtics" is the Knicks (audit gap 43).
+  const lead = /^(?:(?:for|the|tickets?|tix|seats?|to|at|on|in|about|is|are|of|and|see|watch|game|a|an|pair|couple|\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+)+/i;
+  const a = m[1]!.replace(lead, '').replace(/(?:^|\s+)(?:tickets?|tix|seats?)$/i, '').replace(stop, '').trim();
   const b = m[2]!.replace(stop, '').trim();
   return a && b ? `${a} vs ${b}` : null;
 }
@@ -230,6 +234,76 @@ export function readDate(t: string, receivedAt: Date, venueTimeZone: string | nu
   return { dateExpression, resolvedLocalDate, ambiguities };
 }
 
+/**
+ * When they must decide by (audit gap 12: "By when do you need to decide?" was asked and the answer never read). Said
+ * with a decision ("I need to decide by Friday", "have to book before the 20th") or as the whole reply ("By tomorrow.").
+ * "A game before the 20th" names the game's dates, not a deadline, and stays the date reader's.
+ */
+const DEADLINE_DAY = '(?:end of (?:the )?day|eod|tonight|today|tomorrow(?: night| morning)?|(?:this |next )?(?:sun|mon|tues|wednes|thurs|fri|satur)day|the \\d{1,2}(?:st|nd|rd|th)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.? \\d{1,2}(?:st|nd|rd|th)?)';
+// No event word between the verb and the day: "buy tickets for a game before the 20th" is about the game.
+const DEADLINE_SAID = new RegExp(`\\b(?:decide|decision|choose|buy|book|purchase|commit|let (?:me|us) know|answer|lock (?:it|them|something) in)\\b(?:(?!\\b(?:games?|shows?|concerts?|match(?:es)?|gigs?|events?|nights?|performances?)\\b)[^.?!\\n]){0,40}?\\b((by|before|until|no later than)\\s+(${DEADLINE_DAY}))\\b`, 'i');
+const DEADLINE_REPLY = new RegExp(`^\\s*(?:(?:i|we) (?:need|have) to (?:decide|know)\\s+)?((by|before|until|no later than)\\s+(${DEADLINE_DAY}))\\b[\\s,.!]*(?:please|thanks|thank you)?[\\s.!]*$`, 'i');
+const DEADLINE_WEEKDAYS = ['sun', 'mon', 'tues', 'wednes', 'thurs', 'fri', 'satur'];
+
+function deadlineDay(phrase: string, receivedAt: Date, timeZone: string): string | null {
+  const p = phrase.toLowerCase().trim();
+  const now = localDateParts(receivedAt, timeZone);
+  const plus = (n: number) => {
+    const d = new Date(Date.UTC(now.y, now.m - 1, now.d + n));
+    return toIsoDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  };
+  if (/^(?:end of (?:the )?day|eod|tonight|today)$/.test(p)) return plus(0);
+  if (/^tomorrow/.test(p)) return plus(1);
+  const wd = /^(this |next )?(sun|mon|tues|wednes|thurs|fri|satur)day$/.exec(p);
+  if (wd) {
+    // "By Friday" said on a Friday is today; "next Friday" is read as resolveRelativeDate reads it.
+    let delta = (DEADLINE_WEEKDAYS.indexOf(wd[2]!) - new Date(Date.UTC(now.y, now.m - 1, now.d)).getUTCDay() + 7) % 7;
+    if (wd[1] === 'next ') delta = delta === 0 ? 7 : delta + 7;
+    return plus(delta);
+  }
+  const nth = /^the (\d{1,2})(?:st|nd|rd|th)$/.exec(p);
+  if (nth) {
+    // "Before the 20th": this month's when it is still to come, else next month's.
+    const n = Number(nth[1]);
+    const [y, m] = n >= now.d ? [now.y, now.m] : now.m === 12 ? [now.y + 1, 1] : [now.y, now.m + 1];
+    return n >= 1 && n <= new Date(Date.UTC(y, m, 0)).getUTCDate() ? toIsoDate(y, m, n) : null;
+  }
+  return resolveMonthDay(p, receivedAt);
+}
+
+export function readDeadline(t: string, receivedAt: Date, timeZone: string): { at: string; quote: string } | null {
+  const m = DEADLINE_SAID.exec(t) ?? DEADLINE_REPLY.exec(t);
+  if (!m) return null;
+  const day = deadlineDay(m[3]!, receivedAt, timeZone);
+  if (!day) return null;
+  // "By" a day is the end of it; "before" a day is the end of the day before.
+  const [y, mo, d] = day.split('-').map(Number) as [number, number, number];
+  const last = /^before$/i.test(m[2]!) ? new Date(Date.UTC(y, mo - 1, d - 1)) : new Date(Date.UTC(y, mo - 1, d));
+  const at = deadlineInstant(toIsoDate(last.getUTCFullYear(), last.getUTCMonth() + 1, last.getUTCDate()), '23:59', timeZone);
+  return at.getTime() > receivedAt.getTime() ? { at: at.toISOString(), quote: m[1]! } : null;
+}
+
+/** The message without its decision deadline, so "decide by Friday" is never read as a Friday game. */
+export function withoutDeadline(t: string, receivedAt: Date, timeZone: string): string {
+  const d = readDeadline(t, receivedAt, timeZone);
+  return d ? t.replace(d.quote, ' ') : t;
+}
+
+/**
+ * The model's decisionDeadline as an instant: a date alone is the end of that day, and a time with no offset is the
+ * venue's clock (America/New_York when the venue is unknown). Anything unreadable is no deadline, never a failed request.
+ */
+export function deadlineInstantFrom(value: string | null, timeZone: string): string | null {
+  const v = value?.trim();
+  if (!v) return null;
+  const day = /^(\d{4}-\d{2}-\d{2})$/.exec(v);
+  if (day) return deadlineInstant(day[1]!, '23:59', timeZone).toISOString();
+  const local = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(v);
+  if (local) return deadlineInstant(local[1]!, local[2]!, timeZone).toISOString();
+  const at = new Date(v.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+}
+
 export class FixtureExtractor implements Extractor {
   readonly name = 'fixture';
   async extract(input: ExtractionInput): Promise<RequestExtraction> {
@@ -258,6 +332,14 @@ export class FixtureExtractor implements Extractor {
     if (quoted?.quote) ev('quotedPriceCents', quoted.quote);
     ev('budgetCents', budget.quote);
     if (budget.cents !== null && budget.basis === null) ambiguities.push('budget_basis_unknown');
+    // Fees in or out, said beside their budget ("$400 before fees", "$300 all-in"), or as the whole reply to the basis
+    // question ("before fees"); never from a price they saw ("$106 with fees, good deal?") (audit gap 10).
+    const budgetAt = budget.quote ? t.indexOf(budget.quote) : -1;
+    const feeWords = budgetAt >= 0 ? lexiconFeeBasis(t.slice(Math.max(0, budgetAt - 25), budgetAt + budget.quote!.length + 30)) : !/\$\s?\d/.test(t) && t.trim().split(/\s+/).length <= 6 ? lexiconFeeBasis(t) : null;
+    ev('budgetFeeBasis', feeWords?.quote ?? null);
+    // What "best" means to them: the answer to "the best view or the best value?" (audit gap 28).
+    const goal = lexiconRankingGoal(t);
+    ev('rankingGoal', goal?.quote ?? null);
     // "A few" or "some" tickets is a real doubt about the number, so it is asked rather than assumed to be two.
     if (lexiconVagueQuantity(t) || quantityIsOpenChoice(t)) ambiguities.push('quantity_unclear');
 
@@ -272,7 +354,11 @@ export class FixtureExtractor implements Extractor {
     const ent = findEntity(t, input.knownEntities.filter((e) => !negated.includes(e.name)));
     ev('performerOrTeam', ent?.quote ?? null);
 
-    const date = readDate(t, input.receivedAt, input.venueTimeZone);
+    const deadlineZone = input.venueTimeZone ?? 'America/New_York';
+    const deadline = readDeadline(t, input.receivedAt, deadlineZone);
+    ev('decisionDeadline', deadline?.quote ?? null);
+    // "I need to decide by Friday" is not a Friday game.
+    const date = readDate(deadline ? t.replace(deadline.quote, ' ') : t, input.receivedAt, input.venueTimeZone);
     const dateExpression = date.dateExpression;
     ev('dateExpression', dateExpression);
     const resolvedLocalDate = date.resolvedLocalDate;
@@ -351,7 +437,9 @@ export class FixtureExtractor implements Extractor {
     // A genre they rule out is not the one they want: "country or Americana, not rock or pop" is country (Research 1).
     const genre = ent ? null : lexiconGenre(t.replace(/\b(?:not|no|nor|never|rather than|instead of|except|other than)\s+(?:any\s+|more\s+)?[a-z&/ -]{1,40}?(?=[,.;:!?]|\s+(?:but|please|thanks|and i|i want|i'?d)\b|$)/gi, ' '));
     if (genre) ev('genreHint', genre.quote);
-    const categoryHint = categoryHintFrom(t) ?? (genre ? 'concert' : null);
+    // "The same game", "that show": the event already settled, not a kind of event to browse (audit gap 43: "same game"
+    // relabelled a follow-up as a browse).
+    const categoryHint = categoryHintFrom(t.replace(/\b(?:same|that|this)\s+(?:game|show|concert|match|gig|event|night)\b/gi, ' ')) ?? (genre ? 'concert' : null);
     // "What's on" with nothing specific named is a browse: answer with options instead of asking which event.
     if (intent === 'new_search' && !ent && (BROWSE_ASK_TEST(t) || categoryHint)) intent = 'browse';
 
@@ -375,7 +463,7 @@ export class FixtureExtractor implements Extractor {
       ambiguities,
       mustAttend,
       waitRiskTolerance: risk,
-      decisionDeadline: null,
+      decisionDeadline: deadline?.at ?? null,
       splitGroupAllowed: together === false ? true : null,
       forSelf,
       negatedEntities: negated,
@@ -387,6 +475,8 @@ export class FixtureExtractor implements Extractor {
       notifyAsked: notify ? true : null,
       quotedPriceCents: quoted?.cents ?? null,
       quotedPriceBasis: quoted?.basis ?? null,
+      budgetFeeBasis: feeWords?.value ?? null,
+      rankingGoal: goal?.value ?? null,
     });
   }
 }

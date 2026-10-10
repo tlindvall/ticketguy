@@ -126,9 +126,39 @@ export function findAlternatives(listings: MarketListing[], subject: { perTicket
  * allowance and says so. Not verified offers: no link, no check they're still there.
  */
 export type ListingPick = { listing: MarketListing; listedTotalCents: number; estimatedTotalCents: number; exactSplit: boolean };
-/** range: the cheapest and dearest listed price a ticket, before fees, across every listing with enough tickets for them. */
-export type ListingPicks = { picks: ListingPick[]; fits: boolean; budgetTotalCents: number | null; feeAllowancePct: number; comparable: number; cheaperUnsplit: ListingPick | null; range?: { lowCents: number; highCents: number; count: number } };
-export function pickListings(listings: MarketListing[], quantity: number, budgetTotalCents: number | null, feeAllowancePct: number, max = 3): ListingPicks | null {
+/**
+ * range: the cheapest and dearest listed price a ticket, before fees, across every listing with enough tickets for them.
+ * goal: what "best" meant to them; rankedBy: the order the picks are actually in ('view' only when the listings said
+ * where their seats are). budgetFeeBasis 'before_fees': the budget was held against listed totals, not the estimate.
+ */
+export type ListingPicks = { picks: ListingPick[]; fits: boolean; budgetTotalCents: number | null; feeAllowancePct: number; comparable: number; cheaperUnsplit: ListingPick | null; range?: { lowCents: number; highCents: number; count: number }; goal?: 'view' | 'value' | 'price' | null; rankedBy?: 'view' | 'value' | 'price'; budgetFeeBasis?: 'all_in' | 'before_fees' | null };
+
+/**
+ * How close a listing's seats are, from the words the feed gives for its zone and section and its section number: 0 for
+ * a named premium or lower area ("Courtside", "Club", "Lower Level", sections 100 to 199), 1 for the middle ("Mezzanine",
+ * "Loge", the 200s), 2 for the top ("Upper", "Balcony", the 300s and up). Null when the feed says nothing we can place:
+ * a view is never guessed from a price. "Floor" is left unplaced: standing room on a concert floor is close, not a view.
+ */
+export function viewTier(l: MarketListing): number | null {
+  const words = `${l.zone ?? ''} ${l.section ?? ''}`.toLowerCase();
+  if (/\b(?:upper|balcony|nosebleeds?|promenade|family circle|grandstand|bleachers|[3-5]00s?(?: level)?)\b/.test(words)) return 2;
+  if (/\b(?:mezzanine|mezz|loge|middle|mid[- ]?level|dress circle|200s?(?: level)?)\b/.test(words)) return 1;
+  if (/\b(?:courtside|rinkside|ice level|field level|club|premium|vip|orchestra|lower(?: level| bowl| tier)?|plaza|100s?(?: level)?)\b/.test(words)) return 0;
+  const n = /^\s*(?:sec(?:tion)?\.?\s*)?(\d{3})\b/i.exec(l.section ?? '');
+  if (!n) return null;
+  const hundreds = Number(n[1]![0]);
+  return hundreds === 1 ? 0 : hundreds === 2 ? 1 : hundreds >= 3 ? 2 : null;
+}
+
+/** A row as a number, nearest first: "3" is 3, "C" is 3, "AA" is 27. Null when the feed gives none we can read. */
+function rowRank(row: string | null): number | null {
+  const r = (row ?? '').trim().toUpperCase();
+  if (/^\d{1,3}$/.test(r)) return Number(r);
+  if (/^([A-Z])\1?$/.test(r)) return (r.length - 1) * 26 + (r.charCodeAt(0) - 64);
+  return null;
+}
+
+export function pickListings(listings: MarketListing[], quantity: number, budgetTotalCents: number | null, feeAllowancePct: number, max = 3, opts: { goal?: 'view' | 'value' | 'price' | null; budgetFeeBasis?: 'all_in' | 'before_fees' | null } = {}): ListingPicks | null {
   const q = Math.max(1, Math.floor(quantity));
   const all = listings
     .filter((l) => l.quantity >= q)
@@ -143,14 +173,31 @@ export function pickListings(listings: MarketListing[], quantity: number, budget
   const sellable = all.some((p) => p.exactSplit) ? all.filter((p) => p.exactSplit) : all;
   const prices = sellable.map((p) => p.listing.priceCents);
   const range = { lowCents: Math.min(...prices), highCents: Math.max(...prices), count: sellable.length };
-  const within = budgetTotalCents === null ? all : all.filter((p) => p.estimatedTotalCents <= budgetTotalCents);
+  // A budget they gave before fees is held against the listed total; all-in (or unsaid) against the fee estimate, which is
+  // what checkout would come to (audit gap 10).
+  const beforeFees = opts.budgetFeeBasis === 'before_fees';
+  const within = budgetTotalCents === null ? all : all.filter((p) => (beforeFees ? p.listedTotalCents : p.estimatedTotalCents) <= budgetTotalCents);
   const byPrice = (xs: ListingPick[]) => [...xs].sort((a, b) => a.listing.priceCents - b.listing.priceCents || Number(b.exactSplit) - Number(a.exactSplit));
   // Distinct seats: the same section and row at the same price is one choice, however many listings carry it.
   const distinct = (xs: ListingPick[]) => [...new Map(xs.map((p) => [`${p.listing.section ?? ''}|${p.listing.row ?? ''}|${p.listing.priceCents}`, p])).values()];
+  const goal = opts.goal ?? null;
+  const told = { goal, budgetFeeBasis: opts.budgetFeeBasis ?? null };
   if (within.length) {
-    const picks = distinct(byPrice(within.filter((p) => p.exactSplit).length ? within.filter((p) => p.exactSplit) : within)).slice(0, max);
+    const sellable = within.filter((p) => p.exactSplit).length ? within.filter((p) => p.exactSplit) : within;
+    // "Cheapest is fine": the lowest price that seats them, a block that may leave the seller one ticket included (its
+    // card says to check it sells as their number).
+    if (goal === 'price') return { picks: distinct(byPrice(within)).slice(0, max), fits: true, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit: null, range, rankedBy: 'price', ...told };
+    // "Best view": the lowest tier, then the nearest row, then the price, within their budget; only when the listings
+    // say where their seats are. Otherwise the picks are by price, and the email says so (never a better view from data
+    // we don't have).
+    if (goal === 'view' && sellable.some((p) => viewTier(p.listing) !== null)) {
+      const rank = (p: ListingPick) => [viewTier(p.listing) ?? 9, rowRank(p.listing.row) ?? 999, p.listing.priceCents] as const;
+      const byView = [...sellable].sort((a, b) => { const x = rank(a); const y = rank(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; });
+      return { picks: distinct(byView).slice(0, max), fits: true, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit: null, range, rankedBy: 'view', ...told };
+    }
+    const picks = distinct(byPrice(sellable)).slice(0, max);
     const cheaperUnsplit = byPrice(within).find((p) => !p.exactSplit && p.listing.priceCents < picks[0]!.listing.priceCents) ?? null;
-    return { picks, fits: true, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit, range };
+    return { picks, fits: true, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit, range, rankedBy: 'value', ...told };
   }
-  return { picks: distinct(byPrice(all)).slice(0, 1), fits: false, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit: null, range };
+  return { picks: distinct(byPrice(all)).slice(0, 1), fits: false, budgetTotalCents, feeAllowancePct, comparable: all.length, cheaperUnsplit: null, range, rankedBy: 'value', ...told };
 }
