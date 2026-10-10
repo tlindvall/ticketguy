@@ -1446,10 +1446,12 @@ export class Concierge {
     // So is a "best" read as lowest price after the goal question went unanswered, whatever the revision (gap 4).
     if ((revision === 1 || picked || cameFromReferral || altDateNote || bestAskedBefore) && !selfContained && (!answeredUnreviewed || assumptions.length || picked || altDateNote)) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: altDateNote ? [...assumptions, altDateNote] : assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
-    } else if (revision > 1 && !answeredUnreviewed) {
+    } else if (revision > 1 && !answeredUnreviewed && (req.state === 'awaiting_review' || req.state === 'researching')) {
       // A later message while a person reviews the answer: the pending draft was just invalidated and research
       // re-queued, and they heard nothing until the new draft was approved (audit gap 3). One line: what changed,
       // and that the updated answer comes here. Unreviewed, the answer itself follows in seconds, so nothing goes.
+      // Only while an answer was already on its way (researching or a draft in review): a reply to our question
+      // starts the research, and the answer is the next email, as before.
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, updating your answer'), template: 'acknowledgment', vars: { update: revisionNote(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null) }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
