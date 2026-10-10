@@ -155,6 +155,34 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     expect(picked.sends.filter((s) => s.bodyText.includes('Cheapest before Christmas'))).toHaveLength(1);
   });
 
+  // Live, Oct 10: "the emails are not readable. Just a block of text all of a sudden". The ranking had lost the design the
+  // seat brief has. It is the brief's headline and one card per game, every fact the plain line's own.
+  it('the ranking arrives designed: the verdict as the headline, one card per game, the cheapest marked, the banner drawn', async () => {
+    await h.db.insert(t.brandAssets).values({ kind: 'team', key: 'metro-rangers-cg', name: 'Metro Rangers', shortName: 'MRA', league: 'NHL', sport: 'hockey', primaryColor: '#0038A8', secondaryColor: '#CE1126', source: 'team_file', rights: 'approved' }).onConflictDoNothing();
+    try {
+      const r = await ask('What upcoming metro rangers game has the lowest prices. Before christmas. 2 tickets', 'designed@customer.example', { APP_URL: 'https://ticketguy.example' });
+      const html = r.sends[0]!.bodyHtml;
+      expect(html).toMatch(/<h1[^>]*>Cheapest before Christmas: the Ottawa Senators game on Tue, Nov 3\.<\/h1><p[^>]*>Lowest listed prices for two, a ticket before fees:<\/p>/);
+      // One card per game in the plain text's order, each with its kind and date, its arena and its price.
+      const cards = html.split('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e0e4e4').slice(1);
+      expect(cards).toHaveLength(4);
+      expect(cards[0]).toMatch(/NHL · Tue, Nov 3<\/div><h3[^>]*><a href="https:\/\/www\.ticketmaster\.com\/x\/event\/TMCG9101"[^>]*>Metro Rangers vs\. Ottawa Senators<\/a><\/h3><p[^>]*>Garden Arena<\/p><div[^>]*>From \$74<\/div>/);
+      expect(cards[3]).toMatch(/NHL · Sun, Oct 11<\/div>[^]*From \$120/);
+      // The badge is a fact from the ranking: on the cheapest game only.
+      expect(cards[0]).toContain('Lowest listed price');
+      expect(cards.slice(1).join('')).not.toContain('Lowest listed price');
+      // The banner of the team, drawn by this app at an absolute https URL, on each card.
+      expect(cards[0]).toContain('<img src="https://ticketguy.example/brief-art/v1/hockey/metro-rangers-cg/_.jpg"');
+      expect(cards.every((c) => c.includes('/brief-art/v1/hockey/metro-rangers-cg/'))).toBe(true);
+      // The event page is the card's button; the plain text is the list it always was.
+      expect(cards[0]).toMatch(/<a href="https:\/\/www\.ticketmaster\.com\/x\/event\/TMCG9101"[^>]*>Event page&nbsp;↗<\/a>/);
+      expect(r.sends[0]!.bodyText).toContain('• Tue, Nov 3: Metro Rangers vs. Ottawa Senators at Garden Arena, from $74.');
+      expect(r.sends[0]!.bodyText).not.toMatch(/brief-art|Lowest listed price\b/);
+    } finally {
+      await h.db.delete(t.brandAssets).where(eq(t.brandAssets.key, 'metro-rangers-cg'));
+    }
+  });
+
   it('the daily allowance stops the refreshing, and the games left unpriced are said, never guessed', async () => {
     // Fresh prices from the first test are reused; only the Boston game, untracked again, is unpriced, and the allowance
     // (one call a day here, against the four already spent) is gone: it is enrolled, never read.

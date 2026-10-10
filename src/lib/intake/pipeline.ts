@@ -28,7 +28,7 @@ import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { correctToKnown } from '@/lib/domain/name-correction';
 import { ROSTER_NAMES, rosterTeam } from '@/lib/domain/team-names';
-import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
+import { SPORT_CATEGORIES, categoryLabel, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
 import { type CategoryHint, areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, prominenceTier, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
@@ -72,7 +72,7 @@ import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-st
 import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
 import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
-import { loadBriefArtwork, sportFor, venueKeys } from '@/lib/brand/assets';
+import { CONCERT_ARTWORK_PATH, loadBriefArtwork, sportFor, venueKeys } from '@/lib/brand/assets';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -222,6 +222,12 @@ export const AUTO_APPROVER = 'system:auto-approve';
  */
 export function autoApproveActive(e: Pick<Env, 'AUTO_APPROVE_WHILE_TESTING' | 'EMAIL_TEST_RECIPIENT_ALLOWLIST' | 'AUTO_SEND_RECOMMENDATIONS'>): boolean {
   return e.AUTO_SEND_RECOMMENDATIONS || (e.AUTO_APPROVE_WHILE_TESTING && e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0);
+}
+
+/** The small label over an event on its card: "NHL", "Concert", "College football". */
+function cardCategory(e: { category: string; classification: { genre?: string | null } | null }): string {
+  const sport = sportFor(e.category, e.classification?.genre ?? null);
+  return e.category.startsWith('ncaa') && sport ? `College ${sport}` : categoryLabel(e.category);
 }
 
 export class Concierge {
@@ -1470,10 +1476,11 @@ export class Concierge {
     }
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
+      const artworkUrl = await this.bannerFor(resolution.event, resolution.venue);
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1, category: cardCategory(resolution.event), artworkUrl },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -1588,12 +1595,14 @@ export class Concierge {
    * The picks as the email shows them: the line, why it fits, and at most two links — something to listen
    * to or explore, and the event's own ticket page (affiliate-wrapped after the picks were chosen).
    */
-  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect }>, lines: string[], notes: Array<string | null> = []): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean }>> {
+  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, lines: string[], notes: Array<string | null> = []): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean; artworkUrl: string | null; category: string }>> {
     if (!shown.length) return [];
     const ids = shown.map(({ e }) => e.id);
     const maps = await this.db.select({ eventId: t.eventSourceMappings.eventId, url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(inArray(t.eventSourceMappings.eventId, ids), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
-    const entityIds = shown.map(({ e }) => e.primaryEntityId).filter((x): x is string => !!x);
-    const ents = entityIds.length ? await this.db.select({ id: t.entities.id, links: t.entities.links, kind: t.entities.kind }).from(t.entities).where(inArray(t.entities.id, entityIds)) : [];
+    const entityIds = [...new Set(shown.flatMap(({ e }) => [e.primaryEntityId, e.opponentEntityId]).filter((x): x is string => !!x))];
+    const ents = entityIds.length ? await this.db.select({ id: t.entities.id, links: t.entities.links, kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(inArray(t.entities.id, entityIds)) : [];
+    // Our generic concert art would be the same picture on every card, so a list goes without it.
+    const art = await Promise.all(shown.map(({ e, v }) => this.bannerFor(e, v, ents, { generic: false })));
     return shown.map(({ e }, i) => {
       const url = maps.find((m) => m.eventId === e.id)?.url ?? null;
       const seller = officialSellerFor(url);
@@ -1602,8 +1611,21 @@ export class Concierge {
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
       // An event page, not a checked offer: neutral label everywhere (launch A22).
       const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Event page', url: tickets.url }] : [])];
-      return { line: lines[i]!, title: readableTitle(e.name), reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate };
+      return { line: lines[i]!, title: readableTitle(e.name), reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate, artworkUrl: art[i] ?? null, category: cardCategory(e) };
     });
+  }
+
+  /**
+   * An event's banner as the brief draws it (both teams for a game, the show's own image, our concert art), as an
+   * absolute URL. Decoration, so a failed lookup is no banner, never a held reply.
+   */
+  private async bannerFor(e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect, loaded: Array<{ id: string; kind: string; slug: string; name: string }> | null = null, opts: { generic?: boolean } = {}): Promise<string | null> {
+    const ids = [e.primaryEntityId, e.opponentEntityId].filter((x): x is string => !!x);
+    const ents = loaded ?? (ids.length ? await this.db.select({ id: t.entities.id, kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(inArray(t.entities.id, ids)) : []);
+    const side = (id: string | null) => { const x = id ? ents.find((n) => n.id === id) : undefined; return x ? { kind: x.kind, slug: x.slug, name: x.name } : null; };
+    const path = await loadBriefArtwork(this.db, { category: e.category, genre: e.classification?.genre ?? null, primary: side(e.primaryEntityId), opponent: side(e.opponentEntityId), venueKeys: venueKeys(v.externalIds) }).catch(() => null);
+    if (!path || (opts.generic === false && path === CONCERT_ARTWORK_PATH)) return null;
+    return path.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${path}` : path;
   }
 
   private async runExtractor(input: Parameters<Extractor['extract']>[0], req: { id: string; currentRevision: number }): Promise<RequestExtraction> {

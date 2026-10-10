@@ -1408,3 +1408,26 @@ It is stored with its zone and compared with each offer's promised transfer, and
 
 **Not verified live.** Every journey runs on fixtures and a scripted reader; the production model (gpt-6.1-sol) has not read a typed listing or a screenshot in this form.
 
+
+## 76. Every answer carries the ticket brief's design; questions and notes stay plain (Oct 10)
+
+Live, Oct 10: "the emails are not readable. Just a block of text all of a sudden", then "I believe all the email template designs aren't showing since we changed the logic." That was right. The brief's design (#69, design package 2026-10-06) was drawn only when the reply named seats (C_PICKS or C_BEST carrying a brief). The routes added since then all sent plain paragraphs: the ranked games (#74), the sports browse, a verdict on the customer's listing, buy-or-wait, hold-off, and a general sale.
+
+**Decision.** An email that answers gets the design. An email that asks or acknowledges stays a short personal note.
+- **Lists** (ranked games, browse picks): the first sentence of the answer is the headline. Each game or show gets its own card with:
+  - its kind and date;
+  - the name, linked to the event page;
+  - the venue;
+  - the price when the line carries one ("From $74" with its basis beside it);
+  - why it fits;
+  - the event page as a button.
+
+  In a ranking by price, the cheapest card is marked "Lowest listed price". The mark appears only when its price is on the line. Each card is read from the plain-text line, so the two never disagree.
+- **Answers about one event** (verdict, buy-or-wait, hold-off, market read): the first sentence of the answer is the headline, then the event on the brief's card (kind, name, where, when, party). The plain text keeps the event line first, as before.
+- **General sale:** headline ("Big Thief is still on general sale on Ticketmaster."), then the event card with the event page as its button. A send queued before this change keeps the body it was written with.
+- **Banners:** the same artwork rules as the brief. Both teams' colours for a game, or the show's own image; https only. A list leaves out our generic concert art, because it would be the same picture on every card.
+- **Not designed, on purpose:** clarifications, acknowledgements, holding notes, follow-ups, off-topic and unsupported replies, and watch alerts. A one-question email inside a card reads like a form. Watch alerts were never designed and are unchanged.
+
+**Reverses:** the Oct 3 personal-email rule "no cards or buttons" for list emails (tests/unit/email-links.test.ts). The owner asked for the design back on the new logic.
+
+**Verified:** the unit and acceptance tests named in the PR, and Playwright renders at 420px using the app's own banner renderer. **Not verified live:** no real inbox has rendered these. Outlook desktop and dark-mode clients were not checked.

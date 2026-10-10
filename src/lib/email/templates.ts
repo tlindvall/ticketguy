@@ -2,6 +2,7 @@ import { isSlotName, renderAuthored, type SlotName, type TemplateOverrides, type
 import { renderSignature, type BrandSignature, type SignatureKind } from './signature';
 import { AFFILIATE_DISCLOSURE } from './links';
 import { noDashes } from './punctuation';
+import { briefHeadline, briefHeadlineHtml, eventCard, firstSentence, listCard } from './ticket-brief';
 
 /**
  * Bounded email templates (API_AND_DATA_CONTRACTS §6). Text + HTML, escaped user text, no invented availability.
@@ -47,7 +48,7 @@ const block = (text: string) => {
   return `<p style="margin:0 0 8px;">${esc(head!)}</p><ul style="margin:0 0 ${tail.length ? 8 : 18}px;padding-left:20px;">${items.map((l) => `<li style="margin:0 0 4px;">${esc(l.slice(2))}</li>`).join('')}</ul>${tail.length ? para(tail.join(' ')) : ''}`;
 };
 
-type Pick = { line: string; title: string; reason: string; eventUrl: string | null; links: Array<{ label: string; url: string }> };
+type Pick = { line: string; title: string; reason: string; eventUrl: string | null; links: Array<{ label: string; url: string }>; artworkUrl?: string | null; category?: string | null };
 
 /** An inline link, the way a person writes one in an email: underlined text, no buttons or boxes. */
 function link(label: string, url: string, bold = false): string {
@@ -55,17 +56,19 @@ function link(label: string, url: string, bold = false): string {
 }
 
 /**
- * One pick as a line of an ordinary list: the date, the title linked to its event page, the venue, a few words
- * on why, then its links inline ("Listen · Tickets").
+ * A pick as the brief's card (Oct 10: the list emails had lost the design the seat brief has): read from the line the
+ * plain text says ("Tue, Nov 3: Rangers vs. Ottawa Senators at Garden Arena, from $74"), so the two never disagree.
  */
-function pickHtml(p: Pick): string {
+function pickCard(p: Pick, badge: string | null = null): string {
   const [when, ...rest] = p.line.split(': ');
   const after = rest.join(': ');
   const i = after.indexOf(p.title);
-  const titled = i >= 0 ? `${esc(after.slice(0, i))}${p.eventUrl ? link(p.title, p.eventUrl, true) : `<strong>${esc(p.title)}</strong>`}${esc(after.slice(i + p.title.length))}` : esc(after);
-  const links = p.links.map((l) => link(l.label, l.url)).join(' · ');
-  // The date and start time are what a schedule question turns on, so they carry the emphasis (TGQA-R8 writing review 3).
-  return `<li style="margin:0 0 10px;"><strong>${esc(when ?? '')}</strong>: ${titled}.${p.reason ? ` ${esc(p.reason)}` : ''}${links ? ` ${links}` : ''}</li>`;
+  const tail = i >= 0 ? after.slice(i + p.title.length) : '';
+  const m = /^\s*at\s+(.+?)(?:,\s*from\s+(\$[\d,.]+)(.*))?\.?$/.exec(tail);
+  const where = m ? m[1]!.trim() : null;
+  const price = m?.[2] ? `From ${m[2]}` : null;
+  const note = m?.[3]?.trim().replace(/\.$/, '') || null;
+  return listCard({ when: when ?? '', title: i >= 0 ? p.title : after, url: p.eventUrl, where, price, priceNote: note, reason: p.reason || null, links: p.links, badge: price ? badge : null, artworkUrl: p.artworkUrl ?? null, category: p.category ?? null });
 }
 
 /** The Resident Advisor pointer for electronic music: a sentence and a plain link to the city's RA page. */
@@ -192,7 +195,9 @@ function renderBody(
       const end = [...tail, v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
       const ra = vars.ra as Ra | null | undefined;
       const text = [lead[0]!, ...top, ...lead.slice(1), ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...(ra ? [raText(ra)] : []), ...end];
-      const html = [para(lead[0]!), ...(answer ? [`<p style="margin:0 0 18px;"><strong>${esc(answer)}</strong>${corrections ? ` ${esc(corrections)}` : ''}</p>`] : corrections ? [para(corrections)] : []), ...lead.slice(1).map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...(ra ? [raHtml(ra)] : []), ...end.map(para)];
+      // The picks as cards under the headline, the way the seat brief looks (Oct 10); the plain text is unchanged.
+      // A direct answer is the headline when there is one, else the lead line over the picks.
+      const html = [para(lead[0]!), ...(answer ? [briefHeadlineHtml(esc(answer), corrections ? esc(corrections) : '')] : corrections ? [para(corrections)] : []), ...lead.slice(1).map((l, i) => (i === 0 && options.length && !answer ? briefHeadline(l) : para(l))), ...(picks.length ? [picks.map((p) => pickCard(p)).join('')] : []), ...(ra ? [raHtml(ra)] : []), ...end.map(para)];
       return wrap(text, html);
     }
     case 'games_ranked': {
@@ -203,7 +208,8 @@ function renderBody(
       const end = [v.unpriced ? String(v.unpriced) : '', String(v.nextStep ?? ''), v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
       const headline = String(v.headline ?? '');
       const text = ['Hey,', headline, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...end];
-      const html = [para('Hey,'), `<p style="margin:0 0 18px;"><strong>${esc(headline)}</strong></p>`, ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...end.map(para)];
+      // The verdict as the brief's headline and the games as its cards, the cheapest marked (Oct 10: the design was gone).
+      const html = [para('Hey,'), briefHeadline(headline), ...(picks.length ? [picks.map((p, i) => pickCard(p, i === 0 ? 'Lowest listed price' : null)).join('')] : []), ...end.map(para)];
       return wrap(text, html);
     }
     case 'event_alert_set': {
@@ -275,7 +281,16 @@ function renderBody(
       const titleHtml = v.eventUrl ? link(title, String(v.eventUrl)) : esc(title);
       const leadHtml = `${titleHtml}${where ? ` (${esc(where)})` : ''}${esc(rest).replace(`on ${esc(seller)}`, `on ${link(seller, String(v.url), true)}`)}`;
       const checks = unverified.length ? [`<p style="margin:0 0 8px;font-weight:600;">${esc(checkLead)}</p>`, `<ul style="margin:0 0 18px;padding-left:22px;">${unverified.map((u) => `<li style="margin:0 0 8px;">${esc(u)}</li>`).join('')}</ul>`] : [];
-      const html = [para('Hey,'), ...(recheckLine ? [para(recheckLine)] : []), ...(opening ? [`<p style="margin:0 0 18px;"><strong>${esc(opening.split(/(?<=\.)\s/)[0]!)}</strong>${esc(opening.slice(opening.split(/(?<=\.)\s/)[0]!.length))}</p>`] : []), `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
+      const openingHtml = opening ? [`<p style="margin:0 0 18px;"><strong>${esc(opening.split(/(?<=\.)\s/)[0]!)}</strong>${esc(opening.slice(opening.split(/(?<=\.)\s/)[0]!.length))}</p>`] : [];
+      // The answer as the brief's headline, then the event on its card with the event page as its button (Oct 10: a
+      // general sale was the one answer still sent as plain paragraphs). A send queued before then keeps its old body.
+      if (v.category) {
+        const [first, after] = firstSentence(rest.trim());
+        const head = `${esc(title)} ${esc(first).replace(`on ${esc(seller)}`, `on ${link(seller, String(v.url), true)}`)}`;
+        const card = eventCard({ category: String(v.category), name: title, details: [v.eventWhen ? String(v.eventWhen) : '', v.venueName ? String(v.venueName) : ''].filter(Boolean).join(' · '), artworkUrl: v.artworkUrl ? String(v.artworkUrl) : null, action: { label: `Event page on ${seller}`, url: String(v.url) } });
+        return wrap(text, [para('Hey,'), ...(recheckLine ? [para(recheckLine)] : []), ...openingHtml, briefHeadlineHtml(head, after ? esc(after) : ''), card, ...checks, ...tail.map(para)]);
+      }
+      const html = [para('Hey,'), ...(recheckLine ? [para(recheckLine)] : []), ...openingHtml, `<p style="margin:0 0 18px;">${leadHtml}</p>`, ...checks, ...tail.map(para)];
       return wrap(text, html);
     }
     case 'holding': {

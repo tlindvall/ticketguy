@@ -65,9 +65,13 @@ describe('advice email layout: a same-day game with only a listing count', () =>
     await h.close();
   });
 
-  it('the header is the event in bold, then where, when (tonight) and the party in a lighter line', () => {
+  it('the header is the event, then where, when (tonight) and the party in a lighter line; in the HTML, the brief’s event card', () => {
     expect(rec!.bodyText.startsWith('Hey,\n\nDetroit Red Wings vs. New York Rangers\nLittle Caesars Arena, Detroit · Tonight at 6:30 p.m. · 5 tickets\n\n')).toBe(true);
-    expect(rec!.bodyHtml).toContain('<strong>Detroit Red Wings vs. New York Rangers</strong><br><span style="color:#536174;">Little Caesars Arena, Detroit · Tonight at 6:30 p.m. · 5 tickets</span>');
+    // Oct 10: the design was only on named seats; every answer about an event now carries the brief's card, after the answer.
+    const html = rec!.bodyHtml;
+    expect(html).toMatch(/NHL \/ Your ticket brief<\/div><h2[^>]*>Detroit Red Wings vs\. New York Rangers<\/h2><p[^>]*>Little Caesars Arena, Detroit · Tonight at 6:30 p\.m\. · 5 tickets<\/p>/);
+    expect(html.indexOf('<h1')).toBeLessThan(html.indexOf('Your ticket brief'));
+    expect(html).not.toContain('<strong>Detroit Red Wings vs. New York Rangers</strong>');
     // An event page told us the game, nothing else: the header doesn't say "from the StubHub link you sent".
     expect(rec!.bodyText).not.toContain('link you sent');
   });
@@ -75,7 +79,8 @@ describe('advice email layout: a same-day game with only a listing count', () =>
   it('the official sale is the opening, said once, with its link at the end; no model filler', () => {
     const body = rec!.bodyText;
     expect(body).toContain('5 tickets\n\nIt’s on general sale on Ticketmaster. I can’t see whether it has seats left, but if it does, that’s where I’d buy.\n\nThe resale market when I last checked:');
-    expect(rec!.bodyHtml).toContain('<p style="margin:0 0 18px;"><strong>It’s on general sale on Ticketmaster.</strong> I can’t see whether it has seats left, but if it does, that’s where I’d buy.</p>');
+    // The answer as the brief's headline: its first sentence in large type, the rest under it.
+    expect(rec!.bodyHtml).toMatch(/<h1[^>]*font-size:25px[^>]*>It’s on general sale on Ticketmaster\.<\/h1><p[^>]*>I can’t see whether it has seats left, but if it does, that’s where I’d buy\.<\/p>/);
     expect(body.match(/Ticketmaster/g)).toHaveLength(2);
     expect(body.trim().endsWith('Event page on Ticketmaster: https://www.ticketmaster.com/x/event/TMRW1')).toBe(true);
     expect(body).not.toMatch(/Here’s what I can tell you|place I’d start/);
