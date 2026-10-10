@@ -106,6 +106,11 @@ export const AMBIGUITY_KINDS = [
 export const AmbiguitySchema = z.enum(AMBIGUITY_KINDS);
 export type Ambiguity = (typeof AMBIGUITY_KINDS)[number];
 
+/** An ISO date ("2026-10-16") or date-time, with or without seconds and offset; see decisionDeadline. */
+export const ISO_DEADLINE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+export const RANKING_GOALS = ['view', 'value', 'price'] as const;
+export type RankingGoal = (typeof RANKING_GOALS)[number];
+
 export const RequestExtractionSchema = z
   .object({
     intent: z.enum(['new_search', 'browse', 'clarification', 'watch_request', 'cancel_watch', 'marketing_opt_out', 'delete_data', 'other']),
@@ -133,7 +138,13 @@ export const RequestExtractionSchema = z
     /** Advice-engine preference fields; null when not stated. */
     mustAttend: z.boolean().nullable().default(null),
     waitRiskTolerance: z.enum(['low', 'medium', 'high']).nullable().default(null),
-    decisionDeadline: z.string().datetime().nullable().default(null),
+    /**
+     * When they must decide or buy by, as an ISO instant. The model may answer with a date alone or with an offset
+     * (audit gap 12: a date-only answer failed `.datetime()` and was retried until the work failed), so the schema
+     * takes an ISO date or date-time and ModelExtractor turns it into the instant (`deadlineInstantFrom`). Briefs
+     * stored before this kept the `.datetime()` form, which still matches.
+     */
+    decisionDeadline: z.string().regex(ISO_DEADLINE).nullable().default(null),
     splitGroupAllowed: z.boolean().nullable().default(null),
     /** Explicit customer statement about who the tickets are for; null when unknown. */
     forSelf: z.boolean().nullable().default(null),
@@ -153,6 +164,17 @@ export const RequestExtractionSchema = z
     quotedPriceBasis: z.enum(['per_ticket', 'whole_party']).nullable().default(null),
     /** Wants an email when tickets go on sale or a date is announced ("let me know when they go on sale"). Not a price watch. */
     notifyAsked: z.boolean().nullable().default(null),
+    /**
+     * Whether their budget includes fees: "$300 all-in" is the checkout total, "$400 before fees" is held against listed
+     * prices (audit gap 10: both collapsed to a basis question and the fee allowance was applied regardless). Null when
+     * not said. Separate from budgetBasis (each or total).
+     */
+    budgetFeeBasis: z.enum(['all_in', 'before_fees']).nullable().default(null),
+    /**
+     * What "best" means to them, which orders the seats we name (audit gap 28): 'view' ("best view", "best seats"),
+     * 'value' ("best value", "bang for the buck"), 'price' ("cheapest is fine"). Null when not said.
+     */
+    rankingGoal: z.enum(RANKING_GOALS).nullable().default(null),
   })
   .strict();
 export type RequestExtraction = z.infer<typeof RequestExtractionSchema>;

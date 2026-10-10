@@ -10,6 +10,8 @@ const SECTIONS: Array<[LexiconEntry['field'][], string]> = [
   [['genreHint'], 'What kind of music'],
   [['quantity', 'quantity_unclear'], 'How many'],
   [['budgetBasis'], 'Budget: each or total'],
+  [['budgetFeeBasis'], 'Budget: fees in or out'],
+  [['rankingGoal'], 'What “best” means'],
   [['togetherRequired'], 'Seats'],
   [['dateExpression'], 'When'],
   [['city'], 'Where'],

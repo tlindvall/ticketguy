@@ -48,7 +48,8 @@ export async function runOutboxBatch(limit: number): Promise<{ processed: number
           await c.dispatchSend(p.sendIntentId!);
           break;
         case 'staff.alert':
-          await c.alertStaff({ requestId: p.requestId!, revision: Number(ev.payload.revision) });
+          // An email that dead-lettered before it was a request is alerted by its inbound event (audit gap 18).
+          await c.alertStaff(p.inboundEventId ? { inboundEventId: p.inboundEventId } : { requestId: p.requestId!, revision: Number(ev.payload.revision) });
           break;
         case 'recommendation.review_ready':
         case 'advice.prepare':

@@ -29,7 +29,8 @@ describe('A21 auto-response detection', () => {
   const svc = ['my@ticketguy.now'];
   it('detects OOO, DSN, list mail, Auto-Submitted and own address', () => {
     expect(detectAutoResponse({ headers: { 'Auto-Submitted': 'auto-replied' }, subject: 'Re: tickets', from: 'a@b.com', serviceAddresses: svc }).autoResponse).toBe(true);
-    expect(detectAutoResponse({ headers: {}, subject: 'Automatic reply: Out of Office', from: 'a@b.com', serviceAddresses: svc }).autoResponse).toBe(true);
+    // An out-of-office subject suppresses alongside the header real auto-replies carry; on its own it is advisory (gap 17).
+    expect(detectAutoResponse({ headers: { 'X-Autoreply': 'yes' }, subject: 'Automatic reply: Out of Office', from: 'a@b.com', serviceAddresses: svc }).autoResponse).toBe(true);
     expect(detectAutoResponse({ headers: { 'content-type': 'multipart/report; report-type=delivery-status' }, subject: 'Undeliverable', from: 'mailer-daemon@x.com', serviceAddresses: svc }).reasons).toEqual(expect.arrayContaining(['delivery_status_notification', 'system_sender']));
     expect(detectAutoResponse({ headers: { 'List-Id': '<list.example.com>' }, subject: 'Newsletter', from: 'news@x.com', serviceAddresses: svc }).autoResponse).toBe(true);
     expect(detectAutoResponse({ headers: {}, subject: 'hi', from: 'MY@ticketguy.now', serviceAddresses: svc }).reasons).toContain('own_address');
@@ -131,6 +132,8 @@ const baseExtraction: RequestExtraction = {
       notifyAsked: null,
       quotedPriceCents: null,
       quotedPriceBasis: null,
+      budgetFeeBasis: null,
+      rankingGoal: null,
 };
 
 describe('A28/A29 interests', () => {

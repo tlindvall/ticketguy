@@ -213,7 +213,14 @@ function stripHtml(html: string): string {
   // "When: Thu, Oct 1" line from us became their date. Gmail, Apple Mail and Outlook all mark where it starts.
   const cut = html.search(/<div[^>]*class="[^"]*gmail_quote|<blockquote|<div[^>]*id="(?:appendonsend|divRplyFwdMsg)"/i);
   if (cut > 0) html = html.slice(0, cut);
-  return html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  const entities = (x: string) => x.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  // A link that lives only in an href ("<a href=https://www.stubhub.com/...>these seats</a>") vanished with the tag,
+  // and the reply asked for the link they had sent (audit 2026-10-10 gap 19). The targets are appended as text, web
+  // links only, each once, at most ten, and only when the visible text doesn't already carry them.
+  const hrefs = [...html.matchAll(/<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)].map((m) => entities((m[1] ?? m[2] ?? m[3] ?? '').trim())).filter((u) => /^https?:\/\/[^\s<>"]+$/i.test(u));
+  const text = entities(html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, ''));
+  const extra = [...new Set(hrefs)].filter((u) => !text.includes(u)).slice(0, 10);
+  return extra.length ? `${text}\n\n${extra.join('\n')}` : text;
 }
 
 /** "Tobias Lindvall" from "Tobias Lindvall <t@example.com>"; null when there is no display name. */

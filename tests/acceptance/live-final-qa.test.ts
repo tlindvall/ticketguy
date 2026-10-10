@@ -133,9 +133,11 @@ describe('final real-email QA replays', () => {
     expect(second!.text).toContain('Over your $750 budget by $30.');
   });
 
-  it('LIVE-07: "the best tickets" is asked which kind of best, beside the event and party', async () => {
+  it('LIVE-07: "the best tickets" with nothing on file: the event and party are the one question, the goal waits for the event', async () => {
     const [first] = await converse(['Can you find me the best tickets for Dua Lipa?']);
-    expect(first!.text).toContain('Are you after the best view, the best value, or the lowest price?');
-    expect(first!.text).toMatch(/date and venue|How many tickets/);
+    // One compact question (audit gap 14): which event decides everything else, so the kind of best is asked once there
+    // is an event to rank seats for, never stacked beside it.
+    expect(first!.text).toMatch(/date and venue are you looking at, and how many tickets\?/);
+    expect(first!.text).not.toContain('best view');
   });
 });

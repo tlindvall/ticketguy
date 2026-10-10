@@ -151,7 +151,9 @@ describe('Oct 2 concert QA, replayed exactly', () => {
 
   it('HF-C-01: the exact Metallica thread never offers a noon show, and keeps two together and $1,000', async () => {
     const [t1, t2, t3] = await converse(MET);
-    expect(t1!.text).toContain('Are you after the best view, the best value, or the lowest price?');
+    // An act, no count and no date (Oct 9): the goal and the party are the one question, not a menu of dates.
+    expect(t1!.text).toContain('Are you after the best view or the best value, and how many tickets?');
+    expect(t1!.text).not.toMatch(/Which show|How many tickets do you need/);
     const second = t2!.all.join('\n');
     expect(second).not.toMatch(/12pm|12:00 ?PM|Which show|2-Day|Cannot Split/i);
     // "$1,000 for both" is a thousand dollars for the pair, not $1 (the rules reader read the comma as a decimal point).
@@ -171,7 +173,9 @@ describe('Oct 2 concert QA, replayed exactly', () => {
 
   it('HF-C-02/03: a read that ran the rows together keeps the floor part, and the typed price fills it in', async () => {
     const [m1, m2] = await converse(JIG, { reader: new MergedReader(), imageOn: 0 });
-    expect(m1!.text).toContain('in section General Admission Floor, on Ticketmaster');
+    // The rows ran together and no price was read: the one question that unlocks it, and nothing else (Oct 10, B6c).
+    expect(m1!.text).toContain('I can see the section, but the total is cut off. Send the final price for both, including fees, and I’ll compare it.');
+    expect(m1!.text).not.toMatch(/resale market when I last checked|Worth checking before you buy|My read:/);
     for (const t of [m1!.text, m2!.text]) expect(t).not.toMatch(/seat numbers|seats are together|Balcony; General Admission Floor|Accessible seating information|\.\./);
     expect(m2!.text).toContain('The screenshot you sent shows $107.33 a ticket including fees on Ticketmaster.');
     expect(m2!.text).not.toMatch(/taken that as per ticket|price per ticket, or for all/);
@@ -241,7 +245,7 @@ describe('jigitz with the live market: the row, the party total, then the contex
     const sub = subject("It's standing room — we just want two floor tickets. The screenshot says $107.33 each including fees before taxes. Would you buy those or wait until later today?", 10733);
     expect(sub.chosenFor).toBe('floor');
     const text = body(args(sub, { trendAsked: { noAlerts: false, riskOk: false } }));
-    expect(text.split('\n\n')[2]).toBe('If $214.66 for two (with fees and before taxes) works for you and the floor is what you want, I’d buy rather than wait. I don’t have a supported price trend for two floor tickets at this show, so I can’t tell you whether prices are rising or falling, and waiting would be a guess. I haven’t collected a comparable price history for it yet. It’s tonight, so waiting also risks the tickets you found going. If the balcony would do, “Balcony: Standing Room Only” at $100.17 a ticket on the same page is $14.32 less for two.');
+    expect(text.split('\n\n')[2]).toBe('If $214.66 for two (with fees and before taxes) works for you and the floor is what you want, I’d buy rather than wait. I don’t have a supported price trend for two floor tickets at this show, so I can’t tell you whether prices are rising or falling, and waiting would be a guess. I haven’t collected a comparable price history for it yet: a few days of its prices would show which way they’re moving. It’s tonight, so waiting also risks the tickets you found going. If the balcony would do, “Balcony: Standing Room Only” at $100.17 a ticket on the same page is $14.32 less for two.');
     // Over their cap, the view says so instead.
     const capped = body(args(sub, { trendAsked: { noAlerts: false, riskOk: false }, priorities: { mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, budgetTotalCents: 20000, togetherRequired: null, splitGroupAllowed: null, watchConsentGiven: false } }));
     expect(capped).toContain('At $214.66 for two it’s over your $200, so I wouldn’t buy these as they are.');

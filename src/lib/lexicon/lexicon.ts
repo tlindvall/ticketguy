@@ -23,7 +23,7 @@ export type LexiconCategory = CategoryHint | 'any';
 export type LexiconEntry = {
   id: string;
   /** What the phrase sets. */
-  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'notifyAsked' | 'quotedPriceCents' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'togetherRequired' | 'dateExpression' | 'city';
+  field: 'intent' | 'wantsMore' | 'resaleAsked' | 'notifyAsked' | 'quotedPriceCents' | 'categoryHint' | 'genreHint' | 'quantity' | 'quantity_unclear' | 'budgetBasis' | 'budgetFeeBasis' | 'rankingGoal' | 'togetherRequired' | 'dateExpression' | 'city';
   /** The meaning, in words, for people. */
   meaning: string;
   /** The value it sets (for fields with a fixed value). */
@@ -477,6 +477,89 @@ export const LEXICON: LexiconEntry[] = [
     examples: [{ text: 'Two tickets for the Rangers on Oct 3, $300 total.', expect: { budgetBasis: 'whole_party', budgetCents: 30000 } }],
   },
 
+  // ── Budget: fees in or out ───────────────────────────────────────────────────────────────────────────
+  // Audit gap 10: "$400 before fees" and "$300 all-in" were both read as a bare amount, and the seats we named were
+  // held to a fee estimate either way. Read beside their budget only: "$106 with fees, good deal?" is a price they saw.
+  {
+    id: 'budget.before_fees',
+    field: 'budgetFeeBasis',
+    value: 'before_fees',
+    meaning: 'Their budget leaves fees out: it is held against listed prices, with no fee estimate added.',
+    phrases: ['$400 before fees', 'plus fees', 'not including fees', 'excluding fees', 'fees extra'],
+    pattern: /(?:\bbefore (?:the )?fees|\bplus fees|\+\s?fees|\b(?:not including|not incl\.?|excluding|excl\.?|without) (?:the )?fees|\bfees? (?:are )?(?:extra|on top))\b/i,
+    categories: ['any'],
+    requestTypes: ['find', 'change'],
+    teachModel: true,
+    examples: [
+      { text: 'Knicks on Oct 24, 2 tickets, $400 before fees.', expect: { budgetFeeBasis: 'before_fees', budgetCents: 40000 } },
+      { text: 'before fees', expect: { budgetFeeBasis: 'before_fees' } },
+    ],
+  },
+  {
+    id: 'budget.all_in',
+    field: 'budgetFeeBasis',
+    value: 'all_in',
+    meaning: 'Their budget includes fees: it is the checkout total, held against listed prices plus the fee estimate.',
+    phrases: ['$300 all-in', 'including fees', 'fees included', 'with fees', 'out the door'],
+    pattern: /\b(?:all[- ]in|(?<!not )(?:including|incl\.?|inc\.?|with|after) (?:all |the )?fees|fees? (?:are )?included|out the door)\b/i,
+    categories: ['any'],
+    requestTypes: ['find', 'change'],
+    teachModel: true,
+    examples: [
+      { text: 'Two Rangers tickets on Oct 3, $300 all-in.', expect: { budgetFeeBasis: 'all_in', budgetCents: 30000 } },
+      { text: 'Budget is $250 including fees for 2 Knicks tickets on Oct 24', expect: { budgetFeeBasis: 'all_in', budgetCents: 25000 } },
+    ],
+  },
+
+  // ── What "best" means ────────────────────────────────────────────────────────────────────────────────
+  // Audit gap 28: "best view" (the answer to "Are you after the best view or the best value…?") and "cheapest is fine"
+  // were read by nothing. They order the seats we name (src/lib/market/alternatives.ts pickListings).
+  {
+    id: 'goal.view',
+    field: 'rankingGoal',
+    value: 'view',
+    meaning: 'Best means the view: lower sections and rows first, only when the listings say where the seats are.',
+    phrases: ['best view', 'good view', 'best seats', 'great view'],
+    pattern: /\b(?:best|good|great|better) views?\b|\bbest seats?\b/i,
+    categories: ['any'],
+    requestTypes: ['find', 'change'],
+    teachModel: true,
+    examples: [
+      { text: 'Best view, 2 tickets', expect: { rankingGoal: 'view', quantity: 2 } },
+      { text: 'Two Rangers tickets on Oct 3, we want a good view', expect: { rankingGoal: 'view' } },
+    ],
+  },
+  {
+    id: 'goal.value',
+    field: 'rankingGoal',
+    value: 'value',
+    meaning: 'Best means value: the lowest prices for seats that sell as their number.',
+    phrases: ['best value', 'bang for the buck', 'value for money', 'good value'],
+    pattern: /\b(?:best|good|great|better) value\b|\bbang for (?:the|your|my|our) bucks?\b|\bvalue for (?:the )?money\b/i,
+    categories: ['any'],
+    requestTypes: ['find', 'change'],
+    teachModel: true,
+    examples: [
+      { text: 'best value please', expect: { rankingGoal: 'value' } },
+      { text: 'Knicks on Oct 24, 2 tickets, most bang for the buck', expect: { rankingGoal: 'value' } },
+    ],
+  },
+  {
+    id: 'goal.price',
+    field: 'rankingGoal',
+    value: 'price',
+    meaning: 'Best means the lowest price: the cheapest seats that fit, whatever the view.',
+    phrases: ['cheapest is fine', 'cheapest', 'lowest price', 'best price'],
+    pattern: /\bcheapest\b|\blowest[- ](?:prices?|priced)\b|\bbest price\b/i,
+    categories: ['any'],
+    requestTypes: ['find', 'change'],
+    teachModel: true,
+    examples: [
+      { text: 'Cheapest is fine', expect: { rankingGoal: 'price' } },
+      { text: 'The cheapest 2 Rangers tickets on Oct 3', expect: { rankingGoal: 'price', quantity: 2 } },
+    ],
+  },
+
   // ── Seats ────────────────────────────────────────────────────────────────────────────────────────────
   {
     id: 'seats.together',
@@ -487,6 +570,7 @@ export const LEXICON: LexiconEntry[] = [
     pattern: /\b(together|next to each other|adjacent|side by side)\b/i,
     categories: ['any'],
     requestTypes: ['find', 'change'],
+    teachModel: true,
     examples: [{ text: 'Two Rangers tickets on Oct 3, together please.', expect: { togetherRequired: true } }],
   },
   {
@@ -498,6 +582,7 @@ export const LEXICON: LexiconEntry[] = [
     pattern: /\b(don'?t (need|have) to (sit|be) together|split (is )?(ok|fine)|separate seats (are )?(ok|fine))\b/i,
     categories: ['any'],
     requestTypes: ['find', 'change'],
+    teachModel: true,
     examples: [{ text: "Four Rangers tickets on Oct 3, we don't need to sit together.", expect: { togetherRequired: false } }],
   },
 
@@ -589,6 +674,24 @@ export function lexiconQuantity(text: string): { value: number; quote: string } 
     if (Number.isFinite(v) && v > 0) return { value: v, quote: m[0] };
   }
   return null;
+}
+
+/**
+ * Whether a budget includes fees, from the words around it. Before-fees phrases are tried first: "not including fees"
+ * contains "including fees".
+ */
+export function lexiconFeeBasis(text: string): { value: 'all_in' | 'before_fees'; quote: string } | null {
+  for (const e of ['before_fees', 'all_in'].flatMap((v) => entriesFor('budgetFeeBasis').filter((x) => x.value === v))) {
+    const m = e.pattern.exec(text);
+    if (m) return { value: e.value as 'all_in' | 'before_fees', quote: m[0] };
+  }
+  return null;
+}
+
+/** What "best" means to them: the goal named first in the message ("best view, cheapest is fine otherwise" is the view). */
+export function lexiconRankingGoal(text: string): { value: 'view' | 'value' | 'price'; quote: string } | null {
+  const hits = entriesFor('rankingGoal').map((e) => ({ e, m: e.pattern.exec(text) })).filter((x) => x.m).sort((a, b) => a.m!.index - b.m!.index);
+  return hits[0] ? { value: hits[0].e.value as 'view' | 'value' | 'price', quote: hits[0].m![0] } : null;
 }
 
 export function lexiconVagueQuantity(text: string): boolean {

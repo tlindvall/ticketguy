@@ -7,6 +7,13 @@ describe('listing text and reads', () => {
     expect(looksLikeListingText('Found this on StubHub: Sec 112 Row 5, $210 each')).toBe(true);
     expect(looksLikeListingText('Section 101 row 3, $95 ea')).toBe(true);
   });
+  it('asking us to judge a price with its seats is their offer; asking us to find seats is not (Oct 10 brief, J2)', () => {
+    expect(looksLikeListingText('Is this Dua Lipa ticket a good deal? $180 a ticket, section 112, row 8.')).toBe(true);
+    expect(looksLikeListingText('Should I buy these? Section 210 row 4, $150 a ticket')).toBe(true);
+    expect(looksLikeListingText('Can you find 2 tickets in section 112 under $180?')).toBe(false);
+    expect(looksLikeListingText('Would it be a good deal to get 2 in section 112 with a budget of $300?')).toBe(false);
+    expect(looksLikeListingText('Is $180 a good deal for Dua Lipa?')).toBe(false); // no seats named: a price check, not a listing
+  });
   it('keeps unknowns unknown and only derives a per-ticket price the page makes certain', () => {
     const base = { kind: 'ticket_listing', sensitiveContent: false, seller: null, eventName: null, eventDate: null, venue: null, city: null, quantity: 4, priceText: '$800', priceDollars: 800, priceBasis: 'whole_party', feeBasis: 'unknown', totalDollars: null, section: null, row: null, seatNumbers: [], seatsTogether: null, restrictions: [], deliveryText: null, deliveryBy: null, includedBenefits: [], confidence: 'high', unreadable: [] } as ListingRead;
     expect(fieldsFromRead(base)).toMatchObject({ perTicketCents: 20000, wholePartyCents: 80000, seatNumbers: null, seatsTogether: null, feeBasis: 'unknown' });

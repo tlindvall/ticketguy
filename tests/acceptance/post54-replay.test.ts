@@ -124,7 +124,9 @@ describe('the post-#54 QA, replayed exactly', () => {
 
   it('L01: the listing we can’t open is said before any market figures', () => {
     const body = all('L01');
-    const at = body.indexOf('I couldn’t match the StubHub listing you picked in the listing data I can see');
+    // No lookup ran (the listings licence doesn't allow it here), so the reply says it didn't look, never that it
+    // "couldn't match" (audit 2026-10-10 gap 6).
+    const at = body.indexOf('I didn’t look up the StubHub listing you picked: I can’t check individual listings for this game right now');
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(Math.max(body.lastIndexOf('How this compares'), body.lastIndexOf('My read'), at + 1));
   });

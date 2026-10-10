@@ -1,3 +1,6 @@
+> **Superseded for current state (2026-10-10):** see docs/AUDIT_2026-10-10.md for what is implemented, configured, deployed and live-verified today.
+> The rest of this file is kept as history, as written for 2026-09-22, and is not maintained.
+
 # Production readiness checklist
 
 Status as of 2026-09-22. **The service is not live and must not be marked live.** Items marked GATE require an owner input that does not exist in this repository.
