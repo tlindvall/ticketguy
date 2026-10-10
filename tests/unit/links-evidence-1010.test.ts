@@ -12,7 +12,7 @@ import type { RequestExtraction } from '@/lib/domain/types';
  * Links and screenshots as evidence (CTO audit 2026-10-10, gaps 5, 8, 9, 17, 19, 20, 30, 41): the pure parts, each
  * pinned where it decides what the customer is told.
  */
-const base: RequestExtraction = { intent: 'new_search', eventName: null, performerOrTeam: null, city: null, state: null, dateExpression: null, resolvedLocalDate: null, quantity: null, budgetCents: null, budgetBasis: null, seatingPreference: null, togetherRequired: null, accessibilityNeeds: null, alternativesAllowed: null, submittedUrls: [], evidence: [], ambiguities: [], mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, splitGroupAllowed: null, forSelf: null, negatedEntities: [], countryStatement: null, categoryHint: null, genreHint: null, wantsMore: null, resaleAsked: null, quotedPriceCents: null, quotedPriceBasis: null, notifyAsked: null };
+const base: RequestExtraction = { intent: 'new_search', eventName: null, performerOrTeam: null, city: null, state: null, dateExpression: null, resolvedLocalDate: null, quantity: null, budgetCents: null, budgetBasis: null, seatingPreference: null, togetherRequired: null, accessibilityNeeds: null, alternativesAllowed: null, submittedUrls: [], evidence: [], ambiguities: [], mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, splitGroupAllowed: null, forSelf: null, negatedEntities: [], countryStatement: null, categoryHint: null, genreHint: null, wantsMore: null, resaleAsked: null, quotedPriceCents: null, quotedPriceBasis: null, notifyAsked: null, budgetFeeBasis: null, rankingGoal: null };
 
 describe('gap 17: an out-of-office subject alone is advisory', () => {
   const svc = ['my@ticketguy.now'];
