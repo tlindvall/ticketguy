@@ -38,8 +38,13 @@ const para = (text: string) => `<p style="margin:0 0 18px;">${esc(text)}</p>`;
 /** A paragraph whose lines after the first start with "• " is a lead line and a list (the shows elsewhere, live Oct 3). */
 const block = (text: string) => {
   const [head, ...rest] = text.split('\n');
-  if (!rest.length || !rest.every((l) => l.startsWith('• '))) return para(text);
-  return `<p style="margin:0 0 8px;">${esc(head!)}</p><ul style="margin:0 0 18px;padding-left:20px;">${rest.map((l) => `<li style="margin:0 0 4px;">${esc(l.slice(2))}</li>`).join('')}</ul>`;
+  // A list, and the line that closes it ("…and 4 more after that."): live Oct 10, a list of eleven games ended with
+  // that line, failed "every line is a bullet", and arrived as one paragraph with its line breaks gone.
+  const bullets = rest.findIndex((l) => !l.startsWith('• '));
+  const items = bullets === -1 ? rest : rest.slice(0, bullets);
+  const tail = bullets === -1 ? [] : rest.slice(bullets);
+  if (!items.length || tail.some((l) => l.startsWith('• '))) return para(text);
+  return `<p style="margin:0 0 8px;">${esc(head!)}</p><ul style="margin:0 0 ${tail.length ? 8 : 18}px;padding-left:20px;">${items.map((l) => `<li style="margin:0 0 4px;">${esc(l.slice(2))}</li>`).join('')}</ul>${tail.length ? para(tail.join(' ')) : ''}`;
 };
 
 type Pick = { line: string; title: string; reason: string; eventUrl: string | null; links: Array<{ label: string; url: string }> };

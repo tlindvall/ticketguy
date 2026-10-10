@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DbHandle } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import { openTestDb, inbound, testEnv } from '../harness';
@@ -253,6 +253,32 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
       expect(p.req.eventId).toBe(KNICKS_GAME);
     } finally {
       await h.db.delete(t.events).where(eq(t.events.id, KNICKS_GAME));
+    }
+  });
+
+  it('naming the opponent picks that game from the ranking, even when the opponent is a team with its own schedule', async () => {
+    // Live Oct 10: after the Rangers ranking, "ok for the st louis game. can you find 5 in a row for a similar per ticket
+    // price?" was read as a new team, and the St. Louis Blues' whole league schedule came back as one block of text.
+    const SENS = '20000000-0000-4000-8000-0000000000db';
+    const AWAY = '10000000-0000-4000-8000-0000000000db';
+    const SENS_GAMES = ['30000000-0000-4000-8000-0000000000db', '30000000-0000-4000-8000-0000000000dc'];
+    await h.db.insert(t.venues).values({ id: AWAY, name: 'Lakeside Arena', city: 'Buffalo', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    await h.db.insert(t.entities).values({ id: SENS, kind: 'team', name: 'Ottawa Senators', slug: 'ottawa-senators-cg', aliases: ['Ottawa Senators', 'Senators', 'Sens'], league: 'NHL', homeVenueId: null });
+    await h.db.insert(t.events).values(SENS_GAMES.map((id, i) => ({ id, name: `Buffalo Sabres vs. Ottawa Senators${i ? ' II' : ''}`, category: 'nhl', venueId: AWAY, primaryEntityId: SENS, isHome: false, localStartAt: new Date(`2026-10-${20 + i}T23:00:00Z`), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true, saleStatus: 'onsale' })));
+    try {
+      const from = 'ottawa-pick@customer.example';
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+      const p = await ask('ok for the ottawa game. can you find 5 tickets in a row for a similar per ticket price?', from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      expect(p.req.eventId).toBe(games[1]!.id);
+      expect(p.emails).not.toMatch(/Here are the Ottawa Senators games|Buffalo Sabres/);
+      // The party they gave is kept with the pick, and the request goes on to research as an ordinary one.
+      const [v] = await h.db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, r.req.id)).orderBy(desc(t.requestVersions.revision)).limit(1);
+      expect((v!.brief as { quantity: number | null }).quantity).toBe(5);
+      expect(p.research).toEqual([r.req.id]);
+    } finally {
+      await h.db.delete(t.events).where(inArray(t.events.id, SENS_GAMES));
     }
   });
 

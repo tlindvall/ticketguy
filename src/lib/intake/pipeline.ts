@@ -4896,11 +4896,36 @@ export function ordinalChoice(text: string, n: number): number | null {
 
 /**
  * Which of a list we sent their reply picks, in the order the list showed it: by position ("the first one"), as "the
- * cheapest one" when the list was ranked on price, or by its day. Null when the reply picks none of them.
+ * cheapest one" when the list was ranked on price, by its day, or by the other side it names ("the st louis game").
+ * Null when the reply picks none of them.
  */
-export function listChoice(text: string, rows: Array<{ e: { localStartAt: Date }; v: { timezone: string } }>, byPrice: boolean): number | null {
+export function listChoice(text: string, rows: Array<{ e: { localStartAt: Date; name?: string }; v: { timezone: string } }>, byPrice: boolean): number | null {
   if (byPrice && cheapestPick(text)) return 0;
-  return ordinalChoice(text, rows.length) ?? dayChoice(text, rows.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone)));
+  return ordinalChoice(text, rows.length) ?? dayChoice(text, rows.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone))) ?? (rows.every(({ e }) => e.name) ? nameChoice(text, rows.map(({ e }) => e.name!)) : null);
+}
+
+/**
+ * Which listed game a reply names by its other side: "ok for the st louis game", "the Blues one", "the Ottawa match"
+ * (live Oct 10: after the Rangers ranking, "ok for the st louis game. can you find 5 in a row" was read as a new team, and
+ * the St. Louis Blues' whole schedule was sent back). The side every listed game shares (the team they asked about) is
+ * set aside; a name counts only as "the X", "X game", "X one" or "X match", so "we're in New York" picks nothing. Null
+ * unless exactly one listed game is named.
+ */
+export function nameChoice(text: string, names: string[]): number | null {
+  const norm = (x: string) => x.toLowerCase().replace(/[’']/g, '').replace(/\bst\.\s*/g, 'st ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const sides = names.map((n) => n.replace(/\s*\([^)]*\)/g, '').split(/\s+(?:vs\.?|v\.?|at|@)\s+/i).map(norm).filter(Boolean));
+  const shared = sides.reduce((acc, s) => acc.filter((x) => s.includes(x)), sides[0] ?? []);
+  const keysOf = (s: string[]) => s.filter((x) => !shared.includes(x)).flatMap((full) => {
+    const w = full.split(' ');
+    return [full, w.at(-1)!, w.slice(0, -1).join(' ')].filter((k) => k.length >= 4);
+  });
+  const all = sides.map(keysOf);
+  // A word two listed games share ("new york" for the Islanders and the Rangers) names neither.
+  const distinct = all.map((ks, i) => ks.filter((k) => !all.some((o, j) => j !== i && o.includes(k))));
+  const said = ` ${norm(text)} `;
+  const names_ = (k: string) => new RegExp(` the ${k} |\\b${k} (?:game|one|match)\\b`).test(said);
+  const hits = distinct.map((ks, i) => (ks.some(names_) ? i : -1)).filter((i) => i >= 0);
+  return hits.length === 1 ? hits[0]! : null;
 }
 
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
