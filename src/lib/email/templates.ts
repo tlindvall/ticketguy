@@ -181,6 +181,17 @@ function renderBody(
       const html = [para(lead[0]!), ...(answer ? [`<p style="margin:0 0 18px;"><strong>${esc(answer)}</strong>${corrections ? ` ${esc(corrections)}` : ''}</p>`] : corrections ? [para(corrections)] : []), ...lead.slice(1).map(para), ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...(ra ? [raHtml(ra)] : []), ...end.map(para)];
       return wrap(text, html);
     }
+    case 'games_ranked': {
+      // "Which game is cheapest?" answered as a verdict, the games ranked under it, then one next action (live Oct 9: the
+      // comparison was an acknowledgement line, and a single game's trend brief followed). Same list mechanics as the
+      // browse picks, so the plain text and the HTML stay in step.
+      const picks = (vars.picks as Pick[] | undefined) ?? [];
+      const end = [v.unpriced ? String(v.unpriced) : '', String(v.nextStep ?? ''), v.countryCheck ? COUNTRY_CHECK_LINE : '', v.affiliate ? AFFILIATE_DISCLOSURE : ''].filter(Boolean);
+      const headline = String(v.headline ?? '');
+      const text = ['Hey,', headline, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...end];
+      const html = [para('Hey,'), `<p style="margin:0 0 18px;"><strong>${esc(headline)}</strong></p>`, ...(picks.length ? [`<ul style="margin:0 0 18px;padding-left:20px;">${picks.map(pickHtml).join('')}</ul>`] : []), ...end.map(para)];
+      return wrap(text, html);
+    }
     case 'event_alert_set': {
       // The reply to "let me know when": what we'll watch for, in one sentence, and nothing else to do.
       const what = String(v.what ?? 'it');
