@@ -241,7 +241,7 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
   let c: Concierge;
   const extractor = new RecordedModelExtractor();
   const reader = new ScriptedReader();
-  const testers = ['j1', 'j2a', 'j2b', 'j2c', 'j3a', 'j3b', 'j4', 'j5', 'j6', 'j7', 'j7thin', 'j8', 'j9', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'].map(TESTER);
+  const testers = ['j1', 'j2a', 'j2b', 'j2c', 'j3a', 'j3b', 'j3c', 'j4', 'j5', 'j6', 'j7', 'j7thin', 'j8', 'j9', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'].map(TESTER);
   const env = testEnv({ APP_MODE: 'live', EMAIL_SEND_ENABLED: 'true', RESEND_API_KEY: 're_test_key', EXTRACTION_PROVIDER: 'rules', STAFF_EMAIL_ALLOWLIST: 'staff@ticketguy.test', AUTO_APPROVE_WHILE_TESTING: 'true', EMAIL_TEST_RECIPIENT_ALLOWLIST: testers.join(','), SEATDATA_API_KEY: KEY });
   const out = process.env.JOURNEYS_OUT;
   const log: Record<string, string[]> = {};
@@ -437,6 +437,19 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
       expect(text).toContain('I\u2019d take Listing 1: before fees it\u2019s $42 less than Listing 2 for both ($242 against $284).');
       expect(rules(s!, ['event', 'quantity'])).toEqual([]);
     });
+    it('(c) the pair is still the question on the next reply, with no images in it', async () => {
+      const shot = { seller: 'StubHub', eventName: 'New York Rangers vs. Boston Bruins', eventDate: '2026-10-20', eventTime: '19:00', venue: 'Madison Square Garden', city: 'New York', quantity: 2, priceBasis: 'per_ticket', feeBasis: 'before_fees', seatsTogether: true } as const;
+      const [first, s] = await journey('j3c', [
+        { text: 'Can you beat this pair?', subject: 'Rangers pair', read: { quantity: 2 }, screenshots: [{ ...shot, priceText: '$121 each', priceDollars: 121, section: '214', row: '3' }, { ...shot, seller: 'Vivid Seats', priceText: '$142 each', priceDollars: 142, section: '116', row: '22' }] },
+        { text: 'Which of those two would you pick?' },
+      ]);
+      const verdict = 'I’d take Listing 1: before fees it’s $42 less than Listing 2 for both ($242 against $284).';
+      expect(all(first!)).toContain(verdict);
+      // Not the newest screenshot judged alone (audit gap 8, on a later revision).
+      expect(s!.requestId).toBe(first!.requestId);
+      expect(all(s!)).toContain(verdict);
+      expect(rules(s!, ['event', 'quantity'])).toEqual([]);
+    });
   });
 
   it('J4: best Metallica tickets near New York in November: one question, then picks for the view', async () => {
@@ -462,6 +475,9 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
     const text = all(s!);
     expect(text).toContain('Dusky');
     expect(text).toMatch(/Fri(?:day)?,? (?:Oct(?:ober)? 9)/);
+    // The count out of the venue's nights is said once, under the list, and the headline is a sentence.
+    expect(text).toContain('Events at Elsewhere, Oct 9 to 11, as listed on Ticketmaster:');
+    expect(text.match(/Ticketmaster lists/g)).toHaveLength(1);
     expect(rules(s!)).toEqual([]);
   });
 
@@ -484,6 +500,9 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
       const text = all(s!);
       expect(text).toMatch(/I’d buy|I'd buy|I’d wait|I'd wait|I’d hold|buy rather than wait/);
       expect(text).toMatch(/up from|rising|risen|gone up|climb/i);
+      // The call is about the seats named one email earlier, and their offer to narrow them isn't sent again.
+      expect(s!.emails[0]!.body).toContain('Hey,\n\nI’d buy Section 225, Row 5 on StubHub');
+      expect(text).not.toMatch(/One thing that would help me|If you have a budget with fees/);
       expect(rules(s!, ['quantity', 'event'])).toEqual([]);
     });
     it('a thin series: says it can’t tell yet, and what would change that', async () => {
@@ -496,6 +515,7 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
       expect(text).toMatch(/can(?:\u2019|')t tell|not enough|too (?:few|little)|don(?:\u2019|')t have enough/i);
       // And what would change that.
       expect(text).toContain('a few days of its prices would show which way they\u2019re moving');
+      expect(text).not.toMatch(/One thing that would help me|If you have a budget with fees/);
       expect(rules(s!, ['quantity', 'event'])).toEqual([]);
     });
   });
@@ -545,6 +565,9 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
       expect(first!.eventId).toBe(EV.rangersOct13);
       expect(s!.eventId).toBe(EV.rangersOct13);
       expect(s!.brief).toMatchObject({ performerOrTeam: 'New York Rangers', quantity: 2, budgetCents: 30000 });
+      // Their question answered first, not the first email again.
+      expect(s!.emails).toHaveLength(1);
+      expect(s!.emails[0]!.body).toContain('Hey,\n\nI can’t confirm that yet: the listing data for Section 225, Row 5 on StubHub doesn’t say whether the two seats are next to each other.');
       expect(rules(s!, ['quantity', 'budget', 'event'])).toEqual([]);
     });
     it('F3: "actually five of us"', async () => {

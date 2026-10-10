@@ -86,7 +86,7 @@ describe('a Guide event never reaches research without a party size', () => {
     expect(assumed).toHaveLength(1);
   });
 
-  it('research handed a brief with no count refuses it rather than writing "null tickets"', async () => {
+  it('research handed a brief with no count leaves it alone rather than writing "null tickets"', async () => {
     const env = testEnv({ SERVICE_POLICY_MODE: 'enforce', SEATDATA_API_KEY: 'sd-test-key' });
     const c = makeConcierge(h, { env });
     const r = (await c.ingestInbound(inbound({ text: 'Red Storm vs Drexel Nov 12, is resale cheaper? 2 tickets', from: 'guide-guard@customer.example', subject: 'Red Storm' }))) as { requestId: string };
@@ -99,7 +99,9 @@ describe('a Guide event never reaches research without a party size', () => {
     // A route that let the count through: the stored brief has none.
     const version = (await h.db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, r.requestId))).find((v) => v.revision === req!.currentRevision)!;
     await h.db.update(t.requestVersions).set({ brief: { ...(version.brief as Record<string, unknown>), quantity: null } }).where(eq(t.requestVersions.id, version.id));
-    await expect(c.research({ requestId: r.requestId, revision: req!.currentRevision })).rejects.toThrow('research without a party size');
+    // Skipped and recorded, not thrown: a throw retried until the job went dead and came back to staff with no draft.
+    await expect(c.research({ requestId: r.requestId, revision: req!.currentRevision })).resolves.toEqual({ recommendationId: null, state: req!.state });
+    expect(await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.action, 'research.skipped_no_party_size'), eq(t.auditLog.entityId, r.requestId)))).toHaveLength(1);
     const text = (await sendsFor(r.requestId)).map((s) => s.bodyText).join('\n');
     expect(text).not.toMatch(/\bnull\b/);
     expect(await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r.requestId))).toHaveLength(0);

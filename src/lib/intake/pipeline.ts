@@ -353,7 +353,7 @@ export class Concierge {
     const priorVersion = await this.latestVersion(req.id);
     // A new request in a thread that already had one starts from what that one knew (audit gap 4: after a side
     // question or "thanks, we bought them", "2 more for my brothers" started from nothing).
-    const carried = priorVersion ? null : await this.carriedFromThread(req);
+    const carried = priorVersion ? null : await this.carriedFromThread(req, new Date(Math.max(now.getTime(), msg.receivedAt.getTime())));
     let venueTz: string | null = null;
     const tzEventId = req.eventId ?? carried?.eventId ?? null;
     if (tzEventId) {
@@ -443,7 +443,7 @@ export class Concierge {
     // An offer's price is not their budget: "Offer A: $90 per ticket" read as "Budget: $90 a ticket" ruled out
     // every offer they sent (post-#54 replay). A budget is kept only when it isn't one of their offers' prices.
     const latestOffers = offersInText(latestText);
-    if (latestOffers.length >= 2 && extraction.budgetCents !== null && latestOffers.some((o) => o.perTicketCents === extraction.budgetCents || o.totalCents === extraction.budgetCents)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    if (latestOffers.length >= 2 && extraction.budgetCents !== null && latestOffers.some((o) => o.perTicketCents === extraction.budgetCents || o.totalCents === extraction.budgetCents)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, budgetFeeBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // "$220 for both" after a price they asked about or showed us, with its basis unknown, answers our "per ticket or
     // for all of them?" (or says the same of their offer: "they want $220 for both"): it is that price's basis, not a
     // $220 budget for the party (audit gap 9). Budget words still make it theirs: "we can spend $220 for both" is a cap
@@ -453,15 +453,15 @@ export class Concierge {
       const [shot] = pb.quotedPriceCents == null ? await this.db.select({ fields: t.listingEvidence.fields }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), pricedEvidence())).orderBy(desc(t.listingEvidence.createdAt)).limit(1) : [];
       const seen = shot ? (shot.fields as unknown as ListingFields) : null;
       const quoted = pb.quotedPriceCents ?? (seen?.priceBasis === 'unknown' ? seen.perTicketCents : null);
-      if (quoted === extraction.budgetCents && pb.budgetCents !== extraction.budgetCents) extraction = { ...extraction, quotedPriceCents: extraction.budgetCents, quotedPriceBasis: extraction.budgetBasis, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+      if (quoted === extraction.budgetCents && pb.budgetCents !== extraction.budgetCents) extraction = { ...extraction, quotedPriceCents: extraction.budgetCents, quotedPriceBasis: extraction.budgetBasis, budgetCents: null, budgetBasis: null, budgetFeeBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     }
     // Without a budget word, a price they quote from a listing or offer is that listing's price, not a budget:
     // "a listing … PARKING ONLY at $20 each" was read as "Budget: $20 a ticket" (live V03), and "Offer B … $210
     // total" as "up to $210" (live R05-F1).
-    if (extraction.budgetCents !== null && !BUDGET_WORDS.test(latestText) && isListingPrice(flat(latestText), extraction.budgetCents, latestOffers)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    if (extraction.budgetCents !== null && !BUDGET_WORDS.test(latestText) && isListingPrice(flat(latestText), extraction.budgetCents, latestOffers)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, budgetFeeBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // A follow-up about a listing we already read ("the image says $72 per ticket BEFORE fees…") is about that
     // listing's price: without budget words it sets no budget (live A11-F1 replay: $72 × 3 became "up to $216").
-    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !BUDGET_WORDS.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), pricedEvidence())).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    if (priorVersion && extraction.budgetCents !== null && (priorVersion.brief as RequestExtraction).budgetCents !== extraction.budgetCents && !BUDGET_WORDS.test(latestText) && (await this.db.select({ id: t.listingEvidence.id }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), pricedEvidence())).limit(1)).length) extraction = { ...extraction, budgetCents: null, budgetBasis: null, budgetFeeBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
     // "My BUDGET stayed $200": the same amount keeps the basis it had, and isn't asked about again (TGQA-R6 15).
     const priorBrief = priorVersion ? (priorVersion.brief as RequestExtraction) : null;
     if (priorBrief && extraction.budgetCents !== null && extraction.budgetCents === priorBrief.budgetCents && extraction.budgetBasis === null && priorBrief.budgetBasis) extraction = { ...extraction, budgetBasis: priorBrief.budgetBasis, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
@@ -527,7 +527,7 @@ export class Concierge {
     // of event instead ("any comedy this weekend?"), which is a new question about the same party.
     const carriedEvent = !!carried && !(isBrowseRequest(extraction) && !SAME_EVENT.test(flat(latestText)));
     const base = priorVersion ? RequestExtractionSchema.parse(priorVersion.brief) : carried ? (carriedEvent ? carried.brief : { ...carried.brief, performerOrTeam: null, eventName: null, dateExpression: null, resolvedLocalDate: null, categoryHint: null, genreHint: null }) : null;
-    let merged = base ? mergeExtraction(base, extraction) : extraction;
+    let merged = base ? mergeExtraction(base, extraction, latestText) : extraction;
     // What fans call a team ("Bolts", "Habs", "Bama", "Notre Dame") is that team, by its full name, when the name isn't
     // already one in the catalog and only one team answers to it (the league they named narrows "Rangers").
     const typed = extraction.performerOrTeam?.trim().toLowerCase() ?? '';
@@ -946,13 +946,17 @@ export class Concierge {
     // "Find me the best Metallica tickets": an act, no count and no date, and "best" with no goal in it. The goal and the
     // party decide the answer, so they are the one question, asked together, never a menu of dates and three asks
     // (live Oct 9). A team keeps its next home game; a date or a count named goes on as an ordinary request.
-    const bestOpen = !picked && !!merged.performerOrTeam && merged.quantity === null && !merged.dateExpression && !merged.resolvedLocalDate && !ticketLinksIn(merged.submittedUrls).length && BEST_TICKETS.test(flat(latestText)) && !BEST_GOAL.test(flat(latestText)) && known.find((k) => k.name === merged.performerOrTeam)?.kind !== 'team';
+    const bestOpen = !picked && !!merged.performerOrTeam && merged.quantity === null && !merged.dateExpression && !merged.resolvedLocalDate && !ticketLinksIn(merged.submittedUrls).length && BEST_TICKETS.test(flat(latestText)) && !BEST_GOAL.test(flat(latestText)) && !merged.rankingGoal && known.find((k) => k.name === merged.performerOrTeam)?.kind !== 'team';
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
     // "Is this Dua Lipa ticket a good deal?" with no price, link or screenshot: the ticket they mean is what decides it,
     // so it is the one ask, never a search for other seats on an assumed two (brief journeys, Oct 10, J2c).
     const unseenListing = !picked && questionsAsked(flat(latestText)).worth && UNSEEN_LISTING.test(flat(latestText)) && merged.quotedPriceCents == null && !listing.fields && !listing.images && !ticketLinksIn(merged.submittedUrls).length && !supplied.textOffers.length;
-    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: !unseenListing && (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : req.clarificationCount });
+    // How many questions in a row have asked the count. Not the question round: that starts again whenever a reply
+    // answers something else ("the 21st" to "Which game, and how many tickets?"), which put off "asked twice, assume
+    // two" by a round each time.
+    const countRounds = req.state === 'needs_clarification' ? await this.roundsAskingCount(req.id) : 0;
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: !unseenListing && (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : Math.max(req.clarificationCount, countRounds) });
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
@@ -1085,7 +1089,9 @@ export class Concierge {
     // unsettled event it waits ('best_goal_open') so the one question stays the event; asked once and not answered, the
     // reply says it went by price.
     const openBefore = priorVersion?.unresolvedFields ?? [];
-    const goalNamed = BEST_GOAL.test(flat(latestText)) || !!merged.seatingPreference?.trim();
+    // The extractor's rankingGoal is the goal they named, in this message or an earlier one ("best seats" is the view,
+    // "bang for the buck" is value): never asked again, and never said to be the price while research ranks on it.
+    const goalNamed = !!merged.rankingGoal || BEST_GOAL.test(flat(latestText)) || !!merged.seatingPreference?.trim();
     const bestSaid = !picked && !imageUnread && !goalNamed && (BEST_TICKETS.test(flat(latestText)) || openBefore.includes('best_goal_open') || openBefore.includes('best_goal'));
     const bestAskedBefore = bestSaid && req.state === 'needs_clarification' && openBefore.includes('best_goal');
     const bestOnFile = bestOpen && resolution.kind !== 'no_match' && !elsewhere.length;
@@ -2365,8 +2371,10 @@ export class Concierge {
         // Candidates, not picks: nothing about their seats or totals is known yet (Research 1, rule 4).
         ? `${label} in ${place}, ${span}: ${options.length === 1 ? 'the one' : options.length === 2 ? 'two' : 'three'} I can check for you.`
         : `${label} in ${place}, ${span}${single ? '. There’s one on:' : options.length ? (options.length === 1 ? '. Here’s the one I found:' : `. Here are my ${options.length === 3 ? 'three' : 'two'} picks:`) : '.'}`;
-    // At a venue whose own calendar has more, the list is what Ticketmaster shows, never "there's one on".
-    const venueHeadline = rules.venueTerms && venueCalendar(rules.venueTerms) && options.length && !more ? `${label} at ${venueCalendar(rules.venueTerms)!.name}, ${span}. ${options.length === 1 ? 'The one' : `The ${options.length}`} Ticketmaster lists:` : null;
+    // At a venue whose own calendar has more, the list is what Ticketmaster shows, never "there's one on". How many that
+    // is, out of the venue's nights, is said once, by the calendar line under the list ("Ticketmaster lists only 2 of
+    // Elsewhere's nights"); the headline only says where the list comes from (brief journeys J5: "The 2 Ticketmaster lists:").
+    const venueHeadline = rules.venueTerms && venueCalendar(rules.venueTerms) && options.length && !more ? `${label} at ${venueCalendar(rules.venueTerms)!.name}, ${span}, as listed on Ticketmaster:` : null;
     // Most small venues sell outside the listings we read; saying so beats implying there is nothing on.
     const sceneNote = area?.independentScene && events.length < 3 ? `A lot of the smaller venues around ${area.label} sell through DICE, Eventbrite or Resident Advisor, which I can't see yet.` : null;
     // A venue that sells most nights itself: how much we can see, and its own calendar for the rest (live Oct 5).
@@ -3142,11 +3150,13 @@ export class Concierge {
    * What the last request in this thread knew, for a new request opened in the same thread (audit gap 4): a side
    * question on a first message, "thanks, we bought them" or entry help closed it, and "could you find 2 more for my
    * brothers?" must not start from nothing. The event and the party only: who and when (and the event settled), how
-   * many, the budget and its basis, seating, seats together, access needs and the deadline. Never its links, quoted
-   * prices or screenshots, which were about the tickets that request was for. Nothing after a stop, an opt-out or a
-   * staff removal: those end what the thread was doing, and the next email starts clean.
+   * many, the budget and its basis, seating, seats together, access needs and the deadline while it is still ahead.
+   * Never its links, quoted prices or screenshots, which were about the tickets that request was for, and never a
+   * deadline that has passed: "decide by Friday" a week ago would make the new request look out of time ("I’d buy these
+   * now: there isn’t much time left to wait") and give any watch an expiry already behind it. Nothing after a stop, an
+   * opt-out or a staff removal: those end what the thread was doing, and the next email starts clean.
    */
-  private async carriedFromThread(req: typeof t.requests.$inferSelect): Promise<{ brief: RequestExtraction; eventId: string | null } | null> {
+  private async carriedFromThread(req: typeof t.requests.$inferSelect, asOf: Date): Promise<{ brief: RequestExtraction; eventId: string | null } | null> {
     const [last] = await this.db.select().from(t.requests).where(and(eq(t.requests.conversationId, req.conversationId), ne(t.requests.id, req.id))).orderBy(desc(t.requests.createdAt)).limit(1);
     if (!last || last.state !== 'closed') return null;
     const [end] = await this.db.select({ reason: t.requestTransitions.reason }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, last.id), eq(t.requestTransitions.toState, 'closed'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
@@ -3156,8 +3166,9 @@ export class Concierge {
     const version = await this.latestVersion(last.id);
     if (!version) return null;
     const b = RequestExtractionSchema.parse(version.brief);
+    const deadlineAhead = !!b.decisionDeadline && new Date(b.decisionDeadline).getTime() > asOf.getTime();
     return {
-      brief: { ...b, intent: 'new_search', submittedUrls: [], evidence: [], ambiguities: [], quotedPriceCents: null, quotedPriceBasis: null, resaleAsked: null, wantsMore: null, notifyAsked: null, countryStatement: null },
+      brief: { ...b, decisionDeadline: deadlineAhead ? b.decisionDeadline : null, intent: 'new_search', submittedUrls: [], evidence: [], ambiguities: [], quotedPriceCents: null, quotedPriceBasis: null, resaleAsked: null, wantsMore: null, notifyAsked: null, countryStatement: null },
       eventId: last.eventId,
     };
   }
@@ -3167,6 +3178,30 @@ export class Concierge {
     await audit(this.db, { actor: 'system', action: 'request.side_question_answered', entityKind: 'request', entityId: req.id, revision: req.currentRevision, diff: { kind, messageId: msg.id, state: req.state } });
     const prior = await this.latestVersion(req.id);
     return { state: req.state, revision: req.currentRevision, extraction: prior ? RequestExtractionSchema.parse(prior.brief) : null };
+  }
+
+  /** The latest revisions of a request, newest first, that each left the party size open (and so asked for it). */
+  private async roundsAskingCount(requestId: string): Promise<number> {
+    const versions = await this.db.select({ open: t.requestVersions.unresolvedFields }).from(t.requestVersions).where(eq(t.requestVersions.requestId, requestId)).orderBy(desc(t.requestVersions.revision));
+    const i = versions.findIndex((v) => !v.open.includes('quantity'));
+    return i === -1 ? versions.length : i;
+  }
+
+  /**
+   * The message whose listings a reply is about: this revision's when it sent a priced screenshot or a ticket link,
+   * otherwise the newest earlier message of the same request that did (a follow-up with no images or links is about
+   * the ones already sent). This revision's messages when none of them did.
+   */
+  private async listingMessageIds(requestId: string, latestIds: string[]): Promise<string[]> {
+    const versions = await this.db.select({ ids: t.requestVersions.sourceMessageIds }).from(t.requestVersions).where(eq(t.requestVersions.requestId, requestId)).orderBy(desc(t.requestVersions.revision));
+    const newestFirst = [...new Set([...latestIds, ...versions.flatMap((v) => [...v.ids].reverse())])];
+    if (!newestFirst.length) return latestIds;
+    const shot = new Set((await this.db.select({ m: t.listingEvidence.messageId }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, requestId), eq(t.listingEvidence.sensitive, false), inArray(t.listingEvidence.messageId, newestFirst), pricedEvidence()))).map((r) => r.m));
+    const texts = new Map((await this.db.select({ id: t.messages.id, text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, newestFirst))).map((m) => [m.id, m.text ?? '']));
+    const sent = (id: string) => shot.has(id) || ticketLinksIn([...(texts.get(id) ?? '').matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0])).length > 0;
+    if (latestIds.some(sent)) return latestIds;
+    const earlier = newestFirst.find(sent);
+    return earlier ? [earlier] : latestIds;
   }
 
   private async keepSettledEvent(eventId: string, resolution: Awaited<ReturnType<Concierge['resolveEvent']>>, said: RequestExtraction, rules?: ResolveRules | null, fromResolver = true): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
@@ -3402,6 +3437,14 @@ export class Concierge {
     const version = await this.latestVersion(req.id);
     const brief = RequestExtractionSchema.parse(version!.brief);
     if (!req.eventId) throw new Error('research without resolved event');
+    // Every total, split and "for all N" line is built from the party size. Intake fills a missing one before it queues
+    // research; a request still waiting on the count (asked, or parked after the question limit) that reaches here some
+    // other way (staff's "research again") is left as it is and said so, not retried until it goes dead and comes back
+    // to staff with no draft.
+    if (brief.quantity === null) {
+      await audit(this.db, { actor: 'system', action: 'research.skipped_no_party_size', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { state: req.state } });
+      return { recommendationId: null, state: req.state };
+    }
     const [evRow] = await this.db.select({ e: t.events, v: t.venues, ent: t.entities }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, req.eventId));
     const { e: event, v: venue, ent } = evRow!;
     const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
@@ -3423,9 +3466,6 @@ export class Concierge {
     const [run] = await this.db.insert(t.researchRuns).values({ requestId: req.id, revision: args.revision, mode: this.env.APP_MODE === 'fixture' ? 'fixture' : 'live', status: 'running', servicePolicy: storedPolicy(snap, { sources: planned }) }).returning({ id: t.researchRuns.id });
     const runId = run!.id;
     if (snap) await this.db.update(t.requestVersions).set({ servicePolicy: storedPolicy(snap) }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, args.revision)));
-    // The enqueue guard above fills a missing count before research is queued; a brief without one is a bug upstream,
-    // and failing here keeps "null tickets" out of a customer's reply.
-    if (brief.quantity === null) throw new Error('research without a party size');
     const quantity = brief.quantity;
     // Every hard requirement goes to the sources too, not only to the comparison after them (F04).
     const searchInput = { requestId: req.id, revision: args.revision, eventId: event.id, providerEventId: null, quantity, hardConstraints: constraintBasket(brief, quantity, event.localStartAt) as unknown as Record<string, unknown> };
@@ -3536,20 +3576,25 @@ export class Concierge {
     const supplied = suppliedOffers(said, threadMessages, venue.timezone);
     const { offersSetAside } = supplied;
     const linkGates = [!licence.allows('tracking') && `licence_${licence.status}`, !trackingOk && 'service_depth_no_market_tracking', !uses.display && 'licence_no_display'].filter((g): g is string => !!g);
-    // Listings they sent side by side in this message, each priced, compared like typed offers and kept apart: two
+    // Listings they sent side by side in one message, each priced, compared like typed offers and kept apart: two
     // screenshots of one event (audit 2026-10-10 gap 8: the newest priced row was judged alone), else two marketplace
-    // links (gap 5: the first link was the subject and their facts were mixed).
+    // links (gap 5: the first link was the subject and their facts were mixed). The message is the newest of this
+    // request's that sent any listing: this revision's, or the earlier one a follow-up is about ("which of those two
+    // would you pick?", an answer to our question). Read from this revision's message alone, the pair was gone on the
+    // next one and the newest screenshot or link was judged alone again, while intake had set the pair's price aside.
+    const listingMsgIds = await this.listingMessageIds(req.id, latestIds);
+    const listingSaid = listingMsgIds === latestIds ? said : (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, listingMsgIds))).map((m) => m.text ?? '').join('\n');
     let sideBySide: TextOffer[] = [];
-    if (supplied.textOffers.length < 2 && !offersSetAside.length && latestIds.length) {
+    if (supplied.textOffers.length < 2 && !offersSetAside.length && listingMsgIds.length) {
       // Two screenshots of the same listing (same price, count, section and row) are one listing, not a comparison.
-      const shots = [...new Map((await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), inArray(t.listingEvidence.messageId, latestIds), pricedEvidence())).orderBy(asc(t.listingEvidence.createdAt))).map((r) => r.fields as unknown as ListingFields).map((f) => [[f.perTicketCents, f.wholePartyCents, f.quantity, f.section, f.row].join('|'), f] as const)).values()];
+      const shots = [...new Map((await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), inArray(t.listingEvidence.messageId, listingMsgIds), pricedEvidence())).orderBy(asc(t.listingEvidence.createdAt))).map((r) => r.fields as unknown as ListingFields).map((f) => [[f.perTicketCents, f.wholePartyCents, f.quantity, f.section, f.row].join('|'), f] as const)).values()];
       const days = new Set(shots.map((f) => f.eventDate).filter(Boolean));
       if (shots.length >= 2 && distinctActs(shots) <= 1 && days.size <= 1) sideBySide = offersFromReads(shots.map((f) => ({ perTicketCents: f.perTicketCents, wholePartyCents: f.wholePartyCents, quantity: f.quantity, section: cleanSeatField(f.section), row: cleanSeatField(f.row), feeBasis: f.feeBasis })), venue.timezone);
       if (sideBySide.length) await audit(this.db, { actor: 'system', action: 'listing.reads_compared', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { evidence: shots.map(() => 'screenshot'), count: shots.length } });
     }
     if (supplied.textOffers.length < 2 && !offersSetAside.length && sideBySide.length < 2) {
       // One per listing: the same link pasted twice is one link.
-      const pair = [...new Map(ticketLinksIn([...said.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0])).map((l) => [l.listingId ? `${l.marketplace}:${l.listingId}` : l.url, l])).values()];
+      const pair = [...new Map(ticketLinksIn([...listingSaid.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0])).map((l) => [l.listingId ? `${l.marketplace}:${l.listingId}` : l.url, l])).values()];
       if (pair.length >= 2 && pair.length <= 5) {
         // Each link's own price: the one its URL carries (a TickPick checkout), or its number looked up in the licensed
         // feed (one read for all of them). A link with neither isn't priced, and then nothing is compared.
@@ -3930,13 +3975,20 @@ export class Concierge {
    * An expired draft is never sent: it's invalidated and the request researched again for the same revision, so the
    * customer gets prices read now (audit gap 3). A newer revision already has its own research. Three expiries on one
    * revision go to a person rather than loop (a research slower than the expiry would otherwise never send).
+   * Only for a request still waiting on that answer: one closed since ("we bought them", "stop all emails", a staff
+   * removal) or handed to a person keeps its state, and so does a customer who has opted out of everything; a send the
+   * gate refused for another reason (`sendable` false: a kill switch, a suppression) is not researched again either. The
+   * expired draft is invalidated in every case.
    */
-  private async reresearchExpired(rec: typeof t.recommendations.$inferSelect, actor: string, at: 'approval' | 'dispatch'): Promise<void> {
+  private async reresearchExpired(rec: typeof t.recommendations.$inferSelect, actor: string, at: 'approval' | 'dispatch', sendable = true): Promise<void> {
     const now = this.now();
     await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated', reviewNote: `expired at ${at}: prices older than the draft allows, researched again` }).where(eq(t.recommendations.id, rec.id));
     await audit(this.db, { actor, action: 'recommendation.expired_reresearch', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision, diff: { at, expiresAt: rec.expiresAt?.toISOString() ?? null } });
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, rec.requestId));
-    if (!req || req.currentRevision !== rec.revision) return;
+    if (!req || req.currentRevision !== rec.revision || !sendable) return;
+    if (['closed', 'referred', 'unsupported', 'manual_attention'].includes(req.state)) return;
+    const [who] = await this.db.select({ lookup: t.contacts.emailLookup }).from(t.contacts).where(eq(t.contacts.id, req.contactId));
+    if (who && (await loadSuppressionScopes(this.db, who.lookup)).has('global')) return;
     const [expired] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.recommendations).where(and(eq(t.recommendations.requestId, req.id), eq(t.recommendations.revision, rec.revision), sql`${t.recommendations.reviewNote} like 'expired at %'`));
     if ((expired?.n ?? 0) >= 3) {
       await this.transition(req.id, 'manual_attention', 'recommendation_expired_repeatedly', actor);
@@ -4097,7 +4149,9 @@ export class Concierge {
     const gate: { allowed: boolean; reasons: string[] } = !extra.length ? (sendGate.allowed ? { allowed: true, reasons: [] } : sendGate) : { allowed: false, reasons: [...(sendGate.allowed ? [] : sendGate.reasons), ...extra] };
     if ((!policyOk || !evidenceFresh || eventChange) && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
     if (eventChange && intent.approvalId && intent.messageClass !== 'watch_alert') await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated', reviewNote: `event_changed: ${eventChange}` }).where(eq(t.recommendations.id, intent.approvalId));
-    else if (expiredRec) await this.reresearchExpired(expiredRec, 'system', 'dispatch');
+    // Researched again only when nothing but its age held it back: a kill switch, an opt-out, a changed policy or a newer
+    // revision would hold the fresh draft too (stale prices are what expiry means, so they don't count).
+    else if (expiredRec) await this.reresearchExpired(expiredRec, 'system', 'dispatch', policyOk && (sendGate.allowed || !sendGate.reasons.some((r) => r.startsWith('kill_switch') || r.startsWith('suppressed') || r === 'revision_stale')));
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
@@ -4624,7 +4678,7 @@ export function startWindow(text: string): { after: number | null; before: numbe
  * or accessible spaces as one of the options. Both need the words; a passing "transfer" or "accessible" alone
  * is not a question about them.
  */
-export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean; cheaper: boolean; whichCheaper: boolean; fits: boolean; taxAsked: boolean; quotedRows: number[] } {
+export function questionsAsked(text: string): { deliveryRisk: boolean; accessibleSpaces: boolean; together: boolean; salesAsked: boolean; parking: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst: { perTicketCents: number; beforeFees: boolean } | null; worth: boolean; difference: boolean; cheaper: boolean; whichCheaper: boolean; fits: boolean; taxAsked: boolean; quotedRows: number[] } {
   const t = flat(text);
   const delivery = /\b(deliver(y|ed|s)?|transfer(red)?|arrive|in hand|get the tickets|reach (my|our|your) phones?|on (my|our) phones?|in (my|our) app|show up)\b/i.test(t);
   const stakes = /\b(flight|fly|flying|leave|leaving|depart|departure|set off|get on|travel(l?ing)?|trip|drive|driving|train|bus|refund|guarantee|miss(ing)? (it|the game|the show))\b/i.test(t);
@@ -4654,7 +4708,9 @@ export function questionsAsked(text: string): { deliveryRisk: boolean; accessibl
   const fits = /\b(?:does|do|would|will|is|are)\b(?:[^?.!]|\.\d){0,50}\bfit\b|\b(?:within|inside|under) (?:my|our|the) (?:budget|cap|\$)/i.test(t);
   const taxAsked = /\b(?:include|includes|including|incl\.?|with)\s+(?:the\s+)?tax(?:es)?\b[^.!]*\?|\btax(?:es)?\s+(?:included|extra|on top)\b[^.!]*\?|\b(?:is|are) (?:the )?tax(?:es)? (?:included|in it|extra)/i.test(t);
   const quotedRows = [...t.matchAll(/\$\s?(\d[\d,]*(?:\.\d{2})?)\s*(?:each|a ticket|per ticket|\/ticket|ea\b)/gi)].map((m) => Math.round(Number(m[1]!.replace(/,/g, '')) * 100));
-  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, salesAsked: sales, parking, gapAgainst, worth, difference, cheaper, whichCheaper, fits, taxAsked, quotedRows };
+  // "Are the seats together?", "will we be sitting next to each other?": asked, with a question mark, not "2 together please".
+  const together = /\b(?:are|is|will|would|can|do|does)\b[^?.!]{0,40}\b(?:together|next to each other|side by side)\b[^.!?]{0,30}\?/i.test(t);
+  return { deliveryRisk: delivery && stakes, accessibleSpaces: spaces, together, salesAsked: sales, parking, gapAgainst, worth, difference, cheaper, whichCheaper, fits, taxAsked, quotedRows };
 }
 
 /**
@@ -5695,16 +5751,25 @@ export function applyListingFields(x: RequestExtraction, f: ListingFields, known
   return out;
 }
 
-export function mergeExtraction(prior: RequestExtraction, next: RequestExtraction): RequestExtraction {
+/**
+ * Moving from waiting to buying, in their words: "forget waiting, just find me 2 tickets now", "I want to buy now
+ * please", "no need to watch, I'll buy". A watch request then becomes a search, whatever else the message names.
+ */
+export const BUY_NOW = /\b(?:forget (?:about )?(?:the )?(?:waiting|wait|watch(?:ing)?|alerts?)|(?:don'?t|do not|no need to|no point|not going to) (?:wait|watch)(?:ing)?|instead of (?:waiting|watching)|(?:want|ready|going|need) to buy (?:them |it |tickets |now|today)|buy (?:them |it |tickets )?(?:now|today|right away)|(?:find|get|show|send) (?:me|us) (?:\S+\s+){0,4}?(?:now|today|right away)|(?:i'?ll|we'?ll|i will|we will) (?:just )?buy (?:now|today))\b/i;
+
+/** `said` is the message's own text: a watch request stays a watch on a terse follow-up, never when it asks to buy now. */
+export function mergeExtraction(prior: RequestExtraction, next: RequestExtraction, said = ''): RequestExtraction {
   const out: RequestExtraction = { ...prior };
+  const buyingNow = BUY_NOW.test(said.replace(/[’‘]/g, "'"));
   for (const k of Object.keys(next) as Array<keyof RequestExtraction>) {
     const v = next[k];
     if (k === 'evidence' || k === 'submittedUrls' || k === 'negatedEntities') (out as Record<string, unknown>)[k] = [...(prior[k] as unknown[]), ...(v as unknown[])];
     else if (k === 'ambiguities') out.ambiguities = next.ambiguities;
     // An answer to our question ('clarification') or a message about nothing ('other': "thanks!") leaves the request what it
     // was; so does a terse follow-up the rules read as a plain search ("4 tickets, $300 total") on a watch request, when it
-    // names nothing new (audit gap 43: it turned the watch into a search).
-    else if (k === 'intent') out.intent = next.intent === 'clarification' || next.intent === 'other' || (prior.intent === 'watch_request' && next.intent === 'new_search' && !next.performerOrTeam && !next.eventName && !next.categoryHint && !next.submittedUrls.length) ? prior.intent : next.intent;
+    // names nothing new (audit gap 43: it turned the watch into a search). Asking to buy now ends the wait, though:
+    // "forget waiting, just find me 2 tickets now" is a search for seats today, named event or not.
+    else if (k === 'intent') out.intent = prior.intent === 'watch_request' && buyingNow && ['new_search', 'watch_request', 'clarification', 'other'].includes(next.intent) ? 'new_search' : next.intent === 'clarification' || next.intent === 'other' || (prior.intent === 'watch_request' && next.intent === 'new_search' && !next.performerOrTeam && !next.eventName && !next.categoryHint && !next.submittedUrls.length) ? prior.intent : next.intent;
     else if (k === 'wantsMore') out.wantsMore = next.wantsMore; // about this message's list, never the next one's
     else if (k === 'notifyAsked') out.notifyAsked = next.notifyAsked; // this message's ask; a later reply must not re-arm a cancelled or sent alert
     else if (k === 'city' || k === 'state') continue; // a place is moved as one, below

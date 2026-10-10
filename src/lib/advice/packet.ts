@@ -206,7 +206,7 @@ export type BuildPacketArgs = {
   /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
   askedText?: string;
   threadText?: string;
-  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; together?: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
@@ -936,7 +936,7 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
     return [];
   }
   // Seats already named: the one useful next step is narrowing them, not a questionnaire (live Oct 3).
-  if (a.picks?.picks.length && picksAnswer(a)) return a.priorities.budgetTotalCents === null ? ['If you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.'] : [];
+  if (a.picks?.picks.length && picksAnswer(a)) return a.priorities.budgetTotalCents === null ? [NARROW_PICKS] : [];
   const out: string[] = [];
   const sub = a.subject ?? null;
   // "Are they worth it?" has already asked for the price and section in its answer.
@@ -1427,6 +1427,16 @@ function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headl
  */
 function buyOrWaitView(a: BuildPacketArgs): { lead: string; after: string } | null {
   const sub = a.subject;
+  // A follow-up after seats we named: the call is about those seats, named, not "once you find seats that work"
+  // (brief journeys J7: the Section 225 lead sent one email earlier was ignored). Over their budget, the picks carry
+  // their own watch offer, so no call is made on them here.
+  const pick = !sub && a.followUp && a.picks?.picks.length && (a.picks.budgetTotalCents == null || a.picks.fits) && picksAnswer(a) ? a.picks.picks[0]! : null;
+  if (pick) {
+    const seat = seatPhrase(pick.listing.section, pick.listing.row);
+    const on = pick.listing.marketplace === 'stubhub' ? ' on StubHub' : pick.listing.marketplace === 'vividseats' ? ' on Vivid Seats' : '';
+    const what = seat ? (seat.startsWith('general admission') ? `the ${seat} tickets${on}` : `${seat}${on}`) : `the lowest listing${on}`;
+    return { lead: `I’d buy ${what} (about ${formatUsd(roundToDollar(pick.estimatedTotalCents))} for ${a.quantity === 1 ? 'one' : qtyWord(a.quantity)} with estimated fees) rather than wait, if that price works for you.`, after: '' };
+  }
   if (!sub || sub.perTicketCents == null) return null;
   const n = sub.quantity ?? a.quantity;
   const total = sub.perTicketCents * n;
@@ -1908,7 +1918,9 @@ function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
 }
 
 /** Claims that answer a question asked in the thread; with one of them, a follow-up reply is just the answer. */
-const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
+const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
+/** The offer to narrow seats we named: said with the seats, so not again in a follow-up that answers a question about them. */
+const NARROW_PICKS = 'If you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.';
 
 export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A before-fees listing is not "cheaper" than an all-in price just by being lower: its fees are still to come.
@@ -2503,6 +2515,15 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${answer}${pastNote}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
   }
 
+  // "Are the seats together?" about seats we named: answered first, from what the listing data says, which is
+  // nothing about seat numbers (brief journeys F2: the same email came back with the answer buried in the card).
+  const togetherPick = a.asks?.together && q > 1 && !a.subject && picksAnswer(a) ? a.picks!.picks[0]! : null;
+  const togetherSeat = togetherPick ? seatPhrase(togetherPick.listing.section, togetherPick.listing.row) : null;
+  if (togetherPick && !togetherSeat?.startsWith('general admission')) {
+    const on = togetherPick.listing.marketplace === 'stubhub' ? ' on StubHub' : togetherPick.listing.marketplace === 'vividseats' ? ' on Vivid Seats' : '';
+    claims.push({ id: 'C_TOGETHER', kind: 'catches', text: `I can’t confirm that yet: the listing data for ${togetherSeat ?? 'the lowest listing'}${on} doesn’t say whether the ${qtyWord(q)} seats are next to each other. The checkout page shows the seat numbers before you pay, so send me a screenshot of it and I’ll check they’re together.`, values: { quantity: q }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['not_a_verified_offer'], customerVisible: true });
+  }
+
   // Seats named for them are the price summary: the venue floor, its source line and a read worked out from that floor
   // would give a second, conflicting "cheapest" right under them (a block of five quoted under four seats picked).
   if (claims.some((c) => c.id === 'C_PICKS' && c.customerVisible)) for (const c of claims) if (['C_MARKET', 'C_MARKET_TYPICAL', 'C_READ'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
@@ -2619,7 +2640,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     abstentions: a.policy.abstentions,
     claimRecords: claims,
     // A total that can't be read: the verdict already asks for it, and that is the whole next step (B6c).
-    followUps: a.synthetic || a.asks?.parking || comparing || verdictCode === 'unreadable' ? [] : followUpQuestions(a),
+    // A follow-up answered about seats we named already had the offer to narrow them, with the seats (brief journeys J7:
+    // the same line came back under "One thing that would help me:").
+    followUps: a.synthetic || a.asks?.parking || comparing || verdictCode === 'unreadable' ? [] : followUpQuestions(a).filter((x) => !(answered && x === NARROW_PICKS)),
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     ...(answered ? {} : headlineFor(a)),
