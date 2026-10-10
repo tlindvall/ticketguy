@@ -305,7 +305,12 @@ export class MarketTracker {
    * Bring one event's market up to date now, so the first reply to a customer already has SeatData's
    * history for it rather than waiting for the hourly pass. Enrols it; matches and polls it if due.
    */
-  async refreshEvent(eventId: string): Promise<{ refreshed: boolean; reason?: string }> {
+  /**
+   * `stale`: the caller's stored price for this game is too old to use, so a matched game is polled even before its next
+   * scheduled check (Oct 10 review: a game a week out polls daily, and a snapshot the provider dated hours before that
+   * poll aged past the 36-hour cheapest-game window while "fresh" kept it unpriced).
+   */
+  async refreshEvent(eventId: string, opts: { stale?: boolean } = {}): Promise<{ refreshed: boolean; reason?: string }> {
     const why = await this.blocked();
     if (why) return { refreshed: false, reason: why };
     // A direct refresh is enrolment too: the same depth gate as the scheduled pass (F03).
@@ -315,7 +320,7 @@ export class MarketTracker {
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || !['pending_match', 'requested', 'active'].includes(tr.state)) return { refreshed: false, reason: tr?.state ?? 'missing' };
     if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return { refreshed: false, reason: 'budget' };
-    if (tr.nextPollAt > now) {
+    if (tr.nextPollAt > now && !(opts.stale && tr.state === 'active' && tr.providerEventId)) {
       // The stats are current, but a group of three or more reads listings, and those are only as fresh as the last read.
       if (tr.state !== 'active' || !tr.providerEventId) return { refreshed: false, reason: 'fresh' };
       const sizes = await this.groupSizes(eventId);

@@ -74,7 +74,7 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     const one = (await lastSend(r.requestId)).bodyText;
     expect(one).toContain('Games in New York, Sep 28 to Oct 4. Here are my three picks:');
     expect(one).toContain('• Tue, Sep 29: New York Islanders vs. Philadelphia Flyers at Rock Arena.');
-    expect(one).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees.');
+    expect(one).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees for two.');
     expect(one).toContain('• Thu, Oct 1: New York Knicks vs. Boston Celtics at Garden Arena.');
     expect(one).not.toMatch(/Drexel|Exhibition|Yankees/);
     expect(one).toMatch(/There are \d more in that window. Reply "more" to see them/);
@@ -116,6 +116,21 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     expect(await pick('first@customer.example', 'The first one please, 2 tickets')).toBe('New York Islanders vs. Philadelphia Flyers');
     expect(await pick('third@customer.example', 'the third one, 4 of us')).toBe('New York Knicks vs. Boston Celtics');
     expect(await pick('thu@customer.example', "Thursday's game, 2 tickets")).toBe('New York Knicks vs. Boston Celtics');
+  });
+
+  it('a held price is said for the party it was read for: "for two" with no number, nothing for a party of four', async () => {
+    // Oct 10 review: the price held is the "2 or more" series; said as "a ticket" it read as the price for any party.
+    const c = makeConcierge(h, { env: testEnv({}) });
+    const ask = async (text: string, from: string) => {
+      const r = (await c.ingestInbound(inbound({ text, from, subject: 'NY trip' }))) as { requestId: string };
+      await interpretAll(c);
+      return (await lastSend(r.requestId)).bodyText;
+    };
+    const four = await ask('My family is coming to New York next week, 4 of us. What sports games are on?', 'four@customer.example');
+    expect(four).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena.');
+    expect(four).not.toMatch(/\$\d|before fees/);
+    const two = await ask('Two of us are coming to New York next week. What sports games are on?', 'two@customer.example');
+    expect(two).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees.');
   });
 
   it('prominence: the major leagues, then other seasons, then exhibitions, preseason and anything that is not a game', () => {

@@ -2179,7 +2179,7 @@ export class Concierge {
     // A game whose price we already hold carries it: the stored series when fresh, shown where the licence allows. A
     // browse never pays for a read; a game with nothing on file is listed without a price (live Oct 9).
     const held = sportBrowse && shown.length ? await this.heldPrices(shown.map(({ e }) => e), merged.quantity) : [];
-    const options = shown.map(({ e, v }, i) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${v.city && ((cityCore && !inCityCore(v, market)) || (strictCore && v.city.toLowerCase() !== market.label.toLowerCase())) ? ` (${v.city})` : ''}${held[i] != null ? `, from ${formatUsd(held[i]!)} a ticket before fees` : ''}`);
+    const options = shown.map(({ e, v }, i) => `${new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(e.localStartAt)}${timed ? `, ${startLabel(e, v)}` : ''}: ${readableTitle(e.name)} at ${v.name}${v.city && ((cityCore && !inCityCore(v, market)) || (strictCore && v.city.toLowerCase() !== market.label.toLowerCase())) ? ` (${v.city})` : ''}${held[i] != null ? `, from ${formatUsd(held[i]!)} a ticket before fees${merged.quantity === null ? ' for two' : ''}` : ''}`);
     const picks = await this.picksFor(shown, options, shown.map(({ e }) => runNote(runOf.get(e.id), e.category)));
     const label = genre && (genreKept || bounded) ? genre.label : browseLabel(merged.categoryHint);
     const place = areaUsed?.label ?? market.label;
@@ -2861,15 +2861,25 @@ export class Concierge {
 
   /** The cheapest listed price a ticket, before fees, from the stored series when it is fresh enough to compare on; else null. */
   private async freshFromPrice(e: typeof t.events.$inferSelect, basis: MarketBasis, now: Date): Promise<number | null> {
-    const ctx = await loadMarketContext(this.db, { eventId: e.id, basis, eventStartAt: e.localStartAt, now });
-    const c = ctx.current;
-    return c && c.timeKnown !== false && now.getTime() - c.at.getTime() <= CHEAPEST_GAME_FRESH_MS ? c.priceCents : null;
+    return (await this.storedPrice(e, basis, now)).cents;
   }
 
-  /** The prices a browse may show for the games it lists: fresh stored series only, and only where the licence allows display. */
+  /** The stored price as freshFromPrice reads it, and whether a price is held but too old to use. */
+  private async storedPrice(e: typeof t.events.$inferSelect, basis: MarketBasis, now: Date): Promise<{ cents: number | null; stale: boolean }> {
+    const ctx = await loadMarketContext(this.db, { eventId: e.id, basis, eventStartAt: e.localStartAt, now });
+    const c = ctx.current;
+    const fresh = !!c && c.timeKnown !== false && now.getTime() - c.at.getTime() <= CHEAPEST_GAME_FRESH_MS;
+    return { cents: fresh ? c!.priceCents : null, stale: !!c && !fresh };
+  }
+
+  /**
+   * The prices a browse may show for the games it lists: fresh stored series only, and only where the licence allows
+   * display. A series is read for one ticket or for two or more, so a party of three or more gets none (Oct 10 review:
+   * the "2 or more" price, said as "a ticket" to a family of four, read as a price for four).
+   */
   private async heldPrices(events: Array<typeof t.events.$inferSelect>, quantity: number | null): Promise<Array<number | null>> {
     const uses = marketUses(await marketLicence(this.db), this.env);
-    if (!uses.display) return events.map(() => null);
+    if (!uses.display || (quantity !== null && quantity >= 3)) return events.map(() => null);
     const basis = this.comparisonBasis(quantity);
     const now = this.now();
     return Promise.all(events.map((e) => this.freshFromPrice(e, basis, now)));
@@ -2901,15 +2911,18 @@ export class Concierge {
     let budgetOut = false;
     const priced: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; cents: number | null; refresh: string | null }> = [];
     for (const { e, v } of rows) {
-      let cents = await this.freshFromPrice(e, basis, now);
+      const held = await this.storedPrice(e, basis, now);
+      let cents = held.cents;
       let refresh: string | null = null;
       if (cents === null && tracker && !budgetOut && refreshes < CHEAPEST_GAME_MAX_REFRESHES) {
         refreshes += 1;
-        // A supplier read that fails costs this game its price, never the reply (R1-HUMAN-01).
-        const r = await tracker.refreshEvent(e.id).catch((err: unknown) => ({ refreshed: false, reason: `error:${(err instanceof Error ? err.message : String(err)).slice(0, 80)}` }));
+        // A supplier read that fails costs this game its price, never the reply (R1-HUMAN-01). A price held but too old
+        // is read again now, whenever the next scheduled check is.
+        const r = await tracker.refreshEvent(e.id, { stale: held.stale }).catch((err: unknown) => ({ refreshed: false, reason: `error:${(err instanceof Error ? err.message : String(err)).slice(0, 80)}` }));
         refresh = r.refreshed ? 'refreshed' : (r.reason ?? 'unknown');
         if (r.reason === 'budget') budgetOut = true;
-        if (r.refreshed) cents = await this.freshFromPrice(e, basis, now);
+        // Read as of now, after the refresh: a snapshot the provider dated after this loop began is the fresh one.
+        if (r.refreshed) cents = await this.freshFromPrice(e, basis, this.now());
       }
       priced.push({ e, v, cents, refresh });
     }
@@ -2918,7 +2931,8 @@ export class Concierge {
     const team = cands[0]?.entityName ?? merged.performerOrTeam ?? '';
     const shortTeam = titleCaseName(team);
     const day = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => new Intl.DateTimeFormat('en-US', { timeZone: r.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(r.e.localStartAt);
-    const game = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => { const opp = opponentFor(team, r.e.name); return `${day(r)}${opp ? ` vs. ${titleCaseName(opp)}` : ` (${r.e.name})`}`; };
+    // "the Ottawa Senators game on Tue, Nov 3": never "Tue, Nov 3 vs. Ottawa Senators", which reads as a date against a team.
+    const game = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => { const opp = opponentFor(team, r.e.name); return `${opp ? `the ${titleCaseName(opp)} game` : readableTitle(r.e.name)} on ${day(r)}`; };
     const price = (cents: number) => (uses.display ? formatUsd(cents) : null);
     // The resolver hands over home games only when there are two or more of them: one arena is that.
     const home = new Set(rows.map(({ v }) => v.id)).size === 1 || rows.every(({ e }) => e.isHome === true) ? 'home ' : '';
@@ -2926,25 +2940,32 @@ export class Concierge {
     const words = merged.dateExpression?.trim() || BEFORE_RE.exec(said)?.[0] || '';
     const span = words ? ` ${words.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\b(christmas|xmas|thanksgiving|new year|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)\b/gi, (w) => (/^xmas$/i.test(w) ? 'Christmas' : w[0]!.toUpperCase() + w.slice(1).toLowerCase()))}` : '';
     // The pair price is the "2 or more" price: a larger party is told its block isn't priced yet, never that it costs more.
-    const party = q === 1 ? ' for one' : q === 2 ? ' for two' : q ? ` for a pair; I haven’t priced blocks of ${countWordLower(q)} yet` : '';
+    // With no number given it is still the price for two, said as that.
+    const party = q === 1 ? 'for one' : q && q >= 3 ? `for a pair (I haven’t priced blocks of ${countWordLower(q)} yet)` : 'for two';
     const best = ranked[0];
     const shown = best ? ranked.slice(0, 5) : [...priced].sort((a, b) => a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
     const unpriced = best ? priced.filter((p) => p.cents === null) : [];
     const dearer = best ? ranked.length - shown.length : 0;
     const cap = (x: string) => x.replace(/^./, (c) => c.toUpperCase());
+    // The verdict names the game; its price is on the first line under it, and the basis is said once, over the prices
+    // (Oct 10 review: "$74 a ticket before fees" twice in a row, then "before fees" on every line).
     const headline = best
       ? price(best.cents)
-        ? `Cheapest${span}: ${game(best)}, from ${price(best.cents)} a ticket before fees${party}.`
+        ? `Cheapest${span}: ${game(best)}. Lowest listed prices ${party}, a ticket before fees:`
         : `The cheapest ${shortTeam} ${home}game${span} on current resale prices: ${game(best)}.`
-      : `${cap(countWords(rows.length))} ${shortTeam} ${home}games${span}. I don’t have prices to compare them on yet, so here they are in date order.`;
-    const lines = shown.map((r) => `${day(r)}: ${readableTitle(r.e.name)} at ${r.v.name}${best && r.cents !== null && price(r.cents) ? `, from ${price(r.cents)} a ticket before fees` : ''}`);
+      : uses.advice
+        ? `${cap(countWords(rows.length))} ${shortTeam} ${home}games${span}. I don’t have prices to compare them on yet, so here they are in date order.`
+        // Prices may be held but not used for advice: a licence limit, not missing data, so never "yet".
+        : `${cap(countWords(rows.length))} ${shortTeam} ${home}games${span}, in date order. I can’t rank them on price for you.`;
+    const lines = shown.map((r) => `${day(r)}: ${readableTitle(r.e.name)} at ${r.v.name}${best && r.cents !== null && price(r.cents) ? `, from ${price(r.cents)}` : ''}`);
     const picks = await this.picksFor(shown, lines);
     // Refreshing a game enrols it whatever the read then found; only a licence, key or depth gate leaves it untracked.
     const tracked = (x: string | null) => !!x && x !== 'policy' && x !== 'no_api_key' && !x.startsWith('licence');
     const named = unpriced.slice(0, 4).map(game);
     const dearerLine = dearer ? ` ${cap(countWords(dearer))} other${dearer === 1 ? '' : 's'} cost more than these.` : '';
+    // "I'm tracking": a game may have been tracked for weeks, so never "started"; items are split by ";" since each has a comma.
     const unpricedLine = unpriced.length
-      ? `I don’t have prices yet for ${unpriced.length === 1 ? 'one more' : `${countWordLower(unpriced.length)} more`} (${named.join(', ')}${unpriced.length > named.length ? `, and ${countWordLower(unpriced.length - named.length)} more` : ''})${unpriced.some((p) => tracked(p.refresh)) ? '; I’ve started tracking them' : ''}.${dearerLine}`
+      ? `I don’t have prices yet for ${unpriced.length === 1 ? 'one more' : `${countWordLower(unpriced.length)} more`} (${named.join('; ')}${unpriced.length > named.length ? `; and ${countWordLower(unpriced.length - named.length)} more` : ''})${unpriced.some((p) => tracked(p.refresh)) ? `; I’m tracking ${unpriced.length === 1 ? 'it' : 'them'}` : ''}.${dearerLine}`
       : dearerLine.trim() || null;
     const nextStep = q ? `Reply with the date and I’ll find seats for ${q === 1 ? 'you' : countWordLower(q)}.` : 'Reply with the date and how many tickets, and I’ll find seats.';
     // Left the way a browse leaves it: the list remembered, no event settled, nothing researched.
