@@ -2392,7 +2392,9 @@ export class Concierge {
     const dayOf = ({ e, v }: (typeof events)[number]) => eventLocalDate(e.localStartAt, v.timezone);
     // As many as they asked for ("give me one or two real options"), never more than three (R2-EMAIL-HIERARCHY-01).
     const asked = requestedCount(flat(threadText));
-    const shown = choosePicks(events, asked ?? 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint) }));
+    // A sports browse varies the league before the day (one hockey, one basketball, one football game), never with a
+    // college exhibition or a non-game (tier 3).
+    const shown = choosePicks(events, asked ?? 3, (x) => ({ day: dayOf(x), score: genreFitScore(x.e.genre, merged.genreHint), kind: sportBrowse && prominenceTier(x.e) <= 2 ? x.e.category : null }));
     // With a start-time rule, the start time is what proves the fit, so it is shown (TGQA-R8 S04, writing review 6).
     const timed = !!(rules.after || rules.before || rules.exactTime !== null || rules.partOfDay);
     const startLabel = (e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect) => new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(e.localStartAt).replace(':00', '').replace(/\s?([AP])M/, (_m, x: string) => `${x.toLowerCase()}m`);
