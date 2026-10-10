@@ -118,7 +118,7 @@ describe('trend accuracy, through research into the reply', () => {
     expect(r.adv.decision).not.toBe('wait_and_recheck');
     expect(r.adv.reasonCodes).toContain('market_mixed_no_clear_direction');
     expect(r.adv.reasonCodes).not.toContain('market_falling_but_risk_tolerance_or_deadline_unknown');
-    expect(r.claim('C_MARKET')!.text).toContain('That’s down from $150 a day ago but up from $100 three days ago, so no clear direction.');
+    expect(r.claim('C_MARKET')!.text).toContain('(listed price, before fees), down from $150 a day ago but up from $100 three days ago, so no clear direction.');
     const answer = r.claim('C_TREND_ANSWER')!;
     expect(answer.values).toMatchObject({ supported: 1, source: 'resale_series', direction: 'mixed', scope: 'venue' });
     expect(answer.text).toBe('On buy or wait: I’d buy rather than wait once you find seats that work at a price you’re happy with. Listed resale prices for two or more tickets are at $120 a ticket, down from $150 a day ago but up from $100 three days ago (before fees), so they’ve gone both ways and there’s no clear fall to wait for. You’re willing to risk missing out, but that alone doesn’t show that waiting will save money.');
@@ -189,7 +189,7 @@ describe('trend accuracy, through research into the reply', () => {
     expect(r.adv.decision).not.toBe('wait_and_recheck');
     expect(r.adv.reasonCodes).not.toContain('market_falling_but_risk_tolerance_or_deadline_unknown');
     const m = r.claim('C_MARKET')!;
-    expect(m.text).toMatch(/^Resale listings with two or more tickets on the floor currently start at \$260 a ticket \(listed price, before fees\)\. That’s up from \$\d+(?:\.\d\d)? three days ago\. Across every seat in the venue, they start at \$130, down from \$\d+(?:\.\d\d)? three days ago; that includes seats away from the floor\. About 400 listings are up across the venue\.$/);
+    expect(m.text).toMatch(/^Resale listings with two or more tickets on the floor currently start at \$260 a ticket \(listed price, before fees\), up from \$\d+(?:\.\d\d)? three days ago\. Across every seat in the venue, they start at \$130 before fees, down from \$\d+(?:\.\d\d)? three days ago; that includes seats away from the floor\. About 400 listings are up across the venue\.$/);
     expect(m.values).toMatchObject({ scope: 'zone:floor', direction: 'up' });
     // Their area's figures don't carry the "these cover every seat" caveat; the venue line is the labelled context.
     expect(m.text).not.toContain('don’t reflect your preference');

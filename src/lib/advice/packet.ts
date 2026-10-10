@@ -1011,17 +1011,20 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
     const lead = undated ? `When I checked, resale listings ${what} started at` : ageHours < MARKET_RECENT_HOURS ? `Resale listings ${what} currently start at` : `As of about ${ageHours} hours ago, resale listings ${what} started at`;
     const w = c.adequacy === 'sufficient' ? (c.h72 ?? c.h24) : null;
     const clause = moveClause(c);
-    const move = undated ? ' The listing data doesn’t say how recent it is, so I can’t say which way prices are moving.' : clause ? ` That’s ${clause}.` : '';
+    // The move is said in the price's own sentence, so every SeatData price there carries "before fees" (brief journeys,
+    // Oct 10: "That’s up from $99 three days ago." stood alone).
+    const move = undated ? ' The listing data doesn’t say how recent it is, so I can’t say which way prices are moving.' : '';
+    const moveTail = !undated && clause ? `, ${clause}` : '';
     // With their area's figures leading, the whole venue is broader context, labelled as that.
     const v = z ? m.venue : null;
     const venueClause = v && v.adequacy === 'sufficient' ? moveClause(v) : '';
-    const venueLine = v?.current && v.current.timeKnown !== false && !isStale(v) ? `Across every seat in the venue, they start at ${formatUsd(v.current.priceCents)}${venueClause ? `, ${venueClause}` : ''}; that includes seats away from the ${z}.` : '';
+    const venueLine = v?.current && v.current.timeKnown !== false && !isStale(v) ? `Across every seat in the venue, they start at ${formatUsd(v.current.priceCents)} before fees${venueClause ? `, ${venueClause}` : ''}; that includes seats away from the ${z}.` : '';
     out.push({
       id: 'C_MARKET',
       kind: 'market_price',
-      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees).${move}${venueLine ? ` ${venueLine}` : ''}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${z ? '' : wholeVenue(a.seatingPreference ?? null)}`,
+      text: `${lead} ${formatUsd(c.current.priceCents)} a ticket (listed price, before fees)${moveTail}.${move}${venueLine ? ` ${venueLine}` : ''}${supplyText(m.supply)}${group !== null ? ` Some are bigger blocks that may not split into exactly ${q}.` : ''}${z ? '' : wholeVenue(a.seatingPreference ?? null)}`,
       items: [
-        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' with two or more tickets' : ''}${where}, ${undated ? `read ${checkedAt(c.current.at, a.timeZone)} (the data doesn’t say when it was last refreshed)` : `checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}.${undated ? '' : move}`,
+        `Lowest asking price${group !== null ? ` with ${group} or more tickets` : m.basis === 'pair' ? ' with two or more tickets' : ''}${where}, ${undated ? `read ${checkedAt(c.current.at, a.timeZone)} (the data doesn’t say when it was last refreshed)` : `checked ${checkedAt(c.current.at, a.timeZone)}${ageHours < MARKET_RECENT_HOURS ? '' : ` (about ${ageHours} hours ago)`}`}: ${formatUsd(c.current.priceCents)} a ticket before fees${q > 1 ? ` (about ${formatUsd(roundToDollar(c.current.priceCents * q))} for ${countWord(q)})` : ''}${moveTail}.`,
         ...(venueLine ? [venueLine] : []),
         ...(m.supply.now !== null
           ? [group !== null && m.supplyScope === 'group' ? `${supplyText(m.supply).trim()} Some are bigger blocks that may not split into exactly ${q}.` : `About ${count(m.supply.now)} resale listings ${z ? 'across the venue' : 'in all'}${moved(m.supply)}.`]
@@ -1067,6 +1070,20 @@ function marketClaims(a: BuildPacketArgs, obs: string): ClaimRecord[] {
       values: { listings: m.supply.now, listingsBefore: m.supply.before, trend: m.supply.trend },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       limitations: ['all_listings_not_group_blocks'],
+      ...common,
+    });
+  }
+  // A price to judge needs today's floor, not a trend: one fresh, dated read is enough (brief journeys, Oct 10: "Is this
+  // ticket a good deal? $180 a ticket" with two readings got only "You mentioned $180 a ticket", the quote's own line
+  // having left the comparison to a market section that a short series never writes).
+  if (a.quote && c?.current && c.current.timeKnown !== false && !isStale(c) && !out.some((x) => x.id === 'C_QUOTE_MARKET')) {
+    out.push({
+      id: 'C_QUOTE_MARKET',
+      kind: 'quoted_price',
+      text: `Against resale${group !== null ? ` (listings with ${group} or more tickets)` : ''}: ${floorComparison(a.quote, c.current.priceCents)}`,
+      values: { perTicketCents: a.quote.perTicketCents, listedCents: c.current.priceCents },
+      scope: { quantity: size, seatZone: null, feeBasis: 'listed_before_fees', observedAt: c.current.at.toISOString() },
+      limitations: ['listed_prices_before_fees', 'market_statistics_not_listings'],
       ...common,
     });
   }
@@ -1307,7 +1324,13 @@ function offersClaim(a: BuildPacketArgs, offers: TextOffer[], before: OffersBefo
       ? `${personal.head} ${personal.why} ${basis}${check}`.replace(/\s+/g, ' ').trim()
       : `${changedHead ?? head} ${bits.join(' ')} ${provenance}${check}`.replace(/\s+/g, ' ').trim();
   } else if (open.length >= 2 && open.every((r) => r.tot)) {
-    choice = `${open.map((r) => Name(r.o)).join(' and ')} meet what you asked for so far, but their fees aren’t known yet, so I can’t say which costs less until you see the checkout totals. ${provenance}`;
+    // Two before-fees prices for the same number of tickets still name a pick: the cheaper one, and the fee gap that would
+    // undo it (brief journeys, Oct 10: "which of these two should I take?" got "I can’t say which costs less").
+    const [lo, hi] = [...open].sort(byTotal);
+    const lean = open.length === 2 && lo!.tot!.tickets === hi!.tot!.tickets && hi!.tot!.cents > lo!.tot!.cents && !statedCharges(lo!.o) && !statedCharges(hi!.o) ? hi!.tot!.cents - lo!.tot!.cents : null;
+    choice = lean !== null
+      ? `I’d take ${Name(lo!.o)}: before fees it’s ${formatUsd(lean)} less than ${hi!.o.name} for ${ticketsWord(lo!.tot!.tickets)} (${formatUsd(lo!.tot!.cents)} against ${formatUsd(hi!.tot!.cents)}). Their fees aren’t known yet, so compare the checkout totals: it stays the better buy unless its fees come to ${formatUsd(lean)} more than the other’s. ${provenance}`
+      : `${open.map((r) => Name(r.o)).join(' and ')} meet what you asked for so far, but their fees aren’t known yet, so I can’t say which costs less until you see the checkout totals. ${provenance}`;
   } else if (open.length === 1) {
     const c = open[0]!;
     choice = `${Name(c.o)} is the only one left, but its ${unknownFees(c.o)} aren’t known yet${c.tot && budget !== null ? `: it fits your ${formatUsd(budget)} only if they come to ${formatUsd(budget - c.tot.cents)} or less` : ''}. ${provenance}`;
@@ -2399,7 +2422,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     kind: 'coverage',
     text: noMarket
       ? marketShown
-        ? market.some((c) => c.customerVisible && c.kind === 'market_price')
+        ? market.some((c) => c.customerVisible && (c.kind === 'market_price' || c.id === 'C_QUOTE_MARKET'))
           ? `Those figures are StubHub and Vivid Seats resale prices before fees. They show where the market is, not seats I’ve checked, and they can move quickly.`
           // Only a count is shown: calling it "resale prices" described numbers the email doesn't have (live Red Wings email).
           : `That count is from StubHub and Vivid Seats. It isn’t seats I’ve checked, and it can move quickly.`
@@ -2412,7 +2435,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     limitations: [],
     // With a listing we read and no market to set it against, its verdict already says so; once is enough.
     // Nor beside the listing-link line, which already says what we could and couldn't see (live Oct 2, Rangers).
-    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching || (a.link && !a.link.eventPage))),
+    // Nor under seats named from the listings: "I can’t see live resale listings" beside a StubHub pick contradicts it
+    // (brief journeys, Oct 10: a thin trend series hid the market section, and the line printed under the pick).
+    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching || (a.link && !a.link.eventPage) || claims.some((c) => c.id === 'C_PICKS' && c.customerVisible))),
   });
   if (a.policy.nextCheckpointAt) {
     claims.push({
@@ -2459,7 +2484,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
         const head = call ? `${call.lead} ${call.why}, and ${noTrend}, so waiting would be a guess.` : `${view?.lead ? `${view.lead} ` : ''}${noTrend}, so I can’t tell you whether prices are rising or falling, and waiting would be a guess.`;
         // No price and no trend: the decision still has an answer, the price they'd pay (launch A15, "should I hold off?").
         const priceDecides = !call && !view && !sub?.perTicketCents && !gap && !thin && !a.trendAsked.riskOk ? ' So it comes down to the price: if it’s one you’re happy to pay, I wouldn’t hold off for a drop I can’t show you.' : '';
-        return `${head}${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet.'}${priceDecides}${risk}${view?.after ?? ''}`;
+        return `${head}${gap ? ` ${gap}` : thin ? ` ${thin.text}` : ' I haven’t collected a comparable price history for it yet: a few days of its prices would show which way they’re moving.'}${priceDecides}${risk}${view?.after ?? ''}`;
       })();
     for (const c of claims) if (['C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
     // A short follow-up about the row already chosen gets its answer, the other rows and the checks: not the row's

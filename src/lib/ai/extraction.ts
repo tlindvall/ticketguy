@@ -497,7 +497,8 @@ export function missingMandatoryFields(x: RequestExtraction, opts: { eventResolv
  */
 export function titleCaseName(name: string): string {
   // A matchup's separator stays lower case: "Rangers vs Lightning", not "Rangers Vs Lightning".
-  return name.replace(/\b[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1)).replace(/\b(Vs|Versus|Against)\b/g, (w) => w.toLowerCase());
+  // Never the letter after an apostrophe: "St. John's", not "St. John'S" (brief journeys, Oct 10).
+  return name.replace(/(?<![\w'\u2019])[a-z][a-z'\u2019-]*/g, (w) => w[0]!.toUpperCase() + w.slice(1)).replace(/\b(Vs|Versus|Against)\b/g, (w) => w.toLowerCase());
 }
 
 /**

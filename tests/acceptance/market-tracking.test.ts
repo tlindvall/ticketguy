@@ -137,7 +137,7 @@ describe('resale market tracking', () => {
     const claims = (adv!.packet as { claimRecords: Array<{ id: string; customerVisible: boolean; text: string }> }).claimRecords;
     const m = claims.find((x) => x.id === 'C_MARKET')!;
     expect(m.customerVisible).toBe(false);
-    expect(m.text).toBe('Resale listings with two or more tickets currently start at $130 a ticket (listed price, before fees). That’s down from $160 three days ago. About 400 listings are up.');
+    expect(m.text).toBe('Resale listings with two or more tickets currently start at $130 a ticket (listed price, before fees), down from $160 three days ago. About 400 listings are up.');
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     expect(rec!.bodyText).not.toContain('Resale listings');
   });

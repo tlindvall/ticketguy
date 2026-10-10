@@ -12,9 +12,11 @@ export type ProductAnswer = { lead: string; items: string[] };
 // A pack of tickets ("four-pack", "4-pack", "pack of four") is a product too (live Oct 9: "Which MRAK ticket should four
 // of us buy?" with a four-pack and GA on the page).
 const PACK = /\b(?:(?:[2-9]|two|three|four|five|six)[- ]packs?|packs? of (?:[2-9]|two|three|four|five|six)|group (?:tickets?|pass(?:es)?|bundles?))\b/i;
-const PRODUCT_WORDS = new RegExp(`\\b(?:suite reservations?|suites?|(?:[2-9]|two|three|multi)[- ]day (?:tickets?|pass(?:es)?)|(?:single[- ]day|weekend) pass(?:es)?)\\b|${PACK.source}`, 'i');
+// "Which admission tier should four of us buy?" names the choice without naming a product: the tiers are the catalog's
+// (brief journeys, Oct 10: it went to a resale search with a trend block instead).
+const PRODUCT_WORDS = new RegExp(`\\b(?:suite reservations?|suites?|(?:[2-9]|two|three|multi)[- ]day (?:tickets?|pass(?:es)?)|(?:single[- ]day|weekend) pass(?:es)?|(?:admission|ticket|price) (?:tiers?|types?))\\b|${PACK.source}`, 'i');
 // "Which MRAK ticket should four of us buy?": which, then a ticket within a few words, is a choice of ticket type.
-const ASKS_CHOICE = /\bwhich (?:one |should|do|would|is|of)\b|\bwhich (?:\S+\s+){0,3}?tickets?\b|\bstart with\b|\b(?:could|can|should) (?:i|we) (?:buy|split|share|use)\b|\bsplit(?:ting)?\b|\bis (?:it|this|that) (?:the )?(?:concert )?(?:admission|ticket)\b/i;
+const ASKS_CHOICE = /\bwhich (?:one |should|do|would|is|of)\b|\bwhich (?:\S+\s+){0,3}?(?:tickets?|tiers?|types?)\b|\bstart with\b|\b(?:could|can|should) (?:i|we) (?:buy|split|share|use)\b|\bsplit(?:ting)?\b|\bis (?:it|this|that) (?:the )?(?:concert )?(?:admission|ticket)\b/i;
 /** The pack's size, from its name ("four-pack", "4-pack", "pack of 4"). */
 const packSize = (text: string): number | null => {
   const m = /\b(?:([2-9]|two|three|four|five|six)[- ]packs?|packs? of ([2-9]|two|three|four|five|six))\b/i.exec(text);
@@ -51,7 +53,8 @@ export function productChoiceAnswer(latest: string, thread: string, event: Produ
   // A pack sized for their group (live Oct 9, MRAK: "Which ticket should four of us buy?"): the recommendation first,
   // on its terms; cheaper per person only when their own figures say so, never from a price we haven't seen; the
   // pack's admission terms and the fees at checkout to confirm. No seats, no prices and no resale trend are read here.
-  const pack = packSize(all);
+  // The pack they name, or the one the catalog sells for this show when they ask which tier without naming it.
+  const pack = packSize(all) ?? (PRODUCT_WORDS.test(latest) ? packSize(others.map((o) => o.name).join('\n')) : null);
   const q = opts.quantity ?? null;
   if (pack && q && pack === q && !SPLIT.test(latest)) {
     const word = ['', '', 'two', 'three', 'four', 'five', 'six'][pack]!;

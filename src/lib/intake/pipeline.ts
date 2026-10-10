@@ -157,7 +157,10 @@ export type ConstraintConflict = {
 };
 
 /** The keys that earn a clarification round. Ambiguities are a closed vocabulary, so this can match them. */
-const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', 'best_goal', ...AMBIGUITY_KINDS];
+const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', 'best_goal', 'listing_details', ...AMBIGUITY_KINDS];
+/** "this ticket", "these seats", "that pair": a listing they have in front of them. */
+const UNSEEN_LISTING = /\b(?:this|these|that|those)\s+(?:[\w'\u2019-]+\s+){0,3}?(?:tickets?|seats?|pair|listing|offer)\b/i;
+const LISTING_ASK = 'Send me the price, section and row of the one you’re looking at (a screenshot of the listing works), and I’ll tell you straight whether it’s a good deal.';
 
 /**
  * What we tell the customer when no event could be attached — which depends entirely on why.
@@ -694,6 +697,23 @@ export class Concierge {
       return { state: 'closed', revision: rev, extraction: merged };
     }
 
+    // "Do you charge for this?" asked about the service, on its own: answered plainly (it's free; some links pay us a
+    // commission that never changes the pick), never the ticket brief sent again (brief journeys, Oct 10: J9 got the
+    // same seats back). Mid-request it's a side question, so the request keeps its brief, revision and state.
+    if (asksServiceCost(latestText)) {
+      const line = 'No, I don’t charge you anything: Ticket Guy is free to use. Some ticket links pay Ticket Guy a small commission from the seller, and that never changes what I recommend.';
+      const tail = priorVersion ? ASIDE_TAIL : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
+      const rev = priorVersion ? req.currentRevision : 1;
+      if (!priorVersion) {
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+        await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      }
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'What it costs'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${line}</strong></p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `service_cost:${msg.id}` });
+      if (priorVersion) return this.answeredAside(req, msg, 'service_cost_answered');
+      await this.transition(req.id, 'closed', 'service_cost_answered');
+      return { state: 'closed', revision: rev, extraction: merged };
+    }
+
     // What they need help with, accumulated over the conversation (pilot measurement).
     const tags = problemTypesFor(extraction, msg.sanitizedText ?? '', { listing: !!listing.fields || listing.images > 0, link: ticketLinksIn(extraction.submittedUrls).length > 0 });
     const allTags = [...new Set([...(req.problemTypes ?? []), ...tags])];
@@ -929,7 +949,10 @@ export class Concierge {
     const bestOpen = !picked && !!merged.performerOrTeam && merged.quantity === null && !merged.dateExpression && !merged.resolvedLocalDate && !ticketLinksIn(merged.submittedUrls).length && BEST_TICKETS.test(flat(latestText)) && !BEST_GOAL.test(flat(latestText)) && known.find((k) => k.name === merged.performerOrTeam)?.kind !== 'team';
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
-    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : req.clarificationCount });
+    // "Is this Dua Lipa ticket a good deal?" with no price, link or screenshot: the ticket they mean is what decides it,
+    // so it is the one ask, never a search for other seats on an assumed two (brief journeys, Oct 10, J2c).
+    const unseenListing = !picked && questionsAsked(flat(latestText)).worth && UNSEEN_LISTING.test(flat(latestText)) && merged.quotedPriceCents == null && !listing.fields && !listing.images && !ticketLinksIn(merged.submittedUrls).length && !supplied.textOffers.length;
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: !unseenListing && (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : req.clarificationCount });
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
@@ -1068,7 +1091,7 @@ export class Concierge {
     const bestOnFile = bestOpen && resolution.kind !== 'no_match' && !elsewhere.length;
     const bestKey = bestSaid && !bestAskedBefore ? (eventResolved || bestOnFile ? 'best_goal' : 'best_goal_open') : null;
     if (bestAskedBefore) assumptions.push(BEST_ASSUMED);
-    const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities, ...(bestKey ? [bestKey] : [])];
+    const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities, ...(bestKey ? [bestKey] : []), ...(unseenListing ? ['listing_details'] : [])];
 
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: unresolved, createdBy: 'system' });
     // beat_offer is a parsed marketplace ticket link, not any URL: a schedule page or an FAQ isn't an offer (gap 39).
@@ -1320,7 +1343,7 @@ export class Concierge {
       const countOpen = qKeys.includes('quantity');
       const bestQ = bestKey === 'best_goal' && !official ? (countOpen ? withCount(BEST_GOAL_ASK) : BEST_GOAL_ASK) : null;
       const otherKeys = (eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys).filter((k) => k !== 'quantity');
-      const lead = conflictAsk ?? nextStep ?? bestQ ?? eventQuestion ?? clarificationQuestions(otherKeys, merged)[0] ?? null;
+      const lead = conflictAsk ?? nextStep ?? bestQ ?? eventQuestion ?? (unseenListing ? LISTING_ASK : null) ?? clarificationQuestions(otherKeys.filter((k) => k !== 'listing_details'), merged)[0] ?? null;
       const question = imageUnread ? (skippedNote ? IMAGE_UNREAD_OR_TYPE : IMAGE_UNREAD_ASK) : bestOnly ? BEST_OPEN_ASK : lead ? (countOpen && lead !== bestQ ? withCount(lead) : lead) : countOpen ? clarificationQuestions(['quantity'], merged)[0]! : null;
       const questions = question ? [question] : [];
       // The goal wasn't the question this time (the open sale answers without ranking seats): kept open, not "asked",
@@ -5572,6 +5595,17 @@ export function capabilityOnly(text: string): boolean {
   const t = flat(text);
   if (!ON_SALE_ASKED.test(t) && !/\bon[- ]sale alerts?\b/i.test(t)) return false;
   return /\b(?:only|just) asking\b|\bjust say so\b|\b(?:is|are) (?:the |your )?(?:automatic )?(?:on[- ]sale )?(?:alert|alerts) (?:feature )?(?:actually )?(?:available|on|working)\b|\bfeature (?:actually )?available\b|\b(?:do not|don'?t) (?:create|start|set up) (?:a|any)\b[^.?!]{0,30}\b(?:search|watch)\b|\b(?:do not|don'?t) invent\b/i.test(t);
+}
+
+/**
+ * "Do you charge for this?", "Is this free?", "Do I have to pay you?": a question about what the service costs, asked on
+ * its own. Ticket prices ("how much does it cost?") are not this, and a message that also asks for tickets is a request.
+ */
+export function asksServiceCost(text: string): boolean {
+  const t = flat(text);
+  const asked = /\b(?:do|will|would) you (?:guys )?charge\b|\bwhat do you charge\b|\bis (?:this|it|ticket guy|this service|your service|the service) (?:really |actually |completely )?free\b|\b(?:do|will) (?:i|we) (?:have to |need to )?pay (?:you|ticket guy|for (?:this|your (?:help|service|advice)))\b|\bhow much (?:do you|does ticket guy|does (?:this|your) service) (?:cost|charge)\b|\bany (?:fee|charge|cost) for (?:using )?(?:this service|your (?:help|service|advice)|ticket guy)\b/i.test(t);
+  if (!asked) return false;
+  return !/\b(?:need|want|looking for|find|get|buy)\b[^.?!]{0,30}\b(?:tickets?|seats?)\b|\b\d+\s+(?:tickets?|seats?)\b/i.test(t);
 }
 
 export function asksOutsideTickets(text: string): boolean {
