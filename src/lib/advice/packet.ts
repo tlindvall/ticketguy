@@ -615,7 +615,11 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
     code = 'stick_with_yours';
   } else if (a.quote && floor !== null) {
     const where = priceAgainstFloor(a.quote, floor);
-    text = floorComparison(a.quote, floor);
+    // A venue-wide floor values no particular seats, so it never makes a price "fair" or "a deal" (TG-B04); but the
+    // reply still says what I'd do (Oct 10 brief, J2: "it doesn't tell me what these seats are worth" left them with
+    // nothing to act on): above the cheapest seat, these seats are the only reason to pay more.
+    const decision = where === 'above' ? (sub.section ? `I’d buy these only if section ${sub.section} is where you want to sit: I have nothing listed near it to compare them with. ` : 'I’d buy these only if they’re the seats you want: I have nothing listed near them to compare them with. ') : '';
+    text = `${decision}${floorComparison(a.quote, floor)}`;
     code = `price_${where}`;
   } else {
     text = 'I can’t compare its price with the market yet, so the details below are what to check before you pay.';
@@ -2584,9 +2588,10 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     }
     // The buy-or-wait answer already says how the series moved: the market section keeps its figures, not the move again.
     const move = a.trendAsked && a.market?.context && claims.some((c) => c.id === 'C_TREND_ANSWER' && c.customerVisible && c.values.source === 'resale_series') ? moveClause(a.market.context) : '';
+    // The move rides in the price's own sentence (", down from $150 three days ago."), so that tail is what goes.
     if (move) for (const c of claims) if (c.id === 'C_MARKET') {
-      c.text = c.text.replace(` That’s ${move}.`, '');
-      c.items = c.items?.map((i) => i.replace(` That’s ${move}.`, ''));
+      c.text = c.text.replace(`, ${move}.`, '.');
+      c.items = c.items?.map((i) => i.replace(`, ${move}.`, '.'));
     }
   }
   // The $20 parking price is not a ticket price to judge against the market, and a question about what gets them in

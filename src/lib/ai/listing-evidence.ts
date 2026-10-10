@@ -377,10 +377,16 @@ export function usableListing(r: ListingRead): boolean {
  * Pasted text that reads like a listing: a price next to a section, row or seat, and something that says it's a
  * listing they found (a marketplace, "found", "listing", "this one"). "Row 1 preferred, budget $300" is a request.
  */
+/** Asking us to judge an offer: "a good deal", "worth it", "should I buy these". */
+const JUDGE_OFFER = /\b(?:(?:a )?good deal|fair price|worth (?:it|the money|buying|getting)|overpriced|rip-?off|should (?:i|we) (?:buy|get|grab|take) (?:it|them|these|this|that)|is (?:this|that|it) (?:a )?(?:good|fair|decent|ok|okay) (?:price|deal))\b/i;
+
 export function looksLikeListingText(text: string): boolean {
   if (!/\$\s?\d/.test(text) || !/\b(sec(tion)?|row|seats?)\s*[:#]?\s*[a-z0-9]/i.test(text)) return false;
-  if (!/\b(stubhub|ticketmaster|seatgeek|vivid|gametime|tickpick|axs|listing|listed|found|seeing|this one|these|checkout|ea\b|each)\b/i.test(text)) return false;
-  return !/\b(budget|up to|no more than|max(imum)?|under)\s*\$/i.test(text) || /\b(listing|listed|found|seeing|stubhub|vivid|seatgeek|ticketmaster)\b/i.test(text);
+  // "Is this ticket a good deal? $180 a ticket, section 112, row 8" (the brief's J2, Oct 10): asking us to judge a price
+  // with its seats marks it as their offer as surely as naming the marketplace does.
+  if (!/\b(stubhub|ticketmaster|seatgeek|vivid|gametime|tickpick|axs|listing|listed|found|seeing|this one|these|checkout|ea\b|each)\b/i.test(text) && !JUDGE_OFFER.test(text)) return false;
+  // "a budget of $300" is a budget as much as "budget $300" is.
+  return !/\b(budget(?: of| is)?|up to|no more than|max(imum)?|under|spend)\s*\$/i.test(text) || /\b(listing|listed|found|seeing|stubhub|vivid|seatgeek|ticketmaster)\b/i.test(text);
 }
 
 export type ListingImage = { mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; base64: string };

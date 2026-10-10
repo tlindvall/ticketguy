@@ -1400,3 +1400,11 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - A shared 10-minute read assumes one process; several Render instances would each keep their own.
 - The holding note, the expiry re-research and the hold outcome are fixture-tested only.
 - Still open from the audit: the launch cliff, test-mode capture, the listing-id equivalence, model pricing, the open-web finder, enforce mode, the 256 KB webhook cap, the screenshot-reader eval, and journey residues 48 to 56 in the audit's gap list.
+
+**Merged onto the post-merge review fixes (#129), three owner-facing calls made on the way:**
+- **A typed listing is judged like a screenshot.** "Is this Dua Lipa ticket a good deal? $180 a ticket, section 112, row 8" got "You mentioned $180 a ticket" and a venue-wide floor that, by its own words, valued no seats. Asking us to judge a price with its seats now marks the text as their listing (looksLikeListingText, JUDGE_OFFER), so the same reader and verdicts run: in the journey, "I'd choose this alternative" against a pair in section 112. "With a budget of $300" now counts as a budget there too.
+- **Above the cheapest seat with nothing comparable near theirs, the reply still says what I'd do:** "I'd buy these only if section 109 is where you want to sit: I have nothing listed near it to compare them with." No fairness claim from a venue-wide floor (TG-B04 stands).
+- **The pack answer leads with the recommendation** in the owner's framework words (case 9): "The four-pack looks best for your group, provided its entry conditions suit you." The review's objection (a verdict with no figures) is met by saying the unseen prices once as the condition, never "cheaper per person" without their figures. This reverses the "send me both prices first" wording from the post-merge fix.
+
+**Not verified live.** Every journey runs on fixtures and a scripted reader; the production model (gpt-6.1-sol) has not read a typed listing or a screenshot in this form.
+

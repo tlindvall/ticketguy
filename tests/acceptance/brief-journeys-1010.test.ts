@@ -169,13 +169,15 @@ const blankRead: ListingRead = { kind: 'ticket_listing', sensitiveContent: false
 class ScriptedReader implements ListingReader {
   readonly name = 'scripted';
   queue: ListingRead[] = [];
-  async read(input: { image?: ListingImage | null }): Promise<ListingRead> {
-    if (!input.image) return { ...blankRead, kind: 'unrelated', confidence: 'low' };
+  /** What the model reads from listing text they typed (production sends that text to the same reader). */
+  text: ListingRead | null = null;
+  async read(input: { image?: ListingImage | null; text?: string | null }): Promise<ListingRead> {
+    if (!input.image) return input.text && this.text ? this.text : { ...blankRead, kind: 'unrelated', confidence: 'low' };
     return this.queue.shift() ?? { ...blankRead, kind: 'unrelated', confidence: 'low' };
   }
 }
 
-type Turn = { text: string; subject?: string; read?: Partial<RequestExtraction>; screenshots?: Array<Partial<ListingRead>> };
+type Turn = { text: string; subject?: string; read?: Partial<RequestExtraction>; screenshots?: Array<Partial<ListingRead>>; typedListing?: Partial<ListingRead> };
 type Email = { subject: string; body: string; text: string; messageClass: string };
 type Seen = { requestId: string; state: string; eventId: string | null; brief: RequestExtraction; emails: Email[]; blocked: string[]; requests: number; jid: string };
 
@@ -270,6 +272,7 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
     for (const [i, tu] of turns.entries()) {
       if (tu.read) extractor.reads.set(tu.text.trim(), tu.read);
       reader.queue = (tu.screenshots ?? []).map((s) => ({ ...blankRead, ...s }) as ListingRead);
+      reader.text = tu.typedListing ? ({ ...blankRead, kind: 'ticket_listing', confidence: 'high', ...tu.typedListing } as ListingRead) : null;
       const attachments = await Promise.all((tu.screenshots ?? []).map(async (_, k) => ({ filename: `listing-${k + 1}.png`, contentType: 'image/png', bytes: await png(shades[k]!) })));
       const built = await buildTestInbound(h.db, env, { from: rid ? null : TESTER(jid), subject: rid ? null : (tu.subject ?? 'Tickets'), text: tu.text, replyToRequestId: rid, attachments }, CLOCK);
       if (!built.ok) throw new Error(`${jid} turn ${i + 1}: ${built.error}`);
@@ -384,12 +387,15 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
   describe('J2: is this Dua Lipa ticket a good deal?', () => {
     const DUA = { performerOrTeam: 'Dua Lipa', intent: 'new_search' } as const;
     it('(a) with the price, section and row in the text', async () => {
-      const [s] = await journey('j2a', [{ text: 'Is this Dua Lipa ticket a good deal? $180 a ticket, section 112, row 8.', subject: 'Dua Lipa', read: { ...DUA, quantity: null, quotedPriceCents: 18000, quotedPriceBasis: 'per_ticket' } }]);
+      // Production sends their typed listing to the same reader as a screenshot; this is what it reads from the text.
+      const [s] = await journey('j2a', [{ text: 'Is this Dua Lipa ticket a good deal? $180 a ticket, section 112, row 8.', subject: 'Dua Lipa', read: { ...DUA, quantity: null, quotedPriceCents: 18000, quotedPriceBasis: 'per_ticket' }, typedListing: { priceText: '$180 a ticket', priceDollars: 180, priceBasis: 'per_ticket', feeBasis: 'unknown', section: '112', row: '8' } }]);
       expect(s!.eventId).toBe(EV.duaLipa);
       expect(s!.brief).toMatchObject({ quotedPriceCents: 18000 });
       const text = all(s!);
       expect(text).toContain('$180');
-      expect(text).toContain('$17 a ticket above the cheapest listing I can see ($163 before fees)');
+      // Their typed listing is judged like a screenshot: a verdict against comparable pairs in their section, and a link.
+      expect(text).toContain('I’d choose this alternative. Your pair is $360, and I can’t tell whether that includes fees; this comparable pair in section 112, row 12 is $326 before fees, in the same section: $34 less as listed, so compare the checkout totals.');
+      expect(text).toMatch(/Search StubHub for section 112: http/);
       expect(text).not.toMatch(/send me the (?:price|link|screenshot)|what(?:\u2019|')s the price/i);
       const breaks = rules(s!, ['event']);
       // Two was assumed, so an acknowledgment ("Got it. Here's what I have:") goes out seconds before the answer even
@@ -404,6 +410,8 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
       const text = all(s!);
       expect(text).toMatch(/\$186|\$446/);
       expect(text).toMatch(/[Ss]ection 109/);
+      // Nothing listed near section 109: no fairness claim from a venue-wide floor (TG-B04), but still what I'd do.
+      expect(text).toContain('I’d buy these only if section 109 is where you want to sit: I have nothing listed near it to compare them with.');
       expect(rules(s!, ['event', 'quantity'])).toEqual([]);
     });
     it('(c) with nothing to judge: one ask for the price, section and row, or the screenshot', async () => {

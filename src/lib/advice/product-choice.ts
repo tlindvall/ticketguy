@@ -50,10 +50,11 @@ export function productChoiceAnswer(latest: string, thread: string, event: Produ
   const all = `${thread}\n${latest}`;
   // A follow-up about splitting the 2-day ticket named in the thread counts too.
   if (!asksProductChoice(latest) && !(SPLIT.test(latest) && PRODUCT_WORDS.test(all))) return null;
-  // A pack sized for their group (live Oct 9, MRAK: "Which ticket should four of us buy?"): which to buy, why in a line,
-  // then one next step. A recommendation only with a reason read from their own figures, never from the pack's size alone
-  // or a price we haven't seen; each caveat said once (Oct 10 review: the terms caveat three times, and "the four-pack
-  // looks best" followed by a paragraph saying there was nothing to base it on). No seats, prices or resale trend are read.
+  // A pack sized for their group (live Oct 9, MRAK: "Which ticket should four of us buy?"): the recommendation first, in the
+  // owner's framework words (Oct 10, case 9: "The four-pack looks best for your group, provided its entry conditions suit
+  // you"), then the one thing that would change it and the next step. "Cheaper per person" only from their own figures,
+  // never from a price we haven't seen; each caveat said once (Oct 10 review: the terms caveat three times). No seats,
+  // prices or resale trend are read.
   // The pack they name, or the one the catalog sells for this show when they ask which tier without naming it.
   const pack = packSize(all) ?? (PRODUCT_WORDS.test(latest) ? packSize(others.map((o) => o.name).join('\n')) : null);
   const q = opts.quantity ?? null;
@@ -70,7 +71,7 @@ export function productChoiceAnswer(latest: string, thread: string, event: Produ
         ? { lead: `The ${word}-pack is the better buy for your group on the figures you gave: ${usd(each)} each against ${usd(single)} for GA.`, items: [`Before you buy, confirm ${terms} and ${unseen}.`] }
         : { lead: `${word.replace(/^./, (c) => c.toUpperCase())} individual GA tickets are the better buy for your group on the figures you gave: the ${word}-pack works out at ${usd(each)} each against ${usd(single)}.`, items: [`Before you buy, check ${unseen}.`] };
     }
-    return { lead: `The ${word}-pack is sized for your group, but which works out cheaper depends on two prices I haven’t seen: the pack’s and ${word} GA tickets’.`, items: [`Send me both prices from the page and I’ll tell you which to buy. If you go for the pack, confirm ${terms} first.`] };
+    return { lead: `The ${word}-pack looks best for your group, provided its entry conditions suit you.`, items: [`Whether it works out cheaper per person than ${word} GA tickets depends on two prices I haven’t seen: compare the pack with ${word} singles at checkout, or send me both and I’ll check. Before you buy, confirm ${terms}.`] };
   }
   const multi = others.find((o) => isMultiDay(o.name)) ?? null;
   const suite = others.find((o) => isSuite(o.name)) ?? null;

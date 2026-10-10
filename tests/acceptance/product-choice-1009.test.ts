@@ -59,10 +59,12 @@ describe('a ticket-type choice for a group: the pack recommended first, its term
     const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     expect(sends).toHaveLength(1);
     const body = sends[0]!.bodyText;
-    // No prices in the thread: no pick made on the pack's size alone, and each caveat once (Oct 10 review: "looks best",
+    // No prices in the thread: the pack first, in the framework's words, never "cheaper" without figures, each caveat once (Oct 10 review: "looks best",
     // then a paragraph saying there was nothing to base it on, and the terms caveat three times).
-    expect(body).toContain('Hey,\n\nThe four-pack is sized for your group, but which works out cheaper depends on two prices I haven’t seen: the pack’s and four GA tickets’.\n\nSend me both prices from the page and I’ll tell you which to buy. If you go for the pack, confirm the pack’s admission terms (who it admits, whether everyone has to enter together, and any age or ID rule) first.');
-    expect(body).not.toMatch(/looks best|before you buy.*before you buy/is);
+    expect(body).toContain('Hey,\n\nThe four-pack looks best for your group, provided its entry conditions suit you.\n\nWhether it works out cheaper per person than four GA tickets depends on two prices I haven’t seen: compare the pack with four singles at checkout, or send me both and I’ll check. Before you buy, confirm the pack’s admission terms (who it admits, whether everyone has to enter together, and any age or ID rule).');
+    expect(body).not.toMatch(/cheaper per person than four GA tickets\./);
+    // Each caveat once in the reply (the signature's "before you buy" is not a caveat).
+    expect(body).not.toMatch(/Before you buy,.*Before you buy,|haven’t seen.*haven’t seen/s);
     expect(body.match(/haven’t seen/g)).toHaveLength(1);
     expect(body).not.toMatch(/resale|trend|going up|going down|buy now or wait|On buy or wait|\$\d|[–—]/);
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
