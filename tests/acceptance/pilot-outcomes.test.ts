@@ -68,16 +68,26 @@ describe('pilot outcomes', () => {
     // The advice went out (tests have no email provider, so it is marked delivered here).
     await h.db.update(t.sendIntents).set({ state: 'delivered' }).where(eq(t.sendIntents.requestId, r.requestId));
     const after = new Date('2026-10-05T15:00:00Z');
-    const later = makeConcierge(h, { env: env(who), now: () => after });
+    // Off (the default, as live today): nothing is queued and nothing recorded, so the request is still asked once
+    // the switch is on. follow_up_sent written before the gate blocked it excluded the request forever (audit gap 36).
+    const live = { APP_MODE: 'live', EMAIL_SEND_ENABLED: 'true', RESEND_API_KEY: 're_test_key', EMAIL_TEST_RECIPIENT_ALLOWLIST: who };
+    const off = makeConcierge(h, { env: testEnv(live), now: () => after });
+    expect((await off.sendFollowUps()).queued).toBe(0);
+    expect((await outcomes(r.requestId)).map((o) => o.kind)).not.toContain('follow_up_sent');
+    expect((await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId))).some((s) => s.messageClass === 'follow_up')).toBe(false);
+    // Switched on (a live send the gate allows): sent once, and recorded.
+    const later = makeConcierge(h, { env: testEnv({ ...live, FOLLOW_UP_ENABLED: 'true' }), now: () => after });
     const pass = await later.sendFollowUps();
     expect(pass.queued).toBeGreaterThanOrEqual(1);
+    expect((await outcomes(r.requestId)).map((o) => o.kind)).toContain('follow_up_sent');
     const follow = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId))).find((s) => s.messageClass === 'follow_up')!;
     expect(follow.bodyText).toContain('did my note change which tickets you bought, or when you bought them?');
     expect(follow.bodyText).not.toMatch(/https?:\/\/(?!ticketguy)/); // no seller links, no pitch
     expect((await later.sendFollowUps()).queued).toBe(0); // once per request
 
-    await later.ingestInbound(inbound({ text: 'Yes, I waited a day like you said and got them cheaper', from: who, subject: 'Re: Rangers', inReplyTo: first.rfcMessageId, references: first.rfcMessageId, receivedAt: after }));
-    await drain(h, later, after);
+    const reader = makeConcierge(h, { env: env(who), now: () => after });
+    await reader.ingestInbound(inbound({ text: 'Yes, I waited a day like you said and got them cheaper', from: who, subject: 'Re: Rangers', inReplyTo: first.rfcMessageId, references: first.rfcMessageId, receivedAt: after }));
+    await drain(h, reader, after);
     const kinds = (await outcomes(r.requestId)).map((o) => o.kind).sort();
     expect(kinds).toEqual(['follow_up_reply', 'follow_up_sent', 'user_reported_purchase']);
     const reply = (await outcomes(r.requestId)).find((o) => o.kind === 'follow_up_reply')!;

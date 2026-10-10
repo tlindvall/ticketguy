@@ -94,7 +94,8 @@ describe('the clarification email', () => {
     // One type size a person reads, 16/24 in Ticket Guy ink, and 20px either side (personal-email design, Oct 3).
     expect(intent!.bodyHtml).toContain('font-size:16px;line-height:24px;color:#142438;');
     expect(intent!.bodyHtml).not.toMatch(/font-size:(?:11|12|13|15)px/);
-    expect(body.trim().endsWith('AI-assisted ticket advice.')).toBe(true);
+    // Every reply says we are not a marketplace, automatic ones included (audit Oct 10, brief).
+    expect(body.trim().endsWith('AI-assisted ticket advice. We never buy, hold or resell tickets.')).toBe(true);
     expect(body).not.toContain('human-reviewed');
     // Left-aligned, not a centred newsletter column.
     expect(intent!.bodyHtml).not.toContain('margin:0 auto');
