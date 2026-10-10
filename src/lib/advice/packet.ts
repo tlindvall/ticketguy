@@ -809,8 +809,43 @@ function notWatchingLine(reason: string | null, quantity: number): string {
   return 'I can’t watch prices for you yet, so nothing is being monitored for this request and no alert will come. Reply any time and I’ll check again.';
 }
 
+/**
+ * "What are tickets like?", "how much are they?", "what's the price?", "how much are resale tickets selling for…?": a
+ * question about the price itself, which the market answers.
+ */
+export const PRICE_ASKED = /\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seats?|prices?) (?:like|going for|at)\b|\bhow much (?:are|is|do|would|for)\b|\bwhat(?:'s|’s| is| are) the (?:price|prices|cost|going rate)\b|\bhow (?:expensive|pricey)\b|\bwhat do (?:tickets|seats) (?:cost|go for|run)\b|\bprice check\b|\b(?:selling|going|trading|listed|priced) (?:for|at)\b|\bgoing rate\b|\b(?:ticket|resale) prices\b/i;
+
+/**
+ * "How much are resale tickets selling for Mind Enterprises tonight?" with no listings to name (live Oct 10: the
+ * show was found, then the email gave no price, said "I can't see live resale listings" in the middle and asked two
+ * questions). The answer is said first: that we have no resale prices for it, the official seller's own price when
+ * the provider publishes one, and where they can look themselves. Null when anything we hold answers it better.
+ */
+function priceAnswer(a: BuildPacketArgs): { text: string; links: Array<{ label: string; url: string }> } | null {
+  if (!PRICE_ASKED.test(a.askedText ?? '')) return null;
+  if (a.quote || a.subject || a.link || (a.best && a.best.comparableTotalCents !== null) || (a.textOffers && a.textOffers.length) || picksAnswer(a)) return null;
+  // Only when there is truly nothing: data held but not shown (licence) isn't "no listings".
+  if (a.market?.context?.current || a.marketAround || a.picks?.picks.length) return null;
+  const title = (a.eventParts?.title ?? a.eventLabel).replace(/\s*\([^)]*\)/g, '').trim();
+  const noun = a.eventNoun ?? 'event';
+  const face = a.faceValue;
+  // The official sale itself ("It's on general sale on Ticketmaster…") is its own line; this gives only its price.
+  const official = face ? ` ${a.official?.seller ?? 'Ticketmaster'}’s own price is ${face.minCents === face.maxCents ? formatUsd(face.minCents) : `${formatUsd(face.minCents)} to ${formatUsd(face.maxCents)}`} a ticket before fees.` : '';
+  const q = encodeURIComponent(title);
+  const links = [
+    { label: `Search StubHub for this ${noun}`, url: `https://www.stubhub.com/search?q=${q}` },
+    { label: `Search Vivid Seats for this ${noun}`, url: `https://www.vividseats.com/search?searchTerm=${q}` },
+  ];
+  return {
+    text: `I don’t have resale prices for ${title}: the StubHub and Vivid Seats listing data I use has no listings for this ${noun} right now.${official} You can see what resale sellers are asking with the links below, and if you send me a price you find, I’ll tell you how it compares.`,
+    links,
+  };
+}
+
 /** At most three questions, each one something that would change the answer and that we don't know yet. */
 function followUpQuestions(a: BuildPacketArgs): string[] {
+  // The price answer ends on its own next step; a questionnaire under it buried the answer (live Oct 10).
+  if (priceAnswer(a)) return [];
   // A watch they asked for gets one next step, the one that unblocks it: the budget when that's what's missing,
   // otherwise seats of theirs to check (PW-EMAIL-FOCUS-01: screenshot, deadline and risk all asked at once).
   if (a.watchStatus && !a.quote && !a.subject && !(a.textOffers && a.textOffers.length >= 2)) {
@@ -1822,6 +1857,13 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // plainly that we can't see one. Listed prices are before fees; nothing here says those seats meet their other needs.
   const realistic = realisticAnswer(a);
   if (realistic) claims.push({ id: 'C_REALISTIC', kind: 'market_price', text: realistic, values: { budgetCents: a.priorities.budgetTotalCents }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['listed_prices_before_fees'], customerVisible: true });
+  const price = priceAnswer(a);
+  if (price) {
+    claims.push({ id: 'C_PRICE_ANSWER', kind: 'coverage', text: price.text, values: { faceMinCents: a.faceValue?.minCents ?? null }, scope: { quantity: q, seatZone: null, feeBasis: a.faceValue ? 'face_value_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['no_resale_listings', 'search_page_not_a_listing'], customerVisible: true, url: price.links[0]!.url, linkLabel: price.links[0]!.label });
+    claims.push({ id: 'C_PRICE_ANSWER_ALT', kind: 'coverage', text: price.links[1]!.label, values: {}, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['search_page_not_a_listing'], customerVisible: true, url: price.links[1]!.url, linkLabel: price.links[1]!.label });
+    // Said once: the answer carries the official price and that there are no resale listings.
+    for (const c of claims) if (c.id === 'C_FACE') c.customerVisible = false;
+  }
   // Their question about the page's rows, answered before anything else about it; the opening summary isn't repeated.
   const shownAnswer = a.subject ? rowsAnswer(a, a.subject) : null;
   if (shownAnswer) claims.push({ id: 'C_ROWS_ANSWER', kind: 'quoted_price', text: shownAnswer, values: { rows: a.subject!.offers?.length ?? 0 }, scope: { quantity: q, seatZone: null, feeBasis: a.subject!.feeBasis, observedAt: a.subject!.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.1', limitations: ['customer_supplied_evidence', 'availability_not_checked'], customerVisible: true });
@@ -2260,7 +2302,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     limitations: [],
     // With a listing we read and no market to set it against, its verdict already says so; once is enough.
     // Nor beside the listing-link line, which already says what we could and couldn't see (live Oct 2, Rangers).
-    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching || (a.link && !a.link.eventPage))),
+    // Nor under the price answer, which already says there are no resale listings.
+    customerVisible: !comparing && !(noMarket && !marketShown && (a.subject || a.quote || marketWatching || (a.link && !a.link.eventPage) || !!price)),
   });
   if (a.policy.nextCheckpointAt) {
     claims.push({

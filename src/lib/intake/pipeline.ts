@@ -54,7 +54,8 @@ import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms
 import { breaks, displayVenue, eventConstraints, localStart, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
 import { eventChangedSince } from '@/lib/domain/event-lifecycle';
 export { eventChangedSince };
-import { checkedAt, joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
+import { PRICE_ASKED, checkedAt, joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
+export { PRICE_ASKED };
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
 import { trendRights } from '@/lib/advice/trend-rights';
@@ -5276,6 +5277,8 @@ export function acknowledgedFacts(e: { name: string; category: string; localStar
     : /\b(buy now|hold off|wait (?:until|till|for|closer)|should i (?:buy|wait)|good time to buy|now or later|buy or wait)\b/i.test(text)
       ? 'whether to buy now or hold off'
       : asksCheapestGame(text) ? `which ${sports ? 'game' : 'show'} has the lowest prices`
+      // "How much are resale tickets selling for…?" is the price, not a comparison with the official seller (live Oct 10).
+      : PRICE_ASKED.test(text) ? (/\bresale\b/i.test(text) ? 'what resale tickets are selling for' : 'what tickets cost')
       : x.resaleAsked ? 'whether resale is cheaper' : null;
   if (question) out.push(`You asked: ${question}`);
   return out;
@@ -5327,9 +5330,6 @@ function observationToOffer(obs: typeof t.offerObservations.$inferSelect, off: t
 
 /** "Some tickets", "a few seats", "not sure how many": an answer that dodges the number, never read as two. */
 const VAGUE_QUANTITY = /\b(?:some|a few|few|several|a bunch of|a handful of)\s+(?:more\s+)?(?:tickets?|seats?)\b|\bnot sure how many\b/i;
-
-/** "what are tickets like?", "how much are they?", "what's the price?": a question the market answers. */
-export const PRICE_ASKED = /\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seats?|prices?) (?:like|going for|at)\b|\bhow much (?:are|is|do|would|for)\b|\bwhat(?:'s|’s| is| are) the (?:price|prices|cost|going rate)\b|\bhow (?:expensive|pricey)\b|\bwhat do (?:tickets|seats) (?:cost|go for|run)\b|\bprice check\b/i;
 
 /** Tickets assumed when the customer does not say: the most common party, and cheap to correct. */
 export const DEFAULT_QUANTITY = 2;
