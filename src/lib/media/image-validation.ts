@@ -99,3 +99,43 @@ export function selectProcessableImages<T extends { byteLength: number; accepted
   }
   return { selected, skipped };
 }
+
+/** An attachment row as stored: enough to say which image was skipped and why. */
+export type SkippedAttachment = { filename: string | null; declaredMimeType: string | null; validationState: string; validationReason: string | null };
+
+/**
+ * One line naming the images we didn't read and why (audit 2026-10-10 gaps 30 and 41): a fourth image, or one past the
+ * size budget, was dropped without a word, and a HEIC photo or a PDF got a generic "send it again". A HEIC or a PDF is
+ * asked for by name as a PNG or JPEG screenshot; anything else that isn't an image or a PDF (a calendar file, a
+ * document) is none of this line's business. Null when nothing was skipped.
+ */
+export function skippedImagesNote(rows: SkippedAttachment[]): string | null {
+  const name = (r: SkippedAttachment) => {
+    const f = (r.filename ?? '').replace(/[^\w .()+-]/g, '').trim().slice(0, 60);
+    return f || 'one image';
+  };
+  const heic = (r: SkippedAttachment) => /^image\/hei[cf]/i.test(r.declaredMimeType ?? '') || /\.hei[cf]$/i.test(r.filename ?? '');
+  const pdf = (r: SkippedAttachment) => /^application\/pdf/i.test(r.declaredMimeType ?? '') || /\.pdf$/i.test(r.filename ?? '');
+  // A GIF is a signature logo or an animation, never a listing screenshot: not named, or every signed email would say so.
+  const image = (r: SkippedAttachment) => !/^image\/gif/i.test(r.declaredMimeType ?? '') && !/\.gif$/i.test(r.filename ?? '') && (/^image\//i.test(r.declaredMimeType ?? '') || /\.(?:png|jpe?g|webp|bmp|tiff?)$/i.test(r.filename ?? ''));
+  const parts: Array<{ name: string; why: string; resend: boolean }> = [];
+  for (const r of rows) {
+    // Held for media budget is a staff task (A45), not a skip; quarantined ones have their own note.
+    if (r.validationState !== 'rejected') continue;
+    // Never fetched from the provider (no download URL, a failed call) is the unread-image reply's case, not a skip.
+    if (/^not_retrieved:/.test(r.validationReason ?? '') && r.validationReason !== 'not_retrieved:too_large') continue;
+    const reason = (r.validationReason ?? '').replace(/^not_retrieved:/, '');
+    if (heic(r)) parts.push({ name: name(r), why: 'it’s a HEIC photo, which I can’t open', resend: true });
+    else if (pdf(r)) parts.push({ name: name(r), why: 'it’s a PDF, which I don’t read', resend: true });
+    else if (!image(r)) continue;
+    else if (reason === 'exceeds_per_message_limits') parts.push({ name: name(r), why: `I read up to ${IMAGE_LIMITS.maxImagesPerMessage} images an email, or ${IMAGE_LIMITS.maxTotalBytes / 1024 / 1024} MB between them`, resend: false });
+    else if (reason === 'too_large' || reason === 'too_many_pixels') parts.push({ name: name(r), why: 'it’s bigger than I can take', resend: true });
+    else parts.push({ name: name(r), why: 'it didn’t open as an image', resend: true });
+  }
+  if (!parts.length) return null;
+  const list = parts.map((p) => `${p.name} (${p.why})`);
+  const said = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0]!;
+  const one = parts.length === 1;
+  const ask = parts.some((p) => p.resend) ? ` Could you send ${one ? 'it as a PNG or JPEG screenshot' : 'them as PNG or JPEG screenshots'}?` : ` Send ${one ? 'it' : 'them'} in another email if ${one ? 'it matters' : 'they matter'}.`;
+  return `I skipped ${said}.${ask}`;
+}

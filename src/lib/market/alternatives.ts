@@ -40,6 +40,15 @@ export function toMarketListing(l: Record<string, unknown>): MarketListing | nul
 }
 
 /**
+ * Rows the feed marks no longer for sale (`active: false`), read with the same fields as live ones. They're never
+ * priced or offered; they only let a linked listing that has gone be said as gone, not as "couldn't find it" (audit
+ * 2026-10-10 gap 6).
+ */
+export function inactiveListings(raw: Array<Record<string, unknown>>): MarketListing[] {
+  return raw.filter((l) => l.active === false || l.active === 0 || l.active === 'false').map((l) => toMarketListing({ ...l, active: true })).filter((l): l is MarketListing => l !== null);
+}
+
+/**
  * A drawback the feed itself states on a listing (Oct 10 framework, B7): a limited or obstructed view, or seats the note
  * says aren't together. Read from the listing's note only, never guessed from its price or section.
  */

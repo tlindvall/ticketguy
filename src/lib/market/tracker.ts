@@ -6,7 +6,7 @@ import { eventLocalDate, localTimeInstants } from '@/lib/domain/dates';
 import { audit } from '@/lib/util/audit';
 import { gate as policyGate, policyForEvent } from '@/lib/intake/service-policy';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
-import { toMarketListing, type MarketListing } from './alternatives';
+import { inactiveListings, toMarketListing, type MarketListing } from './alternatives';
 import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, providerTime, type MarketBasis, type MarketContext, type Point, type SeriesPoint } from './series';
 
 /**
@@ -73,7 +73,8 @@ type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSele
 
 /** Listings reads by event, shared across requests in this process for a few minutes (see recentListings). */
 /** A listings read: when the provider refreshed it, when we fetched it, the rows, and StubHub's event id when known. */
-export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null };
+/** `inactive`: rows the feed marks no longer for sale, kept only to tell a linked listing that has gone (gap 6). */
+export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null; inactive?: MarketListing[] };
 
 /** StubHub's own event id, from the reply when it carries one (undocumented; read defensively) or the id we asked by. */
 export function replyStubHubEventId(r: Record<string, unknown>, askedBy: string | null): string | null {
@@ -510,7 +511,7 @@ export class MarketTracker {
       const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
       await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw, r)}`);
       await this.rememberListings(eventId, raw, providerAsOf);
-      const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null) };
+      const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null), inactive: inactiveListings(raw.filter(isOrdinarySeatListing)) };
       this.lastRead.set(eventId, out);
       RECENT_READS.set(eventId, out);
       return out;
@@ -577,7 +578,7 @@ export class MarketTracker {
     const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
     await this.rememberListings(ev.e.id, listings, asOf);
-    const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null) };
+    const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null), inactive: inactiveListings(listings.filter(isOrdinarySeatListing)) };
     this.lastRead.set(ev.e.id, read);
     RECENT_READS.set(ev.e.id, read);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings, r)}`);

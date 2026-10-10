@@ -3,7 +3,7 @@ import { asksProductChoice, productChoiceAnswer } from '@/lib/advice/product-cho
 import { answerFromEvidence, evidenceAsks } from '@/lib/advice/evidence-answer';
 import { noDashes } from '@/lib/email/punctuation';
 import { headerFirstName, statedFirstName } from '@/lib/domain/names';
-import { MARKETPLACE_NAMES, garbledLinkNote, suppliedOfficialReference, ticketLinksIn } from '@/lib/domain/ticket-links';
+import { MARKETPLACE_NAMES, garbledLinkNote, suppliedOfficialReference, ticketLinksIn, unreadableLinkNote } from '@/lib/domain/ticket-links';
 import { problemTypesFor } from '@/lib/domain/problem-types';
 import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
@@ -19,11 +19,11 @@ import type { NormalizedInbound } from './contract';
 import { detectAutoResponse } from './autoreply';
 import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReferencesChain, normalizeMessageId } from './threading';
 import { enqueueOutbox } from './outbox';
-import { inspectImage, selectProcessableImages } from '@/lib/media/image-validation';
+import { inspectImage, selectProcessableImages, skippedImagesNote } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
 import { areaIntent, areaOf, chooseShownOffer, distinctActs, fieldsFromRead, looksLikeListingText, usableEvidence, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
-import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice } from '@/lib/ai/extraction';
+import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice, parseQuantity } from '@/lib/ai/extraction';
 import { classifyResidence } from '@/lib/domain/country';
 import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/domain/matchup';
 import { correctToKnown } from '@/lib/domain/name-correction';
@@ -481,13 +481,24 @@ export class Concierge {
     }
 
     // A pasted ticket link names the date, the party size and often the team, as surely as typed words do.
+    const quantityTyped = extraction.quantity;
     extraction = applyTicketLinks(extraction, known);
+    // But a link's count never replaces a party size they typed: "four of us" then a link with ?quantity=2 became two
+    // through the merge, and the comparison was for the wrong party (audit 2026-10-10 gap 5). A count that only an
+    // earlier link gave is still replaced by the newer link's.
+    if (quantityTyped == null && extraction.quantity != null && priorBrief?.quantity != null && priorBrief.quantity !== extraction.quantity) {
+      const earlier = (await this.db.select({ text: t.messages.sanitizedText, id: t.messages.id }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound')))).filter((m) => m.id !== msg.id).map((m) => (m.text ?? '').replace(/https?:\/\/[^\s<>"')]+/gi, ' '));
+      if (earlier.some((x) => parseQuantity(x).value === priorBrief.quantity)) extraction = { ...extraction, quantity: null };
+    }
     // So does the listing they show us: a screenshot, or listing text pasted into the email. What it showed is
     // kept as evidence; what it didn't show stays unknown.
     const listing = await this.readListingEvidence(msg, req);
     if (listing.fields) listing.fields = await this.matchupDate(listing.fields, known, req.id, msg.id);
     if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known);
-    const listingNotes = listing.redacted ? [REDACTED_NOTE] : [];
+    // An image we didn't read is named, with why, in one line: a fourth image or one over the size budget was dropped
+    // without a word, and a HEIC or a PDF got a generic "resend" (audit 2026-10-10 gaps 30, 41).
+    const skippedNote = skippedImagesNote(await this.db.select({ filename: t.attachments.filename, declaredMimeType: t.attachments.declaredMimeType, validationState: t.attachments.validationState, validationReason: t.attachments.validationReason }).from(t.attachments).where(eq(t.attachments.messageId, msg.id)));
+    const listingNotes = [...(listing.redacted ? [REDACTED_NOTE] : []), ...(skippedNote ? [skippedNote] : [])];
     // An image they sent (or say they attached) that we couldn't read is said plainly, and nothing is assumed
     // in its place: "Two tickets. Got it" to a screenshot of three was answering an email they didn't send
     // (post-#54 QA, R3-B09).
@@ -914,14 +925,18 @@ export class Concierge {
     // "Find me the best Metallica tickets": an act, no count and no date, and "best" with no goal in it. The goal and the
     // party decide the answer, so they are the one question, asked together, never a menu of dates and three asks
     // (live Oct 9). A team keeps its next home game; a date or a count named goes on as an ordinary request.
-    const bestOpen = !picked && !!merged.performerOrTeam && merged.quantity === null && !merged.dateExpression && !merged.resolvedLocalDate && !merged.submittedUrls.length && BEST_TICKETS.test(flat(latestText)) && !BEST_GOAL.test(flat(latestText)) && known.find((k) => k.name === merged.performerOrTeam)?.kind !== 'team';
+    const bestOpen = !picked && !!merged.performerOrTeam && merged.quantity === null && !merged.dateExpression && !merged.resolvedLocalDate && !ticketLinksIn(merged.submittedUrls).length && BEST_TICKETS.test(flat(latestText)) && !BEST_GOAL.test(flat(latestText)) && known.find((k) => k.name === merged.performerOrTeam)?.kind !== 'team';
     // Assume and say, rather than ask: an unstated quantity is two and a bare budget is the total, and the reply
     // says so in one line the customer can correct. Only a real doubt ("a few tickets") is still asked.
     const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : req.clarificationCount });
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
-    const assumptions = [...(typoNote ? [typoNote] : []), ...(garbled ? [garbled] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
+    // A short or app share link (bit.ly, *.app.link) or one that doesn't parse is named, with the one thing that fixes
+    // it: it counted as "linked" and the reply said nothing about it (audit 2026-10-10 gap 20). Read from their words,
+    // so a link the model left out is still said. Never followed.
+    const unreadableLink = unreadableLinkNote([...latestText.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0]));
+    const assumptions = [...(typoNote ? [typoNote] : []), ...(garbled ? [garbled] : []), ...(unreadableLink ? [unreadableLink] : []), ...listingNotes, ...(pickNote ? [pickNote] : []), ...assumptionLines(assumed, merged)];
 
     // An event outside the US ("Hamilton in London, UK") is out of scope whatever the listings say: we say so
     // straight away, instead of searching US listings and reporting that we couldn't find it. A US state beside
@@ -1055,7 +1070,8 @@ export class Concierge {
     const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities, ...(bestKey ? [bestKey] : [])];
 
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: unresolved, createdBy: 'system' });
-    await this.db.update(t.requests).set({ currentRevision: revision, eventId: eventResolved ? resolution.event.id : null, category: eventResolved ? resolution.event.category : req.category, mode: merged.intent === 'watch_request' ? 'keep_looking' : merged.submittedUrls.length ? 'beat_offer' : 'find_options', updatedAt: now, deadlineAt: merged.decisionDeadline ? new Date(merged.decisionDeadline) : req.deadlineAt }).where(eq(t.requests.id, req.id));
+    // beat_offer is a parsed marketplace ticket link, not any URL: a schedule page or an FAQ isn't an offer (gap 39).
+    await this.db.update(t.requests).set({ currentRevision: revision, eventId: eventResolved ? resolution.event.id : null, category: eventResolved ? resolution.event.category : req.category, mode: merged.intent === 'watch_request' ? 'keep_looking' : ticketLinksIn(merged.submittedUrls).length ? 'beat_offer' : 'find_options', updatedAt: now, deadlineAt: merged.decisionDeadline ? new Date(merged.decisionDeadline) : req.deadlineAt }).where(eq(t.requests.id, req.id));
     if (eventResolved && resolution.event.id !== req.eventId) await audit(this.db, { actor: 'system', action: 'request.event_settled', entityKind: 'contact', entityId: contact!.id, revision, diff: { requestId: req.id, eventId: resolution.event.id } });
     if (revision > 1) await this.invalidateForRevision(req.id, revision);
 
@@ -1188,7 +1204,7 @@ export class Concierge {
     // names whatever the depth (live Oct 9, MRAK at a club): it reads nothing and runs no research, so the Guide route
     // below, which would answer with the official seller and skip the question, leaves it to the product answer.
     let guideNoFieldAsk = false;
-    if (this.env.SERVICE_POLICY_MODE === 'enforce' && resolution.kind === 'resolved' && !picked && !listing.fields && merged.quotedPriceCents == null && !merged.submittedUrls.length && !(!supplied.textOffers.length && asksProductChoice(flat(latestText)))) {
+    if (this.env.SERVICE_POLICY_MODE === 'enforce' && resolution.kind === 'resolved' && !picked && !listing.fields && merged.quotedPriceCents == null && !ticketLinksIn(merged.submittedUrls).length && !unreadableLink && !(!supplied.textOffers.length && asksProductChoice(flat(latestText)))) {
       const snap = await policyForEvent(this.db, this.env, resolution.event.id, now);
       const guideDepth = !!snap && (snap.decision.depth === 'guide' || snap.decision.depth === 'outside' || snap.decision.reasons.includes('operator_blocked'));
       if (snap && guideDepth) await this.db.update(t.requestVersions).set({ servicePolicy: storedPolicy(snap) }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, revision)));
@@ -1230,7 +1246,11 @@ export class Concierge {
     // A Guide event's open sale is its answer whatever feed is configured: Guide depth runs no resale research, and with
     // the resale key set the request used to fall through to research with no party size ("· null tickets", "for all
     // null", Oct 10 audit replay: "Red Storm tickets Nov 12 please", ncaa_regular, enforce).
-    const official = (this.env.SEATDATA_API_KEY && !guideNoFieldAsk) || merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) || resolution.kind !== 'resolved' ? null : await this.officialSale(resolution.event, now);
+    // A marketplace ticket link (or the show's own page they started on) is an offer to judge; a schedule page or an FAQ
+    // they pasted is not, and no longer skips the sale pointer (audit 2026-10-10 gap 39). A short or app share link is
+    // a listing we can't see yet: judged once they send it in full, and its note goes out with the acknowledgment.
+    const linkedOffer = ticketLinksIn(merged.submittedUrls).length > 0 || (resolution.kind === 'resolved' && !!suppliedOfficialReference(merged.submittedUrls, resolution.event.name)) || !!unreadableLink;
+    const official = (this.env.SEATDATA_API_KEY && !guideNoFieldAsk) || merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || linkedOffer || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) || resolution.kind !== 'resolved' ? null : await this.officialSale(resolution.event, now);
     if (unresolved.some((u) => CLARIFIABLE.includes(u) && !(guideNoFieldAsk && (u === 'quantity' || u === 'budget_basis')) && !(u === 'best_goal' && official))) {
       const count = questionRound(req, priorVersion?.unresolvedFields ?? [], unresolved);
       if (count > 3) {
@@ -1300,7 +1320,7 @@ export class Concierge {
       const bestQ = bestKey === 'best_goal' && !official ? (countOpen ? withCount(BEST_GOAL_ASK) : BEST_GOAL_ASK) : null;
       const otherKeys = (eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys).filter((k) => k !== 'quantity');
       const lead = conflictAsk ?? nextStep ?? bestQ ?? eventQuestion ?? clarificationQuestions(otherKeys, merged)[0] ?? null;
-      const question = imageUnread ? IMAGE_UNREAD_ASK : bestOnly ? BEST_OPEN_ASK : lead ? (countOpen && lead !== bestQ ? withCount(lead) : lead) : countOpen ? clarificationQuestions(['quantity'], merged)[0]! : null;
+      const question = imageUnread ? (skippedNote ? IMAGE_UNREAD_OR_TYPE : IMAGE_UNREAD_ASK) : bestOnly ? BEST_OPEN_ASK : lead ? (countOpen && lead !== bestQ ? withCount(lead) : lead) : countOpen ? clarificationQuestions(['quantity'], merged)[0]! : null;
       const questions = question ? [question] : [];
       // The goal wasn't the question this time (the open sale answers without ranking seats): kept open, not "asked",
       // so the next reply is never told it skipped a question it didn't get.
@@ -1344,7 +1364,7 @@ export class Concierge {
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'One quick question'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions.filter((a) => !(settled && resolution.kind === 'resolved' && a === resolution.assumed)), ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'One quick question'), template: 'clarification', vars: { acknowledgement: imageUnread ? (skippedNote ? `${skippedNote} I haven’t assumed anything about the tickets.` : imageUnreadLine(imageUnread)) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes.filter((n) => n !== skippedNote) : [...assumptions.filter((a) => !(settled && resolution.kind === 'resolved' && a === resolution.assumed)), ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -1690,6 +1710,11 @@ export class Concierge {
     // and each is explained on its own (LAUNCH-02: jigitz's prices and Metallica's Sphere date became one request).
     const multiEvent = distinctActs(facts) > 1;
     if (multiEvent) best = null;
+    // Two or more priced screenshots of one event are listings to compare, each with its own price (research reads them
+    // side by side): the first one's price and count aren't the request's (audit 2026-10-10 gap 8). The event they
+    // share still settles which game it is.
+    const pricedShots = [...new Map(facts.filter((f) => f.perTicketCents != null || f.wholePartyCents != null).map((f) => [[f.perTicketCents, f.wholePartyCents, f.quantity, f.section, f.row].join('|'), f] as const)).values()];
+    if (best && !multiEvent && pricedShots.length >= 2) best = { ...best, perTicketCents: null, wholePartyCents: null, quantity: new Set(pricedShots.map((f) => f.quantity)).size === 1 ? pricedShots[0]!.quantity : null };
     const text = msg.sanitizedText ?? '';
     // Two or more offers in their words are compared one by one (text-offers); read as one listing, their fields
     // run together (post-#54 QA, R3-B01).
@@ -3420,7 +3445,51 @@ export class Concierge {
     // ("I'm now happy to buy six… which of the same offers?", "I can raise it to $230… using only my supplied
     // offers"): the same offers, judged again on the changed terms, never a fresh market search (live M01-F1,
     // M03-F1). A follow-up that names an offer itself ("ignore Offer A, only B") is its own question.
-    const { textOffers, offersSetAside } = suppliedOffers(said, threadMessages, venue.timezone);
+    const supplied = suppliedOffers(said, threadMessages, venue.timezone);
+    const { offersSetAside } = supplied;
+    const linkGates = [!licence.allows('tracking') && `licence_${licence.status}`, !trackingOk && 'service_depth_no_market_tracking', !uses.display && 'licence_no_display'].filter((g): g is string => !!g);
+    // Listings they sent side by side in this message, each priced, compared like typed offers and kept apart: two
+    // screenshots of one event (audit 2026-10-10 gap 8: the newest priced row was judged alone), else two marketplace
+    // links (gap 5: the first link was the subject and their facts were mixed).
+    let sideBySide: TextOffer[] = [];
+    if (supplied.textOffers.length < 2 && !offersSetAside.length && latestIds.length) {
+      // Two screenshots of the same listing (same price, count, section and row) are one listing, not a comparison.
+      const shots = [...new Map((await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), inArray(t.listingEvidence.messageId, latestIds), pricedEvidence())).orderBy(asc(t.listingEvidence.createdAt))).map((r) => r.fields as unknown as ListingFields).map((f) => [[f.perTicketCents, f.wholePartyCents, f.quantity, f.section, f.row].join('|'), f] as const)).values()];
+      const days = new Set(shots.map((f) => f.eventDate).filter(Boolean));
+      if (shots.length >= 2 && distinctActs(shots) <= 1 && days.size <= 1) sideBySide = offersFromReads(shots.map((f) => ({ perTicketCents: f.perTicketCents, wholePartyCents: f.wholePartyCents, quantity: f.quantity, section: cleanSeatField(f.section), row: cleanSeatField(f.row), feeBasis: f.feeBasis })), venue.timezone);
+      if (sideBySide.length) await audit(this.db, { actor: 'system', action: 'listing.reads_compared', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { evidence: shots.map(() => 'screenshot'), count: shots.length } });
+    }
+    if (supplied.textOffers.length < 2 && !offersSetAside.length && sideBySide.length < 2) {
+      // One per listing: the same link pasted twice is one link.
+      const pair = [...new Map(ticketLinksIn([...said.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0])).map((l) => [l.listingId ? `${l.marketplace}:${l.listingId}` : l.url, l])).values()];
+      if (pair.length >= 2 && pair.length <= 5) {
+        // Each link's own price: the one its URL carries (a TickPick checkout), or its number looked up in the licensed
+        // feed (one read for all of them). A link with neither isn't priced, and then nothing is compared.
+        const reads: Array<ReadOffer | null> = [];
+        const evidence: string[] = [];
+        let pairRead: Awaited<ReturnType<MarketTracker['currentListings']>> = null;
+        const priceable = pair.every((l) => !!l.priceCents || (!!l.listingId && (l.marketplace === 'stubhub' || l.marketplace === 'vividseats') && !linkGates.length));
+        for (const l of priceable ? pair : []) {
+          if (l.priceCents) {
+            reads.push({ perTicketCents: l.priceCents, wholePartyCents: null, quantity: l.quantity, section: l.section, row: l.row, feeBasis: 'unknown' });
+            evidence.push('url_text');
+            continue;
+          }
+          if (!l.listingId || (l.marketplace !== 'stubhub' && l.marketplace !== 'vividseats') || linkGates.length) {
+            reads.push(null);
+            continue;
+          }
+          pairRead ??= await tracker.currentListings(event.id, 'listings_compare', l.marketplace === 'stubhub' ? l.eventId : null);
+          const m = pairRead ? matchLinkedListing(pairRead.listings, l) : null;
+          reads.push(m ? { perTicketCents: m.priceCents, wholePartyCents: null, quantity: l.quantity ?? quantity, section: m.section, row: m.row, feeBasis: 'before_fees' } : null);
+          evidence.push('api_lookup');
+        }
+        if (priceable && reads.every((r): r is ReadOffer => r !== null)) sideBySide = offersFromReads(reads, venue.timezone);
+        await audit(this.db, { actor: 'system', action: sideBySide.length ? 'listing.links_compared' : 'listing.links_not_compared', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { marketplaces: pair.map((l) => l.marketplace), evidence, priced: reads.filter(Boolean).length } });
+      }
+    }
+    const comparedSent = sideBySide.length >= 2;
+    const textOffers = comparedSent ? sideBySide : supplied.textOffers;
     const judged = textOffers.length >= 2 || offersSetAside.length > 0;
     // The listing they showed us, newest first: what it displayed is the price being checked, with its source.
     const [ev] = await this.db.select().from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), pricedEvidence())).orderBy(desc(t.listingEvidence.createdAt)).limit(1);
@@ -3436,17 +3505,34 @@ export class Concierge {
     // BEFORE fees, plus $48 for the whole order … delivery by 6pm" (live A11-F1 repeated the old summary).
     // The link they sent is acknowledged by name. Its page is never fetched; a listing link is looked up by its
     // listing number in the resale feed we're licensed for, and found or not, never guessed (R-LINK-READ).
-    const sentLink = ticketLinksIn(brief.submittedUrls)[0] ?? null;
+    // The newest link is the one being asked about: submittedUrls run oldest first across the thread, and the first one
+    // ever sent stayed the subject after they sent another ("can you beat this pair?" judged the old listing; audit
+    // 2026-10-10 gap 5).
+    const sentLink = ticketLinksIn(brief.submittedUrls).at(-1) ?? null;
     let around: Awaited<ReturnType<MarketTracker['currentListings']>> = null;
     let linked: SubjectListing | null = null;
     let linkMarket: Parameters<typeof buildPacket>[0]['linkMarket'] = null;
-    const linkGates = [!licence.allows('tracking') && `licence_${licence.status}`, !trackingOk && 'service_depth_no_market_tracking', !uses.display && 'licence_no_display'].filter((g): g is string => !!g);
+    // What became of looking the linked listing up, so the reply says only what was done (audit 2026-10-10 gap 6).
+    let linkLookup: NonNullable<Parameters<typeof buildPacket>[0]['link']>['lookup'] = null;
+    const lookable = !!sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats');
+    // A listing on a marketplace we can't look up by number (SeatGeek, Ticketmaster, Gametime, AXS, TickPick) is said as
+    // not looked up, and traced as such, never as "couldn't match".
+    if (!read && !judged && sentLink?.listingId && !lookable) {
+      linkLookup = { status: 'not_looked_up', why: 'marketplace' };
+      await audit(this.db, { actor: 'system', action: 'listing.link_skipped', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, gates: ['marketplace_not_looked_up'] } });
+    }
     // A listing link not looked up says which gate stopped it; silence here left the live Rangers reply untraceable (PD-R1-01).
-    if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && linkGates.length) await audit(this.db, { actor: 'system', action: 'listing.link_skipped', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, gates: linkGates } });
-    if (!read && !judged && sentLink?.listingId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') && !linkGates.length) {
+    if (!read && !judged && sentLink && lookable && linkGates.length) {
+      linkLookup = { status: 'not_looked_up', why: 'access' };
+      await audit(this.db, { actor: 'system', action: 'listing.link_skipped', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, gates: linkGates } });
+    }
+    if (!read && !judged && sentLink && lookable && !linkGates.length) {
       around = await tracker.currentListings(event.id, 'listings_compare', sentLink.marketplace === 'stubhub' ? sentLink.eventId : null);
       const m = around ? matchLinkedListing(around.listings, sentLink) : null;
-      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0, providerAsOf: around?.providerAsOf?.toISOString() ?? null, retrievedAt: around?.retrievedAt.toISOString() ?? null } });
+      // Its number among the rows the feed marks no longer for sale: it looks gone, not "not found".
+      const gone = !m && around ? matchLinkedListing(around.inactive ?? [], sentLink) : null;
+      await audit(this.db, { actor: 'system', action: m ? 'listing.link_matched' : 'listing.link_unmatched', entityKind: 'request', entityId: req.id, diff: { marketplace: sentLink.marketplace, read: !!around, listings: around?.listings.length ?? 0, providerAsOf: around?.providerAsOf?.toISOString() ?? null, retrievedAt: around?.retrievedAt.toISOString() ?? null, ...(gone ? { gone: true } : {}) } });
+      if (!m) linkLookup = !around ? { status: 'not_looked_up', why: 'unavailable' } : gone ? { status: 'gone' } : { status: 'not_found' };
       // Dated by the provider's refresh when it gave one; the fetch time only stands in for an undated read.
       if (m && around) linked = linkedSubject(m, MARKETPLACE_NAMES[sentLink.marketplace], quantity, around.providerAsOf ?? around.retrievedAt);
       // Not found by its number: what the same read says the game costs for their party, so the reply leads with a
@@ -3548,7 +3634,7 @@ export class Concierge {
     const artPath = (recsBefore?.n ?? 0) === 0 ? await loadBriefArtwork(this.db, artSubject).catch(() => null) : null;
     const artworkUrl = artPath?.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${artPath}` : artPath;
     const eventSport = sportFor(event.category, event.classification?.genre ?? null);
-    const packet = buildPacket({ followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -4831,32 +4917,36 @@ export function basketKeyFor(eventId: string, quantity: number, seatClass: strin
 /**
  * Folds what pasted ticket links say into this message's extraction. The link's date is the event's own date,
  * so it wins over a looser phrase ("early October"); a quantity or team the customer typed wins over the link.
+ * Each link's facts stay with that link: the newest (last) one is the listing being asked about, so its date, price
+ * and count are the ones read, never one link's date with another's price and a third's quantity (audit 2026-10-10
+ * gap 5). Another link's date is used only when every dated link agrees on it (two links to the same game).
  */
 export function applyTicketLinks(x: RequestExtraction, known: Array<{ name: string; aliases: string[] }>): RequestExtraction {
   const links = ticketLinksIn(x.submittedUrls);
   if (!links.length) return x;
   const out: RequestExtraction = { ...x, ambiguities: [...x.ambiguities] };
-  const dated = links.find((l) => l.localDate);
-  if (dated) {
-    out.dateExpression = dated.localDate;
-    out.resolvedLocalDate = dated.localDate;
+  const subject = links[links.length - 1]!;
+  const dates = [...new Set(links.map((l) => l.localDate).filter((d): d is string => !!d))];
+  const date = subject.localDate ?? (dates.length === 1 ? dates[0]! : null);
+  if (date) {
+    out.dateExpression = date;
+    out.resolvedLocalDate = date;
     out.ambiguities = out.ambiguities.filter((a) => !a.startsWith('date_'));
   }
   // A TickPick checkout carries its listed price a ticket: the price they are asking about, as if they had typed it.
-  const priced = links.find((l) => l.priceCents);
-  if (out.quotedPriceCents == null && priced) {
-    out.quotedPriceCents = priced.priceCents;
+  if (out.quotedPriceCents == null && subject.priceCents) {
+    out.quotedPriceCents = subject.priceCents;
     out.quotedPriceBasis = 'per_ticket';
   }
-  const counted = links.find((l) => l.quantity);
-  if (out.quantity == null && counted) {
-    out.quantity = counted.quantity;
+  if (out.quantity == null && subject.quantity) {
+    out.quantity = subject.quantity;
     out.ambiguities = out.ambiguities.filter((a) => a !== 'quantity_unclear');
   }
   if (!out.performerOrTeam) {
     // The longest name in the slug: "new york rangers new york" is the New York Rangers, not "New York".
     let best: { name: string; len: number } | null = null;
-    for (const l of links) {
+    for (const l of [subject, ...links.slice(0, -1).reverse()]) {
+      if (best) break;
       if (!l.slugText) continue;
       const slug = ` ${l.slugText} `;
       for (const k of known) {
@@ -5159,6 +5249,33 @@ function mergeConcertOffer(old: TextOffer, next: TextOffer): TextOffer {
  * ("which of the same offers?", "just compare the three offers I pasted"), the ones laid out earlier in the thread;
  * else the one it keeps from an earlier comparison ("ignore Offer A, only B"), with the others set aside.
  */
+/** One priced listing read from a screenshot, or from a link (its URL, or its number looked up in the licensed feed). */
+export type ReadOffer = { perTicketCents: number | null; wholePartyCents: number | null; quantity: number | null; section: string | null; row: string | null; feeBasis: 'all_in' | 'before_fees' | 'unknown' };
+
+/**
+ * Two or more listings they sent side by side (two screenshots, two marketplace links), put through the same comparison
+ * their typed offers get, each kept as its own offer: "Can you beat this pair?" with two screenshots compared neither
+ * (the newest priced row was judged alone), and two links mixed one's date with the other's price (audit 2026-10-10
+ * gaps 5 and 8). Each read is written out as the plain offer line a customer would type and read by the same parser,
+ * so no second comparison path exists. Only the read's own price, count, section and row go in; a seat field that
+ * isn't a plain section or row name is left out, so text on a page can't become an instruction or another offer.
+ * Empty unless every read is priced and parses back as its own offer.
+ */
+export function offersFromReads(reads: ReadOffer[], tz: string): TextOffer[] {
+  // "Listing 1", "Listing 2": in the order they sent them, and a name that reads right at the start of a sentence or
+  // inside one ("the first listing" came out as "The first listing and The second listing").
+  if (reads.length < 2 || reads.length > 5 || reads.some((r) => r.perTicketCents == null && r.wholePartyCents == null)) return [];
+  const seat = (x: string | null) => (x && /^[\w .'&/-]{1,24}$/.test(x.trim()) && !/\b(?:offer|option|listing|seller|ignore|instruction)s?\b/i.test(x) ? x.trim() : null);
+  const usd = (c: number) => `$${c % 100 === 0 ? c / 100 : (c / 100).toFixed(2)}`;
+  const fee = (f: ReadOffer['feeBasis']) => (f === 'all_in' ? ' including fees' : f === 'before_fees' ? ' before fees' : '');
+  const text = reads.map((r, i) => {
+    const bits = [r.quantity ? `${r.quantity} ${r.quantity === 1 ? 'ticket' : 'tickets'}` : null, seat(r.section) ? `section ${seat(r.section)}` : null, seat(r.row) ? `row ${seat(r.row)}` : null, r.perTicketCents != null ? `${usd(r.perTicketCents)} per ticket${fee(r.feeBasis)}` : `${usd(r.wholePartyCents!)} total${fee(r.feeBasis)}`].filter(Boolean);
+    return `Listing ${i + 1}: ${bits.join(', ')}.`;
+  }).join(' ');
+  const out = offersInText(text, tz, 2);
+  return out.length === reads.length && out.every((o) => o.perTicketCents !== null || o.totalCents !== null) ? out : [];
+}
+
 export function suppliedOffers(said: string, threadMessages: string[], tz: string, opts: { continuing?: boolean } = {}): { textOffers: TextOffer[]; offersSetAside: string[] } {
   // Fold each concert correction into the product records. A one-product correction must not erase the other
   // product, nor lose an exclusion after several price-only turns. An explicit "only B" still sets A aside.
@@ -5389,6 +5506,8 @@ export function comparedAgainst(text: string, labels: string[]): string | null {
 /** "the attached image", "see attachment", "this screenshot": they meant to send us a picture. */
 const SAYS_ATTACHED = /\b(?:attached|attachment|enclosed)\b|\b(?:this|the|my)\s+(?:screenshot|screen shot|image|picture|photo)\b/i;
 export const IMAGE_UNREAD_ASK = 'Could you type out what it shows: the event and date, how many tickets, the section and row, and the total including fees? Those few details are all I need.';
+/** After a named skipped image and its resend ask, the other way to give us the facts (gaps 30, 41). */
+export const IMAGE_UNREAD_OR_TYPE = 'Or type out what it shows: the event and date, how many tickets, the section and row, and the total including fees.';
 export function imageUnreadLine(kind: 'unread' | 'missing'): string {
   return kind === 'missing'
     ? 'Your email mentions an attachment, but no image reached me, so I haven’t assumed anything about the tickets.'
