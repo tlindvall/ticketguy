@@ -285,8 +285,11 @@ describe('resale market tracking', () => {
     expect(body).not.toMatch(/can’t open StubHub|send a screenshot/);
     // The feed doesn't carry seat numbers, adjacency or delivery: said as gaps in the data, not in what they sent.
     expect(body).toContain('- The resale data for it doesn’t show when the tickets will be delivered.');
-    // Cheaper listings for the pair, from the same read: one paid call, not two.
-    expect(body).toContain('section 101, row 10 at $95 a ticket before fees (about $190 for both)');
+    // Cheaper listings for the pair, from the same read: one paid call, not two. The cheaper equivalent in their area
+    // is the one I'd choose, compared for the pair on the same basis, with the search to find it (Oct 10 framework, B6a).
+    expect(body).toContain('I’d choose this alternative. Your pair is $310 before fees; this comparable pair in section 101, row 10 is $190 before fees: $120 less, also in the Lower Bowl.');
+    expect(body).toContain('That’s a StubHub or Vivid Seats listing at $95 a ticket before fees. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.');
+    expect(body).toContain('Search StubHub for section 101: https://www.stubhub.com/search?q=');
     const [a] = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, requestId), eq(t.auditLog.action, 'listing.link_matched')));
     expect(a).toBeTruthy();
   });
@@ -444,15 +447,19 @@ describe('resale market tracking', () => {
     await c.research({ requestId, revision: 1 });
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     const body = rec!.bodyText;
-    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 4 tickets\n\nBefore you buy it, have a look at the cheaper listings below.')).toBe(true);
+    // What I'd do, then the one comparison behind it, on a conservative basis: theirs includes fees, the listing's
+    // doesn't (Oct 10 framework, B6a). Then what the listing is and isn't, and the search to find it.
+    expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 4 tickets\n\nI’d choose this alternative. Your four tickets are $840 with fees; this comparable set of four in section 112, row 2 is $620 before fees, in the same section: cheaper than yours only if its fees come to less than $220 in total.')).toBe(true);
     expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);
-    expect(body).toContain('Cheaper listings for 4 or more together that I can see: section 112, row 2 at $155 a ticket before fees (about $620 for all four), in your section (cheaper than yours only if its fees come to less than $220 in total). These are StubHub and Vivid Seats prices before fees, without a link, so search for them there. Your price includes fees (or may), so after fees these may not be cheaper: compare the checkout totals. They aren’t your seats, and I haven’t checked they’re still for sale.');
-    // The cheaper listings already say what we can see; no "no verified alternative" line under them (launch E).
-    expect(body).not.toContain('I haven’t found a verified alternative');
-    // Recommendation first, the market figures after it, and nothing called a good deal.
-    expect(body.indexOf('Before you buy it')).toBeLessThan(body.indexOf('Cheaper listings'));
+    expect(body).toContain('That’s a StubHub or Vivid Seats listing at $155 a ticket before fees. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.');
+    expect(body).toContain('Search StubHub for section 112: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston');
+    // The alternative already says what we can see; no "no verified alternative" line under it (launch E), and no
+    // venue floor or trend read: the comparison is the reason, the market section isn't (B8).
+    expect(body).not.toMatch(/I haven’t found a verified alternative|Cheaper listings for|Before you buy it|resale market when I last checked|My read:/);
+    // Recommendation first, the listing's facts after it, and nothing called a good deal.
+    expect(body.indexOf('I’d choose this alternative')).toBeLessThan(body.indexOf('That’s 4 tickets'));
     expect(body).not.toMatch(/good deal/i);
   });
 
