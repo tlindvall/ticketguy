@@ -1310,3 +1310,93 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - Live SeatData: how many of twelve Rangers games match by Ticketmaster id, and what twelve refreshes cost against the 50-a-day allowance alongside the hourly pass (match 1, poll 1 to 2, history up to 9 once a month per team and venue). The reply degrades to "I don't have prices yet for N more" either way.
 - The production catalog's exhibition naming: `(Exhibition)`, `Preseason`, `Friendly` and the non-game words are matched; a differently worded exhibition ranks as tier 1.
 - A pack is recognised from its words ("four-pack", "4-pack", "pack of four", "group tickets"); a page the customer doesn't describe isn't read.
+
+## 75. One thread keeps its facts, a clarification is one question, every link and screenshot sent is judged, and a reply says what was actually done (Oct 10 audit)
+
+**Why.** The production audit of Oct 10 (docs/AUDIT_2026-10-10.md) walked the brief's seven requests and six follow-ups through the code at fecbc59. It found 45 gaps. These are the ones a customer meets first:
+- **Repeating.** After a side question, a capability question or "thanks, bought them", the request closed and the next reply started from nothing.
+  - A follow-up that resolved on its own lost the game the customer had chosen.
+  - "Actually make it Dua Lipa" kept the hockey game's name and date.
+  - "$220 for both", answering our own question, became a budget.
+- **Questions.** A clarification could ask three questions. The counter never reset, so a fourth question in a request's life parked it with a person.
+- **Evidence.** Only the first link ever sent was judged. Two links or two screenshots were never compared. "I couldn't match the listing" was said when no lookup had run. Hrefs in HTML-only mail were lost, wrapper and short links said nothing, and skipped images went unmentioned.
+- **The brief.** A budget's fee basis, a decision deadline and a ranking goal ("best view", "cheapest is fine") had no field, and the model was never told about seven preference fields.
+- **Timing.**
+  - An over-budget party on a falling market could never be told to hold off without a watch.
+  - The recheck time was an ISO timestamp.
+  - A customer who wrote while a draft waited heard nothing, and an expired draft could still be approved and sent.
+- **Scope.** Auto-approved replies never said we don't buy, hold or resell tickets.
+- **Operations.** /api/health could not see the scheduler. Failed SeatData reads under-counted the daily allowance. A dead-lettered inbound email reached no one.
+
+**What.** Six branches merged into integ-r2, followed by an end-to-end journey test and a review pass. Gap numbers are the audit's.
+- **One thread, one memory** (gaps 4, 9, 11, 15; tests/acceptance/conversation-state-1010.test.ts).
+  - A capability or outside-tickets question inside an open request is answered with "Nothing about your ticket request has changed". There is no new version, no revision bump and no state change, and the audit records request.side_question_answered.
+  - A new request in a thread merges onto the last closed request's brief and settled event (carriedFromThread). It carries the event, party, budget, seating, access, deadline and preferences. Links, evidence, quoted prices and flags are not carried. Nothing is carried after a stop, opt-out, off-topic message or staff removal, and a decision deadline that has passed is not carried.
+  - keepSettledEvent keeps the chosen game when the message names no act, event or date and the resolver found the next game itself.
+  - A different act clears eventName, dateExpression, resolvedLocalDate, categoryHint, genreHint, submittedUrls and the quoted price, and the settled event cannot hold it.
+  - "$220 for both" after a quote or an unknown-basis screenshot is the quote's basis. "We can spend $220 for both" stays a budget.
+  - "This weekend" is Friday to Sunday except for sports, where it stays Saturday and Sunday (the weekend line under #60 now says so).
+  - "Did you check Saturday too?" is answered on the research route.
+- **One question** (gaps 14, 16; tests/acceptance/one-question-1010.test.ts, tests/acceptance/guide-null-quantity.test.ts).
+  - Exactly one question, in a fixed priority order, with the count folded into it. The subject is "One quick question".
+  - questionRound restarts the count when a round settled what it asked. The "asked twice, assume two" default counts only rounds that asked for the count.
+  - "Best tickets" with no goal asks the goal once. If unanswered, it says it will go by the lowest price, which is how picks rank.
+  - A Guide-depth event with an open official sale gets the official-sale reply regardless of the resale key. Research without a party size is skipped and audited, and the admin research route answers 422 party_size_unknown.
+- **Evidence** (gaps 5, 6, 8, 17, 19, 20, 30, 39, 41; tests/acceptance/links-evidence-1010.test.ts, tests/unit/links-evidence-1010.test.ts).
+  - The newest link is the subject, and each link keeps its own facts. A typed party size survives a later link's count.
+  - Two to five links in one message are each priced and compared as offers.
+  - Two or more priced screenshots of one game in one message are compared. A follow-up compares the pair from the newest message that sent listings.
+  - The link claim records evidence 'url_text' or 'api_lookup' and the lookup status. The customer reads "I can't check individual listings for this game right now", "I can only look listings up by number on StubHub and Vivid Seats", "the listing data wasn't available when I tried", "looks gone", or, only after a lookup missed, "couldn't match".
+  - stripHtml keeps hrefs. Google, Outlook and Facebook wrappers are unwrapped from the URL alone, and short or app links are named with one ask.
+  - Skipped, HEIC and PDF images are named, with why.
+  - A subject alone no longer suppresses mail as an auto-reply.
+  - beat_offer mode and the official-sale bypass key on a parsed marketplace link.
+  - Text inside a screenshot is data. packet.ts drops restriction notes addressed to the reader, after a test showed an injected line reaching the customer.
+- **The brief** (gaps 10, 12, 13, 28, 43; tests/unit/brief-fields-1010.test.ts, tests/acceptance/brief-goal-fees-1010.test.ts).
+  - New fields budgetFeeBasis ('all_in' | 'before_fees' | null) and rankingGoal ('view' | 'value' | 'price' | null), learned by the model and the rules.
+  - pickListings ranks by the goal. 'view' ranks by zone or section tier and says when the data can't support it.
+  - decisionDeadline is described to the model, read by rules ("decide by Friday", "before the 20th"), and kept out of the event date. A date-only answer becomes an instant, and a malformed model output goes to staff instead of retrying.
+  - Every preference field has one prompt line.
+- **Deviation.** The audit's fix shape said to skip the fee allowance when the customer says all-in. That would compare a checkout-total budget with prices before fees and call seats "within budget" that are over it at checkout. So the allowance is skipped when the budget is **before** fees, and all-in or unstated budgets keep the fee estimate. No hold-and-watch is offered against a before-fees budget. Owner question 13 in the audit asks for confirmation.
+- **Answer timing** (gaps 3, 21, 22, 36, 37; tests/unit/brief-verdict-1009.test.ts, tests/unit/reply-voice-1010.test.ts, tests/acceptance/review-path-1010.test.ts, tests/acceptance/pilot-outcomes.test.ts).
+  - A new 'hold' outcome needs all of: over budget, the party's own series falling, 3 or more days to go, the deadline 2 or more days out, and no watch offer. It reads "I'd hold off for now" and names a check-back day in the venue's time.
+  - C_CHECKPOINT reads "Look again on Thursday, Oct 15, around 6pm".
+  - A message that arrives while research or review is pending gets one note ("Got your update: 4 tickets. I'm rechecking with that...").
+  - An expired recommendation is refused at approval (409) and at dispatch, invalidated and researched again. After three expiries on one revision it goes to manual_attention. Nothing is researched again for a closed, referred, unsupported or suppressed request, or when a kill switch, a stale revision or a policy change also blocked the send.
+  - The follow-up cron runs the send gate before it records anything.
+  - watch_alert and unsupported are rewritten in the house voice.
+  - AUTOMATED_FOOTER is "AI-assisted ticket advice. We never buy, hold or resell tickets."
+- **Market and operations** (gaps 18 part, 26, 34, 42; tests/acceptance/market-budget-1010.test.ts, tests/acceptance/operations-signals-1010.test.ts).
+  - The history backfill is bounded by the calls left, game by game, and resumes on a later refresh.
+  - Error rows log the calls actually made.
+  - A comparison reuses any tracker's read of the event from the last 10 minutes; watch reads stay fresh.
+  - /api/health adds outboxLagSeconds and lastDispatchAt and never 503s on them. /admin/operations shows the deployed commit and a lag badge.
+  - A dead-lettered email.received raises one staff alert with no customer words.
+  - Gap 35 was not reproduced: the depth gate makes historyOk equal trackingOk at every depth. A pinning test records why.
+- **Brief journeys** (tests/acceptance/brief-journeys-1010.test.ts, 20 cases, both policy modes). These are the seven requests and six follow-ups plus J8, J9 and J3c, through dispatch. They found and fixed:
+  - a typed quote with no resale comparison;
+  - a one-ask Dua Lipa case that named picks;
+  - "admission tier" not routed to product choice;
+  - a false "I can't see live resale listings" line;
+  - "St. John'S";
+  - "Do you charge for this?" resending the brief.
+  
+  The review pass (tests/acceptance/review-fixes-1010b.test.ts):
+  - "Are the seats together?" is answered from the listing data (C_TOGETHER).
+  - "Buy now or wait?" after picks names the seats.
+  - A reply to a watch request that asks to buy now becomes a search.
+- **Expectations changed, none weakened:**
+  - launch-evidence-1002 Q01, live-final-qa LIVE-07, metallica-thread-1004, team-month-1004 and unit elsewhere-note: one question;
+  - clarification-email: the footer;
+  - pilot-outcomes: no record in fixture mode;
+  - guide-null-quantity: research without a party size resolves and audits instead of throwing;
+  - unit audit-0929: questionsAsked has a together field.
+  
+  Plain mode passes 1882 tests. Enforce mode has one failure, the known concert-noun-1005 Mind Enterprises case.
+
+**Not verified live.** Nothing here has run on real mail or against the real model or SeatData. The branch is not merged or deployed, and the deployed commit is unknown.
+- The model's reading of the new fields and prompt lines has no real-model eval, and the journeys use recorded model fields.
+- The 'view' ranking depends on the feed's zone and section words.
+- A shared 10-minute read assumes one process; several Render instances would each keep their own.
+- The holding note, the expiry re-research and the hold outcome are fixture-tested only.
+- Still open from the audit: the launch cliff, test-mode capture, the listing-id equivalence, model pricing, the open-web finder, enforce mode, the 256 KB webhook cap, the screenshot-reader eval, and journey residues 48 to 56 in the audit's gap list.
