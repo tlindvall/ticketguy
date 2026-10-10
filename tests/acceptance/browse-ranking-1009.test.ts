@@ -118,6 +118,21 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     expect(await pick('thu@customer.example', "Thursday's game, 2 tickets")).toBe('New York Knicks vs. Boston Celtics');
   });
 
+  it('a new ask that names one day is a new browse, never a pick from the page sent', async () => {
+    // Oct 10 review: "How about concerts on Thursday" after the sports picks settled Thursday's Knicks game and asked how
+    // many tickets; it asks for something else that day.
+    const c = makeConcierge(h, { env: testEnv({}) });
+    const from = 'concerts@customer.example';
+    const first = inbound({ text: 'My family is coming to New York next week. What sports games are on?', from, subject: 'NY trip' });
+    const r = (await c.ingestInbound(first)) as { requestId: string };
+    await interpretAll(c);
+    await c.ingestInbound(inbound({ text: 'How about concerts on Thursday', from, subject: 'Re: NY trip', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await interpretAll(c);
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+    expect(req!.eventId).toBeNull();
+    expect((await lastSend(r.requestId)).bodyText).not.toMatch(/Knicks|How many tickets/);
+  });
+
   it('a held price is said for the party it was read for: "for two" with no number, nothing for a party of four', async () => {
     // Oct 10 review: the price held is the "2 or more" series; said as "a ticket" it read as the price for any party.
     const c = makeConcierge(h, { env: testEnv({}) });

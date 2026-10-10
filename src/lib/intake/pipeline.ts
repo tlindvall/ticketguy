@@ -28,7 +28,7 @@ import { isAgainst, isAgainstPlace, opponentFor, splitMatchup } from '@/lib/doma
 import { correctToKnown } from '@/lib/domain/name-correction';
 import { ROSTER_NAMES, rosterTeam } from '@/lib/domain/team-names';
 import { SPORT_CATEGORIES, eventNounFor, seatPhrase, type EventNoun } from '@/lib/domain/event-noun';
-import { areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, prominenceTier, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
+import { type CategoryHint, areaFor, venueInArea, browseLabel, genreFamilyFor, genreMatches, isBrowseRequest, narrowByFor, oneListingPerShow, oneOfLabel, choosePicks, genreFitScore, pickReason, collapseRuns, categoryBuyingNote, pilotCategoriesFor, prominenceTier, providerClassificationFor, spanLabel } from '@/lib/domain/browse';
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
@@ -130,8 +130,22 @@ const CHEAPEST_GAME_MAX_REFRESHES = 12;
 const PRICE_LOW = /\b(?:cheapest|cheaper|least expensive|most affordable|affordable|lowest(?:[- ]priced)?|low(?:est)? prices?|best (?:price|deal|value)s?|cheap)\b/i;
 const GAME_CHOICE = /\b(?:which|what)\s+(?:\S+\s+){0,5}?(?:game|games|match|matches|date|dates|night|show|shows|one)\b|\b(?:cheapest|least expensive|most affordable|lowest[- ]priced|cheaper)\s+(?:\S+\s+){0,4}?(?:game|games|match|date|night|show)\b/i;
 export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && GAME_CHOICE.test(text);
-/** "The cheapest one", "the cheapest", "cheapest game please": a pick from a list we ranked on price, its first entry. */
-const CHEAPEST_PICK = /\b(?:the\s+)?cheapest\s+(?:one|game|match|date|night|show|option)\b(?!\s+(?:for|in|on|before|after|this|next|of)\b)|\bthe\s+cheapest\s*(?:[.,!?]|$)/i;
+/**
+ * A choice of games that names them: "which game is cheapest", never "which one is cheaper" ("one" can be a seat), and no
+ * section or row in it. Only this sets aside a date from an earlier message (Oct 10 review: "Which one is cheaper,
+ * section 112 or section 114?" in the thread settled on Oct 11 got a games ranking and lost the game).
+ */
+const GAMES_NAMED = /\b(?:which|what)\s+(?:\S+\s+){0,5}?(?:game|games|match|matches|date|dates|night|show|shows)\b|\b(?:cheapest|least expensive|most affordable|lowest[- ]priced|cheaper)\s+(?:\S+\s+){0,4}?(?:game|games|match|date|night|show)\b/i;
+const SEAT_NAMED = /\b(?:sec(?:tion)?s?|rows?|seats?|zones?|levels?)\s*#?\s*[a-z]?\d+\b/i;
+const asksCheapestOfGames = (text: string) => asksCheapestGame(text) && GAMES_NAMED.test(text) && !SEAT_NAMED.test(text);
+/**
+ * "The cheapest one", "the cheapest, please", "cheapest game please": a pick from a list we ranked on price, its first
+ * entry. A question is never that pick: "What about after Christmas, which is the cheapest?" asks for a new ranking and
+ * "Is the Nov 20 game the cheapest?" asks about one game (Oct 10 review: both settled the list's first game).
+ */
+const CHEAPEST_PICK = /\b(?:the\s+)?cheapest\s+(?:one|game|match|date|night|show|option)\b(?!\s+(?:for|in|on|before|after|this|next|of)\b)|\bthe\s+cheapest\s*(?:[.,!]|$)/i;
+const NOT_A_PICK = /\?|\b(?:which|what|what['’]s|whats|how|about)\b|^\s*(?:is|are|was|does|do|did|would|could)\b/i;
+const cheapestPick = (text: string) => CHEAPEST_PICK.test(text) && !NOT_A_PICK.test(text);
 /**
  * A day named as a pick from a browse page: one day, and no scheduling rule around it. "Saturday or Sunday ONLY, after
  * 7pm" restates the search, and "you found Nov 21 and Nov 22, do those still match?" asks about both (TGQA-R8 S04).
@@ -139,6 +153,9 @@ const CHEAPEST_PICK = /\b(?:the\s+)?cheapest\s+(?:one|game|match|date|night|show
 const DAY_MENTION = /\b(?:sun|mon|tue|wed|thu|fri|sat)(?:day|s|nesday|rsday|urday|sday)?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}\/\d{1,2}\b/gi;
 const LIST_QUESTION = /\b(?:any(?:thing)?|what(?:'s|’s| is| else)?|else|other|others|instead|more|only|after|before|keep|not|no|between|every|or|still|match(?:es)?)\b/i;
 const browseDayPick = (text: string) => (text.match(DAY_MENTION)?.length ?? 0) === 1 && !LIST_QUESTION.test(text);
+/** The kind of event a reply names fits the page it answers: none named, the same, or a game on a page of games. */
+const SPORT_KINDS: ReadonlySet<CategoryHint> = new Set(['sports', 'nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer']);
+const sameKind = (said: CategoryHint | null, page: CategoryHint | null) => !said || said === page || (!!page && SPORT_KINDS.has(said) && SPORT_KINDS.has(page));
 /**
  * "The best tickets" with no goal in it (live Oct 9: "Find me the best Metallica tickets" got a menu of dates and three
  * questions). The goal and the party are the one question; "best view" or "cheapest" has named the goal already.
@@ -871,7 +888,7 @@ export class Concierge {
     let pickNote: string | null = null;
     let pickLead: string | null = null;
     if (isBrowseRequest(merged)) {
-      const b = await this.browse({ req, msg, contact: contact!, merged, revision, more: extraction.wantsMore === true && req.browseShown.length > 0 });
+      const b = await this.browse({ req, msg, contact: contact!, merged, revision, more: extraction.wantsMore === true && req.browseShown.length > 0, kinds: { said: extraction.categoryHint, page: priorBrief?.categoryHint ?? null } });
       if (!('pick' in b)) return b;
       picked = b.pick;
       pickNote = b.note;
@@ -911,7 +928,7 @@ export class Concierge {
     // performance their link or screenshot names, checked before any event is chosen (TGQA-R6 1001, 1007).
     // "Which game is cheapest?" asks for a choice of games: a single date from an earlier message ("the game on Oct 11")
     // is no scope for it (Oct 10 review: asked in the thread that settled Oct 11, the date kept the answer on Oct 11).
-    if (!picked && asksCheapestGame(flat(latestText)) && !extraction.resolvedLocalDate && merged.resolvedLocalDate) merged = { ...merged, resolvedLocalDate: null, dateExpression: extraction.dateExpression ?? null };
+    if (!picked && asksCheapestOfGames(flat(latestText)) && !extraction.resolvedLocalDate && merged.resolvedLocalDate) merged = { ...merged, resolvedLocalDate: null, dateExpression: extraction.dateExpression ?? null };
     const rules = await this.resolveRules(req, merged, venueTz, msg.receivedAt);
     rules.cheapest = !picked && asksCheapestGame(flat(latestText));
     // Event resolution (a browse that found exactly one event has already resolved it).
@@ -945,9 +962,11 @@ export class Concierge {
     // cheapest first (Oct 10 review: rebuilt from the date-ordered candidates, "the first one" after "Nov 3 $74, Nov 20
     // $81, Dec 12 $95, Oct 11 $120" settled Oct 11); other lists are rebuilt the same way from the same request, so
     // their order is the order they saw.
+    // The ranking is read only while the reply is still choosing among its games: one it found already, or another
+    // team's ("make it the knicks game on Saturday"), is their pick, never the list's Saturday (Oct 10 review).
     if (!picked && revision > 1) {
       const sent = await this.listSent(req);
-      const ranked = sent?.kind === 'games_ranked' ? sent : null;
+      const ranked = sent?.kind === 'games_ranked' && found.kind === 'ambiguous' && found.candidates.some((c) => sent.rows.some(({ e }) => e.id === c.id)) ? sent : null;
       const options = ranked ? ranked.rows : elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
       // "the first one", or the day itself: "the 19th", "Nov 19", "Thursday" (live Oct 5: "the 19th. 2 tickets together
       // please" after "Thu, Nov 19 or Sat, Nov 21?" got the same question back). "The cheapest one" is the first only of
@@ -1879,7 +1898,7 @@ export class Concierge {
    * named (the next two weeks when none was, and the reply says so). The request waits for the customer to
    * pick one; their reply names it, and the ordinary resolution takes over from there.
    */
-  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string | null; lead?: string | null }> {
+  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean; kinds?: { said: CategoryHint | null; page: CategoryHint | null } }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string | null; lead?: string | null }> {
     const { req, msg, contact, revision } = a;
     let merged = a.merged;
     const more = a.more === true;
@@ -1887,8 +1906,9 @@ export class Concierge {
     // "The first one", "Thursday's game" after the picks we sent: that event, read from the page as it was listed, sports
     // ranked by prominence (Oct 10 review: the reply rebuilt the browse and asked again). A new question about the list
     // ("anything on Saturday?", "Saturday or Sunday only") is not a pick, and neither is "the cheapest one": these picks
-    // weren't ranked on price.
-    if (!more && revision > 1) {
+    // weren't ranked on price. Nor is a reply that names another kind of event: "How about concerts on Thursday" after
+    // sports picks asks for a new list (Oct 10 review: it settled Thursday's Knicks game and asked how many tickets).
+    if (!more && revision > 1 && sameKind(a.kinds?.said ?? null, a.kinds?.page ?? null)) {
       const sent = await this.listSent(req);
       const said = flat(msg.sanitizedText ?? '');
       if (sent?.kind === 'browse_options') {
@@ -4473,7 +4493,7 @@ export function ordinalChoice(text: string, n: number): number | null {
  * cheapest one" when the list was ranked on price, or by its day. Null when the reply picks none of them.
  */
 export function listChoice(text: string, rows: Array<{ e: { localStartAt: Date }; v: { timezone: string } }>, byPrice: boolean): number | null {
-  if (byPrice && CHEAPEST_PICK.test(text)) return 0;
+  if (byPrice && cheapestPick(text)) return 0;
   return ordinalChoice(text, rows.length) ?? dayChoice(text, rows.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone)));
 }
 

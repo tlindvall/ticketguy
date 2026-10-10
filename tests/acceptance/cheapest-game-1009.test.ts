@@ -235,6 +235,59 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     expect(await pick('day@customer.example', 'Saturday works for us')).toBe(games[4]!.id);
   });
 
+  it('a reply that names another team\'s game is that game: the ranked list is read only for a pick among its games', async () => {
+    // Oct 10 review: after the Rangers ranking, "the metro knicks game on Saturday" settled the Rangers game on Sat, Dec 12,
+    // the list's Saturday, though the reply had already found the Knicks' one game.
+    const KNICKS = '20000000-0000-4000-8000-0000000000da';
+    const COURT = '10000000-0000-4000-8000-0000000000da';
+    const KNICKS_GAME = '30000000-0000-4000-8000-0000000000da';
+    await h.db.insert(t.venues).values({ id: COURT, name: 'Metro Court', city: 'New York', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    await h.db.insert(t.entities).values({ id: KNICKS, kind: 'team', name: 'Metro Knicks', slug: 'metro-knicks-cg', aliases: ['Metro Knicks'], league: 'NBA', homeVenueId: COURT });
+    await h.db.insert(t.events).values({ id: KNICKS_GAME, name: 'Metro Knicks vs. Boston Celtics', category: 'nba', venueId: COURT, primaryEntityId: KNICKS, isHome: true, localStartAt: new Date('2026-11-15T00:30:00Z'), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true, saleStatus: 'onsale' });
+    try {
+      const from = 'knicks@customer.example';
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+      const p = await ask('Actually make it the metro knicks game on Saturday, 2 tickets', from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      expect(p.req.eventId).toBe(KNICKS_GAME);
+    } finally {
+      await h.db.delete(t.events).where(eq(t.events.id, KNICKS_GAME));
+    }
+  });
+
+  it('a new question that ends "the cheapest?" is asked again, never read as "the cheapest one" from the list sent', async () => {
+    // Oct 10 review: "What about after Christmas, which is the cheapest?" after the before-Christmas ranking settled its
+    // first game, Nov 3, and went to research; "Is the Nov 20 game the cheapest?" did the same.
+    const ranked = async (from: string, reply: string) => {
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown[0]).toBe(games[1]!.id);
+      const p = await ask(reply, from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      return p;
+    };
+    const after = await ranked('after@customer.example', 'What about after Christmas, which is the cheapest?');
+    expect(after.req.eventId).not.toBe(games[1]!.id);
+    expect(after.research).toEqual([]);
+    const is = await ranked('isit@customer.example', 'Is the Nov 20 game the cheapest?');
+    expect(is.req.eventId).not.toBe(games[1]!.id);
+    // A pick still reads as one.
+    const take = await ranked('take@customer.example', 'The cheapest, please. 2 tickets');
+    expect(take.req.eventId).toBe(games[1]!.id);
+  });
+
+  it('a seat question in a thread settled on a game keeps that game: "which one is cheaper, section 112 or 114?" ranks no games', async () => {
+    // Oct 10 review: the date carried from the settled thread was dropped for any "which one ... cheaper", so a question
+    // about two sections at the Oct 11 game was answered with a games ranking and the settled game was lost.
+    const from = 'sections@customer.example';
+    const first = await ask('2 tickets for the metro rangers game on Oct 11', from);
+    expect(first.req.eventId).toBe(games[0]!.id);
+    const s = await ask('Which one is cheaper, section 112 or section 114?', from, {}, first.rfcMessageId);
+    expect(s.req.id).toBe(first.req.id);
+    expect(s.req.eventId).toBe(games[0]!.id);
+    expect(s.emails).not.toMatch(/Cheapest|Seattle Kraken/);
+  });
+
   it('a tracked game whose stored price aged past the window is read again, never left unpriced as "fresh"', async () => {
     // Oct 10 review: polled daily a week or more out, a game's newest snapshot can be dated more than 36 hours back while
     // its next scheduled check is still ahead; the ranking left it unpriced and said tracking had just started.
