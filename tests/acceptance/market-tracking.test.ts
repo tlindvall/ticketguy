@@ -342,7 +342,11 @@ describe('resale market tracking', () => {
   // said as five hours old; a read with no refresh time is said as undated, never "just now".
   it('the same link read from listings SeatData refreshed hours ago, or never dated, is said as that', async () => {
     const link = 'https://www.stubhub.com/metro-testers-new-york-tickets-11-4-2026/event/161999000/?quantity=2&listingId=55500011';
+    const start = now;
     const bodyFor = async (from: string) => {
+      // Each customer eleven minutes after the last: a comparison reuses a read from the last ten minutes (audit gap
+      // 42), and each reply here is about a read with its own refresh time.
+      now = new Date(now.getTime() + 11 * 60_000);
       const c = concierge();
       const requestId = await ask(c, `Is this a good deal for two or should I hold off? ${link}`, from);
       await c.research({ requestId, revision: 1 });
@@ -357,6 +361,7 @@ describe('resale market tracking', () => {
     expect(undated).toContain('in section 312, row 14, when I checked, though the resale data doesn’t say how recently it was refreshed.');
     expect(undated).not.toContain('just now');
     shRefresh = () => now;
+    now = start;
   });
 
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {

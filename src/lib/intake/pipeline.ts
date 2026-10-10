@@ -1872,6 +1872,17 @@ export class Concierge {
    * error, once, and the customer told a person has it. Replaying the dead event later still answers it.
    */
   async handOffFailedWork(a: { eventType: string; payload: Record<string, unknown>; error: string }): Promise<'handed_off' | 'not_customer_work' | 'already_handled'> {
+    // An email we could not read at all has no request to park, so it used to be "not customer work" and reach no one
+    // (audit 2026-10-10, gap 18). It raises the staff alert, keyed to the inbound event, so a person reads the email.
+    if (a.eventType === 'email.received') {
+      const inboundEventId = String(a.payload.inboundEventId ?? '');
+      if (!/^[0-9a-f-]{36}$/i.test(inboundEventId)) return 'not_customer_work';
+      const [ev] = await this.db.select({ id: t.inboundEvents.id, state: t.inboundEvents.processingState }).from(t.inboundEvents).where(eq(t.inboundEvents.id, inboundEventId));
+      // Read after all (a replay got through) or set aside with its reason (quarantined): nothing waits on a person.
+      if (!ev || ev.state !== 'pending') return 'already_handled';
+      const q = await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:inbound:${ev.id}`, entityId: ev.id, payload: { inboundEventId: ev.id }, now: this.now() });
+      return q.inserted ? 'handed_off' : 'already_handled';
+    }
     if (!['request.interpret', 'research.requested'].includes(a.eventType)) return 'not_customer_work';
     const requestId = String(a.payload.requestId ?? '');
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, requestId));
@@ -1924,9 +1935,10 @@ export class Concierge {
    * customer send gate (whose test allowlist would drop staff), but "stop all outbound" still stops it. It
    * carries the reason and a link, never the customer's words, like the diagnostic scripts.
    */
-  async alertStaff(args: { requestId: string; revision: number }): Promise<{ outcome: 'sent' | 'skipped'; reason?: string }> {
+  async alertStaff(args: { requestId: string; revision: number } | { inboundEventId: string }): Promise<{ outcome: 'sent' | 'skipped'; reason?: string }> {
+    const entity = 'inboundEventId' in args ? { entityKind: 'inbound_event', entityId: args.inboundEventId } : { entityKind: 'request', entityId: args.requestId, revision: args.revision };
     const skip = async (why: string) => {
-      await audit(this.db, { actor: 'system', action: 'staff_alert.skipped', entityKind: 'request', entityId: args.requestId, revision: args.revision, diff: { reason: why } });
+      await audit(this.db, { actor: 'system', action: 'staff_alert.skipped', ...entity, diff: { reason: why } });
       return { outcome: 'skipped' as const, reason: why };
     };
     const allRecipients = this.env.STAFF_ALERT_ADDRESSES.length ? this.env.STAFF_ALERT_ADDRESSES : this.env.STAFF_EMAIL_ALLOWLIST;
@@ -1936,6 +1948,7 @@ export class Concierge {
     if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
     // Test mode sends nothing; the request shows as needing a person on the board, which is where testing watches.
     if (testModeFrom(switches)) return skip('test_mode');
+    if ('inboundEventId' in args) return this.alertStaffUnreadEmail(args.inboundEventId, allRecipients, skip);
     const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, args.requestId));
     if (!req) return skip('request_not_found');
     if (req.state !== 'manual_attention') return skip('no_longer_waiting');
@@ -1977,6 +1990,41 @@ export class Concierge {
       });
     }
     await audit(this.db, { actor: 'system', action: 'staff_alert.sent', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { recipients: recipients.length, reason: last?.reason?.split(':')[0] ?? 'unknown' } });
+    return { outcome: 'sent' };
+  }
+
+  /**
+   * The staff alert for an email that dead-lettered before it became a request (gap 18): nobody has been told anything,
+   * so it says so, with the reason, when it arrived and the provider's email id to find it by. Like every staff alert
+   * it carries no customer words, only a link to Operations, where the dead row can be replayed.
+   */
+  private async alertStaffUnreadEmail(inboundEventId: string, recipients: string[], skip: (why: string) => Promise<{ outcome: 'skipped'; reason: string }>): Promise<{ outcome: 'sent' | 'skipped'; reason?: string }> {
+    const [ev] = await this.db.select().from(t.inboundEvents).where(eq(t.inboundEvents.id, inboundEventId));
+    if (!ev) return skip('inbound_event_not_found');
+    if (ev.processingState !== 'pending') return skip('no_longer_waiting');
+    const data = (ev.payload as { data?: { email_id?: unknown; id?: unknown } } | null)?.data ?? {};
+    const emailId = typeof data.email_id === 'string' ? data.email_id : typeof data.id === 'string' ? data.id : null;
+    const [dead] = await this.db.select({ error: t.outboxEvents.lastError }).from(t.outboxEvents).where(and(eq(t.outboxEvents.eventType, 'email.received'), eq(t.outboxEvents.state, 'dead'), sql`${t.outboxEvents.payload}->>'inboundEventId' = ${inboundEventId}`)).limit(1);
+    const why = (dead?.error ?? 'unknown').split('\n')[0]!.slice(0, 160);
+    const link = `${this.env.APP_URL.replace(/\/$/, '')}/admin/operations`;
+    const subject = 'Needs a person: an email could not be read';
+    const lines = [
+      `A customer's email could not be read, so it has no request and nobody has replied: ${why}.`,
+      `It arrived ${ev.receivedAt.toISOString()}${emailId ? `, provider email id ${emailId}` : ''}. Read it in the email provider's received mail and reply to the customer from there, or replay it from Operations once the cause is fixed.`,
+      `Open Operations: ${link}`,
+      'This is an automatic alert. Reply to the customer, not to this email.',
+    ];
+    const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const html = `<p>${esc(lines[0]!)}</p><p>${esc(lines[1]!)}</p><p><a href="${esc(link)}">Open Operations</a></p><p style="color:#666;font-size:12px;">${esc(lines[3]!)}</p>`;
+    for (const to of recipients) {
+      await this.deps.emailProvider!.send({
+        idempotencyKey: `staff-alert:inbound:${ev.id}:${to}`,
+        from: `Ticket Guy alerts <${this.env.CONCIERGE_FROM_ADDRESS}>`,
+        to, subject, text: lines.join('\n\n'), html,
+        headers: { 'Auto-Submitted': 'auto-generated', 'X-TicketGuy-Staff-Alert': 'true' },
+      });
+    }
+    await audit(this.db, { actor: 'system', action: 'staff_alert.sent', entityKind: 'inbound_event', entityId: ev.id, diff: { recipients: recipients.length, reason: 'email_unread' } });
     return { outcome: 'sent' };
   }
 

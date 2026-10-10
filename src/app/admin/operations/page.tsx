@@ -12,6 +12,7 @@ import { DbMediaStore } from '@/lib/media/storage';
 import { TEST_MODE_KEY, TEST_PROVIDER } from '@/lib/email/test-mode';
 import Link from 'next/link';
 import { SPEND_SQL, PRICES_USD_PER_MTOKEN, priceFor } from '@/lib/ai/budget';
+import { deployedCommit, schedulerLiveness } from '@/lib/admin/liveness';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,9 @@ export default async function Operations() {
   const now = new Date();
   const lag = await outboxLag(db, now);
   const retrying = await retryingOutbox(db);
+  // Whether a dispatcher is running and which build this is (audit gap 26): staff only, never on /api/health.
+  const live = await schedulerLiveness(db, now);
+  const commit = deployedCommit();
   const inboundPending = await db.select({ n: sql<number>`count(*)::int` }).from(t.inboundEvents).where(eq(t.inboundEvents.processingState, 'pending'));
   const dead = await db.select().from(t.outboxEvents).where(eq(t.outboxEvents.state, 'dead')).orderBy(desc(t.outboxEvents.createdAt)).limit(50);
   const switches = await loadSwitches(db);
@@ -48,10 +52,10 @@ export default async function Operations() {
     <main className="space-y-8">
       <header>
         <h1 className="text-xl font-bold">Operations</h1>
-        <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · event alerts {e.EVENT_ALERTS_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'} · drafts {autoApproveActive(e) ? <strong>auto-approved ({e.AUTO_SEND_RECOMMENDATIONS ? 'everyone' : 'testing allowlist on'})</strong> : 'wait for a person'} · recipients {e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length ? `test allowlist only (${e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length})` : <strong>anyone</strong>} · test mode {testMode ? <strong>ON (nothing is sent)</strong> : 'off'} (<Link className="underline" href="/admin/test">change</Link>)</p>
+        <p className="mt-1 text-sm text-gray-600">env {e.appEnv} · commit <code>{commit ?? 'unknown'}</code> · mode <strong>{e.APP_MODE}</strong> · db {driver} · email send {e.EMAIL_SEND_ENABLED ? 'ENABLED' : 'disabled'} · marketing {e.MARKETING_SEND_ENABLED ? 'ENABLED' : 'disabled'} · watches {e.WATCH_SEND_ENABLED ? 'ENABLED' : 'disabled'} · event alerts {e.EVENT_ALERTS_ENABLED ? 'ENABLED' : 'disabled'} · human review {e.HUMAN_REVIEW_REQUIRED ? 'required' : 'OFF'} · drafts {autoApproveActive(e) ? <strong>auto-approved ({e.AUTO_SEND_RECOMMENDATIONS ? 'everyone' : 'testing allowlist on'})</strong> : 'wait for a person'} · recipients {e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length ? `test allowlist only (${e.EMAIL_TEST_RECIPIENT_ALLOWLIST.length})` : <strong>anyone</strong>} · test mode {testMode ? <strong>ON (nothing is sent)</strong> : 'off'} (<Link className="underline" href="/admin/test">change</Link>)</p>
       </header>
       <section className="grid gap-3 text-sm sm:grid-cols-3">
-        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Outbox</h2><p>queued {lag.pending} · ready to run {lag.due} · leased {lag.leased} · dead {lag.dead} · oldest unfinished {lag.oldestUnfinishedSeconds ?? 0}s</p>{lag.expiredLeases ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{lag.expiredLeases} expired leases — work has not finished</span></p> : null}{retrying.length ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{retrying.length} retrying after failure</span></p> : null}</div>
+        <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Outbox</h2><p>queued {lag.pending} · ready to run {lag.due} · leased {lag.leased} · dead {lag.dead} · oldest unfinished {lag.oldestUnfinishedSeconds ?? 0}s</p><p>dispatcher lag {live.outboxLagSeconds}s · last dispatch {live.lastDispatchAt ?? 'never'}</p>{live.outboxLagSeconds > 300 ? <p className="mt-1"><span className="tg-badge tg-badge-danger">work due for over five minutes: is the dispatcher running?</span></p> : null}{lag.expiredLeases ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{lag.expiredLeases} expired leases — work has not finished</span></p> : null}{retrying.length ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{retrying.length} retrying after failure</span></p> : null}</div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">AI spend today (UTC)</h2><p>${(Number(spend?.usd ?? 0) / 1e6).toFixed(3)} of ${e.aiGlobalDailyBudgetUsd.toFixed(2)} cap</p>{model && rate ? <p className="text-xs">{model} at ${rate.input}/${rate.output} per million tokens {configured ? '(configured)' : <span className="tg-badge tg-badge-danger">no rate set: using the high fallback; set MODEL_PRICES_USD_PER_MTOKEN={model}=input:output</span>}</p> : <p className="text-xs">rules mode (no model)</p>}{budgetStops[0]?.n ? <p className="mt-1"><span className="tg-badge tg-badge-warn">{budgetStops[0].n} emails read by rules today: budget used up</span></p> : null}{providerStops[0]?.n ? <p className="mt-1"><span className="tg-badge tg-badge-danger">{providerStops[0].n} emails read by rules today: the AI provider refused the call (check the model name, API key and billing)</span></p> : null}</div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Media</h2><p>{(media.totalBytes / 1048576).toFixed(1)} MiB of {(media.budgetBytes / 1048576).toFixed(0)} MiB {media.ratio >= 0.8 ? <span className="tg-badge tg-badge-warn">≥80%</span> : null}</p><p>pending-budget attachments: {pendingMedia[0]?.n ?? 0}</p></div>
         <div className="rounded border border-gray-200 p-3"><h2 className="font-medium">Sends by state</h2><ul>{intentStates.map((s) => <li key={s.state}>{s.state}: {s.n}</li>)}</ul>{captured?.n ? <p className="mt-1 text-xs text-gray-600">of which recorded by test mode, not sent: {captured.n}</p> : null}</div>
