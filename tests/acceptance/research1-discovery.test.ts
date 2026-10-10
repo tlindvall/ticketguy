@@ -86,7 +86,8 @@ describe('Research 1 discovery: hard dates, exclusions and a finished decision',
       const [first] = await converse([LA[0]!]);
       const parts = first!.text.split('\n\n');
       expect(parts[1]).toBe('I haven’t verified a match for your dates and budget yet.');
-      expect(first!.html).toContain('<strong>I haven’t verified a match for your dates and budget yet.</strong>');
+      // The answer is the email's headline (Oct 10 design): first, and the most prominent line.
+      expect(first!.html).toMatch(/<p style="margin:0 0 18px;">Hey,<\/p>\n<h1[^>]*>I haven’t verified a match for your dates and budget yet\.<\/h1>/);
       expect(first!.text).toContain('Not checked yet for any of these: reserved seats, not general admission; 2 seats together; and $300 in total for both, once fees are added.');
       expect(first!.text).toContain('Pop in Los Angeles, Oct 9 to 10: two I can check for you.');
       expect((first!.text.match(/^• /gm) ?? []).length).toBe(2);

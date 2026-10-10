@@ -104,16 +104,26 @@ export function oneOfLabel(hint: CategoryHint | null, genre: GenreFamily | null)
  * Three picks rather than the first five by date: the ones that fit the ask best, spread across different
  * days, shown in date order. `score` is how well each fits (a sub-genre that names what they asked for).
  */
-export function choosePicks<T>(items: T[], n: number, of: (t: T) => { day: string; score: number }): T[] {
+export function choosePicks<T>(items: T[], n: number, of: (t: T) => { day: string; score: number; kind?: string | null }): T[] {
   const ranked = items.map((it, i) => ({ it, i, ...of(it) })).sort((a, b) => b.score - a.score || a.i - b.i);
   const out: typeof ranked = [];
   const days = new Set<string>();
-  for (const r of ranked) {
-    if (out.length >= n || days.has(r.day)) continue;
-    out.push(r);
-    days.add(r.day);
-  }
-  for (const r of ranked) if (out.length < n && !out.includes(r)) out.push(r);
+  const kinds = new Set<string>();
+  const take = (ok: (r: (typeof ranked)[number]) => boolean) => {
+    for (const r of ranked) {
+      if (out.length >= n || out.includes(r) || !ok(r)) continue;
+      out.push(r);
+      days.add(r.day);
+      if (r.kind) kinds.add(r.kind);
+    }
+  };
+  // A kind to vary by (a sports browse: the league): one of each before a second of any, on different days where
+  // possible (live Oct 10: "What sports games are on?" in New York got three hockey games, the first three by
+  // prominence and date, and no basketball). Items without a kind never take a variety slot.
+  take((r) => !!r.kind && !kinds.has(r.kind) && !days.has(r.day));
+  take((r) => !!r.kind && !kinds.has(r.kind));
+  take((r) => !days.has(r.day));
+  take(() => true);
   return out.sort((a, b) => a.i - b.i).map((r) => r.it);
 }
 
@@ -133,11 +143,15 @@ const EXHIBITION = /\((?:exhibition|preseason|pre-season|friendly|scrimmage)\)|\
 /**
  * How prominent a game is, for a sports browse (live Oct 9: "What sports games are on?" in New York offered "St. John's
  * Red Storm Men's Basketball v. Drexel (Exhibition)" as pick three while Knicks and Yankees games were in the window).
- * 0: the major pro leagues in season; 1: other pro and college seasons; 2: exhibitions, preseason, friendlies and
- * anything that isn't a game. Nothing is dropped by it; a lower tier only comes later in the list.
+ * 0: the major pro leagues in season; 1: other pro and college seasons; 2: a major pro league's preseason or
+ * friendlies; 3: other exhibitions and anything that isn't a game. Nothing is dropped by it; a lower tier only comes
+ * later in the list, and only tiers 0 to 2 take a slot that a sports browse keeps for variety across leagues.
  */
-export function prominenceTier(e: { name: string; category: string }): 0 | 1 | 2 {
-  if (isNonGameName(e.name) || EXHIBITION.test(e.name)) return 2;
+export function prominenceTier(e: { name: string; category: string }): 0 | 1 | 2 | 3 {
+  if (isNonGameName(e.name)) return 3;
+  // A pro team's preseason is still that team (a Knicks preseason game at the Garden); a college exhibition is not a
+  // pick anyone asked for (live Oct 9, St. John's v. Drexel). Both rank below every game of a season.
+  if (EXHIBITION.test(e.name)) return SPORT_CATEGORIES.includes(e.category) ? 2 : 3;
   return SPORT_CATEGORIES.includes(e.category) ? 0 : 1;
 }
 

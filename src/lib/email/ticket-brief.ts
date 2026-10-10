@@ -217,6 +217,78 @@ export function briefTrend(t: BriefTrend): { text: string; html: string } {
   return { text, html };
 }
 
+// "vs.", "St. Louis", "Mt. Hood", "J. Cole", "U.S." end no sentence.
+const NOT_AN_END = /(?:^|\s)(?:vs|v|st|mt|ft|jr|sr|dr|mr|mrs|ms|no|feat|[a-z]|(?:[a-z]\.)+[a-z])$/i;
+/** The text's first sentence and the rest: a stop, "!" or "?" before a space and a capital, a digit or a quote. */
+export function firstSentence(text: string): [string, string] {
+  const re = /[.!?](?=\s+["“'‘A-Z0-9$])/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (m[0] === '.' && NOT_AN_END.test(text.slice(0, m.index))) continue;
+    return [text.slice(0, m.index + 1), text.slice(m.index + 1).trim()];
+  }
+  return [text, ''];
+}
+
+/**
+ * The answer as the brief's headline (design package 2026-10-06, carried to every answer on Oct 10): its first sentence
+ * in large type and the rest under it, so a ranked list, a verdict on their listing or a buy-or-wait answer reads the
+ * same way as named seats. The plain text is the same sentence, unchanged.
+ */
+export function briefHeadline(text: string): string {
+  const [head, rest] = firstSentence(text.trim());
+  return briefHeadlineHtml(esc(head), rest ? esc(rest) : '');
+}
+/** The same headline from markup already escaped (a link in it). */
+export function briefHeadlineHtml(head: string, rest = ''): string {
+  // A verdict can run to two lines of reasons; at 25px that is a wall, so a long one steps down a size.
+  const long = head.replace(/<[^>]+>/g, '').length > 110;
+  return `<h1 style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:${long ? '20px' : '25px'};line-height:${long ? '28px' : '32px'};letter-spacing:${long ? '-.3px' : '-.6px'};font-weight:700;color:${INK};">${head}</h1>${rest ? P(rest) : ''}`;
+}
+
+/**
+ * The event on its own card when no seats are named (their listing judged, a buy-or-wait answer): the banner on the
+ * first reply, the kind of event, its name, and where and when, the same block as the brief's card above its price.
+ */
+export function eventCard(e: { category: string; name: string; details: string; artworkUrl: string | null; action?: { label: string; url: string } | null }): string {
+  const image = imageUrl(e.artworkUrl);
+  return (
+    `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e0e4e4;border-radius:12px;border-collapse:separate;margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;color:${INK};">` +
+    (image ? `<tr><td style="padding:20px 24px 0;font-size:0;line-height:0;"><img src="${esc(image)}" alt="" role="presentation" width="300" height="100" style="display:block;width:300px;max-width:100%;height:auto;border:0;border-radius:8px;"></td></tr>` : '') +
+    `<tr><td style="padding:${image ? '16px' : '22px'} 24px 20px;">${label(`${e.category} / Your ticket brief`)}` +
+    `<h2 style="margin:6px 0 6px;font-size:22px;line-height:29px;letter-spacing:-.4px;font-weight:700;color:${INK};">${esc(e.name)}</h2>` +
+    `<p style="margin:0;font-size:14px;line-height:22px;color:${MUTED};">${esc(e.details)}</p>` +
+    (e.action ? `<div style="height:16px;line-height:16px;font-size:0;">&nbsp;</div>${button(e.action.label, e.action.url, true)}` : '') +
+    `</td></tr></table>`
+  );
+}
+
+/**
+ * One game or show from a list we send (the ranked games, browse picks) as a card: the banner when we hold one, when
+ * and what kind, the name linked to its page, where, its price when we hold one, why it fits, and the page as a
+ * button. Every fact is the list line's own; nothing is added that the plain text doesn't say.
+ */
+export type ListCard = { when: string; title: string; url: string | null; where: string | null; price: string | null; priceNote: string | null; reason: string | null; links: Array<{ label: string; url: string }>; badge?: string | null; artworkUrl?: string | null; category?: string | null };
+export function listCard(c: ListCard): string {
+  const image = imageUrl(c.artworkUrl ?? null);
+  const title = c.url ? `<a href="${esc(c.url)}" style="color:${INK};text-decoration:none;">${esc(c.title)}</a>` : esc(c.title);
+  const page = c.links.find((l) => /event page/i.test(l.label)) ?? null;
+  const others = c.links.filter((l) => l !== page);
+  return (
+    `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e0e4e4;border-radius:12px;border-collapse:separate;margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;color:${INK};">` +
+    (image ? `<tr><td style="padding:18px 22px 0;font-size:0;line-height:0;"><img src="${esc(image)}" alt="" role="presentation" width="300" height="100" style="display:block;width:300px;max-width:100%;height:auto;border:0;border-radius:8px;"></td></tr>` : '') +
+    `<tr><td style="padding:${image ? '14px' : '18px'} 22px 18px;">` +
+    (c.badge ? `<span style="display:inline-block;background:${LIME};color:${INK};padding:4px 8px;border-radius:4px;font-size:11px;line-height:16px;font-weight:700;margin:0 0 8px;">${esc(c.badge)}</span>` : '') +
+    label([c.category, c.when].filter(Boolean).join(' · ')) +
+    `<h3 style="margin:5px 0 4px;font-size:19px;line-height:26px;letter-spacing:-.3px;font-weight:700;color:${INK};">${title}</h3>` +
+    (c.where ? `<p style="margin:0;font-size:14px;line-height:21px;color:${MUTED};">${esc(c.where)}</p>` : '') +
+    (c.price ? `<div style="margin-top:10px;font-size:24px;line-height:30px;font-weight:700;letter-spacing:-.6px;">${esc(c.price)}${c.priceNote ? ` <span style="font-size:14px;line-height:21px;font-weight:400;letter-spacing:0;color:${MUTED};">${esc(c.priceNote)}</span>` : ''}</div>` : '') +
+    (c.reason ? `<p style="margin:10px 0 0;font-size:14px;line-height:21px;color:${INK};">${esc(c.reason)}</p>` : '') +
+    (page ? `<div style="height:14px;line-height:14px;font-size:0;">&nbsp;</div>${button(page.label, page.url, false)}` : '') +
+    (others.length ? `<p style="margin:10px 0 0;font-size:14px;line-height:21px;">${others.map((l) => `<a href="${esc(l.url)}" style="color:${INK};text-decoration:underline;font-weight:700;">${esc(l.label)}</a>`).join('&nbsp;&nbsp;·&nbsp;&nbsp;')}</p>` : '') +
+    `</td></tr></table>`
+  );
+}
+
 /** Where the numbers came from and what isn't checked, in small print at the end. */
 export function briefEvidence(b: TicketBrief): { text: string; html: string } {
   return { text: b.evidenceNote, html: `<p style="margin:0 0 16px;font-size:12px;line-height:18px;color:${MUTED};">${esc(b.evidenceNote)}</p>` };

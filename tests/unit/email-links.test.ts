@@ -58,11 +58,13 @@ describe('the emails', () => {
   it('a discovery email is picks with why and two links, and the disclosure only when a link pays us', () => {
     const plain = renderTemplate('browse_options', { headline: 'Rock and indie in Brooklyn, Oct 1 to 7. Here are my two picks:', options: [pick.line], picks: [pick], moreCount: 0 }, ctx);
     expect(plain.text).toContain('• Sat, Oct 3: Big Thief at Brooklyn Steel. Indie rock.\n  Listen: https://open.spotify.com/a\n  Tickets: https://www.ticketmaster.com/e/1');
-    // Inline links in an ordinary list: the title links to its page, then "Listen · Tickets". No cards or buttons.
-    expect(plain.html).toContain('<li style="margin:0 0 10px;"><strong>Sat, Oct 3</strong>: <a href="https://www.ticketmaster.com/e/1"');
-    expect(plain.html).toContain('>Big Thief</a> at Brooklyn Steel. Indie rock. <a href="https://open.spotify.com/a"');
-    expect(plain.html).toContain('>Listen</a> · <a href="https://www.ticketmaster.com/e/1"');
-    expect(plain.html).not.toMatch(/border-radius|display:inline-block|<div style="margin:0 0 14px;padding/);
+    // Each pick is the brief's card (Oct 10: the list emails had lost the design): the date, the title linked to its
+    // page, the venue, why it fits, then "Listen · Tickets". Every fact is the plain line's own.
+    expect(plain.html).toMatch(/<h1[^>]*>Rock and indie in Brooklyn, Oct 1 to 7\.<\/h1><p[^>]*>Here are my two picks:<\/p>/);
+    expect(plain.html).toMatch(/border-radius:12px[^]*>Sat, Oct 3<\/div><h3[^>]*><a href="https:\/\/www\.ticketmaster\.com\/e\/1"[^>]*>Big Thief<\/a><\/h3><p[^>]*>Brooklyn Steel<\/p><p[^>]*>Indie rock\.<\/p>/);
+    expect(plain.html).toMatch(/>Listen<\/a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https:\/\/www\.ticketmaster\.com\/e\/1"[^>]*>Tickets<\/a>/);
+    // No price on the line, so none on the card, and no badge.
+    expect(plain.html).not.toMatch(/From \$|Lowest listed price/);
     expect(plain.text).not.toContain(AFFILIATE_DISCLOSURE);
     const paid = renderTemplate('browse_options', { headline: 'x', options: [pick.line], picks: [pick], affiliate: true, moreCount: 0 }, ctx);
     expect(paid.text).toContain(AFFILIATE_DISCLOSURE);
