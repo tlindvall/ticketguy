@@ -132,6 +132,8 @@ const baseExtraction: RequestExtraction = {
       notifyAsked: null,
       quotedPriceCents: null,
       quotedPriceBasis: null,
+      budgetFeeBasis: null,
+      rankingGoal: null,
 };
 
 describe('A28/A29 interests', () => {

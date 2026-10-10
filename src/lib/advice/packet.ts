@@ -1493,6 +1493,11 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const [first, ...rest] = p.picks;
   const est = formatUsd(roundToDollar(first!.estimatedTotalCents));
   const budget = p.budgetTotalCents;
+  // A budget they gave before fees is held against listed totals and said that way (audit gap 10): "$400 before fees" is
+  // never set against a fee estimate.
+  const beforeFees = budget != null && p.budgetFeeBasis === 'before_fees';
+  const held = (x: (typeof p.picks)[number]) => (beforeFees ? x.listedTotalCents : x.estimatedTotalCents);
+  const yours = budget != null ? `${formatUsd(budget)}${beforeFees ? ' before fees' : ''}` : '';
   const party = q === 1 ? 'one ticket' : `${n} tickets`;
   const where = on(first!);
   const missing = q > 1 ? 'the final price, whether it’s still available and whether the seats are together' : 'the final price and whether it’s still available';
@@ -1506,7 +1511,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const ga = (seatPhrase(first!.listing.section, first!.listing.row) ?? '').startsWith('general admission');
   const unconfirmed = q > 1 && !ga ? 'The checkout total and whether the seats are together haven’t been confirmed.' : 'The checkout total hasn’t been confirmed.';
   const lead = `${seat(first!)}${where ? ` on ${where}` : ''}`;
-  const priceLine = `about ${est} for ${party}, including estimated fees`;
+  const priceLine = beforeFees ? `${formatUsd(first!.listedTotalCents)} for ${party} before fees, about ${est} with estimated fees` : `about ${est} for ${party}, including estimated fees`;
   // What I'd do → why → the next action (live Oct 9 review). Budget fit, value and timing are separate: over budget is
   // not overpriced, a fall is not automatically "wait" and a rise not automatically "buy". A lead is unchecked, so a
   // buy is said against the checkout total, never as a sure thing.
@@ -1514,15 +1519,15 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const daysLeft = a.eventStartAt ? (a.eventStartAt.getTime() - a.observedAt.getTime()) / 86_400_000 : Infinity;
   const deadline = a.priorities.decisionDeadline ? (a.priorities.decisionDeadline.getTime() - a.observedAt.getTime()) / 86_400_000 : null;
   const noTime = daysLeft < 3 || (deadline !== null && deadline < 2);
-  const fitting = p.picks.filter((x) => budget == null || x.estimatedTotalCents <= budget).length;
-  const gap = over ? formatUsd(roundToDollar(first!.estimatedTotalCents - budget)) : null;
-  const under = budget != null && !over ? formatUsd(roundToDollar(budget - first!.estimatedTotalCents)) : null;
+  const fitting = p.picks.filter((x) => budget == null || held(x) <= budget).length;
+  const gap = over ? formatUsd(roundToDollar(held(first!) - budget)) : null;
+  const under = budget != null && !over ? formatUsd(roundToDollar(budget - held(first!))) : null;
   // Over budget: hold off only with evidence a drop could come (falling now, or past games here usually fell late) and a
   // watch that can actually run; otherwise no indefinite waiting, one question that unlocks a way forward instead.
   const dropEvidence = dir === 'down' || (!!late && late.fell * 2 > late.events);
   type Outcome = 'take' | 'buy_rising' | 'wait_falling' | 'take_falling' | 'hold_watch' | 'ask';
   const outcome: Outcome = over
-    ? dropEvidence && a.watchOffer && !noTime ? 'hold_watch' : 'ask'
+    ? dropEvidence && a.watchOffer && !noTime && !beforeFees ? 'hold_watch' : 'ask'
     : dir === 'up' ? 'buy_rising'
     : dir === 'down' ? (fitting >= 2 && !noTime ? 'wait_falling' : 'take_falling')
     : 'take';
@@ -1533,15 +1538,15 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     wait_falling: `I’d give it another day.`,
     take_falling: noTime ? `I’d buy these now: there isn’t much time left to wait.` : `I’d take these: they’re the only ${q === 2 ? 'pair' : 'option'} ${budget != null ? 'inside your budget' : 'I can see for you'}.`,
     hold_watch: `I’d hold off: you don’t need to stretch your budget yet.`,
-    ask: `I haven’t found a confirmed ${q === 2 ? 'pair' : q === 1 ? 'ticket' : `set of ${n}`} under ${formatUsd(budget ?? 0)}.`,
+    ask: `I haven’t found a confirmed ${q === 2 ? 'pair' : q === 1 ? 'ticket' : `set of ${n}`} under ${yours}.`,
   }[outcome];
   const rationale = {
-    take: `${capitalize(lead)}: ${priceLine}${under ? `, ${under} under your ${formatUsd(budget!)}` : ''}. ${unconfirmed}`,
-    buy_rising: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${formatUsd(budget)}` : ''}. ${unconfirmed}`,
-    wait_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${formatUsd(budget)}` : ''}, and ${fitting === 2 ? 'another option fits' : `${qtyWord(fitting - 1)} other options fit`} too. ${unconfirmed}`,
-    take_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${formatUsd(budget)}` : ''}. ${unconfirmed}`,
+    take: `${capitalize(lead)}: ${priceLine}${under ? `, ${under} under your ${yours}` : ''}. ${unconfirmed}`,
+    buy_rising: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${yours}` : ''}. ${unconfirmed}`,
+    wait_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${yours}` : ''}, and ${fitting === 2 ? 'another option fits' : `${qtyWord(fitting - 1)} other options fit`} too. ${unconfirmed}`,
+    take_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${yours}` : ''}. ${unconfirmed}`,
     hold_watch: `The closest lead is ${lead}: ${priceLine}, against your ${formatUsd(budget ?? 0)} cap. ${unconfirmed}`,
-    ask: `The closest lead is ${lead}: ${priceLine}, ${gap} over. ${unconfirmed}`,
+    ask: `The closest lead is ${lead}: ${priceLine}, ${gap} over${beforeFees ? ' before fees' : ''}. ${unconfirmed}`,
   }[outcome];
   // The trend only where it answers the question: the reason to buy, to wait or to hold off; not under every pick.
   const why = {
@@ -1566,8 +1571,16 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   const watch = outcome === 'hold_watch' && a.watchOffer ? { title: `Want me to watch your ${formatUsd(budget!)} target?`, body: `Reply “watch it” and I’ll keep checking until ${checkedAt(a.watchOffer.until, a.timeZone)} and email you if listings for ${n} come in at about ${formatUsd(budget!)} or less with fees.` } : null;
   const buying = ['take', 'buy_rising', 'take_falling'].includes(outcome);
   const ageNote = p.age === 'undated' ? 'the data doesn’t say how recently it was refreshed' : typeof p.age === 'number' ? `refreshed about ${p.age} hours ago` : 'refreshed in the last couple of hours';
+  // The goal the picks were ordered by, said where the price basis is (audit gap 28). A view is only claimed from the
+  // section and row the listings give; without them the picks are by price, and that is what's said.
+  const goalLine = p.goal === 'view'
+    ? p.rankedBy === 'view' ? 'Picked for the view: lower sections and rows first, going only by the section and row each listing gives.' : 'Picked by price: these listings don’t say enough about where the seats are to pick for the view.'
+    : p.goal === 'price' ? 'Picked on price: the lowest listed prices for your number.'
+    : p.goal === 'value' ? 'Picked for value: the lowest prices for seats that sell as your number.'
+    : null;
   const basis = [
     `${formatUsd(first!.listedTotalCents)} before fees (${formatUsd(first!.listing.priceCents)} each). Includes a ${p.feeAllowancePct}% fee allowance.`,
+    ...(goalLine ? [goalLine] : []),
     ...(first!.exactSplit ? [] : [`It’s a listing of ${first!.listing.quantity}, so check it sells as ${q}.`]),
   ];
   const facts: Array<[string, string]> = [[q > 1 ? 'Seats together' : 'Seats', q > 1 ? 'Not confirmed' : 'Single seat'], ['Listed on', where ?? 'StubHub or Vivid Seats']];
