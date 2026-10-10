@@ -9,7 +9,8 @@ import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
 import { raPointer } from '@/lib/sources/resident-advisor';
 import { venueCalendar } from '@/lib/sources/venue-calendars';
-import { and, asc, desc, eq, gte, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, ne, notInArray, or, sql } from 'drizzle-orm';
+import { REMOVED_REASON } from '@/lib/admin/remove-requests';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
 import * as t from '@/lib/db/schema';
@@ -343,9 +344,13 @@ export class Concierge {
 
     // Venue timezone hint: from a previously matched event or the NY pilot default when city is NYC (never for dates when unknown).
     const priorVersion = await this.latestVersion(req.id);
+    // A new request in a thread that already had one starts from what that one knew (audit gap 4: after a side
+    // question or "thanks, we bought them", "2 more for my brothers" started from nothing).
+    const carried = priorVersion ? null : await this.carriedFromThread(req);
     let venueTz: string | null = null;
-    if (req.eventId) {
-      const [ev] = await this.db.select({ tz: t.venues.timezone }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, req.eventId));
+    const tzEventId = req.eventId ?? carried?.eventId ?? null;
+    if (tzEventId) {
+      const [ev] = await this.db.select({ tz: t.venues.timezone }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, tzEventId));
       venueTz = ev?.tz ?? null;
     }
     if (!venueTz && /\b(new york|nyc|manhattan|brooklyn|msg)\b/i.test(msg.sanitizedText ?? '')) venueTz = 'America/New_York';
@@ -431,6 +436,17 @@ export class Concierge {
     // every offer they sent (post-#54 replay). A budget is kept only when it isn't one of their offers' prices.
     const latestOffers = offersInText(latestText);
     if (latestOffers.length >= 2 && extraction.budgetCents !== null && latestOffers.some((o) => o.perTicketCents === extraction.budgetCents || o.totalCents === extraction.budgetCents)) extraction = { ...extraction, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    // "$220 for both" after a price they asked about or showed us, with its basis unknown, answers our "per ticket or
+    // for all of them?" (or says the same of their offer: "they want $220 for both"): it is that price's basis, not a
+    // $220 budget for the party (audit gap 9). Budget words still make it theirs: "we can spend $220 for both" is a cap
+    // (BUDGET_WORDS, launch A02), and the same amount as a budget they gave earlier answers the budget question.
+    if (priorVersion && extraction.budgetCents !== null && extraction.budgetBasis && extraction.quotedPriceCents == null && !BUDGET_WORDS.test(latestText)) {
+      const pb = priorVersion.brief as RequestExtraction;
+      const [shot] = pb.quotedPriceCents == null ? await this.db.select({ fields: t.listingEvidence.fields }).from(t.listingEvidence).where(and(eq(t.listingEvidence.requestId, req.id), eq(t.listingEvidence.sensitive, false), pricedEvidence())).orderBy(desc(t.listingEvidence.createdAt)).limit(1) : [];
+      const seen = shot ? (shot.fields as unknown as ListingFields) : null;
+      const quoted = pb.quotedPriceCents ?? (seen?.priceBasis === 'unknown' ? seen.perTicketCents : null);
+      if (quoted === extraction.budgetCents && pb.budgetCents !== extraction.budgetCents) extraction = { ...extraction, quotedPriceCents: extraction.budgetCents, quotedPriceBasis: extraction.budgetBasis, budgetCents: null, budgetBasis: null, ambiguities: (extraction.ambiguities as string[]).filter((x) => !x.startsWith('budget_basis')) as typeof extraction.ambiguities };
+    }
     // Without a budget word, a price they quote from a listing or offer is that listing's price, not a budget:
     // "a listing … PARKING ONLY at $20 each" was read as "Budget: $20 a ticket" (live V03), and "Offer B … $210
     // total" as "up to $210" (live R05-F1).
@@ -488,7 +504,11 @@ export class Concierge {
     }
 
     // Merge with prior revision when this is a follow-up (never re-ask established facts).
-    let merged = priorVersion ? mergeExtraction(RequestExtractionSchema.parse(priorVersion.brief), extraction) : extraction;
+    // A new request in a thread merges onto what the last one knew; its event too, unless this message asks for a kind
+    // of event instead ("any comedy this weekend?"), which is a new question about the same party.
+    const carriedEvent = !!carried && !(isBrowseRequest(extraction) && !SAME_EVENT.test(flat(latestText)));
+    const base = priorVersion ? RequestExtractionSchema.parse(priorVersion.brief) : carried ? (carriedEvent ? carried.brief : { ...carried.brief, performerOrTeam: null, eventName: null, dateExpression: null, resolvedLocalDate: null, categoryHint: null, genreHint: null }) : null;
+    let merged = base ? mergeExtraction(base, extraction) : extraction;
     // What fans call a team ("Bolts", "Habs", "Bama", "Notre Dame") is that team, by its full name, when the name isn't
     // already one in the catalog and only one team answers to it (the league they named narrows "Rangers").
     const typed = extraction.performerOrTeam?.trim().toLowerCase() ?? '';
@@ -499,6 +519,13 @@ export class Concierge {
     const typo = rostered || inCatalog ? null : correctToKnown(extraction.performerOrTeam, [...known, ...ROSTER_NAMES]);
     if (typo) merged = { ...merged, performerOrTeam: typo.to, eventName: merged.eventName ? merged.eventName.replace(typo.from, typo.to) : merged.eventName };
     const typoNote = typo ? `I’ve read “${typo.from}” as ${typo.to}. Tell me if you meant someone else.` : null;
+    // A different act or team is a different event (audit gap 11: "Actually make it Dua Lipa instead" kept "Rangers vs
+    // Lightning", its date and its link): what named the old event goes, unless this message says it again. The party
+    // (count, budget, seats together, access) stays theirs.
+    const newAct = !!base?.performerOrTeam && !!extraction.performerOrTeam && !sameAct(base.performerOrTeam, [extraction.performerOrTeam, merged.performerOrTeam], base.eventName, known);
+    if (newAct) merged = { ...merged, eventName: extraction.eventName ? merged.eventName : null, dateExpression: extraction.dateExpression ? merged.dateExpression : null, resolvedLocalDate: extraction.resolvedLocalDate ? merged.resolvedLocalDate : null, categoryHint: extraction.categoryHint, genreHint: extraction.genreHint, submittedUrls: extraction.submittedUrls, quotedPriceCents: extraction.quotedPriceCents, quotedPriceBasis: extraction.quotedPriceBasis };
+    // The event this request already settled on, or the one the thread's last request had; never the old act's.
+    const settledId = newAct ? null : req.eventId ?? (carriedEvent ? carried!.eventId : null);
     // A checkout link with only a listing number, seen in the resale feed at one event: that is the event they mean,
     // as surely as if they had named it (live Oct 2: "Are these a good deal?" with a StubHub checkout link).
     if (!merged.performerOrTeam && !merged.eventName && !merged.resolvedLocalDate) {
@@ -619,11 +646,17 @@ export class Concierge {
     if (!this.env.EVENT_ALERTS_ENABLED && capabilityOnly(latestText)) {
       const who = extraction.performerOrTeam ? titleCaseName(extraction.performerOrTeam) : null;
       const line = 'No. Automatic on-sale alerts are switched off for now, so I won’t email you when tickets go on sale, and nothing is watching this for you.';
-      const tail = `${who ? `${possessive(who)} official website or Ticketmaster` : 'The official website or Ticketmaster'} will have the on-sale date once one is announced; I haven’t seen one, and I haven’t set up a search or a watch.`;
-      const rev = priorVersion ? req.currentRevision + 1 : 1;
-      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
-      await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      // Asked in the middle of a request, it is a side question: the request it interrupted is left as it was (audit gap 4).
+      const tail = priorVersion
+        ? `${who ? `${possessive(who)} official website or Ticketmaster` : 'The official website or Ticketmaster'} will have the on-sale date once one is announced; I haven’t seen one. ${ASIDE_TAIL}`
+        : `${who ? `${possessive(who)} official website or Ticketmaster` : 'The official website or Ticketmaster'} will have the on-sale date once one is announced; I haven’t seen one, and I haven’t set up a search or a watch.`;
+      const rev = priorVersion ? req.currentRevision : 1;
+      if (!priorVersion) {
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+        await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      }
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'On-sale alerts'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;"><strong>${line}</strong></p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `capability:${msg.id}` });
+      if (priorVersion) return this.answeredAside(req, msg, 'capability_answered');
       await this.transition(req.id, 'closed', 'capability_answered');
       return { state: 'closed', revision: rev, extraction: merged };
     }
@@ -631,11 +664,16 @@ export class Concierge {
     if (asksOutsideTickets(latestText)) {
       const venueWord = /\b(msg|madison square garden)\b/i.test(latestText) ? 'Madison Square Garden' : /\bbarclays\b/i.test(latestText) ? 'Barclays Center' : 'the venue';
       const line = `Restaurant and bar suggestions are outside what I do: I only help with tickets, so I don’t have anything reliable on places to eat near ${venueWord}.`;
-      const tail = /\b(?:already|have|bought|got)\b[^.?!]{0,30}\btickets?\b/i.test(latestText) ? 'Enjoy it.' : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
-      const rev = priorVersion ? req.currentRevision + 1 : 1;
-      await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
-      await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      const tail = /\b(?:already|have|bought|got)\b[^.?!]{0,30}\btickets?\b/i.test(latestText) ? 'Enjoy it.' : priorVersion ? ASIDE_TAIL : 'If you need tickets, tell me what you want to see, roughly when, and how many.';
+      // Asked in the middle of a request ("any dinner spots near the arena?"), it is a side question: answered, and the
+      // request it interrupted keeps its brief, revision and state, so the next reply carries on from it (audit gap 4).
+      const rev = priorVersion ? req.currentRevision : 1;
+      if (!priorVersion) {
+        await this.db.insert(t.requestVersions).values({ requestId: req.id, revision: rev, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
+        await this.db.update(t.requests).set({ currentRevision: rev, updatedAt: now }).where(eq(t.requests.id, req.id));
+      }
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: rev, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Not something I do'), template: 'raw_auto', vars: { text: ['Hey,', line, tail].join('\n\n'), html: [`<p style="margin:0 0 18px;">Hey,</p>`, `<p style="margin:0 0 18px;">${line}</p>`, `<p style="margin:0 0 18px;">${tail}</p>`].join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `outside:${msg.id}` });
+      if (priorVersion) return this.answeredAside(req, msg, 'outside_tickets');
       await this.transition(req.id, 'closed', 'outside_tickets');
       return { state: 'closed', revision: rev, extraction: merged };
     }
@@ -906,6 +944,10 @@ export class Concierge {
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
       : await this.resolveEventWithDiscovery(merged, { requestId: req.id, receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id), rules });
+    // The resolver's own answer, before any list choice, nearby pick or rule-fitting suggestion below replaces it. "When
+    // do they play home next?" asks for that answer, whatever game was settled.
+    const resolverFound = found;
+    const asksNext = eventConstraints([latestText], { receivedAt: msg.receivedAt, timeZone: venueTz ?? 'America/New_York', venues: [] }).next;
     // The date came from an earlier message and breaks a rule they have now given ("Oct 5 is in Philadelphia; I
     // only want a HOME game at MSG, find one instead"): the nearest event that keeps every rule, said so.
     if (found.kind === 'no_match' && found.reason === 'constraint_conflict' && found.conflict?.suggestion && !extraction.dateExpression && !extraction.resolvedLocalDate) {
@@ -946,7 +988,8 @@ export class Concierge {
     // to the same game must never reopen "which game?".
     // "Did you check Saturday too?" asks about another date; it doesn't move the request there (Research 1,
     // Brooklyn). The settled event stays, and the other date is answered for the same performer.
-    const altAsk = !picked && req.eventId && ALT_DATE_ASK.test(flat(latestText)) ? await this.settledRow(req.eventId) : null;
+    // "What about Dua Lipa instead?" names a new act, not another date for this one (audit gap 11).
+    const altAsk = !picked && settledId && ALT_DATE_ASK.test(flat(latestText)) ? await this.settledRow(settledId) : null;
     let altDateNote: string | null = null;
     if (altAsk && (merged.resolvedLocalDate || merged.dateExpression)) {
       const tzA = altAsk.v.timezone;
@@ -978,7 +1021,7 @@ export class Concierge {
       const ranked = await this.compareGames({ req, msg, contact: contact!, merged, revision, cands: found.candidates, said: flat(latestText) });
       if (ranked) return ranked;
     }
-    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !cheapestAsk && req.eventId ? ((await this.keepSettledEvent(req.eventId, found, extraction, rules)) ?? found) : found;
+    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !cheapestAsk && settledId ? ((await this.keepSettledEvent(settledId, found, extraction, rules, found === resolverFound && !asksNext)) ?? found) : found;
     // A choice they already made is never asked again, whatever reopened it: a new request in the same thread, a
     // revision that lost the event, a reply to an older email (live Oct 6: "Which show: Thu, Nov 19 … or Sat, Nov 21?"
     // straight after the Nov 19 seats were sent).
@@ -1154,8 +1197,9 @@ export class Concierge {
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
         const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
-        const text = ['Hey,', lead, ...(typoNote ? [typoNote] : []), ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
-        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(typoNote ? [`<p style="margin:0 0 18px;">${esc(typoNote)}</p>`] : []), ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
+        // Their "did you check Saturday too?" is answered on this route as on every other (audit second pass).
+        const text = ['Hey,', lead, ...(typoNote ? [typoNote] : []), ...(altDateNote ? [altDateNote] : []), ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
+        const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(typoNote ? [`<p style="margin:0 0 18px;">${esc(typoNote)}</p>`] : []), ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');
         if (merged.intent === 'watch_request') await audit(this.db, { actor: 'system', action: 'watch.not_created', entityKind: 'request', entityId: req.id, diff: { reason: `policy:${snap.decision.reasons.includes('operator_blocked') ? 'operator_blocked' : 'guide_official_only'}` } });
         await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your tickets'), template: 'raw_auto', vars: { text, html }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `guide:${req.id}:${revision}` });
         await this.transition(req.id, 'referred', 'guide_official_route');
@@ -1312,7 +1356,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -1328,14 +1372,17 @@ export class Concierge {
     // A question answered from what they sent (their offers side by side, a screenshot, delivery against their
     // trip) gets its answer once, seconds later: "I'll look at how the tickets are trading" was promising work
     // that wasn't the job (post-#55 writing review). Anything we assumed still gets the acknowledgment.
-    const selfContained = !assumptions.length && (latestOffers.length >= 2 || !!listing.fields || questionsAsked(latestText).deliveryRisk || !!questionsAsked(latestText).parking);
+    const selfContained = !assumptions.length && !altDateNote && (latestOffers.length >= 2 || !!listing.fields || questionsAsked(latestText).deliveryRisk || !!questionsAsked(latestText).parking);
     // When nobody reviews the answer (testing auto-approval, or a price check that goes out on its own), it follows
     // within seconds: an "I'll look and come back" email just before it is a second email saying nothing (TGQA-R8
     // writing review 10). With a person reviewing, the wait is real and the acknowledgment says so.
     const answeredUnreviewed = autoApproveActive(this.env) || merged.quotedPriceCents != null;
     // What we assumed or picked for them is said in it, so it still goes then.
-    if ((revision === 1 || picked || cameFromReferral) && !selfContained && (!answeredUnreviewed || assumptions.length || picked)) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+    // "Did you check Saturday too?" gets its answer here when the request goes on to research: the acknowledgment is the
+    // one email that goes out now, and the research reply is about the night they're on (audit second pass: the note
+    // reached only the late-entry reply).
+    if ((revision === 1 || picked || cameFromReferral || altDateNote) && !selfContained && (!answeredUnreviewed || assumptions.length || picked || altDateNote)) {
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: altDateNote ? [...assumptions, altDateNote] : assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1919,7 +1966,7 @@ export class Concierge {
     const threadMsgs = (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt))).map((m) => m.text ?? '');
     const venueNames = (await this.db.select({ name: t.venues.name, aliases: t.venues.aliases }).from(t.venues).limit(5000)).map((v) => ({ name: v.name.length >= 6 ? v.name : '', aliases: v.aliases.filter((x) => x.length >= 6 || /^[A-Z]{3,4}$/.test(x)) }));
     const goalChange = threadMsgs.findLastIndex(similarMusicGoal);
-    const rules = eventConstraints(goalChange >= 0 ? threadMsgs.slice(goalChange) : threadMsgs, { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames });
+    const rules = eventConstraints(goalChange >= 0 ? threadMsgs.slice(goalChange) : threadMsgs, { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames, sports: SPORT_HINTS.includes(merged.categoryHint ?? '') });
     let win = rules.window ? { from: rules.window.from, to: rules.window.to } : merged.dateExpression ? dateWindowFor(merged.dateExpression, msg.receivedAt, tz) : null;
     if (!win && merged.resolvedLocalDate) win = { from: merged.resolvedLocalDate, to: merged.resolvedLocalDate };
     // A window they fenced ("November ONLY", "not September or October", "say so rather than give me other dates")
@@ -2108,7 +2155,7 @@ export class Concierge {
     // Not after "check Saturday specifically": the other night is what they just set aside (Research 1 NW-02).
     const narrowed = /\bspecifically\b|\b(?:just|only)\s+(?:on\s+|for\s+)?(?:the\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day\b/i.test(flat(threadMsgs.at(-1) ?? ''));
     if (genre && !events.length && !narrowed) {
-      const earlier = eventConstraints(threadMsgs.slice(0, -1), { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames }).window;
+      const earlier = eventConstraints(threadMsgs.slice(0, -1), { receivedAt: msg.receivedAt, timeZone: tz, venues: venueNames, sports: SPORT_HINTS.includes(merged.categoryHint ?? '') }).window;
       const span2 = earlier && (earlier.from !== win.from || earlier.to !== win.to) ? await lookIn({ from: earlier.from < today ? today : earlier.from, to: earlier.to }) : null;
       const alt = span2?.genreKept ? span2.events.find(({ e, v }) => { const d = eventLocalDate(e.localStartAt, v.timezone); return d < win.from || d > win.to; }) : undefined;
       if (alt) otherDate = `The one ${genre.words} show I have on the other date you mentioned is ${alt.e.name} at ${alt.v.name} on ${new Intl.DateTimeFormat('en-US', { timeZone: alt.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(alt.e.localStartAt)}. Want that one instead?`;
@@ -2595,7 +2642,9 @@ export class Concierge {
     // Venues matched by their own names: a long name, or a short all-capitals alias like MSG. "Home" or "Hall"
     // alone never makes a venue rule.
     const venues = (await this.db.select({ name: t.venues.name, aliases: t.venues.aliases }).from(t.venues).limit(5000)).map((v) => ({ name: v.name.length >= 6 ? v.name : '', aliases: v.aliases.filter((a) => a.length >= 6 || /^[A-Z]{3,4}$/.test(a)) }));
-    const c = eventConstraints(texts, { receivedAt, timeZone: venueTz ?? 'America/New_York', venues });
+    // "This weekend" is Saturday or Sunday for a game and Friday night on too for anything else (audit gap 15).
+    const team = !!x.performerOrTeam && (!!teamHomeMarket(x.performerOrTeam) || (await this.db.select({ kind: t.entities.kind }).from(t.entities).where(eq(t.entities.name, x.performerOrTeam)).limit(1))[0]?.kind === 'team');
+    const c = eventConstraints(texts, { receivedAt, timeZone: venueTz ?? 'America/New_York', venues, sports: team || SPORT_HINTS.includes(x.categoryHint ?? '') });
     // A city they've since named outside the region ("Las Vegas is fine") is where they now mean.
     if (c.region && x.state && !c.region.states.includes(x.state.toUpperCase())) c.region = null;
     // The screenshot's start time is the performance they are looking at, unless they typed a different one.
@@ -2934,11 +2983,47 @@ export class Concierge {
     return { kind: 'resolved', event: row.e, venue: row.v, label: eventLabel(row.e, row.v), entityKind: row.ent?.kind === 'team' ? 'team' : row.ent ? 'artist' : null, assumed: `I’ve stayed with ${eventLabel(row.e, row.v)}, the ${noun} we already looked at. Tell me if you meant a different one${others.length === 1 ? `, like ${others[0]}` : ''}.` };
   }
 
-  private async keepSettledEvent(eventId: string, resolution: Awaited<ReturnType<Concierge['resolveEvent']>>, said: RequestExtraction, rules?: ResolveRules | null): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
-    if (resolution.kind === 'resolved' || resolution.kind === 'non_us') return null;
+  /**
+   * What the last request in this thread knew, for a new request opened in the same thread (audit gap 4): a side
+   * question on a first message, "thanks, we bought them" or entry help closed it, and "could you find 2 more for my
+   * brothers?" must not start from nothing. The event and the party only: who and when (and the event settled), how
+   * many, the budget and its basis, seating, seats together, access needs and the deadline. Never its links, quoted
+   * prices or screenshots, which were about the tickets that request was for. Nothing after a stop, an opt-out or a
+   * staff removal: those end what the thread was doing, and the next email starts clean.
+   */
+  private async carriedFromThread(req: typeof t.requests.$inferSelect): Promise<{ brief: RequestExtraction; eventId: string | null } | null> {
+    const [last] = await this.db.select().from(t.requests).where(and(eq(t.requests.conversationId, req.conversationId), ne(t.requests.id, req.id))).orderBy(desc(t.requests.createdAt)).limit(1);
+    if (!last || last.state !== 'closed') return null;
+    const [end] = await this.db.select({ reason: t.requestTransitions.reason }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, last.id), eq(t.requestTransitions.toState, 'closed'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
+    if (!end?.reason || ENDED_BY_STOP.includes(end.reason)) return null;
+    const [stopped] = await this.db.select({ id: t.requestOutcomes.id }).from(t.requestOutcomes).where(and(eq(t.requestOutcomes.requestId, last.id), eq(t.requestOutcomes.kind, 'stop_watching'))).limit(1);
+    if (stopped) return null;
+    const version = await this.latestVersion(last.id);
+    if (!version) return null;
+    const b = RequestExtractionSchema.parse(version.brief);
+    return {
+      brief: { ...b, intent: 'new_search', submittedUrls: [], evidence: [], ambiguities: [], quotedPriceCents: null, quotedPriceBasis: null, resaleAsked: null, wantsMore: null, notifyAsked: null, countryStatement: null },
+      eventId: last.eventId,
+    };
+  }
+
+  /** A side question answered in the middle of a request: the request carries on as it was (audit gap 4). */
+  private async answeredAside(req: typeof t.requests.$inferSelect, msg: typeof t.messages.$inferSelect, kind: string): Promise<{ state: string; revision: number; extraction: RequestExtraction | null }> {
+    await audit(this.db, { actor: 'system', action: 'request.side_question_answered', entityKind: 'request', entityId: req.id, revision: req.currentRevision, diff: { kind, messageId: msg.id, state: req.state } });
+    const prior = await this.latestVersion(req.id);
+    return { state: req.state, revision: req.currentRevision, extraction: prior ? RequestExtractionSchema.parse(prior.brief) : null };
+  }
+
+  private async keepSettledEvent(eventId: string, resolution: Awaited<ReturnType<Concierge['resolveEvent']>>, said: RequestExtraction, rules?: ResolveRules | null, fromResolver = true): Promise<Awaited<ReturnType<Concierge['resolveEvent']>> | null> {
+    if (resolution.kind === 'non_us') return null;
     // A settled event that breaks a rule they have since given ("I only want a HOME game") is not kept.
     if (resolution.kind === 'no_match' && resolution.reason === 'constraint_conflict') return null;
     const saysNothingNew = !said.performerOrTeam && !said.eventName && !said.dateExpression && !said.resolvedLocalDate;
+    // The whole brief resolving to another game is no reason to move: "are the seats together?" after a game chosen from
+    // a list went to the next home game, the brief's own answer (audit second pass). Moved only when this message names
+    // a team, act, event or date, asks for the next one, or when the game came from their choice in this message (a
+    // list, a nearby show).
+    if (resolution.kind === 'resolved' && (resolution.event.id === eventId || !saysNothingNew || !fromResolver)) return null;
     const stillFits = resolution.kind === 'ambiguous' && resolution.candidates.some((c) => c.id === eventId);
     if (!saysNothingNew && !stillFits) return null;
     const [row] = await this.db.select({ e: t.events, v: t.venues, kind: t.entities.kind, teamName: t.entities.name, homeVenueId: t.entities.homeVenueId }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).leftJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId)).where(eq(t.events.id, eventId));
@@ -3327,7 +3412,10 @@ export class Concierge {
       }
     }
     const corrected = read && ev && !latestIds.includes(ev.messageId ?? '') ? correctListing(read, said) : { fields: read ?? linked, changes: [] as string[], matches: false };
-    const shown = corrected.fields;
+    // "$220 for both" answering our "is $220 the price per ticket, or for both?" about this listing: the price it showed
+    // is for the party (audit gap 9; interpret records it as the quote's basis), so it isn't asked again.
+    const forParty = corrected.fields?.priceBasis === 'unknown' && brief.quotedPriceBasis === 'whole_party' && brief.quotedPriceCents != null && brief.quotedPriceCents === corrected.fields.perTicketCents;
+    const shown = forParty ? { ...corrected.fields!, priceBasis: 'whole_party' as const, wholePartyCents: brief.quotedPriceCents!, perTicketCents: Math.round(brief.quotedPriceCents! / (corrected.fields!.quantity ?? quantity)) } : corrected.fields;
     // One price for the listing: a total that carries fees on top of a before-fees ticket price is compared as its
     // all-in share per ticket, with the breakdown kept (live A11: $72 + $48 / 3 = $88 each).
     const tickets = shown?.quantity ?? quantity;
@@ -5515,6 +5603,30 @@ export function guideChecks(category: string): string {
 }
 
 /** "Did you check Saturday too?", "what about Saturday Oct 3?": a question about another date, not a move to it. */
+/** Closing reasons that end what a thread was doing: nothing from that request is carried into the next (audit gap 4). */
+const ENDED_BY_STOP = ['customer_stopped', 'customer_stopped_all', 'opt_out_only', 'off_topic', 'off_topic_repeat', REMOVED_REASON];
+/** "the same game", "that show": a follow-up about the event already in the thread, whatever else it asks. */
+const SAME_EVENT = /\b(?:same|that|this)\s+(?:game|match|show|concert|event|night|one|performance)\b/i;
+/** The close of a side question's answer: the request it interrupted is unchanged and still theirs to add to. */
+const ASIDE_TAIL = 'Nothing about your ticket request has changed; reply here with anything else you want me to check on it.';
+
+/**
+ * Whether the team or act this message names is the one the request was about: the same name or part of it ("Rangers",
+ * "New York Rangers"), a team named in the old matchup ("the Lightning game" after "Rangers vs Lightning"), or another
+ * name of the same catalog entry.
+ */
+function sameAct(before: string, named: Array<string | null>, eventName: string | null, known: Array<{ name: string; aliases: string[] }>): boolean {
+  const a = before.trim().toLowerCase();
+  const entry = (x: string) => known.find((k) => [k.name, ...k.aliases].some((n) => n.toLowerCase() === x));
+  return named.some((n) => {
+    const b = n?.trim().toLowerCase();
+    if (!b) return false;
+    if (a === b || a.includes(b) || b.includes(a) || (eventName ?? '').toLowerCase().includes(b)) return true;
+    const e = entry(a);
+    return !!e && e === entry(b);
+  });
+}
+
 const ALT_DATE_ASK = /\b(?:did|have) you (?:also |even )?(?:check|look(?:ed)? at|search(?:ed)?|try|tried)\b[^?]*\b(?:too|also|as well|either)?\b[^?]*\?|\bwhat about\b[^?]{0,40}\?|\bis there (?:one|anything|a show) on\b[^?]*\?/i;
 
 /**

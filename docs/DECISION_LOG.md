@@ -975,7 +975,7 @@ It is stored with its zone and compared with each offer's promised transfer, and
 - Well-known venue nicknames are built in ("MSG", "the Garden", "Barclays", "UBS", "Prudential").
 - A venue they exclude is never searched.
 - A date that breaks a rule is named with the reason. The alternatives are offered as another date, and the reply never claims they fit everything.
-- "Weekend" means Saturday and Sunday.
+- "Weekend" means Saturday and Sunday for a game. For a concert, club night, comedy or theatre it includes Friday night, as the date window always did (audit gap 15, Oct 10).
 
 **Dates.** When the model leaves the day unresolved, the deterministic reader fills it in from the model's own date phrase or the email ("Monday October 5", "this coming Friday", "fri"). The timezone comes from the venue, else the team's market, else the pilot market's. The reader never pins one weekday out of "Saturday or Sunday".
 
