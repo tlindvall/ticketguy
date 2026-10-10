@@ -1,6 +1,7 @@
 import { lexiconBrowseAsk, lexiconCategory, lexiconGenre } from '@/lib/lexicon/lexicon';
 import { neighbourhoodFor } from './neighbourhoods';
 import { milesBetween } from './markets';
+import { isNonGameName } from '@/lib/catalog/sync';
 /**
  * "What gigs are on in New York the first week of October?" is not a request for one event; it asks what the
  * options are. Browsing answers with a short list of real scheduled events for a kind of event, a place and
@@ -125,6 +126,20 @@ export function genreFitScore(eventGenre: string | null | undefined, words: stri
 }
 
 const SPORT_CATEGORIES = ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'];
+
+/** A game that isn't the season: an exhibition, a preseason or a friendly, however the provider spells it. */
+const EXHIBITION = /\((?:exhibition|preseason|pre-season|friendly|scrimmage)\)|\b(?:exhibition|preseason|pre-season|friendly|friendlies|scrimmage)\b/i;
+
+/**
+ * How prominent a game is, for a sports browse (live Oct 9: "What sports games are on?" in New York offered "St. John's
+ * Red Storm Men's Basketball v. Drexel (Exhibition)" as pick three while Knicks and Yankees games were in the window).
+ * 0: the major pro leagues in season; 1: other pro and college seasons; 2: exhibitions, preseason, friendlies and
+ * anything that isn't a game. Nothing is dropped by it; a lower tier only comes later in the list.
+ */
+export function prominenceTier(e: { name: string; category: string }): 0 | 1 | 2 {
+  if (isNonGameName(e.name) || EXHIBITION.test(e.name)) return 2;
+  return SPORT_CATEGORIES.includes(e.category) ? 0 : 1;
+}
 
 /**
  * Why a pick fits, in a few words the date-and-venue line does not already say: the kind of music, or the

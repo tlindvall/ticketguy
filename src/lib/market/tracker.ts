@@ -236,7 +236,9 @@ export class MarketTracker {
       if (hit) out.push('cohort');
     }
     if (tr.reasons.includes('request')) {
-      const [open] = await this.db.select({ id: t.requests.id }).from(t.requests).where(and(eq(t.requests.eventId, tr.eventId), notInArray(t.requests.state, ['closed', 'unsupported']))).limit(1);
+      // A game ranked on price for a customer still choosing (requests.browseShown, live Oct 9) is theirs as much as a
+      // settled one: it stays priced for the pick, and for the next customer who asks the same question.
+      const [open] = await this.db.select({ id: t.requests.id }).from(t.requests).where(and(or(eq(t.requests.eventId, tr.eventId), sql`${t.requests.browseShown} @> ${JSON.stringify([tr.eventId])}::jsonb`), notInArray(t.requests.state, ['closed', 'unsupported']))).limit(1);
       if (open && (await this.requestMayTrack(tr.eventId))) out.push('request');
     }
     return out;
