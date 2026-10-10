@@ -17,6 +17,8 @@ export type MarketListing = {
   marketplace?: 'stubhub' | 'vividseats' | null;
   /** The listing's own page on StubHub or Vivid Seats, when the feed carries one (https, those hosts only). */
   url?: string | null;
+  /** The feed's own note on the listing ("Limited view"), when it carries one: the only drawback we can read. */
+  notes?: string | null;
 };
 
 const MARKETPLACES: Record<string, 'stubhub' | 'vividseats'> = { sh: 'stubhub', stubhub: 'stubhub', vs: 'vividseats', vivid: 'vividseats', vividseats: 'vividseats', vivid_seats: 'vividseats' };
@@ -34,7 +36,19 @@ export function toMarketListing(l: Record<string, unknown>): MarketListing | nul
   const src = str(l.source ?? l.marketplace ?? l.exchange)?.toLowerCase().replace(/[\s-]+/g, '_') ?? null;
   const url = listingUrl(l.url ?? l.listing_url ?? l.link ?? l.deep_link);
   const fromUrl = url ? (new URL(url).hostname.endsWith('stubhub.com') ? 'stubhub' : 'vividseats') : null;
-  return { priceCents: Math.round(price * 100), quantity: qty, section: str(l.section), row: str(l.row), zone: str(l.zone), id, marketplace: (src ? (MARKETPLACES[src] ?? null) : null) ?? fromUrl, url };
+  return { priceCents: Math.round(price * 100), quantity: qty, section: str(l.section), row: str(l.row), zone: str(l.zone), id, marketplace: (src ? (MARKETPLACES[src] ?? null) : null) ?? fromUrl, url, notes: str(l.notes) };
+}
+
+/**
+ * A drawback the feed itself states on a listing (Oct 10 framework, B7): a limited or obstructed view, or seats the note
+ * says aren't together. Read from the listing's note only, never guessed from its price or section.
+ */
+export type ListingDrawback = 'obstructed_view' | 'seats_not_together';
+export function listingDrawback(l: MarketListing): ListingDrawback | null {
+  const n = l.notes ?? '';
+  if (/\b(?:obstructed|limited|partial|restricted|side)[ -]view\b|\bview (?:is )?(?:obstructed|limited|restricted)\b|\bobstructed\b/i.test(n)) return 'obstructed_view';
+  if (/\bnot (?:be )?(?:seated |sitting )?together\b|\bpiggy-?back\b/i.test(n)) return 'seats_not_together';
+  return null;
 }
 
 /** A listing page we'd send a customer to: https on StubHub or Vivid Seats only, never any other host. */
@@ -63,11 +77,14 @@ export function matchLinkedListing(listings: MarketListing[], link: { marketplac
   return same.length === 1 && unnamed.length === 1 ? unnamed[0]! : null;
 }
 
-export type Alternative = { scope: 'same_section' | 'same_zone'; listing: MarketListing; perTicketSavingCents: number };
+/** `drawback`: what the feed's note says is wrong with it; a clean listing in the same place is preferred over it. */
+export type Alternative = { scope: 'same_section' | 'same_zone'; listing: MarketListing; perTicketSavingCents: number; drawback: ListingDrawback | null };
 
 export type AlternativesResult = {
   /** How many listings could seat the whole party. */
   comparable: number;
+  /** How many of those are in their section (theirs excluded): zero means nothing like for like was compared. */
+  sectionListings?: number;
   zone: string | null;
   alternatives: Alternative[];
   /** The customer's price per ticket, as compared (before fees when that's what they gave). */
@@ -90,11 +107,15 @@ export function findAlternatives(listings: MarketListing[], subject: { perTicket
   const sameSeatsMaybe = (l: MarketListing) => !!sec && norm(l.section) === sec && !!subject.row && (l.row ?? '').toLowerCase() === subject.row.toLowerCase();
   const cheaper = fits.filter((l) => l.priceCents <= cap && !sameSeatsMaybe(l)).sort((a, b) => a.priceCents - b.priceCents);
   const out: Alternative[] = [];
-  const inSection = sec ? cheaper.find((l) => norm(l.section) === sec) : undefined;
-  if (inSection) out.push({ scope: 'same_section', listing: inSection, perTicketSavingCents: subject.perTicketCents - inSection.priceCents });
-  const inZone = zone ? cheaper.find((l) => l.zone === zone && norm(l.section) !== sec) : undefined;
-  if (inZone) out.push({ scope: 'same_zone', listing: inZone, perTicketSavingCents: subject.perTicketCents - inZone.priceCents });
-  return { comparable: fits.length, zone, alternatives: out, subjectPerTicketCents: subject.perTicketCents };
+  // The cheapest listing the feed doesn't fault first; one it does fault only when there is nothing clean there, so
+  // "I'd choose this alternative" is never said of a limited view when an ordinary seat sits beside it (B6a vs B7).
+  const pick = (xs: MarketListing[]) => xs.find((l) => !listingDrawback(l)) ?? xs[0];
+  const inSection = sec ? pick(cheaper.filter((l) => norm(l.section) === sec)) : undefined;
+  if (inSection) out.push({ scope: 'same_section', listing: inSection, perTicketSavingCents: subject.perTicketCents - inSection.priceCents, drawback: listingDrawback(inSection) });
+  const inZone = zone ? pick(cheaper.filter((l) => l.zone === zone && norm(l.section) !== sec)) : undefined;
+  if (inZone) out.push({ scope: 'same_zone', listing: inZone, perTicketSavingCents: subject.perTicketCents - inZone.priceCents, drawback: listingDrawback(inZone) });
+  const sectionListings = sec ? fits.filter((l) => norm(l.section) === sec && !sameSeatsMaybe(l)).length : 0;
+  return { comparable: fits.length, sectionListings, zone, alternatives: out, subjectPerTicketCents: subject.perTicketCents };
 }
 
 /**

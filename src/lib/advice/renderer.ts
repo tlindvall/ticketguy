@@ -360,7 +360,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(P(esc(coverage.text)));
   }
   // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
+  // The alternative the verdict chose carries its own link (its page, or the marketplace's search): the next action.
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || (c.id === 'C_ALTERNATIVES' && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
   // The offer card carries its own links.
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
@@ -372,7 +373,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   } else if (asks.length) section(lines, html, questionsLead(asks.length), asks);
   // Nor over their own question (delivery, their offers, access, sales): a model closing there drifted into
   // generic buy-or-wait advice (post-#54 QA, R3-B03).
-  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING', 'C_LINK_UNREAD', 'C_PICKS'].some((id) => claimsById.has(id))) {
+  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING', 'C_LINK_UNREAD', 'C_PICKS', 'C_VERDICT'].some((id) => claimsById.has(id))) {
     // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
     // worse, ask for the listing they already sent.
     lines.push(b.closing.trim());

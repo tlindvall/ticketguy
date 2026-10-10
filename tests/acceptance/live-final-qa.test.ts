@@ -133,7 +133,7 @@ describe('final real-email QA replays', () => {
     expect(second!.text).toContain('Over your $750 budget by $30.');
   });
 
-  it('LIVE-07: "the best tickets" is asked which kind of best, beside the event and party', async () => {
+  it('LIVE-07: "the best tickets" is asked which kind of best, beside the event and party (nothing on file: not the one question)', async () => {
     const [first] = await converse(['Can you find me the best tickets for Dua Lipa?']);
     expect(first!.text).toContain('Are you after the best view, the best value, or the lowest price?');
     expect(first!.text).toMatch(/date and venue|How many tickets/);
