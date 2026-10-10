@@ -182,6 +182,54 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     }
   });
 
+  it('after a game was settled, "which is cheapest?" ranks the games: never the settled game kept, in a new thread or the same one', async () => {
+    // The live Oct 9 failure was the remembered Oct 11 game kept as the answer. Both ways it can come back: the same
+    // contact asking afresh (the remembered choice) and a reply in the thread that settled it (the settled event, at
+    // revision 2, which also invalidates what revision 1 recommended).
+    const from = 'settled@customer.example';
+    const first = await ask('2 tickets for the metro rangers game on Oct 11', from);
+    expect(first.req.eventId).toBe(games[0]!.id);
+    const fresh = await ask('What upcoming metro rangers game would be good to take my son to with the lowest prices. Before christmas. 2 tickets', from);
+    expect(fresh.req.id).not.toBe(first.req.id);
+    expect(fresh.req.eventId).toBeNull();
+    expect(fresh.req.state).toBe('needs_clarification');
+    expect(fresh.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+    expect(fresh.emails).toContain('Cheapest before Christmas');
+    expect(fresh.emails).not.toMatch(/already looked at|whether resale is cheaper/);
+    const again = await ask('Actually, which metro rangers game before christmas has the lowest prices? 2 tickets', from, {}, first.rfcMessageId);
+    expect(again.req.id).toBe(first.req.id);
+    expect(again.req.currentRevision).toBe(2);
+    expect(again.req.eventId).toBeNull();
+    expect(again.req.state).toBe('needs_clarification');
+    expect(again.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+    expect(again.research).toEqual([]);
+    expect(again.sends.at(-1)!.bodyText).toContain('Cheapest before Christmas');
+    expect(again.sends.at(-1)!.bodyText).not.toMatch(/already looked at|whether resale is cheaper/);
+    expect(await h.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, first.req.id), eq(t.requestVersions.revision, 2)))).toHaveLength(1);
+  });
+
+  it('a pick from the ranked list is read in the order the list showed it: "the first one" is the cheapest game, not the earliest', async () => {
+    // Live shape, Oct 10 review: the list is cheapest first (Nov 3, Nov 20, Dec 12, Oct 11) while the games behind it
+    // are in date order (Oct 11 first), so "the first one" settled the dearest game. Ordinals, "the cheapest one" and a
+    // day all read the list as sent.
+    const pick = async (from: string, reply: string) => {
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+      const p = await ask(reply, from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      // The pick goes on to research as an ordinary request; the list is never sent again.
+      expect(p.research).toEqual([r.req.id]);
+      expect(p.sends.filter((s) => s.bodyText.includes('Cheapest before Christmas'))).toHaveLength(1);
+      return p.req.eventId;
+    };
+    expect(await pick('first@customer.example', 'the first one, 2 tickets')).toBe(games[1]!.id);
+    expect(await pick('second@customer.example', 'The second game please')).toBe(games[2]!.id);
+    expect(await pick('cheap@customer.example', 'the cheapest one')).toBe(games[1]!.id);
+    expect(await pick('last@customer.example', 'the last one')).toBe(games[0]!.id);
+    // Two of the games are Saturdays (Dec 5 and Dec 12), one of them listed: the day names the one they saw.
+    expect(await pick('day@customer.example', 'Saturday works for us')).toBe(games[4]!.id);
+  });
+
   it('the words: a choice of game on price, not the cheapest seats for a game already named', () => {
     expect(asksCheapestGame('What upcoming new york rangers game would be good to take my son to with the lowest prices. Before christmas.')).toBe(true);
     expect(asksCheapestGame('cheapest knicks game in november?')).toBe(true);

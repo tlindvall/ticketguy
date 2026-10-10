@@ -97,6 +97,27 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     expect(pages.at(-1)!.split('Drexel')[1] ?? '').not.toMatch(/\n\u2022 /);
   });
 
+  it('a pick from the picks is read in the order they were listed: "the first one" is the first pro game, not the earliest', async () => {
+    // Oct 10 review: the picks are ranked by prominence (Islanders, Rangers, Knicks) while the exhibition is the earliest
+    // game; "the first one" or a day named must settle the game the customer saw there, and never send the list again.
+    const c = makeConcierge(h, { env: testEnv({}) });
+    const pick = async (from: string, reply: string) => {
+      const first = inbound({ text: 'My family is coming to New York next week. What sports games are on?', from, subject: 'NY trip' });
+      const r = (await c.ingestInbound(first)) as { requestId: string };
+      await interpretAll(c);
+      await c.ingestInbound(inbound({ text: reply, from, subject: 'Re: NY trip', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+      await interpretAll(c);
+      const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+      const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
+      expect(sends.filter((s) => s.bodyText.includes('Here are my three picks'))).toHaveLength(1);
+      const [ev] = req!.eventId ? await h.db.select().from(t.events).where(eq(t.events.id, req!.eventId)) : [];
+      return ev?.name ?? null;
+    };
+    expect(await pick('first@customer.example', 'The first one please, 2 tickets')).toBe('New York Islanders vs. Philadelphia Flyers');
+    expect(await pick('third@customer.example', 'the third one, 4 of us')).toBe('New York Knicks vs. Boston Celtics');
+    expect(await pick('thu@customer.example', "Thursday's game, 2 tickets")).toBe('New York Knicks vs. Boston Celtics');
+  });
+
   it('prominence: the major leagues, then other seasons, then exhibitions, preseason and anything that is not a game', () => {
     expect(prominenceTier({ name: 'New York Knicks vs. Boston Celtics', category: 'nba' })).toBe(0);
     expect(prominenceTier({ name: 'New York City FC vs. Inter Miami CF', category: 'soccer' })).toBe(0);

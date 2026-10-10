@@ -130,6 +130,15 @@ const CHEAPEST_GAME_MAX_REFRESHES = 12;
 const PRICE_LOW = /\b(?:cheapest|cheaper|least expensive|most affordable|affordable|lowest(?:[- ]priced)?|low(?:est)? prices?|best (?:price|deal|value)s?|cheap)\b/i;
 const GAME_CHOICE = /\b(?:which|what)\s+(?:\S+\s+){0,5}?(?:game|games|match|matches|date|dates|night|show|shows|one)\b|\b(?:cheapest|least expensive|most affordable|lowest[- ]priced|cheaper)\s+(?:\S+\s+){0,4}?(?:game|games|match|date|night|show)\b/i;
 export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && GAME_CHOICE.test(text);
+/** "The cheapest one", "the cheapest", "cheapest game please": a pick from a list we ranked on price, its first entry. */
+const CHEAPEST_PICK = /\b(?:the\s+)?cheapest\s+(?:one|game|match|date|night|show|option)\b(?!\s+(?:for|in|on|before|after|this|next|of)\b)|\bthe\s+cheapest\s*(?:[.,!?]|$)/i;
+/**
+ * A day named as a pick from a browse page: one day, and no scheduling rule around it. "Saturday or Sunday ONLY, after
+ * 7pm" restates the search, and "you found Nov 21 and Nov 22, do those still match?" asks about both (TGQA-R8 S04).
+ */
+const DAY_MENTION = /\b(?:sun|mon|tue|wed|thu|fri|sat)(?:day|s|nesday|rsday|urday|sday)?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}\/\d{1,2}\b/gi;
+const LIST_QUESTION = /\b(?:any(?:thing)?|what(?:'s|’s| is| else)?|else|other|others|instead|more|only|after|before|keep|not|no|between|every|or|still|match(?:es)?)\b/i;
+const browseDayPick = (text: string) => (text.match(DAY_MENTION)?.length ?? 0) === 1 && !LIST_QUESTION.test(text);
 /**
  * "The best tickets" with no goal in it (live Oct 9: "Find me the best Metallica tickets" got a menu of dates and three
  * questions). The goal and the party are the one question; "best view" or "cheapest" has named the goal already.
@@ -900,6 +909,9 @@ export class Concierge {
 
     // Their rules on which event, from the whole thread (venue, home only, time, days, "the next one"), the
     // performance their link or screenshot names, checked before any event is chosen (TGQA-R6 1001, 1007).
+    // "Which game is cheapest?" asks for a choice of games: a single date from an earlier message ("the game on Oct 11")
+    // is no scope for it (Oct 10 review: asked in the thread that settled Oct 11, the date kept the answer on Oct 11).
+    if (!picked && asksCheapestGame(flat(latestText)) && !extraction.resolvedLocalDate && merged.resolvedLocalDate) merged = { ...merged, resolvedLocalDate: null, dateExpression: extraction.dateExpression ?? null };
     const rules = await this.resolveRules(req, merged, venueTz, msg.receivedAt);
     rules.cheapest = !picked && asksCheapestGame(flat(latestText));
     // Event resolution (a browse that found exactly one event has already resolved it).
@@ -929,16 +941,21 @@ export class Concierge {
       }
     }
     // "Yes the first one would be great" after a list we sent: that one, never the same list again (live Oct 3,
-    // Metallica: the two Mohegan Sun nights were offered back word for word). The list is rebuilt the same way from the
-    // same request, so its order is the order they saw.
+    // Metallica: the two Mohegan Sun nights were offered back word for word). A games ranking is read as it was sent,
+    // cheapest first (Oct 10 review: rebuilt from the date-ordered candidates, "the first one" after "Nov 3 $74, Nov 20
+    // $81, Dec 12 $95, Oct 11 $120" settled Oct 11); other lists are rebuilt the same way from the same request, so
+    // their order is the order they saw.
     if (!picked && revision > 1) {
-      const options = elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
+      const sent = await this.listSent(req);
+      const ranked = sent?.kind === 'games_ranked' ? sent : null;
+      const options = ranked ? ranked.rows : elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
       // "the first one", or the day itself: "the 19th", "Nov 19", "Thursday" (live Oct 5: "the 19th. 2 tickets together
-      // please" after "Thu, Nov 19 or Sat, Nov 21?" got the same question back).
-      const idx = options.length > 1 ? ordinalChoice(flat(latestText), options.length) ?? dayChoice(flat(latestText), options.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone))) : null;
+      // please" after "Thu, Nov 19 or Sat, Nov 21?" got the same question back). "The cheapest one" is the first only of
+      // a list ranked on price.
+      const idx = options.length > 1 ? listChoice(flat(latestText), options, ranked?.rankedBy === 'price') : null;
       if (idx !== null) {
         const { e, v } = options[idx]!;
-        found = { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: elsewhere[idx]?.kind ?? null };
+        found = { kind: 'resolved', event: e, venue: v, label: eventLabel(e, v), entityKind: ranked ? null : elsewhere[idx]?.kind ?? null };
         elsewhere = [];
       }
     }
@@ -1862,11 +1879,23 @@ export class Concierge {
    * named (the next two weeks when none was, and the reply says so). The request waits for the customer to
    * pick one; their reply names it, and the ordinary resolution takes over from there.
    */
-  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string; lead?: string | null }> {
+  private async browse(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number; more?: boolean }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | { pick: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }; note: string | null; lead?: string | null }> {
     const { req, msg, contact, revision } = a;
     let merged = a.merged;
     const more = a.more === true;
     const now = this.now();
+    // "The first one", "Thursday's game" after the picks we sent: that event, read from the page as it was listed, sports
+    // ranked by prominence (Oct 10 review: the reply rebuilt the browse and asked again). A new question about the list
+    // ("anything on Saturday?", "Saturday or Sunday only") is not a pick, and neither is "the cheapest one": these picks
+    // weren't ranked on price.
+    if (!more && revision > 1) {
+      const sent = await this.listSent(req);
+      const said = flat(msg.sanitizedText ?? '');
+      if (sent?.kind === 'browse_options') {
+        const idx = ordinalChoice(said, sent.rows.length) ?? (browseDayPick(said) ? listChoice(said, sent.rows, false) : null);
+        if (idx !== null) return { pick: sent.rows[idx]!, note: null };
+      }
+    }
     // Paging through a list is the customer steering, not a question we failed to settle: it does not count
     // towards the limit that hands a request to a person.
     const count = req.clarificationCount + (more ? 0 : 1);
@@ -2200,6 +2229,8 @@ export class Concierge {
     // What this reply lists is remembered, so "the other 7" continues from here; a new question starts over.
     const listed = shown.map(({ e }) => e.id);
     await this.db.update(t.requests).set({ clarificationCount: count, browseShown: more ? [...req.browseShown, ...listed] : listed }).where(eq(t.requests.id, req.id));
+    // The page as sent, in its order, so "the first one" in the reply is read from it (a "more" page included).
+    await audit(this.db, { actor: 'system', action: 'request.options_listed', entityKind: 'request', entityId: req.id, revision, diff: { listed, rankedBy: sportBrowse ? 'prominence' : 'date', more } });
     await this.transition(req.id, 'needs_clarification', 'browse_options');
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
@@ -2792,6 +2823,22 @@ export class Concierge {
   }
 
   /** Events with their venues, in the order of `ids` (ids not found are left out). */
+  /**
+   * The list our last reply on this request asked them to choose from (a games ranking or a browse page), in the order
+   * it showed them, with what that order was: price, prominence or date. Null when the last reply wasn't such a list.
+   * The page is the one last sent ("more" adds pages to browseShown); browseShown alone when no page was recorded.
+   */
+  private async listSent(req: typeof t.requests.$inferSelect): Promise<{ kind: 'games_ranked' | 'browse_options'; rows: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>; rankedBy: string } | null> {
+    if (req.state !== 'needs_clarification' || req.browseShown.length < 2) return null;
+    const [last] = await this.db.select({ reason: t.requestTransitions.reason }).from(t.requestTransitions).where(eq(t.requestTransitions.requestId, req.id)).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
+    if (last?.reason !== 'games_ranked' && last?.reason !== 'browse_options') return null;
+    const [page] = await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.action, 'request.options_listed'), eq(t.auditLog.entityId, req.id))).orderBy(desc(t.auditLog.createdAt)).limit(1);
+    const d = page?.diff as { listed?: string[]; rankedBy?: string } | undefined;
+    const recorded = !!d?.listed?.length && d.listed.every((id) => req.browseShown.includes(id));
+    const rows = await this.eventRows(recorded ? d!.listed! : req.browseShown);
+    return rows.length > 1 ? { kind: last.reason, rows, rankedBy: recorded ? d!.rankedBy ?? 'date' : 'date' } : null;
+  }
+
   private async eventRows(ids: string[]): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>> {
     if (!ids.length) return [];
     const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(inArray(t.events.id, ids));
@@ -2905,6 +2952,7 @@ export class Concierge {
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
     await this.db.update(t.requests).set({ currentRevision: revision, eventId: null, mode: 'find_options', browseShown: listed, updatedAt: now }).where(eq(t.requests.id, req.id));
     if (revision > 1) await this.invalidateForRevision(req.id, revision);
+    await audit(this.db, { actor: 'system', action: 'request.options_listed', entityKind: 'request', entityId: req.id, revision, diff: { listed, rankedBy: best ? 'price' : 'date', more: false } });
     await this.transition(req.id, 'needs_clarification', 'games_ranked');
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
@@ -4394,6 +4442,15 @@ export function ordinalChoice(text: string, n: number): number | null {
   const w = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
   const i = /^(?:first|1st|former|1)$/.test(w) ? 0 : /^(?:second|2nd|2)$/.test(w) ? 1 : /^(?:third|3rd|3)$/.test(w) ? 2 : /^(?:fourth|4th|4)$/.test(w) ? 3 : /^(?:last|latter)$/.test(w) ? n - 1 : -1;
   return i >= 0 && i < n ? i : null;
+}
+
+/**
+ * Which of a list we sent their reply picks, in the order the list showed it: by position ("the first one"), as "the
+ * cheapest one" when the list was ranked on price, or by its day. Null when the reply picks none of them.
+ */
+export function listChoice(text: string, rows: Array<{ e: { localStartAt: Date }; v: { timezone: string } }>, byPrice: boolean): number | null {
+  if (byPrice && CHEAPEST_PICK.test(text)) return 0;
+  return ordinalChoice(text, rows.length) ?? dayChoice(text, rows.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone)));
 }
 
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
