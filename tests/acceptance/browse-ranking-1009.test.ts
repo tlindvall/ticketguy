@@ -74,7 +74,7 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     const one = (await lastSend(r.requestId)).bodyText;
     expect(one).toContain('Games in New York, Sep 28 to Oct 4. Here are my three picks:');
     expect(one).toContain('• Tue, Sep 29: New York Islanders vs. Philadelphia Flyers at Rock Arena.');
-    expect(one).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees.');
+    expect(one).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees for two.');
     expect(one).toContain('• Thu, Oct 1: New York Knicks vs. Boston Celtics at Garden Arena.');
     expect(one).not.toMatch(/Drexel|Exhibition|Yankees/);
     expect(one).toMatch(/There are \d more in that window. Reply "more" to see them/);
@@ -95,6 +95,57 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     expect(all.indexOf('Yankees')).toBeLessThan(all.indexOf('Drexel'));
     expect(pages.at(-1)).toMatch(/Drexel/);
     expect(pages.at(-1)!.split('Drexel')[1] ?? '').not.toMatch(/\n\u2022 /);
+  });
+
+  it('a pick from the picks is read in the order they were listed: "the first one" is the first pro game, not the earliest', async () => {
+    // Oct 10 review: the picks are ranked by prominence (Islanders, Rangers, Knicks) while the exhibition is the earliest
+    // game; "the first one" or a day named must settle the game the customer saw there, and never send the list again.
+    const c = makeConcierge(h, { env: testEnv({}) });
+    const pick = async (from: string, reply: string) => {
+      const first = inbound({ text: 'My family is coming to New York next week. What sports games are on?', from, subject: 'NY trip' });
+      const r = (await c.ingestInbound(first)) as { requestId: string };
+      await interpretAll(c);
+      await c.ingestInbound(inbound({ text: reply, from, subject: 'Re: NY trip', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+      await interpretAll(c);
+      const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+      const sends = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
+      expect(sends.filter((s) => s.bodyText.includes('Here are my three picks'))).toHaveLength(1);
+      const [ev] = req!.eventId ? await h.db.select().from(t.events).where(eq(t.events.id, req!.eventId)) : [];
+      return ev?.name ?? null;
+    };
+    expect(await pick('first@customer.example', 'The first one please, 2 tickets')).toBe('New York Islanders vs. Philadelphia Flyers');
+    expect(await pick('third@customer.example', 'the third one, 4 of us')).toBe('New York Knicks vs. Boston Celtics');
+    expect(await pick('thu@customer.example', "Thursday's game, 2 tickets")).toBe('New York Knicks vs. Boston Celtics');
+  });
+
+  it('a new ask that names one day is a new browse, never a pick from the page sent', async () => {
+    // Oct 10 review: "How about concerts on Thursday" after the sports picks settled Thursday's Knicks game and asked how
+    // many tickets; it asks for something else that day.
+    const c = makeConcierge(h, { env: testEnv({}) });
+    const from = 'concerts@customer.example';
+    const first = inbound({ text: 'My family is coming to New York next week. What sports games are on?', from, subject: 'NY trip' });
+    const r = (await c.ingestInbound(first)) as { requestId: string };
+    await interpretAll(c);
+    await c.ingestInbound(inbound({ text: 'How about concerts on Thursday', from, subject: 'Re: NY trip', inReplyTo: first.rfcMessageId, references: first.rfcMessageId }));
+    await interpretAll(c);
+    const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
+    expect(req!.eventId).toBeNull();
+    expect((await lastSend(r.requestId)).bodyText).not.toMatch(/Knicks|How many tickets/);
+  });
+
+  it('a held price is said for the party it was read for: "for two" with no number, nothing for a party of four', async () => {
+    // Oct 10 review: the price held is the "2 or more" series; said as "a ticket" it read as the price for any party.
+    const c = makeConcierge(h, { env: testEnv({}) });
+    const ask = async (text: string, from: string) => {
+      const r = (await c.ingestInbound(inbound({ text, from, subject: 'NY trip' }))) as { requestId: string };
+      await interpretAll(c);
+      return (await lastSend(r.requestId)).bodyText;
+    };
+    const four = await ask('My family is coming to New York next week, 4 of us. What sports games are on?', 'four@customer.example');
+    expect(four).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena.');
+    expect(four).not.toMatch(/\$\d|before fees/);
+    const two = await ask('Two of us are coming to New York next week. What sports games are on?', 'two@customer.example');
+    expect(two).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees.');
   });
 
   it('prominence: the major leagues, then other seasons, then exhibitions, preseason and anything that is not a game', () => {

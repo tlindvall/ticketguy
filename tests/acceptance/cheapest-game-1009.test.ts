@@ -56,9 +56,9 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;
   const env = (over: Record<string, string> = {}) => testEnv({ SEATDATA_API_KEY: KEY, ...over });
-  const concierge = (over: Record<string, string> = {}) => new Concierge({ db: h.db, env: env(over), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => now, emailProvider: null, marketFetch: fetchImpl });
-  const ask = async (text: string, from: string, over: Record<string, string> = {}, replyTo: string | null = null) => {
-    const c = concierge(over);
+  const concierge = (over: Record<string, string> = {}, deps: { clock?: () => Date; fetch?: typeof fetch } = {}) => new Concierge({ db: h.db, env: env(over), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: deps.clock ?? (() => now), emailProvider: null, marketFetch: deps.fetch ?? fetchImpl });
+  const ask = async (text: string, from: string, over: Record<string, string> = {}, replyTo: string | null = null, deps: { clock?: () => Date; fetch?: typeof fetch } = {}) => {
+    const c = concierge(over, deps);
     const first = inbound({ text, from, subject: replyTo ? 'Re: Rangers' : 'Rangers', receivedAt: now, inReplyTo: replyTo, references: replyTo });
     const r = (await c.ingestInbound(first)) as { requestId: string };
     const research: string[] = [];
@@ -106,12 +106,15 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     expect(r.sends).toHaveLength(1);
     expect(r.sends[0]!.messageClass).toBe('clarification');
     expect(r.sends[0]!.subject).toBe('Re: Rangers');
-    expect(r.emails).toContain('Cheapest before Christmas: Tue, Nov 3 vs. Ottawa Senators, from $74 a ticket before fees for two.');
+    expect(r.emails).toContain('Cheapest before Christmas: the Ottawa Senators game on Tue, Nov 3. Lowest listed prices for two, a ticket before fees:');
+    // The winning price is said once, on its line, and the basis once, over the list (Oct 10 review).
+    expect(r.emails.match(/\$74/g)).toHaveLength(1);
+    expect(r.emails.match(/before fees/g)).toHaveLength(1);
     const list = r.emails.slice(r.emails.indexOf('• Tue, Nov 3'));
-    expect(list.indexOf('• Tue, Nov 3: Metro Rangers vs. Ottawa Senators at Garden Arena, from $74 a ticket before fees')).toBeLessThan(list.indexOf('• Fri, Nov 20: Metro Rangers vs. Utah Mammoth at Garden Arena, from $81 a ticket before fees'));
-    expect(list.indexOf('• Fri, Nov 20')).toBeLessThan(list.indexOf('• Sat, Dec 12: Metro Rangers vs. Detroit Red Wings at Garden Arena, from $95 a ticket before fees'));
-    expect(list.indexOf('• Sat, Dec 12')).toBeLessThan(list.indexOf('• Sun, Oct 11: Metro Rangers vs. Vancouver Canucks at Garden Arena, from $120 a ticket before fees'));
-    expect(r.emails).toContain('I don’t have prices yet for one more (Sat, Dec 5 vs. Boston Bruins); I’ve started tracking them.');
+    expect(list.indexOf('• Tue, Nov 3: Metro Rangers vs. Ottawa Senators at Garden Arena, from $74.')).toBeLessThan(list.indexOf('• Fri, Nov 20: Metro Rangers vs. Utah Mammoth at Garden Arena, from $81.'));
+    expect(list.indexOf('• Fri, Nov 20')).toBeLessThan(list.indexOf('• Sat, Dec 12: Metro Rangers vs. Detroit Red Wings at Garden Arena, from $95.'));
+    expect(list.indexOf('• Sat, Dec 12')).toBeLessThan(list.indexOf('• Sun, Oct 11: Metro Rangers vs. Vancouver Canucks at Garden Arena, from $120.'));
+    expect(r.emails).toContain('I don’t have prices yet for one more (the Boston Bruins game on Sat, Dec 5); I’m tracking it.');
     expect(r.emails).toContain('Reply with the date and I’ll find seats for two.');
     // Never the earlier game as the answer, never the cheaper game after Christmas, never a trend brief or an ack.
     expect(r.emails).not.toMatch(/already looked at|Seattle Kraken|whether resale is cheaper|I'll look at how the tickets are trading|buy rather than wait|Got it/);
@@ -159,8 +162,8 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     calls.length = 0;
     const r = await ask('cheapest metro rangers game before christmas? 2 tickets', 'budget@customer.example', { SEATDATA_DAILY_CALL_LIMIT: '1' });
     expect(r.sends).toHaveLength(1);
-    expect(r.emails).toContain('Cheapest before Christmas: Tue, Nov 3 vs. Ottawa Senators, from $74 a ticket before fees for two.');
-    expect(r.emails).toContain('I don’t have prices yet for one more (Sat, Dec 5 vs. Boston Bruins); I’ve started tracking them.');
+    expect(r.emails).toContain('Cheapest before Christmas: the Ottawa Senators game on Tue, Nov 3. Lowest listed prices for two, a ticket before fees:');
+    expect(r.emails).toContain('I don’t have prices yet for one more (the Boston Bruins game on Sat, Dec 5); I’m tracking it.');
     expect(calls).toEqual([]);
     expect((await h.db.select().from(t.trackedEvents).where(eq(t.trackedEvents.eventId, games[3]!.id)))[0]).toMatchObject({ state: 'pending_match', reasons: ['request'] });
     const [aud] = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.action, 'request.games_compared'), eq(t.auditLog.entityId, r.req.id)));
@@ -172,11 +175,170 @@ describe('"which game has the lowest prices?" is answered by ranking the games o
     try {
       const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', 'noadvice@customer.example');
       expect(r.sends).toHaveLength(1);
-      expect(r.emails).toContain('Five Metro Rangers home games before Christmas. I don’t have prices to compare them on yet, so here they are in date order.');
+      // A licence limit, not missing prices: never "yet", which invites asking again (Oct 10 review).
+      expect(r.emails).toContain('Five Metro Rangers home games before Christmas, in date order. I can’t rank them on price for you.');
+      expect(r.emails).not.toMatch(/\byet\b/);
       expect(r.emails).not.toMatch(/\$\d|before fees|Cheapest/);
       expect(r.emails).toContain('Reply with the date and I’ll find seats for two.');
       expect(r.req.eventId).toBeNull();
       expect(r.research).toEqual([]);
+    } finally {
+      await h.db.update(t.marketDatasets).set({ approvedUses: ['tracking', 'benchmark', 'advice', 'customer_display'] }).where(eq(t.marketDatasets.id, SEATDATA_DATASET_ID));
+    }
+  });
+
+  it('after a game was settled, "which is cheapest?" ranks the games: never the settled game kept, in a new thread or the same one', async () => {
+    // The live Oct 9 failure was the remembered Oct 11 game kept as the answer. Both ways it can come back: the same
+    // contact asking afresh (the remembered choice) and a reply in the thread that settled it (the settled event, at
+    // revision 2, which also invalidates what revision 1 recommended).
+    const from = 'settled@customer.example';
+    const first = await ask('2 tickets for the metro rangers game on Oct 11', from);
+    expect(first.req.eventId).toBe(games[0]!.id);
+    const fresh = await ask('What upcoming metro rangers game would be good to take my son to with the lowest prices. Before christmas. 2 tickets', from);
+    expect(fresh.req.id).not.toBe(first.req.id);
+    expect(fresh.req.eventId).toBeNull();
+    expect(fresh.req.state).toBe('needs_clarification');
+    expect(fresh.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+    expect(fresh.emails).toContain('Cheapest before Christmas');
+    expect(fresh.emails).not.toMatch(/already looked at|whether resale is cheaper/);
+    const again = await ask('Actually, which metro rangers game before christmas has the lowest prices? 2 tickets', from, {}, first.rfcMessageId);
+    expect(again.req.id).toBe(first.req.id);
+    expect(again.req.currentRevision).toBe(2);
+    expect(again.req.eventId).toBeNull();
+    expect(again.req.state).toBe('needs_clarification');
+    expect(again.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+    expect(again.research).toEqual([]);
+    expect(again.sends.at(-1)!.bodyText).toContain('Cheapest before Christmas');
+    expect(again.sends.at(-1)!.bodyText).not.toMatch(/already looked at|whether resale is cheaper/);
+    expect(await h.db.select().from(t.requestVersions).where(and(eq(t.requestVersions.requestId, first.req.id), eq(t.requestVersions.revision, 2)))).toHaveLength(1);
+  });
+
+  it('a pick from the ranked list is read in the order the list showed it: "the first one" is the cheapest game, not the earliest', async () => {
+    // Live shape, Oct 10 review: the list is cheapest first (Nov 3, Nov 20, Dec 12, Oct 11) while the games behind it
+    // are in date order (Oct 11 first), so "the first one" settled the dearest game. Ordinals, "the cheapest one" and a
+    // day all read the list as sent.
+    const pick = async (from: string, reply: string) => {
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+      const p = await ask(reply, from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      // The pick goes on to research as an ordinary request; the list is never sent again.
+      expect(p.research).toEqual([r.req.id]);
+      expect(p.sends.filter((s) => s.bodyText.includes('Cheapest before Christmas'))).toHaveLength(1);
+      return p.req.eventId;
+    };
+    expect(await pick('first@customer.example', 'the first one, 2 tickets')).toBe(games[1]!.id);
+    expect(await pick('second@customer.example', 'The second game please')).toBe(games[2]!.id);
+    expect(await pick('cheap@customer.example', 'the cheapest one')).toBe(games[1]!.id);
+    expect(await pick('last@customer.example', 'the last one')).toBe(games[0]!.id);
+    // Two of the games are Saturdays (Dec 5 and Dec 12), one of them listed: the day names the one they saw.
+    expect(await pick('day@customer.example', 'Saturday works for us')).toBe(games[4]!.id);
+  });
+
+  it('a reply that names another team\'s game is that game: the ranked list is read only for a pick among its games', async () => {
+    // Oct 10 review: after the Rangers ranking, "the metro knicks game on Saturday" settled the Rangers game on Sat, Dec 12,
+    // the list's Saturday, though the reply had already found the Knicks' one game.
+    const KNICKS = '20000000-0000-4000-8000-0000000000da';
+    const COURT = '10000000-0000-4000-8000-0000000000da';
+    const KNICKS_GAME = '30000000-0000-4000-8000-0000000000da';
+    await h.db.insert(t.venues).values({ id: COURT, name: 'Metro Court', city: 'New York', state: 'NY', country: 'US', timezone: 'America/New_York' });
+    await h.db.insert(t.entities).values({ id: KNICKS, kind: 'team', name: 'Metro Knicks', slug: 'metro-knicks-cg', aliases: ['Metro Knicks'], league: 'NBA', homeVenueId: COURT });
+    await h.db.insert(t.events).values({ id: KNICKS_GAME, name: 'Metro Knicks vs. Boston Celtics', category: 'nba', venueId: COURT, primaryEntityId: KNICKS, isHome: true, localStartAt: new Date('2026-11-15T00:30:00Z'), status: 'scheduled', verifiedSourceId: 'ticketmaster', isFixture: true, saleStatus: 'onsale' });
+    try {
+      const from = 'knicks@customer.example';
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown).toEqual([games[1]!.id, games[2]!.id, games[4]!.id, games[0]!.id]);
+      const p = await ask('Actually make it the metro knicks game on Saturday, 2 tickets', from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      expect(p.req.eventId).toBe(KNICKS_GAME);
+    } finally {
+      await h.db.delete(t.events).where(eq(t.events.id, KNICKS_GAME));
+    }
+  });
+
+  it('a new question that ends "the cheapest?" is asked again, never read as "the cheapest one" from the list sent', async () => {
+    // Oct 10 review: "What about after Christmas, which is the cheapest?" after the before-Christmas ranking settled its
+    // first game, Nov 3, and went to research; "Is the Nov 20 game the cheapest?" did the same.
+    const ranked = async (from: string, reply: string) => {
+      const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', from);
+      expect(r.req.browseShown[0]).toBe(games[1]!.id);
+      const p = await ask(reply, from, {}, r.rfcMessageId);
+      expect(p.req.id).toBe(r.req.id);
+      return p;
+    };
+    const after = await ranked('after@customer.example', 'What about after Christmas, which is the cheapest?');
+    expect(after.req.eventId).not.toBe(games[1]!.id);
+    expect(after.research).toEqual([]);
+    const is = await ranked('isit@customer.example', 'Is the Nov 20 game the cheapest?');
+    expect(is.req.eventId).not.toBe(games[1]!.id);
+    // A pick still reads as one.
+    const take = await ranked('take@customer.example', 'The cheapest, please. 2 tickets');
+    expect(take.req.eventId).toBe(games[1]!.id);
+  });
+
+  it('a seat question in a thread settled on a game keeps that game: "which one is cheaper, section 112 or 114?" ranks no games', async () => {
+    // Oct 10 review: the date carried from the settled thread was dropped for any "which one ... cheaper", so a question
+    // about two sections at the Oct 11 game was answered with a games ranking and the settled game was lost.
+    const from = 'sections@customer.example';
+    const first = await ask('2 tickets for the metro rangers game on Oct 11', from);
+    expect(first.req.eventId).toBe(games[0]!.id);
+    const s = await ask('Which one is cheaper, section 112 or section 114?', from, {}, first.rfcMessageId);
+    expect(s.req.id).toBe(first.req.id);
+    expect(s.req.eventId).toBe(games[0]!.id);
+    expect(s.emails).not.toMatch(/Cheapest|Seattle Kraken/);
+  });
+
+  it('a tracked game whose stored price aged past the window is read again, never left unpriced as "fresh"', async () => {
+    // Oct 10 review: polled daily a week or more out, a game's newest snapshot can be dated more than 36 hours back while
+    // its next scheduled check is still ahead; the ranking left it unpriced and said tracking had just started.
+    const g = games[2]!; // Nov 20, $81, matched and active since the first test
+    const old = new Date(now.getTime() - 37 * 3_600_000);
+    await h.db.update(t.marketSnapshots).set({ observedAt: old, providerAsOf: old, retrievedAt: old }).where(eq(t.marketSnapshots.eventId, g.id));
+    // The last poll's newest snapshot is that old one; the provider has a newer one now, read only by polling.
+    await h.db.update(t.trackedEvents).set({ lastObservedAt: old, nextPollAt: new Date(now.getTime() + 20 * 3_600_000) }).where(eq(t.trackedEvents.eventId, g.id));
+    calls.length = 0;
+    const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', 'stale@customer.example');
+    expect(r.emails).toContain('• Fri, Nov 20: Metro Rangers vs. Utah Mammoth at Garden Arena, from $81.');
+    expect(r.emails).not.toContain('the Utah Mammoth game on Fri, Nov 20)');
+    expect(calls.filter((c) => c.startsWith(`/api/v1/events/${g.provider}/stats`))).toHaveLength(1);
+    const [aud] = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.action, 'request.games_compared'), eq(t.auditLog.entityId, r.req.id)));
+    expect((aud!.diff as { games: Array<{ eventId: string; cents: number | null; refresh: string | null }> }).games.find((x) => x.eventId === g.id)).toEqual({ eventId: g.id, cents: 8100, refresh: 'refreshed' });
+  });
+
+  it('a game refreshed during the ranking is priced from what that refresh read, even a snapshot dated after the ranking began', async () => {
+    // Oct 10 review: the ranking read prices as of the moment it started, so a snapshot the provider stamped while the
+    // refreshes ran (several calls a game) was left out and the game listed as unpriced, though its refresh succeeded.
+    const g = games[4]!; // Dec 12, $95
+    const old = new Date(now.getTime() - 37 * 3_600_000);
+    await h.db.update(t.marketSnapshots).set({ observedAt: old, providerAsOf: old, retrievedAt: old }).where(eq(t.marketSnapshots.eventId, g.id));
+    await h.db.update(t.trackedEvents).set({ lastObservedAt: old, nextPollAt: new Date(now.getTime() + 20 * 3_600_000) }).where(eq(t.trackedEvents.eventId, g.id));
+    let clock = now.getTime();
+    const late = (async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname !== `/api/v1/events/${g.provider}/stats`) return fetchImpl(input);
+      // The read takes five minutes; the provider's newest snapshot is from one minute before it returned.
+      clock += 5 * 60_000;
+      const at = new Date(clock - 60_000).toISOString();
+      return new Response(JSON.stringify({ event_id: Number(g.provider), data: [{ timestamp: at, total_listings_all: 300, total_listings_active: 200, listing_fill_rate: 0.6, avg_price: 200, median_price: 180, get_in: 85, get_in_qty2plus: 95, zones: [] }], has_more: false, next_cursor: null }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const r = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', 'late@customer.example', {}, null, { clock: () => new Date(clock), fetch: late });
+    expect(r.emails).toContain('• Sat, Dec 12: Metro Rangers vs. Detroit Red Wings at Garden Arena, from $95.');
+    const [aud] = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.action, 'request.games_compared'), eq(t.auditLog.entityId, r.req.id)));
+    expect((aud!.diff as { games: Array<{ eventId: string; cents: number | null; refresh: string | null }> }).games.find((x) => x.eventId === g.id)).toEqual({ eventId: g.id, cents: 9500, refresh: 'refreshed' });
+  });
+
+  it('the basis is said for the party it fits: a pair price for four says so, no number is "for two", no display names no price', async () => {
+    const four = await ask('Which metro rangers game before christmas is cheapest? 4 tickets', 'four@customer.example');
+    expect(four.emails).toContain('Cheapest before Christmas: the Ottawa Senators game on Tue, Nov 3. Lowest listed prices for a pair (I haven’t priced blocks of four yet), a ticket before fees:');
+    expect(four.emails).toContain('Reply with the date and I’ll find seats for four.');
+    const open = await ask('Which metro rangers game before christmas is cheapest?', 'open@customer.example');
+    expect(open.emails).toContain('Lowest listed prices for two, a ticket before fees:');
+    expect(open.emails).toContain('Reply with the date and how many tickets, and I’ll find seats.');
+    await h.db.update(t.marketDatasets).set({ approvedUses: ['tracking', 'benchmark', 'advice'] }).where(eq(t.marketDatasets.id, SEATDATA_DATASET_ID));
+    try {
+      const quiet = await ask('Which metro rangers game before christmas is cheapest? 2 tickets', 'quiet@customer.example');
+      expect(quiet.emails).toContain('The cheapest Metro Rangers home game before Christmas on current resale prices: the Ottawa Senators game on Tue, Nov 3.');
+      expect(quiet.emails).not.toMatch(/\$\d|before fees/);
     } finally {
       await h.db.update(t.marketDatasets).set({ approvedUses: ['tracking', 'benchmark', 'advice', 'customer_display'] }).where(eq(t.marketDatasets.id, SEATDATA_DATASET_ID));
     }

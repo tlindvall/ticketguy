@@ -137,7 +137,7 @@ describe('resale market tracking', () => {
     const claims = (adv!.packet as { claimRecords: Array<{ id: string; customerVisible: boolean; text: string }> }).claimRecords;
     const m = claims.find((x) => x.id === 'C_MARKET')!;
     expect(m.customerVisible).toBe(false);
-    expect(m.text).toBe('Resale listings with two or more tickets currently start at $130 a ticket (listed price, before fees). That’s down from $160 three days ago. About 400 listings are up.');
+    expect(m.text).toBe('Resale listings with two or more tickets currently start at $130 a ticket (listed price, before fees), down from $160 three days ago. About 400 listings are up.');
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, requestId));
     expect(rec!.bodyText).not.toContain('Resale listings');
   });
@@ -288,8 +288,10 @@ describe('resale market tracking', () => {
     // Cheaper listings for the pair, from the same read: one paid call, not two. The cheaper equivalent in their area
     // is the one I'd choose, compared for the pair on the same basis, with the search to find it (Oct 10 framework, B6a).
     expect(body).toContain('I’d choose this alternative. Your pair is $310 before fees; this comparable pair in section 101, row 10 is $190 before fees: $120 less, also in the Lower Bowl.');
-    expect(body).toContain('That’s a StubHub or Vivid Seats listing at $95 a ticket before fees. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.');
+    // Its price is the verdict's, not said again; the feed doesn't name its marketplace, so both searches (Oct 10 review).
+    expect(body).toContain('The listing data doesn’t say whether it’s on StubHub or Vivid Seats, so look for section 101 on both. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.');
     expect(body).toContain('Search StubHub for section 101: https://www.stubhub.com/search?q=');
+    expect(body).toContain('Search Vivid Seats for section 101: https://www.vividseats.com/search?searchTerm=');
     const [a] = await h.db.select().from(t.auditLog).where(and(eq(t.auditLog.entityId, requestId), eq(t.auditLog.action, 'listing.link_matched')));
     expect(a).toBeTruthy();
   });
@@ -342,7 +344,11 @@ describe('resale market tracking', () => {
   // said as five hours old; a read with no refresh time is said as undated, never "just now".
   it('the same link read from listings SeatData refreshed hours ago, or never dated, is said as that', async () => {
     const link = 'https://www.stubhub.com/metro-testers-new-york-tickets-11-4-2026/event/161999000/?quantity=2&listingId=55500011';
+    const start = now;
     const bodyFor = async (from: string) => {
+      // Each customer eleven minutes after the last: a comparison reuses a read from the last ten minutes (audit gap
+      // 42), and each reply here is about a read with its own refresh time.
+      now = new Date(now.getTime() + 11 * 60_000);
       const c = concierge();
       const requestId = await ask(c, `Is this a good deal for two or should I hold off? ${link}`, from);
       await c.research({ requestId, revision: 1 });
@@ -357,6 +363,7 @@ describe('resale market tracking', () => {
     expect(undated).toContain('in section 312, row 14, when I checked, though the resale data doesn’t say how recently it was refreshed.');
     expect(undated).not.toContain('just now');
     shRefresh = () => now;
+    now = start;
   });
 
   it('five together read the listings: the cheapest listing with five or more and how many there are, no trend from one read', async () => {
@@ -453,8 +460,9 @@ describe('resale market tracking', () => {
     expect(body).toContain('That’s 4 tickets, in section 112, row 5, seats 1, 2, 3 and 4, on StubHub, for $840 in total including fees, delivered by Oct 29.');
     expect(body).not.toContain('I can’t see what sellers are charging');
     expect(body).not.toMatch(/send me the listing/i);
-    expect(body).toContain('That’s a StubHub or Vivid Seats listing at $155 a ticket before fees. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.');
+    expect(body).toContain('The listing data doesn’t say whether it’s on StubHub or Vivid Seats, so look for section 112 on both. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.');
     expect(body).toContain('Search StubHub for section 112: https://www.stubhub.com/search?q=Metro%20Testers%20vs.%20Boston');
+    expect(body).toContain('Search Vivid Seats for section 112: https://www.vividseats.com/search?searchTerm=Metro%20Testers%20vs.%20Boston');
     // The alternative already says what we can see; no "no verified alternative" line under it (launch E), and no
     // venue floor or trend read: the comparison is the reason, the market section isn't (B8).
     expect(body).not.toMatch(/I haven’t found a verified alternative|Cheaper listings for|Before you buy it|resale market when I last checked|My read:/);

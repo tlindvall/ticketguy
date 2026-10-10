@@ -73,7 +73,7 @@ describe('TG-B01: an open sale is not an endorsement when there are needs it can
 describe('TG-B02: their own question is answered first', () => {
   it('A08: delivery at 6pm for a 7pm game with a noon departure is a delivery question, answered first', () => {
     const text = 'Two tickets $220 total for the game at 7pm. Seller says delivery by 6pm but we leave at noon to drive there. If they don’t arrive, is a refund enough?';
-    expect(questionsAsked(text)).toEqual({ deliveryRisk: true, accessibleSpaces: false, salesAsked: false, parking: null, gapAgainst: null, worth: false, difference: false, cheaper: false, whichCheaper: false, fits: false, taxAsked: false, quotedRows: [] });
+    expect(questionsAsked(text)).toEqual({ deliveryRisk: true, accessibleSpaces: false, together: false, salesAsked: false, parking: null, gapAgainst: null, worth: false, difference: false, cheaper: false, whichCheaper: false, fits: false, taxAsked: false, quotedRows: [] });
     const p = buildPacket(args({ quantity: 2, asks: questionsAsked(text), eventNoun: 'game' }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const body = render(p);
     const opening = body.split('\n\n')[2]!;
@@ -88,7 +88,7 @@ describe('TG-B02: their own question is answered first', () => {
     expect(claim(p, 'C_ACCESS')).toContain('not a cheaper version of ordinary seats');
   });
   it('a passing "transfer" or "accessible" is not a question about them', () => {
-    expect(questionsAsked('Two Knicks tickets, mobile transfer is fine')).toEqual({ deliveryRisk: false, accessibleSpaces: false, salesAsked: false, parking: null, gapAgainst: null, worth: false, difference: false, cheaper: false, whichCheaper: false, fits: false, taxAsked: false, quotedRows: [] });
+    expect(questionsAsked('Two Knicks tickets, mobile transfer is fine')).toEqual({ deliveryRisk: false, accessibleSpaces: false, together: false, salesAsked: false, parking: null, gapAgainst: null, worth: false, difference: false, cheaper: false, whichCheaper: false, fits: false, taxAsked: false, quotedRows: [] });
   });
   // The remediation review's intent cases (§1).
   it('a paraphrase of the delivery question counts', () => {

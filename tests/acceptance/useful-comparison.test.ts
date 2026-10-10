@@ -34,9 +34,9 @@ const D = base({ id: 'd-6-218', quantity: 6, payableTotalCents: null, baseTotalC
 const read: ListingRead = { kind: 'ticket_listing', sensitiveContent: false, seller: 'StubHub', eventName: null, eventDate: '2026-10-03', venue: null, city: null, quantity: 5, priceText: '$650 total incl. fees', priceDollars: 650, priceBasis: 'whole_party', feeBasis: 'all_in', totalDollars: 650, section: '214', row: 'D', seatNumbers: ['1', '2', '3', '4', '5'], seatsTogether: true, restrictions: [], deliveryText: 'Mobile transfer', deliveryBy: '2026-10-02', includedBenefits: [], confidence: 'high', unreadable: [] };
 const reader: ListingReader = { name: 'fake', read: async () => read };
 
-async function run(h: DbHandle, offers: Offer[], from: string) {
+async function run(h: DbHandle, offers: Offer[], from: string, text = 'Rangers Oct 3, five together, $600 total including fees, no obstructed views. Found this on StubHub: Sec 214 Row D seats 1-5, $650 total incl fees. Is there a better option?') {
   const c = new Concierge({ db: h.db, env: testEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: from }), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => FIXTURE_NOW, emailProvider: null, fixtureOffers: { [EV]: offers }, listingReader: reader });
-  const r = (await c.ingestInbound(inbound({ text: 'Rangers Oct 3, five together, $600 total including fees, no obstructed views. Found this on StubHub: Sec 214 Row D seats 1-5, $650 total incl fees. Is there a better option?', from, subject: 'Rangers for five' }))) as { requestId: string };
+  const r = (await c.ingestInbound(inbound({ text, from, subject: 'Rangers for five' }))) as { requestId: string };
   for (let i = 0; i < 10; i++) {
     const leased = await leaseDueOutbox(h.db, { limit: 50, now: FIXTURE_NOW });
     if (!leased.length) break;
@@ -83,5 +83,14 @@ describe('useful comparisons: their offer against suitable alternatives', () => 
     expect(body).toContain('I haven’t found a verified alternative I can link you to yet, with a checked all-in price.');
     expect(body).toContain('I left out two cheaper listings');
     expect(body).not.toMatch(/\$500|section 227|section 218|\$570|Best verified option/);
+  });
+
+  it('B7 from research: a cheaper verified offer rejected for a flaw they ruled out is named and weighed against theirs, all-in both', async () => {
+    // Oct 10 review: the pipeline never passed the rejected offer's total, so this verdict could not be sent; and when it
+    // could, it said "the alternative saves $150" about an offer the email never described.
+    const body = await run(h, [C], 'compare-flawed@customer.example', 'Rangers Oct 3, five together, no obstructed views. Found this on StubHub: Sec 214 Row D seats 1-5, $650 total incl fees. Is there a better option?');
+    expect(body).toContain('I’d keep your original five tickets. The verified five tickets I found in section 227, row A are $150 less with fees, but they have a limited or obstructed view. Even for that saving, your seats are the better choice.');
+    // Said once: the left-out line would only repeat it.
+    expect(body).not.toContain('I left out');
   });
 });

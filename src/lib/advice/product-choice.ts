@@ -12,9 +12,11 @@ export type ProductAnswer = { lead: string; items: string[] };
 // A pack of tickets ("four-pack", "4-pack", "pack of four") is a product too (live Oct 9: "Which MRAK ticket should four
 // of us buy?" with a four-pack and GA on the page).
 const PACK = /\b(?:(?:[2-9]|two|three|four|five|six)[- ]packs?|packs? of (?:[2-9]|two|three|four|five|six)|group (?:tickets?|pass(?:es)?|bundles?))\b/i;
-const PRODUCT_WORDS = new RegExp(`\\b(?:suite reservations?|suites?|(?:[2-9]|two|three|multi)[- ]day (?:tickets?|pass(?:es)?)|(?:single[- ]day|weekend) pass(?:es)?)\\b|${PACK.source}`, 'i');
+// "Which admission tier should four of us buy?" names the choice without naming a product: the tiers are the catalog's
+// (brief journeys, Oct 10: it went to a resale search with a trend block instead).
+const PRODUCT_WORDS = new RegExp(`\\b(?:suite reservations?|suites?|(?:[2-9]|two|three|multi)[- ]day (?:tickets?|pass(?:es)?)|(?:single[- ]day|weekend) pass(?:es)?|(?:admission|ticket|price) (?:tiers?|types?))\\b|${PACK.source}`, 'i');
 // "Which MRAK ticket should four of us buy?": which, then a ticket within a few words, is a choice of ticket type.
-const ASKS_CHOICE = /\bwhich (?:one |should|do|would|is|of)\b|\bwhich (?:\S+\s+){0,3}?tickets?\b|\bstart with\b|\b(?:could|can|should) (?:i|we) (?:buy|split|share|use)\b|\bsplit(?:ting)?\b|\bis (?:it|this|that) (?:the )?(?:concert )?(?:admission|ticket)\b/i;
+const ASKS_CHOICE = /\bwhich (?:one |should|do|would|is|of)\b|\bwhich (?:\S+\s+){0,3}?(?:tickets?|tiers?|types?)\b|\bstart with\b|\b(?:could|can|should) (?:i|we) (?:buy|split|share|use)\b|\bsplit(?:ting)?\b|\bis (?:it|this|that) (?:the )?(?:concert )?(?:admission|ticket)\b/i;
 /** The pack's size, from its name ("four-pack", "4-pack", "pack of 4"). */
 const packSize = (text: string): number | null => {
   const m = /\b(?:([2-9]|two|three|four|five|six)[- ]packs?|packs? of ([2-9]|two|three|four|five|six))\b/i.exec(text);
@@ -48,23 +50,28 @@ export function productChoiceAnswer(latest: string, thread: string, event: Produ
   const all = `${thread}\n${latest}`;
   // A follow-up about splitting the 2-day ticket named in the thread counts too.
   if (!asksProductChoice(latest) && !(SPLIT.test(latest) && PRODUCT_WORDS.test(all))) return null;
-  // A pack sized for their group (live Oct 9, MRAK: "Which ticket should four of us buy?"): the recommendation first,
-  // on its terms; cheaper per person only when their own figures say so, never from a price we haven't seen; the
-  // pack's admission terms and the fees at checkout to confirm. No seats, no prices and no resale trend are read here.
-  const pack = packSize(all);
+  // A pack sized for their group (live Oct 9, MRAK: "Which ticket should four of us buy?"): the recommendation first, in the
+  // owner's framework words (Oct 10, case 9: "The four-pack looks best for your group, provided its entry conditions suit
+  // you"), then the one thing that would change it and the next step. "Cheaper per person" only from their own figures,
+  // never from a price we haven't seen; each caveat said once (Oct 10 review: the terms caveat three times). No seats,
+  // prices or resale trend are read.
+  // The pack they name, or the one the catalog sells for this show when they ask which tier without naming it.
+  const pack = packSize(all) ?? (PRODUCT_WORDS.test(latest) ? packSize(others.map((o) => o.name).join('\n')) : null);
   const q = opts.quantity ?? null;
   if (pack && q && pack === q && !SPLIT.test(latest)) {
     const word = ['', '', 'two', 'three', 'four', 'five', 'six'][pack]!;
     const packPrice = priceNear(all, PACK);
     const single = priceNear(all, /general admission|\bGA\b|single|individual|regular|standard/);
-    const cheaper = packPrice !== null && single !== null ? packPrice / pack < single : null;
-    const perPerson = cheaper === true
-      ? `On the figures you gave, it works out cheaper per person than ${word} individual GA tickets: $${(packPrice! / pack).toFixed(2).replace(/\.00$/, '')} each against $${single!.toFixed(2).replace(/\.00$/, '')}.`
-      : cheaper === false
-        ? `On the figures you gave, it isn’t cheaper per person than ${word} individual GA tickets ($${(packPrice! / pack).toFixed(2).replace(/\.00$/, '')} each against $${single!.toFixed(2).replace(/\.00$/, '')}), so the pack only wins if its terms suit you better.`
-        : `Whether it works out cheaper per person than ${word} individual GA tickets depends on the prices at checkout, which I haven’t seen: compare the pack price with ${word} singles before you buy.`;
-    const lead = cheaper === false ? `${word.replace(/^./, (c) => c.toUpperCase())} individual GA tickets look like the better buy for your group, unless the ${word}-pack’s terms suit you better.` : `The ${word}-pack looks best for your group, provided its entry conditions suit you.`;
-    return { lead, items: [perPerson, `Before you buy, confirm the pack’s admission terms (who it admits, whether everyone has to enter together, and any age or ID rule) and the fees at checkout, which I haven’t seen for ${event.name} on ${event.when}.`] };
+    const usd = (x: number) => `$${x.toFixed(2).replace(/\.00$/, '')}`;
+    const terms = 'the pack’s admission terms (who it admits, whether everyone has to enter together, and any age or ID rule)';
+    const unseen = `the fees at checkout, which I haven’t seen for ${event.name} on ${event.when}`;
+    if (packPrice !== null && single !== null) {
+      const each = packPrice / pack;
+      return each < single
+        ? { lead: `The ${word}-pack is the better buy for your group on the figures you gave: ${usd(each)} each against ${usd(single)} for GA.`, items: [`Before you buy, confirm ${terms} and ${unseen}.`] }
+        : { lead: `${word.replace(/^./, (c) => c.toUpperCase())} individual GA tickets are the better buy for your group on the figures you gave: the ${word}-pack works out at ${usd(each)} each against ${usd(single)}.`, items: [`Before you buy, check ${unseen}.`] };
+    }
+    return { lead: `The ${word}-pack looks best for your group, provided its entry conditions suit you.`, items: [`Whether it works out cheaper per person than ${word} GA tickets depends on two prices I haven’t seen: compare the pack with ${word} singles at checkout, or send me both and I’ll check. Before you buy, confirm ${terms}.`] };
   }
   const multi = others.find((o) => isMultiDay(o.name)) ?? null;
   const suite = others.find((o) => isSuite(o.name)) ?? null;

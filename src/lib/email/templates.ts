@@ -20,7 +20,9 @@ function esc(s: string): string {
 }
 
 const REVIEWED_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We compare options and link you to the seller; we never buy, hold or resell tickets. Reply to this email any time.';
-const AUTOMATED_FOOTER = 'AI-assisted ticket advice.';
+// The brief's "we are not a marketplace" is said on every reply, not only the reviewed ones: while drafts auto-approve,
+// no live customer saw it (audit 2026-10-10, critic: the scope line lived only in the reviewed footers).
+const AUTOMATED_FOOTER = 'AI-assisted ticket advice. We never buy, hold or resell tickets.';
 /** Templates that are only ever sent after a person approved that exact message. */
 const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert', 'watch_alert_market']);
 // A market heads-up has no link by design, so its footer doesn't promise one (PW QA wave 1).
@@ -118,6 +120,12 @@ function renderBody(
   const list = (items: string[]) => items.map((i) => `• ${i}`).join('\n');
   switch (name) {
     case 'acknowledgment': {
+      // A later message while the answer is still being worked on (a draft waiting for review, re-researched): one
+      // line saying what changed and that the updated answer is coming, so they aren't left in silence (audit gap 3).
+      if (v.update) {
+        const paras = ['Hey,', String(v.update)];
+        return wrap(paras, paras.map(para));
+      }
       const known = (v.knownFacts as string[]) ?? [];
       const assumed = (v.assumptions as string[] | undefined) ?? [];
       // A person's quick note back: what I have, laid out; what I'll do next. It promises no prices and no review.
@@ -129,8 +137,9 @@ function renderBody(
       return wrap(paras, html);
     }
     case 'clarification': {
-      // One sentence saying what we understood, then the questions that decide it, one per line. Headings
-      // like "What we have so far" / "Could you tell us" made a two-line question read like a form.
+      // One sentence saying what we understood, then the one question that decides it (at most two asks in one
+      // sentence, audit gap 14). Headings like "What we have so far" / "Could you tell us" made a two-line question
+      // read like a form, and three stacked asks did the same.
       const qs = (v.questions as string[]) ?? [];
       // The note is paragraphs of its own (what I searched, then the nearest games as a list): one block each, or a
       // list run into the sentence before it (live Oct 5: "The closest games I have: • Tomorrow… • Sunday…" in one line).
@@ -307,15 +316,28 @@ function renderBody(
       ];
       return wrap(paras, paras.map(para));
     }
-    case 'unsupported':
-      return wrap([String(v.reason ?? ''), `We're sorry we can't help with this one yet.`], [`<p>${esc(String(v.reason ?? ''))}</p>`, `<p>We're sorry we can't help with this one yet.</p>`]);
+    case 'unsupported': {
+      // A person saying no: greeted, in the first person, the event named when we know it, and the one thing they
+      // can do, which is put us right if we misread them (audit gap 37: no greeting, "We're sorry we can't help").
+      const paras = [
+        'Hey,',
+        String(v.reason ?? ''),
+        `I’m sorry I can’t help with ${v.what ? String(v.what) : 'this one'} yet. If I’ve got that wrong, just reply and tell me.`,
+      ].filter(Boolean);
+      return wrap(paras, paras.map(para));
+    }
     case 'deletion_verification':
       return wrap([`We received a request to delete your Ticket Guy data. To confirm, reply to this email with the word CONFIRM. If you didn't ask for this, ignore this message.`], [`<p>We received a request to delete your Ticket Guy data. To confirm, reply to this email with the word <strong>CONFIRM</strong>. If you didn't ask for this, ignore this message.</p>`]);
     case 'watch_alert': {
       const total = Number(v.totalCents ?? 0);
       const dollars = `$${(total / 100).toFixed(total % 100 === 0 ? 0 : 2)}`;
-      const line = `A verified option for ${String(v.quantity)} together${v.section ? ` in section ${String(v.section)}` : ''} is now ${dollars} total (checked ${String(v.observedAt)}).`;
-      return wrap([line, `Link: ${String(v.url)}`, `Prices can change before checkout. Reply "stop" to end this watch.`], [`<p>${esc(line)}</p>`, `<p><a href="${esc(String(v.url))}">View this offer</a></p>`, `<p>Prices can change before checkout. Reply "stop" to end this watch.</p>`]);
+      // First person with the event named, every fact kept: the party together, the section, the verified total, when
+      // it was checked, the link, the caveat and how to stop (audit gap 37: no greeting, no event, "Link:").
+      const what = v.eventLabel ? String(v.eventLabel) : 'the event you asked me to watch';
+      const line = `I’ve found a verified option for ${what}: ${String(v.quantity)} together${v.section ? ` in section ${String(v.section)}` : ''}, now ${dollars} total (checked ${String(v.observedAt)}).`;
+      const next = 'If you want them, here’s the listing:';
+      const tail = 'Prices can change before checkout, so check the total before you pay. Reply "stop" to end this watch.';
+      return wrap(['Hey,', line, `${next} ${String(v.url)}`, tail], [para('Hey,'), para(line), `<p style="margin:0 0 18px;">${esc(next)} ${link('View this offer', String(v.url), true)}</p>`, para(tail)]);
     }
     case 'watch_alert_market': {
       // A heads-up from resale market data (DECISION_LOG #62): listed prices before fees, the fee allowance said as
