@@ -124,10 +124,34 @@ describe('what I’d do, why, and the next action: the outcome follows their bud
     expect(text).toContain('I’d buy these now: there isn’t much time left to wait.');
   });
 
-  it('5. over budget, falling with weeks to go, but no watch can run: says so, and asks', () => {
-    const { textBody: text } = email(args(market({ direction: 'down', h24: h(24, 74000), h72: h(72, 80000), late: null }), null));
-    expect(text).toContain('Comparable pairs have fallen 11% over three days, but they haven’t reached $1,500, and I can’t keep watching for you here.');
+  // Audit gap 21, owner framework case 4: with WATCH_SEND_ENABLED off there is never a watch, so "hold off" could
+  // never be said and a falling, over-budget party always got a question back. The fall in their own series is
+  // reason enough to hold, with a day to look again (venue time) and the one thing that would change the answer.
+  it('4. over budget, falling with weeks to go, no watch can run: hold off for now, check back on a named day', () => {
+    const { textBody: text, htmlBody: html } = email(args(market({ direction: 'down', h24: h(24, 74000), h72: h(72, 80000), late: null }), null));
+    const top = text.slice(0, text.indexOf('How prices are moving'));
+    expect(top).toContain('I’d hold off for now.\n\nComparable pairs have fallen 11% over three days, and nothing for two fits your $1,500 yet.');
+    expect(top).toContain('The closest lead is Section 119, Row 26: about $1,841 for two tickets, including estimated fees, $341 over.');
+    // A day on from Friday, Oct 9 at noon in Indiana: never a time we can't keep, never "I'll watch".
+    expect(top).toContain('Check back on Saturday, Oct 10; if you can go up to about $1,841 for two, I’d take these now instead.');
+    expect(text).toContain('How prices are moving: falling');
+    expect(text).not.toMatch(/watch it|keep checking|I’ll email you|Would you go up/);
+    expect(html).not.toMatch(/[\u2013\u2014]/);
+    expect(text.indexOf('I’d hold off')).toBeLessThan(text.indexOf('Check back on')); // what I'd do, why, then the next action
+  });
+
+  it('5. over budget and falling, but the game is in two days: no time to hold, so it asks', () => {
+    const a = args(market({ direction: 'down', h24: h(24, 74000), h72: h(72, 80000), late: null }), null);
+    const { textBody: text } = email({ ...a, eventStartAt: new Date(at.getTime() + 2 * 86_400_000) } as BuildPacketArgs);
+    expect(text).toContain('I haven’t found a confirmed pair under $1,500.');
     expect(text).toContain('Would you go up to about $1,841');
+    expect(text).not.toMatch(/hold off|Check back/);
+  });
+
+  it('5. over budget, a fall the series can’t support (thin): keeps the question, never a hold', () => {
+    const { textBody: text } = email(args(market({ direction: 'down', adequacy: 'insufficient', h24: h(24, 74000), h72: h(72, 80000), late: null }), null));
+    expect(text).toContain('Would you go up to about $1,841');
+    expect(text).not.toMatch(/hold off|Check back|Comparable pairs have fallen/);
   });
 
   it('3. no budget given, falling, only one option: never "inside your budget"', () => {

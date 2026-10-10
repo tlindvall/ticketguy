@@ -726,7 +726,7 @@ export class Concierge {
         await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: [], createdBy: 'system' });
         await this.db.update(t.requests).set({ currentRevision: revision }).where(eq(t.requests.id, req.id));
         await this.transition(req.id, 'unsupported', 'customer_outside_us');
-        await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: 'We currently serve US customers and US events only.' }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+        await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: 'We currently serve US customers and US events only.', what: merged.eventName ?? (merged.performerOrTeam ? titleCaseName(merged.performerOrTeam) : null) }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
         return { state: 'unsupported', revision, extraction: merged };
       }
     }
@@ -1087,7 +1087,7 @@ export class Concierge {
 
     if (resolution.kind === 'non_us') {
       await this.transition(req.id, 'unsupported', 'event_outside_us');
-      await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: 'That event is outside the US, and we only cover US events for now.' }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Ticket Guy is US-only for now'), template: 'unsupported', vars: { reason: 'That event is outside the US, and we only cover US events for now.', what: merged.eventName ?? (merged.performerOrTeam ? titleCaseName(merged.performerOrTeam) : null) }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'unsupported', revision, extraction: merged };
     }
 
@@ -1446,6 +1446,11 @@ export class Concierge {
     // So is a "best" read as lowest price after the goal question went unanswered, whatever the revision (gap 4).
     if ((revision === 1 || picked || cameFromReferral || altDateNote || bestAskedBefore) && !selfContained && (!answeredUnreviewed || assumptions.length || picked || altDateNote)) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: altDateNote ? [...assumptions, altDateNote] : assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+    } else if (revision > 1 && !answeredUnreviewed) {
+      // A later message while a person reviews the answer: the pending draft was just invalidated and research
+      // re-queued, and they heard nothing until the new draft was approved (audit gap 3). One line: what changed,
+      // and that the updated answer comes here. Unreviewed, the answer itself follows in seconds, so nothing goes.
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, updating your answer'), template: 'acknowledgment', vars: { update: revisionNote(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null) }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -1797,8 +1802,17 @@ export class Concierge {
       // Only after an answer actually reached them: advice, a price check or an official-sale referral.
       const answered = await this.db.select({ id: t.sendIntents.id }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, r.id), inArray(t.sendIntents.messageClass, ['recommendation', 'no_result', 'acknowledgment']), or(sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.dedupeKey} like 'official_sale:%'`), inArray(t.sendIntents.state, ['provider_accepted', 'delivered']))).limit(1);
       if (!answered.length) continue;
+      // The gate is asked first, as dispatch will ask it: while FOLLOW_UP_ENABLED is off (or the switch, a
+      // suppression or the allowlist says no) nothing is queued and nothing recorded. Recording follow_up_sent for a
+      // send the gate then blocked excluded the request forever and counted a question nobody was asked (audit gap 36).
+      const lookup = normalizeEmailLookup(c.emailOriginal);
+      const [switches, suppressed] = await Promise.all([loadSwitches(this.db), loadSuppressionScopes(this.db, lookup)]);
+      const capture = testModeFrom(switches) || (await isTestConversation(this.db, r.conversationId));
+      const gate = evaluateGate(this.env, switches, suppressed, { messageClass: 'follow_up', recipientLookup: lookup, containsFixtureData: false, approved: false, approvalHashMatches: true, revisionCurrent: true, evidenceFresh: true, marketingPermission: false, testMode: capture });
+      if (!gate.allowed) continue;
       const [last] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, r.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
-      await this.queueSend({ messageClass: 'follow_up', contactId: c.id, conversationId: r.conversationId, requestId: r.id, revision: r.currentRevision, recipient: c.emailOriginal, subject: reSubject(last?.subject ?? null, `How was ${e.name}?`), template: 'follow_up', vars: { what: e.name }, inReplyTo: last?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `follow_up:${r.id}` });
+      const intent = await this.queueSend({ messageClass: 'follow_up', contactId: c.id, conversationId: r.conversationId, requestId: r.id, revision: r.currentRevision, recipient: c.emailOriginal, subject: reSubject(last?.subject ?? null, `How was ${e.name}?`), template: 'follow_up', vars: { what: e.name }, inReplyTo: last?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `follow_up:${r.id}` });
+      if (!intent.created) continue;
       await this.db.insert(t.requestOutcomes).values({ requestId: r.id, kind: 'follow_up_sent', source: 'system', details: {}, at: now });
       queued += 1;
     }
@@ -3720,6 +3734,9 @@ export class Concierge {
       // draft that fails them stays in the queue for a person.
       const r = await this.approveRecommendation({ recommendationId: rec!.id, reviewerUserId: AUTO_APPROVER, expectedRevision: args.revision, draftHash, note: 'auto-approved while testing' });
       if (r.ok) return { recommendationId: rec!.id, state: 'awaiting_review' };
+      // Expired before it could be approved (a research slower than the expiry): already invalidated and researched
+      // again, so there's nothing for a person to review here.
+      if (r.reason === 'recommendation_expired') return { recommendationId: rec!.id, state: 'researching' };
       await this.db.update(t.recommendations).set({ reviewNote: `auto-approve skipped: ${r.reason}` }).where(eq(t.recommendations.id, rec!.id));
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'recommendation.review_ready', eventKey: `review:${rec!.id}`, entityId: rec!.id, revision: args.revision, payload: { recommendationId: rec!.id, requestId: req.id }, now }));
@@ -3806,6 +3823,12 @@ export class Concierge {
       await audit(this.db, { actor: args.reviewerUserId, action: 'recommendation.invalidated_event_changed', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision, diff: { reason: changed } });
       return { ok: false, status: 409, reason: changed };
     }
+    // A draft approved after its expiry would send prices read more than 15 minutes ago as current (audit gap 3):
+    // it's researched again instead, and the fresh draft comes back for approval (or auto-approval) on its own.
+    if (draftExpired(rec, now)) {
+      await this.reresearchExpired(rec, args.reviewerUserId, 'approval');
+      return { ok: false, status: 409, reason: 'recommendation_expired' };
+    }
     // A27: chosen observations must be fresh at approval; otherwise revalidation is required.
     const obs = rec.chosenObservationIds.length ? await this.db.select().from(t.offerObservations).where(inArray(t.offerObservations.id, rec.chosenObservationIds)) : [];
     const stale = obs.filter((o) => !checkFreshness({ fetchedAt: o.fetchedAt, sourceAsOf: o.sourceAsOf, eventStartAt: event!.localStartAt, now }).fresh);
@@ -3828,6 +3851,27 @@ export class Concierge {
     const intent = await this.queueSend({ messageClass: obs.length ? 'recommendation' : 'no_result', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(lastInbound?.subject ?? null, rec.subject), template: args.reviewerUserId === AUTO_APPROVER ? 'raw_auto' : 'raw', vars: { text: rec.bodyText, html: rec.bodyHtml }, inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: rec.id, approvedHash: rec.draftHash, dedupeKey: `rec:${rec.id}:${rec.draftHash}`, containsFixtureData: containsFixture });
     await audit(this.db, { actor: args.reviewerUserId, action: 'recommendation.approved', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision, diff: { draftHash: rec.draftHash, observationIds: rec.chosenObservationIds } });
     return { ok: true, sendIntentId: intent.id };
+  }
+
+  /**
+   * An expired draft is never sent: it's invalidated and the request researched again for the same revision, so the
+   * customer gets prices read now (audit gap 3). A newer revision already has its own research. Three expiries on one
+   * revision go to a person rather than loop (a research slower than the expiry would otherwise never send).
+   */
+  private async reresearchExpired(rec: typeof t.recommendations.$inferSelect, actor: string, at: 'approval' | 'dispatch'): Promise<void> {
+    const now = this.now();
+    await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated', reviewNote: `expired at ${at}: prices older than the draft allows, researched again` }).where(eq(t.recommendations.id, rec.id));
+    await audit(this.db, { actor, action: 'recommendation.expired_reresearch', entityKind: 'recommendation', entityId: rec.id, revision: rec.revision, diff: { at, expiresAt: rec.expiresAt?.toISOString() ?? null } });
+    const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, rec.requestId));
+    if (!req || req.currentRevision !== rec.revision) return;
+    const [expired] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.recommendations).where(and(eq(t.recommendations.requestId, req.id), eq(t.recommendations.revision, rec.revision), sql`${t.recommendations.reviewNote} like 'expired at %'`));
+    if ((expired?.n ?? 0) >= 3) {
+      await this.transition(req.id, 'manual_attention', 'recommendation_expired_repeatedly', actor);
+      await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: `staff_alert:${req.id}:${rec.revision}:recommendation_expired`, entityId: req.id, payload: { requestId: req.id, revision: rec.revision }, now });
+      return;
+    }
+    await this.transition(req.id, 'researching', `recommendation_expired_at_${at}`, actor);
+    await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${rec.revision}:expired:${rec.id}`, entityId: req.id, revision: rec.revision, payload: { requestId: req.id, revision: rec.revision }, now }));
   }
 
   async revalidateRecommendation(args: { recommendationId: string; staffUserId: string }): Promise<{ refreshed: number; unavailable: number }> {
@@ -3917,6 +3961,10 @@ export class Concierge {
     let hashMatches = true;
     let policyOk = true;
     let eventChange: string | null = null;
+    // A draft whose expiry passed between approval and dispatch (audit gap 3). Not on a retry of a send the provider
+    // may already have accepted: that one keeps its payload (A17).
+    let expiredRec: typeof t.recommendations.$inferSelect | null = null;
+    const retrying = intent.state === 'uncertain';
     if (intent.requestId && intent.requestRevision !== null) {
       const [req] = await this.db.select({ rev: t.requests.currentRevision, eventId: t.requests.eventId }).from(t.requests).where(eq(t.requests.id, intent.requestId));
       revisionCurrent = req?.rev === intent.requestRevision;
@@ -3945,6 +3993,7 @@ export class Concierge {
         const [rec] = await this.db.select().from(t.recommendations).where(eq(t.recommendations.id, intent.approvalId));
         approved = rec?.reviewStatus === 'approved';
         hashMatches = rec?.draftHash === intent.approvedHash;
+        if (rec && approved && !retrying && draftExpired(rec, now)) expiredRec = rec;
         if (rec && req?.eventId) {
           const [event] = await this.db.select().from(t.events).where(eq(t.events.id, req.eventId));
           // An approval given while the event was scheduled doesn't carry over a cancellation, postponement or
@@ -3971,10 +4020,11 @@ export class Concierge {
     }
     const capture = testModeFrom(switches) || (await isTestConversation(this.db, intent.conversationId));
     const sendGate = evaluateGate(this.env, switches, suppressed, { messageClass: intent.messageClass as MessageClass, recipientLookup: normalizeEmailLookup(intent.recipient), containsFixtureData: containsFixture, approved, approvalHashMatches: hashMatches, revisionCurrent, evidenceFresh, marketingPermission, testMode: capture });
-    const extra = [...(policyOk ? [] : ['policy_changed']), ...(eventChange ? [eventChange] : [])];
+    const extra = [...(policyOk ? [] : ['policy_changed']), ...(eventChange ? [eventChange] : []), ...(expiredRec ? ['recommendation_expired'] : [])];
     const gate: { allowed: boolean; reasons: string[] } = !extra.length ? (sendGate.allowed ? { allowed: true, reasons: [] } : sendGate) : { allowed: false, reasons: [...(sendGate.allowed ? [] : sendGate.reasons), ...extra] };
     if ((!policyOk || !evidenceFresh || eventChange) && intent.approvalId && intent.messageClass === 'watch_alert') await this.db.update(t.watchAlerts).set({ approvalState: 'invalidated' }).where(eq(t.watchAlerts.id, intent.approvalId));
     if (eventChange && intent.approvalId && intent.messageClass !== 'watch_alert') await this.db.update(t.recommendations).set({ reviewStatus: 'invalidated', reviewNote: `event_changed: ${eventChange}` }).where(eq(t.recommendations.id, intent.approvalId));
+    else if (expiredRec) await this.reresearchExpired(expiredRec, 'system', 'dispatch');
     if (!gate.allowed) {
       const suppressedOnly = gate.reasons.every((r) => r.startsWith('suppressed'));
       await releaseClaim(this.db, claim, suppressedOnly ? 'suppressed' : 'blocked', gate.reasons.join(','));
@@ -4304,7 +4354,10 @@ export class Concierge {
       await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.approved', entityKind: 'watch_alert', entityId: alert.id, diff: { market: true } });
       return { ok: true, sendIntentId: intent.id };
     }
-    const intent = await this.queueSend({ messageClass: 'watch_alert', contactId: contact!.id, conversationId: req!.conversationId, requestId: req!.id, revision: w.revision, recipient: contact!.emailOriginal, subject: `Ticket Guy alert: ${w.quantity} for ${formatUsd(alert.payableTotalCents)} total`, template: 'watch_alert', vars: { totalCents: alert.payableTotalCents, quantity: w.quantity, url: obs!.off.directPurchaseUrl, observedAt: obs!.o.fetchedAt.toISOString(), section: obs!.o.section }, inReplyTo: null, approvalId: alert.id, approvedHash: null, dedupeKey: `alert:${alert.dedupeKey}`, containsFixtureData: obs!.o.verificationMethod === 'fixture' });
+    // The event named and the check time in the venue's time, as the market alert says them (audit gap 37: the
+    // seller alert named no event and printed an ISO timestamp).
+    const [venue] = await this.db.select().from(t.venues).where(eq(t.venues.id, event!.venueId));
+    const intent = await this.queueSend({ messageClass: 'watch_alert', contactId: contact!.id, conversationId: req!.conversationId, requestId: req!.id, revision: w.revision, recipient: contact!.emailOriginal, subject: `Ticket Guy alert: ${w.quantity} for ${formatUsd(alert.payableTotalCents)} total`, template: 'watch_alert', vars: { totalCents: alert.payableTotalCents, quantity: w.quantity, url: obs!.off.directPurchaseUrl, observedAt: checkedAt(obs!.o.fetchedAt, venue?.timezone ?? 'America/New_York'), section: obs!.o.section, eventLabel: venue ? eventLabel(event!, venue) : event!.name }, inReplyTo: null, approvalId: alert.id, approvedHash: null, dedupeKey: `alert:${alert.dedupeKey}`, containsFixtureData: obs!.o.verificationMethod === 'fixture' });
     await this.db.update(t.watchAlerts).set({ approvalState: 'approved', sendIntentId: intent.id }).where(eq(t.watchAlerts.id, alert.id));
     await audit(this.db, { actor: args.reviewerUserId, action: 'watch_alert.approved', entityKind: 'watch_alert', entityId: alert.id });
     return { ok: true, sendIntentId: intent.id };
@@ -5634,6 +5687,27 @@ export function acknowledgedFacts(e: { name: string; category: string; localStar
       : x.resaleAsked ? 'whether resale is cheaper' : null;
   if (question) out.push(`You asked: ${question}`);
   return out;
+}
+
+/** Past its expiry: the prices it says were read too long ago to send as current (recommendations.expiresAt, 15 minutes). */
+function draftExpired(rec: { expiresAt: Date | null }, now: Date): boolean {
+  return !!rec.expiresAt && rec.expiresAt.getTime() <= now.getTime();
+}
+
+/**
+ * The one line sent when a later message re-opens an answer still being worked on (audit gap 3): what changed, from
+ * the brief they gave before and the one now, and that the updated answer is coming. Only what they told us; no time
+ * promised, since a person reviews it.
+ */
+export function revisionNote(prior: RequestExtraction | null, next: RequestExtraction, newEvent: string | null): string {
+  const changed: string[] = [];
+  if (newEvent) changed.push(newEvent);
+  if (next.quantity && next.quantity !== prior?.quantity) changed.push(`${next.quantity} ${next.quantity === 1 ? 'ticket' : 'tickets'}`);
+  if (next.budgetCents !== null && next.budgetBasis && (next.budgetCents !== prior?.budgetCents || next.budgetBasis !== prior?.budgetBasis)) changed.push(`${formatUsd(next.budgetCents)} ${next.budgetBasis === 'whole_party' ? 'total' : 'a ticket'}`);
+  if (next.seatingPreference && next.seatingPreference !== prior?.seatingPreference) changed.push(next.seatingPreference);
+  return changed.length
+    ? `Got your update: ${listAnd(changed)}. I’m rechecking with that, and the updated answer will come here in this thread.`
+    : 'Got your note. I’m taking it into account, and the updated answer will come here in this thread.';
 }
 
 export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {

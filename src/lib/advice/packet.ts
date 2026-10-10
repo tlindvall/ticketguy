@@ -714,6 +714,20 @@ export function checkedAt(d: Date, timeZone = 'America/New_York'): string {
   return new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d);
 }
 
+/**
+ * "Thursday, Oct 15, around 6pm": a time to come back, in the venue's time, to the nearest hour, said the way a person
+ * would (audit gap 22: C_CHECKPOINT printed "2026-10-15T22:00:00.000Z" to the customer). Without the time, the day only.
+ */
+export function recheckWhen(d: Date, timeZone = 'America/New_York', withTime = true): string {
+  const dayOf = (x: Date) => new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long', month: 'short', day: 'numeric' }).format(x);
+  if (!withTime) return dayOf(d);
+  // To the nearest hour, and the day read from that hour: 11:45pm is "around midnight" on the next day.
+  const hour = new Date(Math.round(d.getTime() / 3_600_000) * 3_600_000);
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', hourCycle: 'h23' }).format(hour)) % 24;
+  const time = h === 0 ? 'midnight' : h === 12 ? 'noon' : `${h % 12}${h < 12 ? 'am' : 'pm'}`;
+  return `${dayOf(hour)}, around ${time}`;
+}
+
 const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const countWord = (n: number) => COUNT_WORDS[n] ?? String(n);
 /** 1,928, not 1928. */
@@ -1525,9 +1539,13 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   // Over budget: hold off only with evidence a drop could come (falling now, or past games here usually fell late) and a
   // watch that can actually run; otherwise no indefinite waiting, one question that unlocks a way forward instead.
   const dropEvidence = dir === 'down' || (!!late && late.fell * 2 > late.events);
-  type Outcome = 'take' | 'buy_rising' | 'wait_falling' | 'take_falling' | 'hold_watch' | 'ask';
+  // Over budget with the series itself falling and time to wait, but no watch that can run (WATCH_SEND_ENABLED off):
+  // hold off anyway, said from the series alone, with a day to look again and what would change the answer (audit
+  // gap 21, owner framework case 4). Past games falling late is not a fall now, and a mixed or thin series isn't
+  // one either: those keep the question. Never a watch that isn't running.
+  type Outcome = 'take' | 'buy_rising' | 'wait_falling' | 'take_falling' | 'hold_watch' | 'hold' | 'ask';
   const outcome: Outcome = over
-    ? dropEvidence && a.watchOffer && !noTime && !beforeFees ? 'hold_watch' : 'ask'
+    ? dropEvidence && a.watchOffer && !noTime && !beforeFees ? 'hold_watch' : dir === 'down' && !!trend?.comparable && !noTime ? 'hold' : 'ask'
     : dir === 'up' ? 'buy_rising'
     : dir === 'down' ? (fitting >= 2 && !noTime ? 'wait_falling' : 'take_falling')
     : 'take';
@@ -1538,6 +1556,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     wait_falling: `I’d give it another day.`,
     take_falling: noTime ? `I’d buy these now: there isn’t much time left to wait.` : `I’d take these: they’re the only ${q === 2 ? 'pair' : 'option'} ${budget != null ? 'inside your budget' : 'I can see for you'}.`,
     hold_watch: `I’d hold off: you don’t need to stretch your budget yet.`,
+    hold: `I’d hold off for now.`,
     ask: `I haven’t found a confirmed ${q === 2 ? 'pair' : q === 1 ? 'ticket' : `set of ${n}`} under ${yours}.`,
   }[outcome];
   const rationale = {
@@ -1546,6 +1565,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     wait_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${yours}` : ''}, and ${fitting === 2 ? 'another option fits' : `${qtyWord(fitting - 1)} other options fit`} too. ${unconfirmed}`,
     take_falling: `${capitalize(lead)} is ${priceLine}${budget != null ? `, within your ${yours}` : ''}. ${unconfirmed}`,
     hold_watch: `The closest lead is ${lead}: ${priceLine}, against your ${formatUsd(budget ?? 0)} cap. ${unconfirmed}`,
+    hold: `${comparable}, and nothing for ${n} fits your ${yours} yet.`,
     ask: `The closest lead is ${lead}: ${priceLine}, ${gap} over${beforeFees ? ' before fees' : ''}. ${unconfirmed}`,
   }[outcome];
   // The trend only where it answers the question: the reason to buy, to wait or to hold off; not under every pick.
@@ -1555,13 +1575,19 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     wait_falling: comparable ? [`${comparable}. Waiting could improve the price, although this particular ${q === 2 ? 'pair' : 'listing'} may go.`] : [],
     take_falling: comparable ? [`${comparable}, but waiting means risking these seats.`] : [],
     hold_watch: [...(trend ? [trend.sentence] : []), ...(past ? [past] : [])],
+    // The day to look again is a day on from now in the venue's time (the series' own step, as the policy's checkpoint),
+    // always before the game here: holding needs three days left. The one thing that changes the answer is their cap.
+    hold: [
+      `The closest lead is ${lead}: ${priceLine}, ${gap} over${beforeFees ? ' before fees' : ''}. ${unconfirmed}`,
+      `Check back on ${recheckWhen(new Date(a.observedAt.getTime() + 86_400_000), a.timeZone ?? 'America/New_York', false)}; if you can go up to about ${beforeFees ? `${formatUsd(roundToDollar(first!.listedTotalCents))} before fees` : est} for ${n}, I’d take these now instead.`,
+    ],
     ask: [
       dir === 'down' ? `${comparable ?? 'Prices are falling'}, but ${noTime ? `there isn’t time to wait for ${formatUsd(budget ?? 0)}` : `they haven’t reached ${formatUsd(budget ?? 0)}, and I can’t keep watching for you here`}.`
       : trend ? `${trend.sentence}` : `I don’t have enough price history to expect a drop to ${formatUsd(budget ?? 0)}.`,
       `Would you go up to about ${est} for these, or should I look at other seats or another date?`,
     ],
   }[outcome];
-  const trendShown = !!trend && ['buy_rising', 'wait_falling', 'take_falling', 'hold_watch'].includes(outcome);
+  const trendShown = !!trend && ['buy_rising', 'wait_falling', 'take_falling', 'hold_watch', 'hold'].includes(outcome);
   const points = why;
   const headline = head;
   // The next action follows the advice: a direct listing link to buy; the watch when holding off and one can run; the
@@ -2392,7 +2418,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_CHECKPOINT',
       kind: 'checkpoint',
-      text: `Recheck point: ${a.policy.nextCheckpointAt.toISOString()}${a.policy.waitDeadlineAt ? `; decide by ${a.policy.waitDeadlineAt.toISOString()} at the latest` : ''}. ${a.policy.watchScheduled ? 'We will check for you and email if a qualifying offer appears.' : 'We are not monitoring this automatically; reply if you want us to.'}`,
+      // Said in the venue's time as a day and an hour, never an ISO timestamp (audit gap 22), and in the first person.
+      // Without a watch running, nothing offers one: they look again themselves (audit gap 21).
+      text: `Look again on ${recheckWhen(a.policy.nextCheckpointAt, a.timeZone ?? 'America/New_York')}${a.policy.waitDeadlineAt ? `, and decide by ${recheckWhen(a.policy.waitDeadlineAt, a.timeZone ?? 'America/New_York')} at the latest` : ''}. ${a.policy.watchScheduled ? 'I’ll check for you and email if a qualifying offer appears.' : 'I’m not watching this for you automatically, so check back then.'}`,
       values: { nextCheckpointAt: a.policy.nextCheckpointAt.toISOString(), waitDeadlineAt: a.policy.waitDeadlineAt?.toISOString() ?? null, watchScheduled: a.policy.watchScheduled ? 1 : 0 },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
