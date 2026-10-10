@@ -25,7 +25,12 @@ describe('LAUNCH-06: the provider clock on current listings', () => {
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;
   const tracker = () => new MarketTracker({ db: h.db, env: testEnv({ SEATDATA_API_KEY: KEY }), now: () => now, fetchImpl, sleep: async () => {} });
-  const read = () => tracker().currentListings(FX.events.knicks, 'listings_compare', '161000999');
+  // Every read here is a paid read with its own reply: eleven minutes apart, past the ten-minute cache a comparison
+  // honours (audit gap 42).
+  const read = () => {
+    now = new Date(now.getTime() + 11 * 60_000);
+    return tracker().currentListings(FX.events.knicks, 'listings_compare', '161000999');
+  };
   const lastSeen = async () => (await h.db.select().from(t.marketListingSightings).where(and(eq(t.marketListingSightings.listingId, '9001'), eq(t.marketListingSightings.eventId, FX.events.knicks))))[0]?.lastSeenAt ?? null;
 
   beforeAll(async () => {

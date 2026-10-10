@@ -6,7 +6,7 @@ import { eventLocalDate, localTimeInstants } from '@/lib/domain/dates';
 import { audit } from '@/lib/util/audit';
 import { gate as policyGate, policyForEvent } from '@/lib/intake/service-policy';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
-import { toMarketListing, type MarketListing } from './alternatives';
+import { inactiveListings, toMarketListing, type MarketListing } from './alternatives';
 import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, providerTime, type MarketBasis, type MarketContext, type Point, type SeriesPoint } from './series';
 
 /**
@@ -65,6 +65,8 @@ const SHADOW_PROFILES: Array<{ profile: string; basis: MarketBasis; quantity: nu
 const GROUP_FRESH_HOURS = 3;
 const OPEN_STATES = ['received', 'interpreting', 'needs_clarification', 'resolving_event', 'researching', 'awaiting_review', 'manual_attention', 'recommendation_sent', 'monitoring', 'referred'];
 const HISTORY_EVENTS = 8;
+/** Stats pages read per past game: what one game of the backfill can cost, retries aside. */
+const HISTORY_PAGES = 3;
 const HISTORY_SAMPLE_HOURS = 6;
 const HISTORY_REFRESH_DAYS = 30;
 const MAX_MATCH_ATTEMPTS = 4;
@@ -73,7 +75,8 @@ type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSele
 
 /** Listings reads by event, shared across requests in this process for a few minutes (see recentListings). */
 /** A listings read: when the provider refreshed it, when we fetched it, the rows, and StubHub's event id when known. */
-export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null };
+/** `inactive`: rows the feed marks no longer for sale, kept only to tell a linked listing that has gone (gap 6). */
+export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null; inactive?: MarketListing[] };
 
 /** StubHub's own event id, from the reply when it carries one (undocumented; read defensively) or the id we asked by. */
 export function replyStubHubEventId(r: Record<string, unknown>, askedBy: string | null): string | null {
@@ -122,9 +125,21 @@ export class MarketTracker {
    */
   private async api(): Promise<SeatDataClient> {
     if (!this.client) this.client = new SeatDataClient(this.deps.env.SEATDATA_API_KEY!, { fetchImpl: this.deps.fetchImpl, sleep: this.deps.sleep });
-    const left = Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - (await this.callsToday()));
+    // Calls this tracker made that no row counts yet are spent too: without them the cap ran past the limit (gap 34).
+    const left = Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - (await this.callsToday()) - this.unlogged());
     this.client.callCap = this.client.calls + left;
     return this.client;
+  }
+
+  /** Calls already written to market_fetches by this tracker (log and finish), against the client's own count. */
+  private logged = 0;
+  /**
+   * Calls the client made that no market_fetches row counts yet: what a failed operation actually attempted, pages
+   * and retries included. A failure used to log one call whatever it spent, so the daily cap was softer than
+   * documented (audit gap 34: a 503 retried three times counted once).
+   */
+  private unlogged(): number {
+    return Math.max(0, (this.client?.calls ?? 0) - this.logged);
   }
 
   async callsToday(): Promise<number> {
@@ -134,8 +149,10 @@ export class MarketTracker {
     return r?.n ?? 0;
   }
 
-  private async log(kind: string, eventId: string | null, status: string, calls: number, points = 0, detail: string | null = null) {
-    await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 600) ?? null, at: this.now() });
+  private async log(kind: string, eventId: string | null, status: string, calls: number, points = 0, detail: string | null = null): Promise<string | null> {
+    const [r] = await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 600) ?? null, at: this.now() }).returning({ id: t.marketFetches.id });
+    this.logged += calls;
+    return r?.id ?? null;
   }
 
   /**
@@ -166,6 +183,7 @@ export class MarketTracker {
   /** The reserved row, completed with what the read actually did. */
   private async finish(id: string, status: string, calls: number, points = 0, detail: string | null = null) {
     await this.db.update(t.marketFetches).set({ status, calls, points, detail: detail?.slice(0, 600) ?? null }).where(eq(t.marketFetches.id, id));
+    this.logged += calls;
   }
 
   /** Why nothing would run, or null when it can. */
@@ -292,7 +310,7 @@ export class MarketTracker {
       } catch (e) {
         const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
         await this.db.update(t.trackedEvents).set({ lastError: msg.slice(0, 300), nextPollAt: new Date(now.getTime() + 60 * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
-        await this.log('stats', tr.eventId, 'error', 1, 0, msg);
+        await this.log('stats', tr.eventId, 'error', this.unlogged(), 0, msg);
         if (e instanceof SeatDataError && (e.type === 'authentication_error' || e.type === 'subscription_required' || e.type === 'payment_required')) break; // the account itself is the problem
       }
     }
@@ -335,7 +353,7 @@ export class MarketTracker {
         return { refreshed: true };
       } catch (e) {
         const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
-        await this.log('listings', eventId, 'error', 1, 0, msg);
+        await this.log('listings', eventId, 'error', this.unlogged(), 0, msg);
         return { refreshed: false, reason: msg };
       }
     }
@@ -349,7 +367,7 @@ export class MarketTracker {
       return { refreshed: true };
     } catch (e) {
       const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
-      await this.log('stats', eventId, 'error', 1, 0, msg);
+      await this.log('stats', eventId, 'error', this.unlogged(), 0, msg);
       return { refreshed: false, reason: msg };
     }
   }
@@ -390,7 +408,6 @@ export class MarketTracker {
   private async poll(tr: typeof t.trackedEvents.$inferSelect & { providerEventId: string }, ev: EventRow): Promise<number> {
     const now = this.now();
     const api = await this.api();
-    const before = api.calls;
     // Listings for any group of three or more following the event; the read also puts it on SeatData's fast rescan.
     // A failed read is logged and the stats poll goes on: singles and pairs don't depend on it.
     const sizes = await this.groupSizes(ev.e.id);
@@ -400,7 +417,7 @@ export class MarketTracker {
         await this.readGroups(tr.providerEventId, ev, sizes);
         groupsRead = true;
       } catch (e) {
-        await this.log('listings', ev.e.id, 'error', 1, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
+        await this.log('listings', ev.e.id, 'error', this.unlogged(), 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
       }
     }
     const prompted = groupsRead || (await this.prioritize(tr.providerEventId, ev.e.id));
@@ -418,7 +435,9 @@ export class MarketTracker {
     const followUp = prompted && oldData && (!tr.lastPolledAt || now.getTime() - tr.lastPolledAt.getTime() > 2 * 3_600_000);
     const next = followUp ? 45 : pollIntervalMinutes(lead, ctx.h24?.pct ?? null);
     await this.db.update(t.trackedEvents).set({ lastPolledAt: now, lastObservedAt: newest, lastError: null, nextPollAt: new Date(now.getTime() + next * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
-    await this.log('stats', ev.e.id, 'success', api.calls - before, points.length);
+    // Only the stats pages: the listings read and the rescan prompt above logged their own calls, and counting them
+    // here again charged the day twice for them (gap 34).
+    await this.log('stats', ev.e.id, 'success', this.unlogged(), points.length);
     return points.length;
   }
 
@@ -471,16 +490,26 @@ export class MarketTracker {
   async recentListings(eventId: string): Promise<ListingsRead | null> {
     const mine = this.lastRead.get(eventId);
     if (mine) return mine;
-    const shared = RECENT_READS.get(eventId);
-    if (shared && this.now().getTime() - shared.retrievedAt.getTime() <= RECENT_READ_MS && shared.retrievedAt <= this.now()) return shared;
+    const shared = this.sharedRead(eventId);
+    if (shared) return shared;
     return this.currentListings(eventId);
+  }
+
+  /** Any tracker's read of this event in this process within the last ten minutes, else null. */
+  private sharedRead(eventId: string): ListingsRead | null {
+    const shared = RECENT_READS.get(eventId);
+    return shared && this.now().getTime() - shared.retrievedAt.getTime() <= RECENT_READ_MS && shared.retrievedAt <= this.now() ? shared : null;
   }
 
   /** The listings this tracker read in this pass, by event: a second ask within the same request reuses it, unpaid. */
   private lastRead = new Map<string, ListingsRead>();
 
   async currentListings(eventId: string, kind: 'listings_compare' | 'listings_watch' = 'listings_compare', stubHubEventId: string | null = null): Promise<ListingsRead | null> {
-    const held = kind === 'listings_compare' ? this.lastRead.get(eventId) : undefined;
+    // A comparison reuses a read made for this event in the last ten minutes, by this research or another: each
+    // research builds its own tracker, so a follow-up on the same listing link paid for the same listings again
+    // (audit gap 42). The read is every listing of the event, so it serves any party size; the party is filtered
+    // after. A watch still reads fresh: its alert is about now.
+    const held = kind === 'listings_compare' ? this.lastRead.get(eventId) ?? this.sharedRead(eventId) : undefined;
     if (held) return held;
     // Every read that doesn't happen says why, so a reply with no market can be traced to its cause (PD-R1-01).
     const why = await this.blocked();
@@ -515,7 +544,7 @@ export class MarketTracker {
       const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
       await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw, r)}`);
       await this.rememberListings(eventId, raw, providerAsOf);
-      const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null) };
+      const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null), inactive: inactiveListings(raw.filter(isOrdinarySeatListing)) };
       this.lastRead.set(eventId, out);
       RECENT_READS.set(eventId, out);
       return out;
@@ -582,7 +611,7 @@ export class MarketTracker {
     const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
     await this.rememberListings(ev.e.id, listings, asOf);
-    const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null) };
+    const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null), inactive: inactiveListings(listings.filter(isOrdinarySeatListing)) };
     this.lastRead.set(ev.e.id, read);
     RECENT_READS.set(ev.e.id, read);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings, r)}`);
@@ -606,15 +635,29 @@ export class MarketTracker {
     if (!ev.ent) return;
     const now = this.now();
     const key = `${ev.ent.id}:${ev.v.id}`;
-    const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'history_search'), eq(t.marketFetches.detail, key), gte(t.marketFetches.at, new Date(now.getTime() - HISTORY_REFRESH_DAYS * 86_400_000)))).limit(1);
+    // A backfill the budget cut short ('partial') is not a month's history: the rest is picked up on a later refresh.
+    const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'history_search'), eq(t.marketFetches.detail, key), eq(t.marketFetches.status, 'success'), gte(t.marketFetches.at, new Date(now.getTime() - HISTORY_REFRESH_DAYS * 86_400_000)))).limit(1);
     if (recent) return;
-    if ((await this.callsToday()) + HISTORY_EVENTS + 1 > this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return; // tomorrow
+    // The search and at least one past game's pages. The guard used to reserve HISTORY_EVENTS + 1 calls while the loop
+    // could spend 1 + HISTORY_EVENTS * HISTORY_PAGES; at the cap the client threw mid-loop and the live event's refresh
+    // logged it as a stats error (audit 2026-10-10, budget guard "known to be loose"). Now the loop is bounded by
+    // what is left before each game, so budget exhaustion is a skipped_budget row, never a phantom stats failure.
+    if ((await this.callsToday()) + this.unlogged() + 1 + HISTORY_PAGES > this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return; // tomorrow
     const api = await this.api();
     const before = api.calls;
     const today = eventLocalDate(now, ev.v.timezone);
-    const r = await api.searchEvents({ event_name: ev.ent.name, venue_name: ev.v.name, historical: true, limit: 50 });
+    const why = (e: unknown) => (e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e)).slice(0, 200);
+    let r: Awaited<ReturnType<SeatDataClient['searchEvents']>>;
+    try {
+      r = await api.searchEvents({ event_name: ev.ent.name, venue_name: ev.v.name, historical: true, limit: 50 });
+    } catch (e) {
+      // History is extra: a failed search is the backfill's own row, and the live event's poll stands.
+      const budget = e instanceof SeatDataError && e.type === 'budget_exhausted';
+      await this.log('history_search', ev.e.id, budget ? 'skipped_budget' : 'error', this.unlogged(), 0, `${key}; ${why(e)}`);
+      return;
+    }
     const past = (r.data ?? []).filter((x) => x.event_date && x.event_date.slice(0, 10) < today && norm(x.venue_name) === norm(ev.v.name)).sort((a, b) => b.event_date.localeCompare(a.event_date)).slice(0, HISTORY_EVENTS);
-    await this.log('history_search', ev.e.id, 'success', api.calls - before, past.length, key);
+    const searchRow = await this.log('history_search', ev.e.id, 'success', api.calls - before, past.length, key);
     for (const p of past) {
       const exists = await this.db.select({ id: t.marketHistory.id }).from(t.marketHistory).where(eq(t.marketHistory.providerEventId, String(p.event_id))).limit(1);
       if (exists.length) continue;
@@ -623,12 +666,31 @@ export class MarketTracker {
       const starts = localTimeInstants(p.event_date.slice(0, 10), (p.event_time ?? '19:00').slice(0, 5), ev.v.timezone);
       if (starts.length !== 1) continue;
       const start = starts[0]!;
-      const b2 = api.calls;
-      const { snapshots } = await api.eventStats(p.event_id, { maxPages: 3 });
-      const sampled = downsample(snapshots.flatMap((s) => pointsFromSnapshot(s)), HISTORY_SAMPLE_HOURS);
-      const rows = sampled.map((pt) => ({ datasetId: SEATDATA_DATASET_ID, providerEventId: String(p.event_id), entityId: ev.ent!.id, venueId: ev.v.id, eventName: p.event_name, eventStartAt: start, basketKey: marketBasketKey(`provider:${p.event_id}`, pt.basis, pt.zone), quantity: pt.basis === 'single' ? 1 : 2, seatZone: pt.zone, observedAt: pt.observedAt, leadTimeMinutes: Math.round((start.getTime() - pt.observedAt.getTime()) / 60_000), priceCents: pt.priceCents, medianCents: pt.medianCents, activeListings: pt.activeListings }));
-      for (let i = 0; i < rows.length; i += 200) await this.db.insert(t.marketHistory).values(rows.slice(i, i + 200)).onConflictDoNothing();
-      await this.log('history_stats', ev.e.id, 'success', api.calls - b2, rows.length, String(p.event_id));
+      // Room for this game's pages, counted again before each one: other reads may have spent the day meanwhile.
+      const room = await this.api();
+      const stop = room.callCap !== null && room.callCap - room.calls < HISTORY_PAGES;
+      let failure: unknown = null;
+      if (!stop) {
+        const b2 = api.calls;
+        try {
+          const { snapshots } = await api.eventStats(p.event_id, { maxPages: HISTORY_PAGES });
+          const sampled = downsample(snapshots.flatMap((s) => pointsFromSnapshot(s)), HISTORY_SAMPLE_HOURS);
+          const rows = sampled.map((pt) => ({ datasetId: SEATDATA_DATASET_ID, providerEventId: String(p.event_id), entityId: ev.ent!.id, venueId: ev.v.id, eventName: p.event_name, eventStartAt: start, basketKey: marketBasketKey(`provider:${p.event_id}`, pt.basis, pt.zone), quantity: pt.basis === 'single' ? 1 : 2, seatZone: pt.zone, observedAt: pt.observedAt, leadTimeMinutes: Math.round((start.getTime() - pt.observedAt.getTime()) / 60_000), priceCents: pt.priceCents, medianCents: pt.medianCents, activeListings: pt.activeListings }));
+          for (let i = 0; i < rows.length; i += 200) await this.db.insert(t.marketHistory).values(rows.slice(i, i + 200)).onConflictDoNothing();
+          await this.log('history_stats', ev.e.id, 'success', api.calls - b2, rows.length, String(p.event_id));
+          continue;
+        } catch (e) {
+          failure = e;
+        }
+      }
+      // One past game failing is that game's row, never the live event's: a game the budget can't cover stops the
+      // backfill as skipped_budget, with the calls it did make, and leaves the search 'partial' so the rest is read
+      // on a later refresh; any other failure skips that game.
+      const budget = stop || (failure instanceof SeatDataError && failure.type === 'budget_exhausted');
+      await this.log('history_stats', ev.e.id, budget ? 'skipped_budget' : 'error', this.unlogged(), 0, `${p.event_id}; ${budget ? `${key}; daily call allowance` : why(failure)}`);
+      if (!budget) continue;
+      if (searchRow) await this.db.update(t.marketFetches).set({ status: 'partial' }).where(eq(t.marketFetches.id, searchRow));
+      return;
     }
   }
 

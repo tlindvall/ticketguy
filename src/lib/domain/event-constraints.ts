@@ -154,15 +154,18 @@ function timesIn(t: string) {
   return { after, before, exactTime, notTimes };
 }
 
-function weekdaysIn(t: string): { weekdays: number[] | null; notWeekdays: number[] } {
+function weekdaysIn(t: string, sports: boolean): { weekdays: number[] | null; notWeekdays: number[] } {
   const notWeekdays: number[] = [];
   for (const m of t.matchAll(new RegExp(`\\b(?:not|no|never|except)\\s+(?:on\\s+)?((?:${DAY_RE})(?:\\s*(?:,|or|and|nor|/)\\s*(?:${DAY_RE}))*)`, 'gi'))) {
     for (const d of m[1]!.matchAll(new RegExp(DAY_RE, 'gi'))) notWeekdays.push(dayIndex(d[1]!));
   }
   if (/\bnot\s+(?:on\s+)?weekdays?\b|\bweekends?\s+only\b|\bonly\s+(?:on\s+)?(?:a\s+|the\s+)?weekends?\b|\b(?:a|the)\s+weekend\s+that works\b|\bsat(?:urday)?s?\s*(?:or|and|\/|&)\s*sun(?:day)?s?\b|\bany\s+weekend\b/i.test(t)) return { weekdays: [6, 0], notWeekdays };
   // "Knicks tickets for next weekend": Saturday or Sunday, not the Monday or Thursday game between, and not a
-  // Friday called a weekend match (TGQA-R8 S04).
-  if (/\b(?:this|next|the|that|a)\s+weekend\b|\bover the weekend\b/i.test(t)) return { weekdays: [6, 0], notWeekdays };
+  // Friday called a weekend match (TGQA-R8 S04; DECISION_LOG: "Weekend" means Saturday and Sunday, for games).
+  // A night out is different: "anything good at Elsewhere this weekend?" means Friday night too, and the window
+  // already starts on the Friday (dates.ts weekWindowFor), so a concert, club night, comedy or theatre keeps it (audit
+  // gap 15: Friday was dropped in silence).
+  if (/\b(?:this|next|the|that|a)\s+weekend\b|\bover the weekend\b/i.test(t)) return { weekdays: sports ? [6, 0] : [5, 6, 0], notWeekdays };
   if (/\bweekdays?\s+only\b|\bnot\s+(?:on\s+)?(?:a\s+|the\s+)?weekends?\b/i.test(t)) return { weekdays: [1, 2, 3, 4, 5], notWeekdays };
   // "Saturday October 3 ONLY", "any Friday", "Saturday works better", "let's do Saturday": that day of the week.
   const only = new RegExp(`\\b${DAY_RE}\\b[^.?!]{0,30}?\\bonly\\b|\\bonly\\s+(?:on\\s+)?${DAY_RE}\\b|\\bany\\s+${DAY_RE}\\b|\\b${DAY_RE}\\s+(?:works|is|would be|suits)\\s+(?:better|best|fine|good|easier|us)\\b|\\b(?:let'?s do|make it|go with|do)\\s+${DAY_RE}\\b(?!\\s+\\d)|\\b${DAY_RE}\\s+then\\b`, 'i').exec(t);
@@ -228,7 +231,7 @@ function windowIn(t: string, receivedAt: Date, timeZone: string): EventConstrain
   return null;
 }
 
-export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedAt: Date; timeZone: string; venues: Array<{ name: string; aliases: string[] }> }): EventConstraints {
+export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedAt: Date; timeZone: string; venues: Array<{ name: string; aliases: string[] }>; sports?: boolean }): EventConstraints {
   const out: EventConstraints = { ...NO_CONSTRAINTS, notTimes: [], notWeekdays: [] };
   // Each venue once, by its catalog name, however they wrote it ("MSG", "Madison Square Garden").
   const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -279,7 +282,7 @@ export function eventConstraints(messagesOldestFirst: string[], ctx: { receivedA
     const matinee = /\b(?<!not\s(?:the\s)?(?:\d{1,2}\s?[ap]m\s)?)(?:matinee|afternoon)\b/i.test(t) && !/\bnot\s+(?:the\s+)?(?:\d{1,2}\s*[ap]m\s+)?matinee\b/i.test(t);
     if (evening) out.partOfDay = 'evening';
     else if (matinee) out.partOfDay = 'matinee';
-    const days = weekdaysIn(t);
+    const days = weekdaysIn(t, !!ctx.sports);
     if (days.weekdays) out.weekdays = days.weekdays;
     if (days.notWeekdays.length) out.notWeekdays = days.notWeekdays;
     const w = windowIn(t, ctx.receivedAt, ctx.timeZone);

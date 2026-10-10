@@ -17,7 +17,7 @@ describe('not playing where they asked, said as a person would', () => {
   it('one venue, two nights: where and how far once, the nights as a list, no "around then"', () => {
     const note = elsewhereNote('Metallica', [show('2026-11-20T00:00:00Z'), show('2026-11-22T00:00:00Z')], x({}), now);
     expect(note).toBe('Metallica isn’t playing in New York. The closest is Mohegan Sun Arena in Uncasville, about 115 miles away, on two nights:\n• Thursday, November 19, at 7 p.m.\n• Saturday, November 21, at 7 p.m.');
-    expect(elsewhereQuestion([show('2026-11-20T00:00:00Z'), show('2026-11-22T00:00:00Z')], x({}))).toBe('Which night works? Tell me how many tickets and I’ll find you seats, or tell me how far you’d travel.');
+    expect(elsewhereQuestion([show('2026-11-20T00:00:00Z'), show('2026-11-22T00:00:00Z')], x({}))).toBe('Which night works, and how many tickets? Or tell me how far you’d travel.');
   });
 
   it('a month they named is kept; "soon" is never played back', () => {

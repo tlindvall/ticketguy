@@ -91,12 +91,27 @@ run `pnpm test`, then `pnpm lexicon:doc`.
 | The amount is for each ticket. **model** | “$150 each”, “per ticket”, “per person”, “a ticket”, “apiece”, “pp” | `budgetBasis="per_ticket"` | any | find, change | “Knicks next weekend, 4 seats together, $150 each” |
 | The amount is for everyone together. A bare amount is read this way too, and the reply says so. **model** | “$300 total”, “all in”, “for both”, “for all of us”, “combined”, “altogether” | `budgetBasis="whole_party"` | any | find, change | “Two tickets for the Rangers on Oct 3, $300 total.” |
 
+## Budget: fees in or out
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| Their budget leaves fees out: it is held against listed prices, with no fee estimate added. **model** | “$400 before fees”, “plus fees”, “not including fees”, “excluding fees”, “fees extra” | `budgetFeeBasis="before_fees"` | any | find, change | “Knicks on Oct 24, 2 tickets, $400 before fees.” |
+| Their budget includes fees: it is the checkout total, held against listed prices plus the fee estimate. **model** | “$300 all-in”, “including fees”, “fees included”, “with fees”, “out the door” | `budgetFeeBasis="all_in"` | any | find, change | “Two Rangers tickets on Oct 3, $300 all-in.” |
+
+## What “best” means
+
+| Meaning | How customers say it | Sets | Categories | Request types | Example |
+|---|---|---|---|---|---|
+| Best means the view: lower sections and rows first, only when the listings say where the seats are. **model** | “best view”, “good view”, “best seats”, “great view” | `rankingGoal="view"` | any | find, change | “Best view, 2 tickets” |
+| Best means value: the lowest prices for seats that sell as their number. **model** | “best value”, “bang for the buck”, “value for money”, “good value” | `rankingGoal="value"` | any | find, change | “best value please” |
+| Best means the lowest price: the cheapest seats that fit, whatever the view. **model** | “cheapest is fine”, “cheapest”, “lowest price”, “best price” | `rankingGoal="price"` | any | find, change | “Cheapest is fine” |
+
 ## Seats
 
 | Meaning | How customers say it | Sets | Categories | Request types | Example |
 |---|---|---|---|---|---|
-| Seats must be next to each other. | “together”, “next to each other”, “side by side”, “adjacent” | `togetherRequired=true` | any | find, change | “Two Rangers tickets on Oct 3, together please.” |
-| Seats may be apart. | “don't need to sit together”, “split is fine”, “separate seats are ok” | `togetherRequired=false` | any | find, change | “Four Rangers tickets on Oct 3, we don't need to sit together.” |
+| Seats must be next to each other. **model** | “together”, “next to each other”, “side by side”, “adjacent” | `togetherRequired=true` | any | find, change | “Two Rangers tickets on Oct 3, together please.” |
+| Seats may be apart. **model** | “don't need to sit together”, “split is fine”, “separate seats are ok” | `togetherRequired=false` | any | find, change | “Four Rangers tickets on Oct 3, we don't need to sit together.” |
 
 ## When
 

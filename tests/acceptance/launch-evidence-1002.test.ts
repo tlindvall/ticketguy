@@ -220,7 +220,8 @@ describe('Final launch review, Workstream A, replayed with the original screensh
       { text: 'Hey, can you find me the best tickets for Metallica at Sphere on October 8?', reads: [] },
       { text: "Best value, two seated tickets. Up to $300 total including fees. We don't want an obstructed view. Is that realistic, and should we wait?", reads: [] },
     ]);
-    expect(q1!.text).toContain('Are you after the best view, the best value, or the lowest price?');
+    // One compact question: the goal and the count in one sentence (audit gap 14).
+    expect(q1!.text).toContain('Are you after the best view, the best value, or the lowest price, and how many tickets?');
     expect(q2!.text).toContain('Sphere, Las Vegas · Thursday, October 8, at 8:30 p.m. · 2 tickets · up to $300 in total');
     expect(q2!.text).toContain('Whether $300 for two is realistic I can’t say yet: I can’t see current prices for this show.');
     expect(q2!.text).toContain('waiting would be a guess');

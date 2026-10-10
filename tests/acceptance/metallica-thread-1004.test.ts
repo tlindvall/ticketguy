@@ -99,7 +99,7 @@ describe('a show picked from the list we sent', () => {
       { text: 'I want to see Metallica in CT. Can you find any good tickets? they look very expensive.', over: ct },
       { text: 'the 19th. 2 tickets together please.', over: { ...ct, dateExpression: 'the 19th', resolvedLocalDate: null, quantity: 2, togetherRequired: true } },
     ], 'm3@customer.example');
-    expect(r.all[0]).toMatch(/Which show: Thu, Nov 19 at Mohegan Sun Arena or Sat, Nov 21 at Mohegan Sun Arena\?/);
+    expect(r.all[0]).toMatch(/Which show: Thu, Nov 19 at Mohegan Sun Arena or Sat, Nov 21 at Mohegan Sun Arena, and how many tickets\?/);
     expect(r.req.eventId).toBe(NOV19);
     expect(r.all.slice(1).join('\n')).not.toMatch(/Which show/);
   });
