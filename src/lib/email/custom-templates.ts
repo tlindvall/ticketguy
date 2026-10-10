@@ -38,7 +38,7 @@ export const SLOTS: SlotSpec[] = [
     variables: [
       { name: 'acknowledgement', kind: 'text', description: 'One sentence saying what we understood', sample: 'Two Rangers tickets next week, up to $200 total. Got it.' },
       { name: 'eventNote', kind: 'text', description: 'What we found (or did not) about the event, when there is something to say', sample: 'We don’t have a scheduled Dua Lipa event on file, so we haven’t looked at prices yet.' },
-      { name: 'questions', kind: 'list', description: 'The questions that decide it, most important first', sample: ['Are you looking for a home game at Madison Square Garden, or are away games an option?'] },
+      { name: 'questions', kind: 'list', description: 'The one question that decides it (at most two asks in one sentence)', sample: ['Are you looking for a home game at Madison Square Garden, or are away games an option?'] },
       { name: 'countryCheck', kind: 'flag', description: 'True on the first clarification to a customer whose country is not yet confirmed', sample: true },
       { name: 'knownFacts', kind: 'list', description: 'What we have so far, as a list (kept for existing templates)', sample: ['4 tickets', 'Budget $600 total'] },
       { name: 'assumptions', kind: 'list', description: 'What we assumed instead of asking (quantity, budget basis), one line each; empty when nothing was', sample: ["I've assumed two tickets. Just tell me if you need a different number."] },

@@ -138,6 +138,10 @@ export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && GAME_C
 const BEST_TICKETS = /\bbest (?:\S+\s+){0,4}?(?:tickets?|seats?)\b/i;
 const BEST_GOAL = /\b(?:view|value|cheap(?:est)?|lowest|price|closest|front|sightline)\b/i;
 export const BEST_OPEN_ASK = 'Are you after the best view or the best value, and how many tickets?';
+/** "Best" with the event settled and the count known: the goal alone is the question. */
+export const BEST_GOAL_ASK = 'Are you after the best view, the best value, or the lowest price?';
+/** Asked once and answered without a goal: said, so "best" is never quietly read as cheapest. */
+export const BEST_ASSUMED = 'You didn’t say what makes a ticket best for you, so I’ll go by the lowest price for your group. Tell me if you’d rather have the best view.';
 /** Events that matched the name and date but break one of their rules, and the nearest one that doesn't. */
 export type ConstraintConflict = {
   label: string;
@@ -153,7 +157,7 @@ export type ConstraintConflict = {
 };
 
 /** The keys that earn a clarification round. Ambiguities are a closed vocabulary, so this can match them. */
-const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', ...AMBIGUITY_KINDS];
+const CLARIFIABLE: string[] = ['event', 'quantity', 'budget_basis', 'country', 'best_goal', ...AMBIGUITY_KINDS];
 
 /**
  * What we tell the customer when no event could be attached — which depends entirely on why.
@@ -1036,7 +1040,19 @@ export class Concierge {
     // The model flags "Giants" as ambiguous and "no city" as unknown from the words alone; once the catalog has
     // settled the event (one team with a game then, or the local one), those questions have been answered.
     const ambiguities = merged.ambiguities.filter((a) => !(dateWindowKnown && a === 'date_unsupported_expression') && !(eventResolved && SETTLED_BY_RESOLUTION.includes(a)));
-    const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities];
+    // "Best" is not one ranking (brief: price, value, view or an experience), and research ranks on price, so a "best"
+    // with no goal is asked, never silently read as cheapest. A4's question (BEST_OPEN_ASK) asked it only for an act on
+    // file with no date or count; it is now asked whenever the event is settled, however it was named. Behind an
+    // unsettled event it waits ('best_goal_open') so the one question stays the event; asked once and not answered, the
+    // reply says it went by price.
+    const openBefore = priorVersion?.unresolvedFields ?? [];
+    const goalNamed = BEST_GOAL.test(flat(latestText)) || !!merged.seatingPreference?.trim();
+    const bestSaid = !picked && !imageUnread && !goalNamed && (BEST_TICKETS.test(flat(latestText)) || openBefore.includes('best_goal_open') || openBefore.includes('best_goal'));
+    const bestAskedBefore = bestSaid && req.state === 'needs_clarification' && openBefore.includes('best_goal');
+    const bestOnFile = bestOpen && resolution.kind !== 'no_match' && !elsewhere.length;
+    const bestKey = bestSaid && !bestAskedBefore ? (eventResolved || bestOnFile ? 'best_goal' : 'best_goal_open') : null;
+    if (bestAskedBefore) assumptions.push(BEST_ASSUMED);
+    const unresolved = [...missing, ...(resolution.kind === 'ambiguous' ? ['event_ambiguous'] : []), ...ambiguities, ...(bestKey ? [bestKey] : [])];
 
     await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: unresolved, createdBy: 'system' });
     await this.db.update(t.requests).set({ currentRevision: revision, eventId: eventResolved ? resolution.event.id : null, category: eventResolved ? resolution.event.category : req.category, mode: merged.intent === 'watch_request' ? 'keep_looking' : merged.submittedUrls.length ? 'beat_offer' : 'find_options', updatedAt: now, deadlineAt: merged.decisionDeadline ? new Date(merged.decisionDeadline) : req.deadlineAt }).where(eq(t.requests.id, req.id));
@@ -1207,8 +1223,16 @@ export class Concierge {
       }
     }
 
-    if (unresolved.some((u) => CLARIFIABLE.includes(u) && !(guideNoFieldAsk && (u === 'quantity' || u === 'budget_basis')))) {
-      const count = req.clarificationCount + 1;
+    // Read before any question, so a goal that wouldn't change this answer isn't asked (the sale pointer ranks nothing).
+    // Prices are the answer: an open official sale is said inside the priced reply, never instead of it (live Oct 5:
+    // "Knicks vs. Orlando Magic is on general sale on Ticketmaster. I haven't seen its seats or prices", then "reply
+    // compare"). Only with no resale feed at all is the official sale the whole reply.
+    // A Guide event's open sale is its answer whatever feed is configured: Guide depth runs no resale research, and with
+    // the resale key set the request used to fall through to research with no party size ("· null tickets", "for all
+    // null", Oct 10 audit replay: "Red Storm tickets Nov 12 please", ncaa_regular, enforce).
+    const official = (this.env.SEATDATA_API_KEY && !guideNoFieldAsk) || merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) || resolution.kind !== 'resolved' ? null : await this.officialSale(resolution.event, now);
+    if (unresolved.some((u) => CLARIFIABLE.includes(u) && !(guideNoFieldAsk && (u === 'quantity' || u === 'budget_basis')) && !(u === 'best_goal' && official))) {
+      const count = questionRound(req, priorVersion?.unresolvedFields ?? [], unresolved);
       if (count > 3) {
         await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
         await this.parkForStaff({ req, revision, reason: 'clarification_limit_reached', contact: contact!, msg });
@@ -1221,7 +1245,7 @@ export class Concierge {
       // date are you looking at?" when we already know the dates they could mean (live Oct 4).
       const gameRows = resolution.kind === 'ambiguous' && !elsewhere.length && resolution.candidates.length > 3 && new Set(resolution.candidates.map((c) => c.entityName)).size === 1 ? await this.eventRows(resolution.candidates.map((c) => c.id)) : [];
       // The one question only when the act is on file: nothing scheduled, or only elsewhere, is the thing to say first.
-      const bestOnly = bestOpen && resolution.kind !== 'no_match' && !elsewhere.length;
+      const bestOnly = bestOnFile && !bestAskedBefore;
       const gameNote = gameRows.length && !bestOnly ? gameListNote(resolution.kind === 'ambiguous' ? resolution.candidates[0]! : null, gameRows, merged, this.now()) : null;
       const eventQuestion = bestOnly ? null : elsewhere.length ? elsewhereQuestion(elsewhere, merged) : gameNote ? `Which ${gameRows.some((r) => eventNounFor(r.e.category) === 'game') ? 'game' : 'show'} would you like? I’ll look for the best seats for it.` : resolution.kind === 'ambiguous' ? decisiveEventQuestion(resolution.candidates, merged) : null;
       const qKeys = [...new Set([...missing, ...ambiguities])].filter((k) => !(eventQuestion && (k === 'event' || k === 'performer_ambiguous')) && !(elsewhere.length && k === 'quantity'));
@@ -1266,10 +1290,21 @@ export class Concierge {
         : null;
       // One ask per missing thing: the event question already covers its date and place (TGQA-R8 S08).
       const coveredByEvent = (k: string) => k.startsWith('date_') || k.startsWith('event_') || k === 'performer_ambiguous';
-      // "The best tickets" names no goal: best view, best value or lowest price is the question that decides the
-      // answer, asked beside the event and party (live F06; master CL-05).
-      const bestAsk = /\bbest (?:tickets?|seats?)\b/i.test(flat(latestText)) && !/\b(?:view|value|cheap(?:est)?|lowest|price|closest|front|sightline)\b/i.test(flat(latestText)) ? 'Are you after the best view, the best value, or the lowest price?' : null;
-      const questions = imageUnread ? [IMAGE_UNREAD_ASK] : bestOnly ? [BEST_OPEN_ASK] : conflictAsk ? [conflictAsk, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 2) : nextStep ? [nextStep, ...clarificationQuestions(qKeys.filter((k) => k !== 'event' && !coveredByEvent(k)), merged)].slice(0, 3) : [...(bestAsk ? [bestAsk] : []), ...(eventQuestion ? [eventQuestion] : []), ...clarificationQuestions(eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys, merged)].slice(0, 3);
+      // One compact question (brief: "Clarify only what materially changes the answer. Ask one compact question where
+      // possible"; audit gap 14): the ask that decides the answer, with the party size folded into the same sentence when
+      // it is open too ("Which game would you like, and how many tickets?"), never a stack of three under "A couple of
+      // quick questions". Whatever it leaves open is assumed and said (applyDefaults) or asked next time, and the round
+      // counter now resets once a round is answered (questionRound). Which event comes before what "best" means; with the
+      // event settled, the goal is the question (live F06; master CL-05), not something research reads as cheapest.
+      const countOpen = qKeys.includes('quantity');
+      const bestQ = bestKey === 'best_goal' && !official ? (countOpen ? withCount(BEST_GOAL_ASK) : BEST_GOAL_ASK) : null;
+      const otherKeys = (eventQuestion || qKeys.includes('event') ? qKeys.filter((k) => !coveredByEvent(k)) : qKeys).filter((k) => k !== 'quantity');
+      const lead = conflictAsk ?? nextStep ?? bestQ ?? eventQuestion ?? clarificationQuestions(otherKeys, merged)[0] ?? null;
+      const question = imageUnread ? IMAGE_UNREAD_ASK : bestOnly ? BEST_OPEN_ASK : lead ? (countOpen && lead !== bestQ ? withCount(lead) : lead) : countOpen ? clarificationQuestions(['quantity'], merged)[0]! : null;
+      const questions = question ? [question] : [];
+      // The goal wasn't the question this time (the open sale answers without ranking seats): kept open, not "asked",
+      // so the next reply is never told it skipped a question it didn't get.
+      if (bestKey === 'best_goal' && question !== bestQ && question !== BEST_OPEN_ASK) await this.db.update(t.requestVersions).set({ unresolvedFields: unresolved.map((u) => (u === 'best_goal' ? 'best_goal_open' : u)) }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, revision)));
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       // Asked once, on the first reply in the thread, not on every follow-up (Research 1).
@@ -1309,7 +1344,7 @@ export class Concierge {
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
-      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'A couple of quick questions'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions.filter((a) => !(settled && resolution.kind === 'resolved' && a === resolution.assumed)), ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'One quick question'), template: 'clarification', vars: { acknowledgement: imageUnread ? imageUnreadLine(imageUnread) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes : [...assumptions.filter((a) => !(settled && resolution.kind === 'resolved' && a === resolution.assumed)), ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
     }
 
@@ -1347,10 +1382,6 @@ export class Concierge {
         return { state: 'recommendation_sent', revision, extraction: merged };
       }
     }
-    // Prices are the answer: an open official sale is said inside the priced reply, never instead of it (live Oct 5:
-    // "Knicks vs. Orlando Magic is on general sale on Ticketmaster. I haven't seen its seats or prices", then "reply
-    // compare"). Only with no resale feed at all is the official sale the whole reply.
-    const official = this.env.SEATDATA_API_KEY || merged.resaleAsked || merged.quotedPriceCents != null || merged.intent === 'watch_request' || merged.submittedUrls.length || supplied.textOffers.length || listing.fields || TREND_ASKED.test(flat(latestText)) ? null : await this.officialSale(resolution.event, now);
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
       await this.queueSend({
@@ -1365,6 +1396,16 @@ export class Concierge {
       return { state: 'referred', revision, extraction: merged };
     }
 
+    // Research never starts without a party size: every total, split and "for all N" line in the reply is built from it,
+    // and a route that let the count through unasked printed "· null tickets" (Oct 10 audit replay). A Guide event with
+    // offers of their own is one such route (the count isn't asked there): it goes ahead on two, said once, the way a
+    // per-ticket price check does, and the stored brief carries the number so research reads it.
+    if (merged.quantity === null) {
+      merged = { ...merged, quantity: DEFAULT_QUANTITY };
+      assumptions.push(...assumptionLines(['quantity'], merged));
+      await this.db.update(t.requestVersions).set({ brief: merged }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, revision)));
+      await audit(this.db, { actor: 'system', action: 'request.quantity_assumed', entityKind: 'request', entityId: req.id, revision, diff: { quantity: DEFAULT_QUANTITY, at: 'research_enqueue' } });
+    }
     const cameFromReferral = req.state === 'referred';
     await this.transition(req.id, 'researching', 'brief_complete');
     // A browse that settled on its only match is answered here too, whichever revision it came on, and so is
@@ -1381,7 +1422,8 @@ export class Concierge {
     // "Did you check Saturday too?" gets its answer here when the request goes on to research: the acknowledgment is the
     // one email that goes out now, and the research reply is about the night they're on (audit second pass: the note
     // reached only the late-entry reply).
-    if ((revision === 1 || picked || cameFromReferral || altDateNote) && !selfContained && (!answeredUnreviewed || assumptions.length || picked || altDateNote)) {
+    // So is a "best" read as lowest price after the goal question went unanswered, whatever the revision (gap 4).
+    if ((revision === 1 || picked || cameFromReferral || altDateNote || bestAskedBefore) && !selfContained && (!answeredUnreviewed || assumptions.length || picked || altDateNote)) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: altDateNote ? [...assumptions, altDateNote] : assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
@@ -1915,8 +1957,8 @@ export class Concierge {
     const more = a.more === true;
     const now = this.now();
     // Paging through a list is the customer steering, not a question we failed to settle: it does not count
-    // towards the limit that hands a request to a person.
-    const count = req.clarificationCount + (more ? 0 : 1);
+    // towards the limit that hands a request to a person. Nor does a list after a round they answered (audit gap 16).
+    const count = more ? req.clarificationCount : questionRound(req, (await this.latestVersion(req.id))?.unresolvedFields ?? [], ['event']);
     // Recorded once the outcome is known: a single match goes on as an ordinary request, which records its own.
     const recordVersion = async () => {
       await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
@@ -3268,7 +3310,10 @@ export class Concierge {
     const [run] = await this.db.insert(t.researchRuns).values({ requestId: req.id, revision: args.revision, mode: this.env.APP_MODE === 'fixture' ? 'fixture' : 'live', status: 'running', servicePolicy: storedPolicy(snap, { sources: planned }) }).returning({ id: t.researchRuns.id });
     const runId = run!.id;
     if (snap) await this.db.update(t.requestVersions).set({ servicePolicy: storedPolicy(snap) }).where(and(eq(t.requestVersions.requestId, req.id), eq(t.requestVersions.revision, args.revision)));
-    const quantity = brief.quantity!;
+    // The enqueue guard above fills a missing count before research is queued; a brief without one is a bug upstream,
+    // and failing here keeps "null tickets" out of a customer's reply.
+    if (brief.quantity === null) throw new Error('research without a party size');
+    const quantity = brief.quantity;
     // Every hard requirement goes to the sources too, not only to the comparison after them (F04).
     const searchInput = { requestId: req.id, revision: args.revision, eventId: event.id, providerEventId: null, quantity, hardConstraints: constraintBasket(brief, quantity, event.localStartAt) as unknown as Record<string, unknown> };
 
@@ -4573,10 +4618,20 @@ export function gameListNote(c: EventCandidate | null, rows: Array<{ e: { name: 
   return `Here are the ${team} ${games ? 'games' : 'shows'}${where}${when}:\n${shown.map(line).join('\n')}${more > 0 ? `\n…and ${more} more after that.` : ''}`;
 }
 
-/** One next step for the shows above: which one, and how many tickets when we don't know yet. */
+/**
+ * One next step for the shows above: which one, and how many tickets when we don't know yet, in the same sentence, so
+ * the city choice and the count are one answer, not two rounds (audit gap 14).
+ */
 export function elsewhereQuestion(shows: NearbyShow[], x: RequestExtraction): string {
   const which = shows.length === 1 ? 'Want that one?' : new Set(shows.map((s) => s.v.id)).size === 1 ? 'Which night works?' : 'Which one works?';
-  return x.quantity ? `${which} I’ll find you ${x.quantity === 1 ? 'a seat' : `${countWordLower(x.quantity)} seats`} for it, or tell me how far you’d travel.` : `${which} Tell me how many tickets and I’ll find you seats, or tell me how far you’d travel.`;
+  return x.quantity ? `${which} I’ll find you ${x.quantity === 1 ? 'a seat' : `${countWordLower(x.quantity)} seats`} for it, or tell me how far you’d travel.` : `${withCount(which)} Or tell me how far you’d travel.`;
+}
+
+/** "Which game would you like?" becomes "Which game would you like, and how many tickets?": the count rides in the same sentence. */
+export function withCount(question: string): string {
+  const i = question.indexOf('?');
+  if (i < 0 || /\bhow many\b/i.test(question)) return question;
+  return `${question.slice(0, i)}, and how many tickets?${question.slice(i + 1)}`;
 }
 
 export function decisiveEventQuestion(cands: EventCandidate[], x: RequestExtraction): string {
@@ -5549,6 +5604,24 @@ export function assumptionLines(assumed: Array<'quantity' | 'budget_basis'>, x: 
   }
   return lines;
 }
+
+/**
+ * Which round of questions in a row this one is, counting only rounds that went unanswered (audit gap 16). A reply that
+ * settled something the last round left open (the game, the count, the goal) answered it, so the count starts again:
+ * the fourth question in a request's life used to park it with a person even when every earlier one was answered. A
+ * request that wasn't waiting on an answer (researched, referred, a first message) starts at one too.
+ */
+export function questionRound(req: { state: string; clarificationCount: number }, openBefore: string[], openNow: string[]): number {
+  const waiting = req.state === 'needs_clarification' || req.state === 'manual_attention';
+  // Judged on the facts a reply fills (the event, the count, the budget's basis, what "best" means), which stay filled
+  // once given. The extractor's ambiguity flags come and go with the words of each message ("Anyone there?" carries no
+  // "a few tickets"), so they decide only a round that asked nothing else.
+  const facts = openBefore.filter((k) => SETTLED_BY_ANSWER.includes(k));
+  const asked = facts.length ? facts : openBefore.filter((k) => k !== 'best_goal_open');
+  const answered = !waiting || !asked.length || asked.some((k) => !openNow.includes(k));
+  return (answered ? 0 : req.clarificationCount) + 1;
+}
+const SETTLED_BY_ANSWER = ['event', 'event_ambiguous', 'quantity', 'budget_basis', 'best_goal'];
 
 /** Why a request is waiting on a person, in words for the staff alert. */
 export function staffReasonLabel(reason: string): string {
