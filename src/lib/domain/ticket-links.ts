@@ -71,7 +71,82 @@ function iso(y: number, m: number, d: number): string | null {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-export function parseTicketLink(raw: string): TicketLink | null {
+/**
+ * Wrappers that carry the real link in a query parameter: Google's redirect (google.com/url?q=), Outlook's Safe Links
+ * (*.safelinks.protection.outlook.com/?url=) and Facebook's outbound link (l.facebook.com/l.php?u=). A StubHub link
+ * pasted from Outlook or Messenger arrived wrapped, counted as "linked" and said nothing (audit 2026-10-10 gap 20).
+ * The target is read from the URL itself; nothing is fetched.
+ */
+const WRAPPERS: Array<[RegExp, RegExp, string]> = [
+  [/^(?:www\.)?google\.[a-z.]+$/, /^\/url$/, 'q'],
+  [/^(?:www\.)?google\.[a-z.]+$/, /^\/url$/, 'url'],
+  [/(^|\.)safelinks\.protection\.outlook\.com$/, /^\/?$/, 'url'],
+  [/^(?:l|lm)\.facebook\.com$/, /^\/l\.php$/, 'u'],
+  [/^(?:l|lm)\.messenger\.com$/, /^\/l\.php$/, 'u'],
+];
+
+/** The link a wrapper carries, unwrapped (twice at most: Safe Links around a Google redirect); the URL as given otherwise. */
+export function unwrapLink(raw: string): string {
+  let cur = raw;
+  for (let i = 0; i < 2; i++) {
+    let u: URL;
+    try {
+      u = new URL(cur.replace(/[.,;:!?)\]]+$/, ''));
+    } catch {
+      return cur;
+    }
+    const host = u.hostname.toLowerCase();
+    const w = WRAPPERS.find(([h, p, k]) => h.test(host) && p.test(u.pathname) && u.searchParams.get(k));
+    const target = w ? u.searchParams.get(w[2])! : null;
+    if (!target || !/^https?:\/\//i.test(target)) return cur;
+    cur = target;
+  }
+  return cur;
+}
+
+/**
+ * Links that name a listing somewhere we can't read without opening them: a shortener (bit.ly) or an app's share link
+ * (*.app.link), whose target is only known by following it, and a URL that doesn't parse at all. We never follow a
+ * link, so the reply names it and asks for the full marketplace link or a screenshot (audit 2026-10-10 gap 20).
+ */
+const SHORTENERS = /^(?:www\.)?(?:bit\.ly|bitly\.com|tinyurl\.com|t\.co|ow\.ly|goo\.gl|buff\.ly|rebrand\.ly|is\.gd|cutt\.ly|shorturl\.at|rb\.gy|tiny\.cc|lnkd\.in|t\.ly|qrco\.de|linktr\.ee|tm\.ink|stub\.hub)$/;
+const APP_LINKS = /(?:^|\.)(?:app\.link|page\.link|onelink\.me|app\.goo\.gl|smart\.link|sng\.link)$/;
+export type UnreadableLink = { label: string; kind: 'short' | 'app' | 'broken' };
+export function unreadableLinks(urls: string[]): UnreadableLink[] {
+  const out: UnreadableLink[] = [];
+  for (const raw of urls) {
+    const target = unwrapLink(raw);
+    let u: URL;
+    try {
+      u = new URL(target.replace(/[.,;:!?)\]]+$/, ''));
+    } catch {
+      out.push({ label: raw.replace(/^https?:\/\//i, '').slice(0, 40), kind: 'broken' });
+      continue;
+    }
+    if (parseTicketLink(target)) continue;
+    const host = u.hostname.toLowerCase();
+    const label = `${host.replace(/^www\./, '')}${u.pathname.length > 1 ? u.pathname.slice(0, 24) : ''}`;
+    if (SHORTENERS.test(host)) out.push({ label, kind: 'short' });
+    else if (APP_LINKS.test(host)) out.push({ label, kind: 'app' });
+  }
+  return out.filter((l, i, xs) => xs.findIndex((y) => y.label === l.label) === i);
+}
+
+/**
+ * One line naming the link we couldn't read and the one thing that fixes it. Said in place of "a link works", never as
+ * well as it: we have their link, just not what it points to.
+ */
+export function unreadableLinkNote(urls: string[]): string | null {
+  const bad = unreadableLinks(urls);
+  if (!bad.length) return null;
+  const l = bad[0]!;
+  const what = l.kind === 'short' ? `the short link ${l.label}` : l.kind === 'app' ? `the app share link ${l.label}` : `the link ${l.label}`;
+  const why = l.kind === 'broken' ? 'it came through broken' : 'I don’t open links, and that one doesn’t say which tickets it points to';
+  return `I couldn’t read ${what}: ${why}. Could you send the full StubHub, Ticketmaster, SeatGeek or Vivid Seats link, or a screenshot of the listing?`;
+}
+
+export function parseTicketLink(given: string): TicketLink | null {
+  const raw = unwrapLink(given);
   let u: URL;
   try {
     u = new URL(raw.replace(/[.,;:!?)\]]+$/, ''));
@@ -80,6 +155,8 @@ export function parseTicketLink(raw: string): TicketLink | null {
   }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
   const host = u.hostname.toLowerCase();
+  // "stubhub.app.link" is StubHub's app share link, not a StubHub page: it names nothing until followed (gap 20).
+  if (APP_LINKS.test(host)) return null;
   const marketplace = HOSTS.find(([re]) => re.test(host))?.[1];
   if (!marketplace) return null;
 

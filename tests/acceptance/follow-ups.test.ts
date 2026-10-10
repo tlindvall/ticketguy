@@ -75,11 +75,13 @@ describe('follow-ups keep what was settled', () => {
     expect(sends.some((s) => s.messageClass === 'clarification')).toBe(false);
   });
 
-  it('a reply of only a StubHub link is read for its game and quantity', async () => {
+  it('a reply of only a StubHub link is read for its game; a party size they typed stands', async () => {
     const link = 'https://www.stubhub.com/new-york-rangers-new-york-tickets-10-3-2026/event/161415566/?backUrl=%2Fnew-york-rangers-tickets%2Fperformer%2F2764&quantity=5&listingId=13718391146';
     const { req, brief, sends } = await thread('link@customer.example', 'Two Rangers tickets Oct 3 please.', link);
     expect(req.eventId).toBe(FX.events.rangersPreseason);
-    expect(brief.quantity).toBe(5);
+    // "Two Rangers tickets" was typed; the link's ?quantity=5 never overrides a party size they typed (audit
+    // 2026-10-10 gap 5). A link alone, with no typed count, still sets it (next case).
+    expect(brief.quantity).toBe(2);
     expect(sends.some((s) => s.messageClass === 'clarification')).toBe(false);
   });
 

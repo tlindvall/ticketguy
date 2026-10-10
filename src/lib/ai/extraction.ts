@@ -46,7 +46,7 @@ const COUPLE = /\b(?:my (?:wife|husband|partner|girlfriend|boyfriend) and (?:i|m
  * Tickets they need, not tickets a listing has: "the screenshot still says $52 each for THREE tickets… We now need
  * four people together" is four (TGQA-R6 15). A sentence about a listing only counts when nothing else gives one.
  */
-function parseQuantity(t: string): { value: number | null; quote: string | null } {
+export function parseQuantity(t: string): { value: number | null; quote: string | null } {
   const sentences = t.split(/(?<=[.!?])\s+/);
   const listingSentence = (x: string) => /\b(?:screenshot|listing|image|the offer|seller|(?:it|that|this) (?:says|shows)|still says|still shows)\b/i.test(x);
   if (sentences.length > 1 && sentences.some(listingSentence)) {

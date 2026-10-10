@@ -26,5 +26,10 @@ export function detectAutoResponse(args: { headers: InboundHeaders; subject: str
   if (args.serviceAddresses.map((a) => a.toLowerCase()).includes(from)) reasons.push('own_address');
   if (args.subject && OOO_SUBJECT.test(args.subject)) reasons.push('subject_pattern');
   if (h['return-path'] === '<>' || h['return-path'] === '') reasons.push('null_return_path');
-  return { autoResponse: reasons.length > 0, reasons };
+  // The subject alone is advisory (audit 2026-10-10 gap 17): a customer writing "Tickets for our vacation" or "my
+  // StubHub order came back as returned mail" was stored as an auto-reply and got no answer and no staff alert. Real
+  // out-of-office and bounce mail also carries a header (Auto-Submitted, X-Autoreply, Precedence, an empty
+  // Return-Path or a MAILER-DAEMON sender), so the subject only suppresses alongside one of those; it is still
+  // recorded so the trace shows it matched.
+  return { autoResponse: reasons.some((r) => r !== 'subject_pattern'), reasons };
 }
