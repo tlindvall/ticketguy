@@ -129,8 +129,9 @@ function renderBody(
       return wrap(paras, html);
     }
     case 'clarification': {
-      // One sentence saying what we understood, then the questions that decide it, one per line. Headings
-      // like "What we have so far" / "Could you tell us" made a two-line question read like a form.
+      // One sentence saying what we understood, then the one question that decides it (at most two asks in one
+      // sentence, audit gap 14). Headings like "What we have so far" / "Could you tell us" made a two-line question
+      // read like a form, and three stacked asks did the same.
       const qs = (v.questions as string[]) ?? [];
       // The note is paragraphs of its own (what I searched, then the nearest games as a list): one block each, or a
       // list run into the sentence before it (live Oct 5: "The closest games I have: • Tomorrow… • Sunday…" in one line).

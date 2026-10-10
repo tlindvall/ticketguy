@@ -58,8 +58,8 @@ describe('a team and a month', () => {
     const [send] = await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.requestId, r.requestId));
     const body = send!.bodyText;
     expect(body).toContain('Hey,\n\nHere are the New York Knicks games in New York in October:\n• Thursday, October 8, at 7:30 p.m.: vs. Washington Wizards (preseason)\n• Wednesday, October 21, at 7:30 p.m.: vs. Boston Celtics\n• Saturday, October 24, at 7:30 p.m.: vs. Fixture Opponent\n• Thursday, October 29, at 7:30 p.m.: vs. Miami Heat');
-    expect(body).toContain('Which game would you like? I’ll look for the best seats for it.');
-    expect(body).toMatch(/How many tickets/);
+    // Which game and how many, in one sentence (audit gap 14).
+    expect(body).toContain('Which game would you like, and how many tickets? I’ll look for the best seats for it.');
     expect(body).not.toMatch(/Which date are you looking at|76ers|Bulls|Got it/);
     expect(send!.bodyHtml).toContain('<li');
     // No game settled yet, so SeatData was never asked, and the admin trace says why.
