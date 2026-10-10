@@ -3443,7 +3443,10 @@ export class Concierge {
       const ps = perSeat(e.offer);
       if (ps === null || ps >= ref || e.exclusions.some((x) => ['wrong_event', 'parking_only', 'different_session', 'unavailable', 'currency', 'resale_deposit', 'vip_package'].includes(x))) continue;
       const reason = e.exclusions.includes('obstructed_view') ? 'obstructed_view' : e.exclusions.includes('accessible_only') ? 'accessible_only' : e.exclusions.includes('seats_not_together') ? 'seats_not_together' : e.exclusions.includes('section_not_acceptable') ? 'section_not_acceptable' : e.exclusions.includes('wrong_quantity') && e.offer.quantity > quantity ? 'bigger_block' : null;
-      if (reason && !leftOut.some((l) => l.reason === reason && l.quantity === e.offer.quantity)) leftOut.push({ reason, quantity: e.offer.quantity });
+      // With its checked all-in total for their number, and where it is, so a listing they sent all-in can be weighed
+      // against it by name (B7; Oct 10 review: the total was never passed, so that verdict could not be sent).
+      const total = e.offer.quantity === quantity && e.offer.priceCompleteness === 'verified_total' ? e.comparableTotalCents : null;
+      if (reason && !leftOut.some((l) => l.reason === reason && l.quantity === e.offer.quantity)) leftOut.push({ reason, quantity: e.offer.quantity, totalCents: total, section: e.offer.section, row: e.offer.row });
     }
     const eventNoun = eventNounFor(event.category);
     // The staffed comparison pilot (DECISION_LOG #54): when nothing verified meets what they asked for, and a

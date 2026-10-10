@@ -345,7 +345,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_ALTERNATIVES_ALT', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -361,7 +361,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   }
   // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
   // The alternative the verdict chose carries its own link (its page, or the marketplace's search): the next action.
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || (c.id === 'C_ALTERNATIVES' && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_ALTERNATIVES' || c.id === 'C_ALTERNATIVES_ALT') && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
   // The offer card carries its own links.
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
@@ -417,7 +417,9 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
   const linked = rest.filter((c) => c.url);
   const top = header(packet);
   const head = top ? [top.text] : [];
-  const text = [GREETING, ...head, lead, ...rest.map((c) => c.text), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
-  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...rest.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
+  // A link-only claim (the other marketplace's search) is a link, not a line of its own.
+  const said = rest.filter((c) => c.id !== 'C_ALTERNATIVES_ALT');
+  const text = [GREETING, ...head, lead, ...said.map((c) => c.text), ...(asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
+  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...said.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
   return { textBody: text, htmlBody: html };
 }

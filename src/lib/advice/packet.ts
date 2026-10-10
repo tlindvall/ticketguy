@@ -168,7 +168,8 @@ export type BuildPacketArgs = {
    * they weren't missed, and never offered as an alternative.
    */
   /** `totalCents`: its checked all-in total, when known, so a flawed cheaper offer can be weighed against theirs (B7). */
-  leftOut?: Array<{ reason: 'obstructed_view' | 'bigger_block' | 'accessible_only' | 'seats_not_together' | 'section_not_acceptable'; quantity: number; totalCents?: number | null }>;
+  /** `section`/`row`: where it is, so a verdict that weighs it can name it rather than say "the alternative". */
+  leftOut?: Array<{ reason: 'obstructed_view' | 'bigger_block' | 'accessible_only' | 'seats_not_together' | 'section_not_acceptable'; quantity: number; totalCents?: number | null; section?: string | null; row?: string | null }>;
   /**
    * Their hard requirements (seats together, the all-in budget, access, seat preference), when nothing verified
    * meets them: each is said as not yet checked, not implied by a market figure (audit replay A05-R1).
@@ -485,6 +486,9 @@ function floorComparison(q: QuotedPrice, floorCents: number): string {
   return `It’s ${formatUsd(gap)} a ticket above the cheapest listing I can see (${formatUsd(floorCents)} before fees).${basis} That cheapest listing could be any seat in the venue, so it doesn’t tell me what these seats are worth.`;
 }
 
+/** How far under an all-in price a before-fees listing must be to count as cheaper: under that, its fees can close it. */
+const feeMarginCents = (perTicketCents: number) => Math.max(1000, Math.round(perTicketCents * 0.2));
+
 /** "pair" for two, "ticket" for one, "four" otherwise: the party as the verdict names it. */
 const partyWord = (n: number) => (n === 1 ? 'ticket' : n === 2 ? 'pair' : qtyWord(n));
 /** "both", "the ticket", "all four": the party as a price is asked for. */
@@ -539,7 +543,10 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
   const around = a.market?.visible ? a.marketAround : null;
   const alt = marketAlternative(a, sub);
   // A cheaper verified offer the comparison rejected for a flaw the customer can see, priced all-in like theirs.
-  const flawed = sub.feeBasis === 'all_in' && sub.wholePartyCents !== null ? (a.leftOut ?? []).find((l) => l.totalCents != null && l.totalCents < sub.wholePartyCents! && ['obstructed_view', 'seats_not_together', 'section_not_acceptable'].includes(l.reason)) : undefined;
+  // Its total is all-in for the same number of tickets, so the two compare on one basis (Oct 10 review: never a gap
+  // between an all-in total and a before-fees one called a saving).
+  const flawedAt = sub.feeBasis === 'all_in' && sub.wholePartyCents !== null ? (a.leftOut ?? []).findIndex((l) => l.totalCents != null && l.quantity === q && l.totalCents < sub.wholePartyCents! && ['obstructed_view', 'seats_not_together', 'section_not_acceptable'].includes(l.reason)) : -1;
+  const flawed = flawedAt >= 0 ? a.leftOut![flawedAt]! : undefined;
   let text: string;
   let code: string;
   if (problem) {
@@ -566,22 +573,36 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
     text = `I’d choose this alternative. ${alt.compare}`;
     code = 'choose_alternative';
   } else if (alt) {
-    // The feed faults the cheaper listing; theirs is clean. The saving is said on the listed basis it was read on.
-    const saving = sub.feeBasis === 'before_fees' ? `saves ${formatUsd(alt.lessCents)}` : `is listed ${formatUsd(alt.lessCents)} less before fees`;
+    // The feed faults the cheaper listing; theirs is clean. A saving only when both prices are before fees: against an
+    // all-in price the gap is said as listed, before its fees, and never weighed as a saving (Oct 10 review).
     const small = alt.lessCents < Math.round(sub.perTicketCents * q * 0.2) ? 'For the small saving' : 'Even for that saving';
-    text = `I’d keep your original ${partyWord(q)}${q >= 3 ? ' tickets' : ''}. The alternative in ${alt.where} ${saving}, but the listing notes ${drawbackText(alt.alt.drawback!)}. ${small}, your seats are the better choice.`;
+    const yours = `I’d keep your original ${partyWord(q)}${q >= 3 ? ' tickets' : ''}.`;
+    text = sub.feeBasis === 'before_fees'
+      ? `${yours} The alternative in ${alt.where} saves ${formatUsd(alt.lessCents)}, but the listing notes ${drawbackText(alt.alt.drawback!)}. ${small}, your seats are the better choice.`
+      : `${yours} The alternative in ${alt.where} is listed ${formatUsd(alt.lessCents)} under yours before its fees, but the listing notes ${drawbackText(alt.alt.drawback!)}, so your seats are the better choice.`;
     code = 'keep_yours';
   } else if (flawed) {
-    const small = sub.wholePartyCents! - flawed.totalCents! < Math.round(sub.wholePartyCents! * 0.2) ? 'For the small saving' : 'Even for that saving';
-    text = `I’d keep your original ${partyWord(q)}${q >= 3 ? ' tickets' : ''}. The alternative saves ${formatUsd(sub.wholePartyCents! - flawed.totalCents!)}, but it has ${drawbackText(flawed.reason)}. ${small}, your seats are the better choice.`;
+    // Named, so "the alternative" has something to refer to: the left-out line that would have said it is not shown.
+    const saving = sub.wholePartyCents! - flawed.totalCents!;
+    const small = saving < Math.round(sub.wholePartyCents! * 0.2) ? 'For the small saving' : 'Even for that saving';
+    const where = [flawed.section ? `section ${flawed.section}` : null, flawed.row ? `row ${flawed.row}` : null].filter(Boolean).join(', ');
+    const what = q >= 3 ? `${qtyWord(q)} tickets` : partyWord(q);
+    text = `I’d keep your original ${partyWord(q)}${q >= 3 ? ' tickets' : ''}. The verified ${what} I found${where ? ` in ${where}` : ''} ${q >= 3 ? 'are' : 'is'} ${formatUsd(saving)} less with fees, but ${q >= 3 ? 'they have' : 'it has'} ${drawbackText(flawed.reason)}. ${small}, your seats are the better choice.`;
     code = 'keep_yours';
-  } else if (around && around.comparable > 0 && sub.section && (around.zone || (around.sectionListings ?? 0) > 0)) {
-    // Nothing like for like is cheaper: the listings read for their party, in their section and the rest of its area.
-    // "Listed", because the comparison is listing data before fees, not checked offers (B6b).
-    const where = around.zone ? `section ${sub.section} or the rest of the ${around.zone}` : `section ${sub.section}`;
-    const margin = sub.feeBasis === 'all_in' ? ' Your price includes fees and those are listed before them, so only a listing well under yours would beat it, and none there is.' : '';
-    const unusual = a.quote && floor !== null && priceAgainstFloor(a.quote, floor) === 'below' ? ` It’s also below the cheapest listing I can see anywhere in the venue (${formatUsd(floor)} a ticket before fees), which is unusual, so check the seats, the number of tickets and the fees before you pay.` : '';
-    text = `I’d stick with yours. It’s the lowest listed total I found for ${qtyWord(q)} together in ${where}, from ${around.comparable} listing${around.comparable === 1 ? '' : 's'} with ${qtyWord(q)} or more tickets.${margin}${unusual}`;
+  } else if (around && (around.nearby ?? 0) > 0 && (around.nearbyLowestCents == null || around.nearbyLowestCents >= sub.perTicketCents || (sub.feeBasis === 'all_in' && sub.perTicketCents - around.nearbyLowestCents < feeMarginCents(sub.perTicketCents)))) {
+    // Nothing like for like is cheaper: the listings read for their party in their section and the rest of its zone, or
+    // anywhere in the venue for a listing with no section (a GA floor). "Listed", because the comparison is listing
+    // data before fees, not checked offers (B6b). The count is of those listings only, never the venue's (Oct 10 review:
+    // "from 61 listings" with one in their section). A lower listing within a fee margin of an all-in price is said as
+    // the gap it is, never "the lowest listed total".
+    const where = !sub.section ? 'anywhere in the venue' : around.zone ? `in section ${sub.section} or the rest of the ${around.zone}` : `in section ${sub.section}`;
+    const n = around.nearby!;
+    // The catches say fees are extra (or to check the total) for anything but an all-in price: not said twice.
+    const unusual = a.quote && floor !== null && priceAgainstFloor(a.quote, floor) === 'below' ? ` It’s also below the cheapest listing I can see anywhere in the venue (${formatUsd(floor)} a ticket before fees), which is unusual, so check the seats${sub.feeBasis === 'all_in' ? ', the number of tickets and the fees' : ' and the number of tickets'} before you pay.` : '';
+    const under = around.nearbyLowestCents != null && around.nearbyLowestCents < sub.perTicketCents ? sub.perTicketCents - around.nearbyLowestCents : null;
+    text = under !== null
+      ? `I’d stick with yours. Yours includes fees; the lowest listing for ${qtyWord(q)} or more ${where} is ${formatUsd(under)} a ticket under it before fees, so it only comes out cheaper if its fees are less than ${formatUsd(under)} a ticket.${unusual}`
+      : `I’d stick with yours. It’s the lowest listed total I found for ${qtyWord(q)} together ${where}, from ${n} listing${n === 1 ? '' : 's'} with ${qtyWord(q)} or more tickets.${unusual}`;
     code = 'stick_with_yours';
   } else if (a.quote && floor !== null) {
     const where = priceAgainstFloor(a.quote, floor);
@@ -596,7 +617,7 @@ function verdictClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord {
   // Beside rows from the same page, a venue-wide floor from hours ago (another area, before fees) is no saving: it
   // stays in the market section below, with its age, and doesn't follow the lead (live Oct 2: "$25.38 above").
   if (lead) text = code === 'no_market' ? `${lead} I can’t compare it with the wider resale market yet.` : code.startsWith('price_') ? lead : `${lead} ${text}`;
-  return { id: 'C_VERDICT', kind: 'verdict', text, values: { code }, scope: { quantity: q, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.0', limitations: ['no_authenticity_or_delivery_guarantee'], customerVisible: true };
+  return { id: 'C_VERDICT', kind: 'verdict', text, values: { code, ...(code === 'keep_yours' && flawed && !alt ? { leftOut: flawedAt } : {}) }, scope: { quantity: q, seatZone: null, feeBasis: sub.feeBasis, observedAt: sub.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'listing-1.0', limitations: ['no_authenticity_or_delivery_guarantee'], customerVisible: true };
 }
 
 const QTY_WORDS_LOWER = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
@@ -604,23 +625,29 @@ const QTY_WORDS_LOWER = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', '
 /**
  * The cheaper market listing the verdict chose, with what it is and isn't, and where to find it (Oct 10 framework,
  * B6a's next action): its own page when the feed carries one, else the marketplace's search with the section named.
- * With nothing cheaper, the verdict already says theirs is the lowest like for like; nothing is said twice.
+ * Only under "I'd choose this alternative": under a verified option or a listing I wouldn't buy, "That's a StubHub
+ * listing" would describe something else (Oct 10 review). Its price is the verdict's, not said again, and a listing
+ * whose marketplace the feed doesn't name is searched for on both, never sent to one of them as if it were there.
  */
-function alternativesClaim(a: BuildPacketArgs, sub: SubjectListing, alt: AlternativesResult): ClaimRecord | null {
+function alternativesClaims(a: BuildPacketArgs, sub: SubjectListing, alt: AlternativesResult, code: string): ClaimRecord[] {
+  if (code !== 'choose_alternative') return [];
   const chosen = marketAlternative(a, sub);
-  if (!chosen || chosen.worse) return null;
+  if (!chosen || chosen.worse) return [];
   const l = chosen.alt.listing;
   const market = l.marketplace === 'vividseats' ? 'Vivid Seats' : l.marketplace === 'stubhub' ? 'StubHub' : null;
   const section = l.section ? `section ${l.section}` : 'this listing';
   // A search names the event as a fan types it, and the label names the section to look for on the results.
   const query = encodeURIComponent((a.eventParts?.title ?? a.eventLabel).replace(/\s*\([^)]*\)/g, '').trim());
-  const link = l.url
-    ? { url: l.url, linkLabel: `View ${section} on ${market ?? 'the marketplace'}` }
-    : market === 'Vivid Seats'
-      ? { url: `https://www.vividseats.com/search?searchTerm=${query}`, linkLabel: `Search Vivid Seats for ${section}` }
-      : { url: `https://www.stubhub.com/search?q=${query}`, linkLabel: `Search StubHub for ${section}` };
-  const text = `${market ? `That’s a ${market} listing` : 'That’s a StubHub or Vivid Seats listing'} at ${formatUsd(l.priceCents)} a ticket before fees. It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.`;
-  return { id: 'C_ALTERNATIVES', kind: 'alternative_market', text, ...link, values: { comparable: alt.comparable, alternatives: alt.alternatives.length, lessCents: chosen.lessCents }, scope: { quantity: a.quantity, seatZone: alt.zone, feeBasis: 'listed_before_fees', observedAt: a.observedAt.toISOString() }, evidenceIds: [], methodVersion: 'alternatives-1.1', limitations: ['market_statistics_not_listings', 'listed_prices_before_fees', 'not_verified_offers', 'not_same_seats'], customerVisible: !!a.market?.visible };
+  const stubhub = { url: `https://www.stubhub.com/search?q=${query}`, linkLabel: `Search StubHub for ${section}` };
+  const vivid = { url: `https://www.vividseats.com/search?searchTerm=${query}`, linkLabel: `Search Vivid Seats for ${section}` };
+  const link = l.url ? { url: l.url, linkLabel: `View ${section} on ${market ?? 'the marketplace'}` } : market === 'Vivid Seats' ? vivid : stubhub;
+  const caveat = 'It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.';
+  const text = market || l.url ? `That’s a ${market ?? 'resale'} listing. ${caveat}` : `The listing data doesn’t say whether it’s on StubHub or Vivid Seats, so look for ${section} on both. ${caveat}`;
+  const scope = { quantity: a.quantity, seatZone: alt.zone, feeBasis: 'listed_before_fees', observedAt: a.observedAt.toISOString() };
+  const claim: ClaimRecord = { id: 'C_ALTERNATIVES', kind: 'alternative_market', text, ...link, values: { comparable: alt.comparable, alternatives: alt.alternatives.length, lessCents: chosen.lessCents }, scope, evidenceIds: [], methodVersion: 'alternatives-1.2', limitations: ['market_statistics_not_listings', 'listed_prices_before_fees', 'not_verified_offers', 'not_same_seats'], customerVisible: !!a.market?.visible };
+  // The other marketplace's search: a link only, placed beside the first (as C_PICKS_ALT is).
+  const other: ClaimRecord | null = !market && !l.url ? { id: 'C_ALTERNATIVES_ALT', kind: 'coverage', text: vivid.linkLabel, ...vivid, values: {}, scope, evidenceIds: [], methodVersion: null, limitations: ['search_page_not_a_listing'], customerVisible: !!a.market?.visible } : null;
+  return other ? [claim, other] : [claim];
 }
 
 /** Whether we have a verified alternative (checked by a person or a licensed source, all-in total), said plainly. */
@@ -1827,7 +1854,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // headlined against $210 all-in). The rest carry the fee that would make them cheaper.
   if (a.marketAround && a.subject && a.subject.feeBasis === 'all_in' && a.subject.perTicketCents !== null) {
     const sub = a.subject.perTicketCents;
-    a = { ...a, marketAround: { ...a.marketAround, alternatives: a.marketAround.alternatives.filter((x) => sub - x.listing.priceCents >= Math.max(1000, Math.round(sub * 0.2))) } };
+    a = { ...a, marketAround: { ...a.marketAround, alternatives: a.marketAround.alternatives.filter((x) => sub - x.listing.priceCents >= feeMarginCents(sub)) } };
   }
   const claims: ClaimRecord[] = [];
   const obs = a.observedAt.toISOString();
@@ -1911,8 +1938,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push(subjectClaim(a, a.subject));
     const catches = catchesClaim(a, a.subject);
     if (catches) claims.push(catches);
-    const alternative = a.marketAround ? alternativesClaim(a, a.subject, a.marketAround) : null;
-    if (alternative) claims.push(alternative);
+    if (a.marketAround) claims.push(...alternativesClaims(a, a.subject, a.marketAround, String(verdict.values.code)));
     const verified = verifiedClaim(a, a.subject, String(verdict.values.code));
     if (verified) claims.push(verified);
   }
@@ -2260,18 +2286,22 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       customerVisible: true,
     });
   }
-  if (a.leftOut?.length) {
+  // The flawed offer a keep-yours verdict weighs is said there, by name; the rest are said here. Only that one: a
+  // keep-yours about a market listing leaves every left-out offer to this line (Oct 10 review).
+  const weighed = claims.find((c) => c.id === 'C_VERDICT')?.values.leftOut;
+  const leftOut = (a.leftOut ?? []).filter((_, i) => i !== weighed);
+  if (leftOut.length) {
     const say = (l: NonNullable<BuildPacketArgs['leftOut']>[number]) =>
       l.reason === 'obstructed_view' ? 'one has an obstructed view, which you ruled out'
         : l.reason === 'bigger_block' ? `one is a block of ${l.quantity} that may not sell as exactly ${q}, with its charges unknown`
           : l.reason === 'accessible_only' ? 'one is wheelchair or companion spaces, meant for people who need them'
             : l.reason === 'seats_not_together' ? 'one isn’t seats together'
               : 'one is outside the sections you’d take';
-    const n = a.leftOut.length;
+    const n = leftOut.length;
     claims.push({
       id: 'C_LEFT_OUT',
       kind: 'coverage',
-      text: `I left out ${n === 1 ? 'a cheaper listing' : `${countWord(n)} cheaper listings`}: ${((xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(a.leftOut.slice(0, 4).map(say))}.`,
+      text: `I left out ${n === 1 ? 'a cheaper listing' : `${countWord(n)} cheaper listings`}: ${((xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join('; ')}; and ${xs[xs.length - 1]}`))(leftOut.slice(0, 4).map(say))}.`,
       values: { count: n },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
@@ -2423,14 +2453,23 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // asked about timing. A total that can't be read gets the one question and nothing else (B6c), as a link we
   // couldn't match does: a floor, a trend or a coverage line under it would be read as about their seats.
   if (typeof verdictCode === 'string' && a.subject && !a.synthetic) {
-    const keep = verdictCode === 'unreadable' ? ['C_VERDICT', 'C_CORRECTION', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'] : null;
+    // A verified option research found is checked seats with a link, not a figure about theirs: it stays (Oct 10 review:
+    // hidden behind "send me the final price" until they replied).
+    const keep = verdictCode === 'unreadable' ? ['C_VERDICT', 'C_CORRECTION', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING', 'C_BEST'] : null;
     const floorIsReason = verdictCode.startsWith('price_') || verdictCode === 'no_market';
     for (const c of claims) {
       if (keep && !keep.includes(c.id)) c.customerVisible = false;
       else if (!keep && !a.trendAsked && (c.id === 'C_READ' || (!floorIsReason && (['C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text)))))) c.customerVisible = false;
+      // Asked about timing, the market section stays for the trend it reads from, but the venue floor is not compared
+      // with their price again under a verdict that compared like for like (Oct 10 review: the floor said three times).
+      else if (!keep && a.trendAsked && !floorIsReason && c.id === 'C_QUOTE_MARKET') c.customerVisible = false;
     }
-    // The flawed offer the verdict weighs is the one left out; said once, in the verdict.
-    if (verdictCode === 'keep_yours' && a.leftOut?.length === 1) for (const c of claims) if (c.id === 'C_LEFT_OUT') c.customerVisible = false;
+    // The buy-or-wait answer already says how the series moved: the market section keeps its figures, not the move again.
+    const move = a.trendAsked && a.market?.context && claims.some((c) => c.id === 'C_TREND_ANSWER' && c.customerVisible && c.values.source === 'resale_series') ? moveClause(a.market.context) : '';
+    if (move) for (const c of claims) if (c.id === 'C_MARKET') {
+      c.text = c.text.replace(` That’s ${move}.`, '');
+      c.items = c.items?.map((i) => i.replace(` That’s ${move}.`, ''));
+    }
   }
   // The $20 parking price is not a ticket price to judge against the market, and a question about what gets them in
   // is answered by that alone: no seat search, history or coverage note under it (live V03).
@@ -2440,7 +2479,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // The writing review's shape: the total and the per-ticket price with fees in one line, then the working, the
   // seats and the catches as short points, each said once (live A11-F1 said $264 three times and 6pm twice).
   if (a.synthetic) {
-    for (const c of claims) if (['C_VERDICT', 'C_QUOTE_MARKET', 'C_ALTERNATIVES', 'C_VERIFIED', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_READ', 'C_COVERAGE', 'C_FACE', 'C_BENCH', 'C_NOHIST', 'C_TREND', 'C_NOTREND', 'C_COUNT', 'C_ENTRY', 'C_CHECKPOINT', 'C_REQS', 'C_STAFF', 'C_CATCHES', 'C_CORRECTION'].includes(c.id)) c.customerVisible = false;
+    for (const c of claims) if (['C_VERDICT', 'C_QUOTE_MARKET', 'C_ALTERNATIVES', 'C_ALTERNATIVES_ALT', 'C_VERIFIED', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_READ', 'C_COVERAGE', 'C_FACE', 'C_BENCH', 'C_NOHIST', 'C_TREND', 'C_NOTREND', 'C_COUNT', 'C_ENTRY', 'C_CHECKPOINT', 'C_REQS', 'C_STAFF', 'C_CATCHES', 'C_CORRECTION'].includes(c.id)) c.customerVisible = false;
     const sub = a.subject ?? null;
     const qt = a.quote;
     const quoteClaim = claims.find((c) => c.id === 'C_QUOTE');

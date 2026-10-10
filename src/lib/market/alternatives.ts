@@ -85,6 +85,13 @@ export type AlternativesResult = {
   comparable: number;
   /** How many of those are in their section (theirs excluded): zero means nothing like for like was compared. */
   sectionListings?: number;
+  /**
+   * How many of those were compared like for like, and the lowest of their prices: their section and the rest of its
+   * zone, or the whole venue when their listing names no section (a GA floor). The count a verdict cites, never
+   * `comparable`, which is every listing in the venue (Oct 10 review: "from 61 listings" in a section that had one).
+   */
+  nearby?: number;
+  nearbyLowestCents?: number | null;
   zone: string | null;
   alternatives: Alternative[];
   /** The customer's price per ticket, as compared (before fees when that's what they gave). */
@@ -115,7 +122,9 @@ export function findAlternatives(listings: MarketListing[], subject: { perTicket
   const inZone = zone ? pick(cheaper.filter((l) => l.zone === zone && norm(l.section) !== sec)) : undefined;
   if (inZone) out.push({ scope: 'same_zone', listing: inZone, perTicketSavingCents: subject.perTicketCents - inZone.priceCents, drawback: listingDrawback(inZone) });
   const sectionListings = sec ? fits.filter((l) => norm(l.section) === sec && !sameSeatsMaybe(l)).length : 0;
-  return { comparable: fits.length, sectionListings, zone, alternatives: out, subjectPerTicketCents: subject.perTicketCents };
+  const near = fits.filter((l) => !sameSeatsMaybe(l) && (!sec || norm(l.section) === sec || (!!zone && l.zone === zone)));
+  const nearbyLowestCents = near.length ? Math.min(...near.map((l) => l.priceCents)) : null;
+  return { comparable: fits.length, sectionListings, nearby: near.length, nearbyLowestCents, zone, alternatives: out, subjectPerTicketCents: subject.perTicketCents };
 }
 
 /**
