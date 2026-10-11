@@ -78,7 +78,8 @@ describe('Research 1: useful advice and email responses', () => {
       expect(first!.text).toContain('$150 in total for both');
       // Correction: no rejected genres, the answer first, coverage stated honestly, budget kept, one productive step.
       expect(second!.text.split('\n\n')[1]).toBe('I don’t have a verified country or Americana option to recommend in Austin for Sat, Oct 10.');
-      expect(second!.html).toContain('<strong>I don’t have a verified country or Americana option to recommend in Austin for Sat, Oct 10.</strong>');
+      // The answer is the email's headline (Oct 10 design): first, and the most prominent line.
+      expect(second!.html).toMatch(/<p style="margin:0 0 18px;">Hey,<\/p>\n<h1[^>]*>I don’t have a verified country or Americana option to recommend in Austin for Sat, Oct 10\.<\/h1>/);
       expect(second!.text).toContain('Your limit is still $150 total for two, including fees.');
       expect(second!.text).toContain('not proof that nothing suitable is on');
       expect(second!.text).not.toMatch(/Voltage Saints|Glitter Theory|Neon Pulse|nothing on in Austin/);

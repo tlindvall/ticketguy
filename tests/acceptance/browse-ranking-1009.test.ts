@@ -5,7 +5,7 @@ import * as t from '@/lib/db/schema';
 import { openTestDb, makeConcierge, inbound, testEnv } from '../harness';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
-import { prominenceTier } from '@/lib/domain/browse';
+import { choosePicks, prominenceTier } from '@/lib/domain/browse';
 import { SEATDATA_DATASET_ID } from '@/lib/market/series';
 import { storeSeriesPoints } from '@/lib/market/tracker';
 
@@ -22,6 +22,7 @@ const STADIUM = '10000000-0000-4000-8000-0000000000e2';
 const ROCK = '10000000-0000-4000-8000-0000000000e3';
 const GYM = '10000000-0000-4000-8000-0000000000e4';
 const RANGERS_GAME = '30000000-0000-4000-8000-0000000000e1';
+const KNICKS_GAME = '30000000-0000-4000-8000-0000000000e2';
 
 describe('a sports browse ranks the major leagues before an exhibition, and says a price it already holds', () => {
   let h: DbHandle;
@@ -53,12 +54,12 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
       row(null, "St. John's Red Storm Men's Basketball v. Drexel (Exhibition)", 'ncaa_regular', GYM, '2026-09-28T23:00:00Z'),
       row(null, 'New York Islanders vs. Philadelphia Flyers', 'nhl', ROCK, '2026-09-29T23:00:00Z'),
       row(RANGERS_GAME, 'New York Rangers vs. Boston Bruins', 'nhl', GARDEN, '2026-09-30T23:00:00Z'),
-      row(null, 'New York Knicks vs. Boston Celtics', 'nba', GARDEN, '2026-10-01T23:30:00Z'),
+      row(KNICKS_GAME, 'New York Knicks vs. Boston Celtics', 'nba', GARDEN, '2026-10-01T23:30:00Z'),
       row(null, 'New York Yankees vs. Toronto Blue Jays', 'mlb', STADIUM, '2026-10-02T23:00:00Z'),
     ]);
-    // A price already on file for the Rangers game, from a customer who asked about it yesterday.
+    // A price already on file for the Knicks game, from a customer who asked about it yesterday.
     const at = new Date(now.getTime() - 3 * 3_600_000);
-    await storeSeriesPoints(h.db, { id: RANGERS_GAME, localStartAt: new Date('2026-09-30T23:00:00Z') }, [{ basis: 'pair', zone: null, observedAt: at, providerAsOf: at, retrievedAt: at, priceCents: 9500, medianCents: null, activeListings: 40 }]);
+    await storeSeriesPoints(h.db, { id: KNICKS_GAME, localStartAt: new Date('2026-10-01T23:30:00Z') }, [{ basis: 'pair', zone: null, observedAt: at, providerAsOf: at, retrievedAt: at, priceCents: 9500, medianCents: null, activeListings: 40 }]);
     await h.db.update(t.adapterConfigs).set({ enabled: false });
     await h.db.update(t.marketDatasets).set({ status: 'approved', approvedUses: ['tracking', 'benchmark', 'advice', 'customer_display'], licenseReference: 'test' }).where(eq(t.marketDatasets.id, SEATDATA_DATASET_ID));
   });
@@ -66,17 +67,20 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
     await h.close();
   });
 
-  it('the three picks are pro games; the exhibition comes only after "more"; the held price is said', async () => {
+  it('the three picks are pro games, one per league; the exhibition comes only after "more"; the held price is said', async () => {
     const c = makeConcierge(h, { env: testEnv({}) });
     const first = inbound({ text: 'My family is coming to New York next week. What sports games are on?', from: 'family@customer.example', subject: 'NY trip' });
     const r = (await c.ingestInbound(first)) as { requestId: string };
     await interpretAll(c);
     const one = (await lastSend(r.requestId)).bodyText;
     expect(one).toContain('Games in New York, Sep 28 to Oct 4. Here are my three picks:');
+    // One per league before a second of any (live Oct 10: three hockey games and no basketball or baseball).
     expect(one).toContain('• Tue, Sep 29: New York Islanders vs. Philadelphia Flyers at Rock Arena.');
-    expect(one).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees for two.');
-    expect(one).toContain('• Thu, Oct 1: New York Knicks vs. Boston Celtics at Garden Arena.');
-    expect(one).not.toMatch(/Drexel|Exhibition|Yankees/);
+    expect(one).toContain('• Thu, Oct 1: New York Knicks vs. Boston Celtics at Garden Arena, from $95 a ticket before fees for two.');
+    // The baseball slot is the earliest baseball game: the seeded fixture world's Yankees game on Wednesday.
+    expect(one).toContain('• Wed, Sep 30: New York Yankees vs. Fixture Opponent at Yankee Stadium.');
+    expect(one.match(/\n• /g)).toHaveLength(3);
+    expect(one).not.toMatch(/Drexel|Exhibition|Rangers/);
     expect(one).toMatch(/There are \d more in that window. Reply "more" to see them/);
     // No price was invented for the games we hold nothing on.
     expect(one.match(/before fees/g)).toHaveLength(1);
@@ -90,15 +94,15 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
       pages.push((await lastSend(r.requestId)).bodyText);
     }
     const all = pages.join('\n====\n');
-    expect(all).toContain('\u2022 Fri, Oct 2: New York Yankees vs. Toronto Blue Jays at Bronx Ballpark');
+    expect(all).toContain('\u2022 Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena');
     expect(all).toContain("\u2022 Mon, Sep 28: St. John's Red Storm Men's Basketball v. Drexel (Exhibition) at Carnesecca Court");
-    expect(all.indexOf('Yankees')).toBeLessThan(all.indexOf('Drexel'));
+    expect(all.indexOf('Rangers')).toBeLessThan(all.indexOf('Drexel'));
     expect(pages.at(-1)).toMatch(/Drexel/);
     expect(pages.at(-1)!.split('Drexel')[1] ?? '').not.toMatch(/\n\u2022 /);
   });
 
   it('a pick from the picks is read in the order they were listed: "the first one" is the first pro game, not the earliest', async () => {
-    // Oct 10 review: the picks are ranked by prominence (Islanders, Rangers, Knicks) while the exhibition is the earliest
+    // Oct 10 review: the picks are ranked by prominence, one per league (Islanders, Yankees, Knicks), while the exhibition is the earliest
     // game; "the first one" or a day named must settle the game the customer saw there, and never send the list again.
     const c = makeConcierge(h, { env: testEnv({}) });
     const pick = async (from: string, reply: string) => {
@@ -114,6 +118,7 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
       return ev?.name ?? null;
     };
     expect(await pick('first@customer.example', 'The first one please, 2 tickets')).toBe('New York Islanders vs. Philadelphia Flyers');
+    expect(await pick('second@customer.example', 'the second one, 4 of us')).toBe('New York Yankees vs. Fixture Opponent');
     expect(await pick('third@customer.example', 'the third one, 4 of us')).toBe('New York Knicks vs. Boston Celtics');
     expect(await pick('thu@customer.example', "Thursday's game, 2 tickets")).toBe('New York Knicks vs. Boston Celtics');
   });
@@ -142,20 +147,41 @@ describe('a sports browse ranks the major leagues before an exhibition, and says
       return (await lastSend(r.requestId)).bodyText;
     };
     const four = await ask('My family is coming to New York next week, 4 of us. What sports games are on?', 'four@customer.example');
-    expect(four).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena.');
+    expect(four).toContain('• Thu, Oct 1: New York Knicks vs. Boston Celtics at Garden Arena.');
     expect(four).not.toMatch(/\$\d|before fees/);
     const two = await ask('Two of us are coming to New York next week. What sports games are on?', 'two@customer.example');
-    expect(two).toContain('• Wed, Sep 30: New York Rangers vs. Boston Bruins at Garden Arena, from $95 a ticket before fees.');
+    expect(two).toContain('• Thu, Oct 1: New York Knicks vs. Boston Celtics at Garden Arena, from $95 a ticket before fees.');
   });
 
-  it('prominence: the major leagues, then other seasons, then exhibitions, preseason and anything that is not a game', () => {
+  it('prominence: the major leagues, then other seasons, then pro preseason, then exhibitions and anything that is not a game', () => {
     expect(prominenceTier({ name: 'New York Knicks vs. Boston Celtics', category: 'nba' })).toBe(0);
     expect(prominenceTier({ name: 'New York City FC vs. Inter Miami CF', category: 'soccer' })).toBe(0);
     expect(prominenceTier({ name: 'Brooklyn Cyclones vs. Hudson Valley Renegades', category: 'minor_league' })).toBe(1);
     expect(prominenceTier({ name: "St. John's Red Storm Men's Basketball v. Seton Hall", category: 'ncaa_regular' })).toBe(1);
-    expect(prominenceTier({ name: "St. John's Red Storm Men's Basketball v. Drexel (Exhibition)", category: 'ncaa_regular' })).toBe(2);
+    expect(prominenceTier({ name: "St. John's Red Storm Men's Basketball v. Drexel (Exhibition)", category: 'ncaa_regular' })).toBe(3);
     expect(prominenceTier({ name: 'New York Giants vs. New York Jets (Preseason)', category: 'nfl' })).toBe(2);
-    expect(prominenceTier({ name: 'New York Knicks Open Practice', category: 'nba' })).toBe(2);
+    expect(prominenceTier({ name: 'New York Knicks Open Practice', category: 'nba' })).toBe(3);
     expect(prominenceTier({ name: 'USMNT vs. Mexico International Friendly', category: 'soccer' })).toBe(2);
+  });
+
+  it('three picks vary the league before the day, and never take a college exhibition for variety (live Oct 10)', () => {
+    // The live week: Devils Mon, Rangers Tue, Devils Thu, a Knicks preseason game Wed, a college exhibition Sat; ranked
+    // as the pipeline ranks them (prominence, then date), with the league as the kind for tiers 0 to 2 only.
+    type G = { name: string; category: string; day: string };
+    const games: G[] = [
+      { name: 'New Jersey Devils vs. Ottawa Senators', category: 'nhl', day: '2026-10-12' },
+      { name: 'New York Rangers vs. Tampa Bay Lightning', category: 'nhl', day: '2026-10-13' },
+      { name: 'New Jersey Devils vs. New York Rangers', category: 'nhl', day: '2026-10-15' },
+      { name: 'New York Knicks vs. Charlotte Hornets (Preseason)', category: 'nba', day: '2026-10-14' },
+      { name: "St. John's Red Storm Men's Basketball v. Drexel (Exhibition)", category: 'ncaa_regular', day: '2026-10-17' },
+    ];
+    const rank = (gs: G[]) => [...gs].sort((a, b) => prominenceTier(a) - prominenceTier(b));
+    const pick = (gs: G[]) => choosePicks(rank(gs), 3, (g) => ({ day: g.day, score: 0, kind: prominenceTier(g) <= 2 ? g.category : null })).map((g) => g.name);
+    expect(pick(games)).toEqual(['New Jersey Devils vs. Ottawa Senators', 'New York Rangers vs. Tampa Bay Lightning', 'New York Knicks vs. Charlotte Hornets (Preseason)']);
+    // With a Giants game that Sunday: one hockey, one football, one basketball game.
+    const withNfl = [...games, { name: 'New York Giants vs. Philadelphia Eagles', category: 'nfl', day: '2026-10-18' }];
+    expect(pick(withNfl)).toEqual(['New Jersey Devils vs. Ottawa Senators', 'New York Giants vs. Philadelphia Eagles', 'New York Knicks vs. Charlotte Hornets (Preseason)']);
+    // Concerts pass no kind: the picks are still one per day, as before.
+    expect(choosePicks(['a', 'b', 'c', 'd'], 3, (x) => ({ day: x === 'b' ? 'd1' : x, score: 0 }))).toEqual(['a', 'b', 'c']);
   });
 });

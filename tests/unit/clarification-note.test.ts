@@ -19,4 +19,19 @@ describe('the clarification note', () => {
     expect(r.html).not.toMatch(/I have: •/);
     expect(r.text).toContain('On buy or wait: I haven’t looked at price history yet.\n\nI searched Ticketmaster');
   });
+
+  it('a long list keeps its bullets when a closing line follows it ("…and 4 more after that.")', () => {
+    // Live Oct 10: eleven St. Louis Blues games ended with that line, failed "every line is a bullet", and arrived as one
+    // paragraph: "Here are the St. Louis Blues games: • Tonight at 6 p.m.: … • Thursday, October 15 …".
+    const games = Array.from({ length: 10 }, (_, i) => `• Thursday, October ${12 + i}, at 7 p.m.: vs. Team ${i + 1}`);
+    const r = renderTemplate('clarification', {
+      acknowledgement: 'Rangers tickets. Got it.',
+      eventNote: `Here are the New York Rangers games:\n${games.join('\n')}\n…and 4 more after that.`,
+      questions: ['Which one do you want, and how many tickets?'],
+    }, ctx);
+    expect(r.html).toContain('<p style="margin:0 0 8px;">Here are the New York Rangers games:</p><ul');
+    expect(r.html.match(/<li /g)).toHaveLength(10);
+    expect(r.html).toContain('</ul><p style="margin:0 0 18px;">…and 4 more after that.</p>');
+    expect(r.html).not.toMatch(/games: •|\d p\.m\.: vs\. Team \d+ •/);
+  });
 });

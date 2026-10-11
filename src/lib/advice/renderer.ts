@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AdvicePacket, ClaimRecord } from './packet';
-import { briefCard, briefEvidence, briefTop, type TicketBrief } from '@/lib/email/ticket-brief';
+import { briefCard, briefEvidence, briefHeadline, briefTop, eventCard, type TicketBrief } from '@/lib/email/ticket-brief';
 
 /**
  * Safe response renderer + validator (ADVICE_ENGINE §8 step 5–6).
@@ -247,9 +247,13 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(pickCard!.card!.head);
     html.push(P(`<strong>${esc(pickCard!.card!.head)}</strong>`));
   }
+  // Every other answer about an event gets the brief's look too (Oct 10: only named seats had it, and a verdict, a
+  // buy-or-wait or a hold-off read as a block of text): the answer as the headline, then the event on its card. The
+  // plain text keeps the event line first; a packet from before the card keeps the old header.
+  const designed = !picksFirst && !!head && !!packet.headlineTitle && !!packet.headerCategory;
   if (head && !(picksFirst && brief)) {
     lines.push(head.text);
-    html.push(head.html);
+    if (!designed) html.push(head.html);
   }
   // The answer to what they asked comes first: the verdict on their listing, the price they asked about, or,
   // with neither and nothing verified or on official sale to recommend, what the market means for them.
@@ -269,15 +273,16 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
       return;
     }
     const fmt = lead || c.id === 'C_PICKS' ? leadRich : rich;
+    const open = (s: string) => (lead && designed ? briefHeadline(s) : P(fmt(s)));
     // Named seats scan by their place: "Section 214, Row 10 (StubHub):" in bold, then the price.
     const item = c.id === 'C_PICKS' ? labelRich : rich;
     if (c.items?.length && c.text.includes('\n')) {
       const head = c.text.split('\n')[0]!;
       lines.push(head, c.items.map((i) => `- ${i}`).join('\n'));
-      html.push(P(fmt(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${item(i)}</li>`).join('')}</ul>`);
+      html.push(open(head), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${item(i)}</li>`).join('')}</ul>`);
     } else {
       lines.push(c.text);
-      html.push(P(fmt(c.text)));
+      html.push(open(c.text));
     }
   };
   // With nothing they asked about to answer first, the official sale is the answer, in the server's words. The
@@ -291,8 +296,9 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     put(opener, true);
   } else if (b.opening.trim()) {
     lines.push(b.opening.trim());
-    html.push(P(rich(b.opening.trim())));
+    html.push(designed ? briefHeadline(b.opening.trim()) : P(rich(b.opening.trim())));
   }
+  if (designed) html.push(eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null }));
   for (const c of primary.slice(1)) put(c);
 
   // A made-up example's details are short points (A11), anything else one sentence.
@@ -383,7 +389,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // Where to buy, last, with the affiliate disclosure beside the links it's about.
   if (linked.length) {
     lines.push(linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n'));
-    html.push(P(linked.map((c) => `<a href="${esc(c.url!)}" style="font-weight:600;">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>')));
+    html.push(P(linked.map((c) => `<a href="${esc(c.url!)}" style="color:#142438;text-decoration:underline;font-weight:600;">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>')));
   }
   // The card says it beside its own button; said again only for other links.
   if (opts.affiliateDisclosure && !(brief?.affiliate && !linked.length)) {
