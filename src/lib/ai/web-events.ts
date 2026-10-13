@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { wrapAnthropic } from 'braintrust';
 import { z } from 'zod';
 import { ModelOutputError, providerError, type Usage } from './model-client';
 
@@ -115,7 +116,7 @@ export class AnthropicWebEventFinder implements WebEventFinder {
     private readonly model: string,
     private readonly maxSearches = 3,
   ) {
-    this.client = new Anthropic({ apiKey, maxRetries: 2, timeout: 120_000 });
+    this.client = wrapAnthropic(new Anthropic({ apiKey, maxRetries: 2, timeout: 120_000 }));
   }
 
   async find(q: WebEventQuery): Promise<WebEventResult> {

@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { wrapAnthropic } from 'braintrust';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type { z } from 'zod';
 import { ModelOutputError, isOutputParseError, providerError, type StructuredClient, type StructuredRequest, type StructuredResult } from './model-client';
@@ -12,7 +13,7 @@ export class AnthropicClient implements StructuredClient {
   readonly provider = 'anthropic';
   readonly client: Anthropic;
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey, maxRetries: 2, timeout: 120_000 });
+    this.client = wrapAnthropic(new Anthropic({ apiKey, maxRetries: 2, timeout: 120_000 }));
   }
 
   /**
