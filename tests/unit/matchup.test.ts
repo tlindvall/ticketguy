@@ -9,6 +9,19 @@ describe('matchups', () => {
     expect(splitMatchup('Rangers versus Devils (preseason)')).toEqual({ first: 'Rangers', second: 'Devils' });
   });
 
+  it('drops qualifiers written out after the opponent (eval Oct 13: "preseason game" emptied the opponent filter)', () => {
+    expect(splitMatchup('New York Rangers vs New York Islanders preseason game')).toEqual({ first: 'New York Rangers', second: 'New York Islanders' });
+    expect(splitMatchup('Knicks vs Celtics game 3')).toEqual({ first: 'Knicks', second: 'Celtics' });
+    expect(splitMatchup('Rangers vs Devils home opener tonight')).toEqual({ first: 'Rangers', second: 'Devils' });
+    expect(splitMatchup('Rangers vs Bruins regular season game')).toEqual({ first: 'Rangers', second: 'Bruins' });
+    // A team whose name only contains a qualifier word keeps it ("Golden Knights" is not "night").
+    expect(splitMatchup('Rangers vs Vegas Golden Knights')).toEqual({ first: 'Rangers', second: 'Vegas Golden Knights' });
+    // Only qualifiers on one side: nothing left to strip to, so the words stay.
+    expect(splitMatchup('Rangers vs game 3')).toEqual({ first: 'Rangers', second: 'game 3' });
+    expect(opponentFor('New York Rangers', 'New York Rangers vs New York Islanders preseason game')).toBe('New York Islanders');
+    expect(isAgainst('New York Rangers vs. New York Islanders (preseason)', opponentFor('New York Rangers', 'New York Rangers vs New York Islanders preseason game')!)).toBe(true);
+  });
+
   it('does not treat a venue or a single name as a matchup', () => {
     expect(splitMatchup('Rangers at Madison Square Garden')).toBeNull();
     expect(splitMatchup('Dua Lipa')).toBeNull();
