@@ -8,14 +8,23 @@
  */
 const SEPARATOR = /\s+(?:vs\.?|v\.?|versus|against|@)\s+/i;
 
+/** Words after a team's name that describe the game, not the team: "preseason game", "game 3", "home opener tonight". */
+const TRAILING_QUALIFIERS = /(?:(?:^|\s+)(?:pre-?season|regular[- ]season|post-?season|playoffs?|exhibition|home|opener|games?|match(?:up)?|tonight|tomorrow|night|series|\d+))+$/i;
+
 export type Matchup = { first: string; second: string };
 
 export function splitMatchup(text: string | null | undefined): Matchup | null {
   if (!text) return null;
   const parts = text.split(SEPARATOR).map((s) => s.trim()).filter(Boolean);
   if (parts.length !== 2) return null;
-  // Trailing qualifiers ("(preseason)", "game 3") are not part of the opponent's name.
-  const clean = (s: string) => s.replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim();
+  // Trailing qualifiers ("(preseason)", "game 3") are not part of the opponent's name. Written out without brackets
+  // they are the same qualifier: "vs New York Islanders preseason game" is against the Islanders, and keeping
+  // "preseason game" in the opponent made the hard opponent filter drop the real game (eval, Oct 13: "We don't have a
+  // scheduled New York Rangers event on file" for a game on file).
+  const clean = (s: string) => {
+    const bare = s.replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim();
+    return bare.replace(TRAILING_QUALIFIERS, '').trim() || bare;
+  };
   const first = clean(parts[0]!);
   const second = clean(parts[1]!);
   return first && second ? { first, second } : null;
