@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { wrapOpenAI } from 'braintrust';
 import { zodTextFormat } from 'openai/helpers/zod';
 import type { z } from 'zod';
 import { ModelOutputError, isOutputParseError, providerError, type StructuredClient, type StructuredRequest, type StructuredResult } from './model-client';
@@ -12,7 +13,9 @@ export class OpenAiClient implements StructuredClient {
   readonly provider = 'openai';
   readonly client: OpenAI;
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey, maxRetries: 2, timeout: 120_000 });
+    const client = new OpenAI({ apiKey, maxRetries: 2, timeout: 120_000 });
+    // Traced in Braintrust only when a key is configured (production); tests stub the raw SDK.
+    this.client = process.env.BRAINTRUST_API_KEY ? wrapOpenAI(client) : client;
   }
 
   /**
