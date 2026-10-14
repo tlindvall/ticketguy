@@ -41,6 +41,7 @@ const TRACKED: Record<string, string> = {
   price_alert_set: 'Price alert not set up',
   price_alert_raised: 'Price alert not raised when the price drops',
   answered_the_question: 'Answers a different question',
+  only_what_was_asked: "Says things the customer didn't ask for",
   thread_coherence: 'Long thread loses coherence',
   sim_customer_satisfied: 'Simulated customer gives up',
 };
