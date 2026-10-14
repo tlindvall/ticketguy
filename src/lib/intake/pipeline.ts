@@ -66,7 +66,7 @@ import { trendRights } from '@/lib/advice/trend-rights';
 import { evidenceFacts, suppliedEvidenceAnswer } from '@/lib/advice/supplied-evidence';
 import { decisionAnswer } from '@/lib/advice/decision-questions';
 import { decide, type CustomerPriorities } from '@/lib/advice/policy';
-import { buildPacket, packetCoverage, packetHash, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
+import { buildPacket, packetCoverage, packetHash, type AdvicePacket, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
@@ -782,6 +782,21 @@ export class Concierge {
       // never the recommendation again with a holding note before it (#136). The request keeps its brief and state. Not
       // while our own question is open: "thanks" then answers it, and the next step is the one it already had.
       const aside = req.state !== 'needs_clarification' && bringsNothingNew(extraction, RequestExtractionSchema.parse(priorVersion.brief), !!listing.fields || listing.images > 0) ? (closingOnly(latestText) ? 'closing' : gettingThereAsked(latestText) ? 'getting_there' : null) : null;
+      // "Which is the best value of the three for 2 of us?" after three games in this thread (#159: the latest game's
+      // recommendation came back, no comparison): the games this request has been on, checked for the party, each one's
+      // cost said and the cheapest named. Value here is the price for their party, and the reply says so. The request
+      // stays on its game until they choose ("go with the kings"), so nothing is settled for them.
+      if (req.state !== 'needs_clarification' && ACROSS_GAMES.test(flat(latestText)) && !listing.fields && !extraction.submittedUrls.length) {
+        const games = await this.threadEvents(req.id);
+        const prior = RequestExtractionSchema.parse(priorVersion.brief);
+        const cheaper = games.length >= 2 && games.length <= 4 ? await this.cheaperByCheckedListings(games.map(({ e }) => e.id), { ...prior, quantity: extraction.quantity ?? prior.quantity }) : null;
+        if (cheaper) {
+          const paras = ['Hey,', cheaper.line.replace(/^Cheapest (for [^:]+): (.+?), (\$[\d,.]+ in total)/, 'On price $1, the best value is $2: $3'), `Want the seats for ${readableTitle(cheaper.e.name)}? Say so and I’ll send the link.`];
+          const escHtml = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Your games compared'), template: 'raw_auto', vars: { text: paras.join('\n\n'), html: paras.map((x) => `<p style="margin:0 0 18px;">${escHtml(x)}</p>`).join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `games_compared:${msg.id}` });
+          return this.answeredAside(req, msg, 'games_compared');
+        }
+      }
       if (aside) {
         const [at] = aside === 'getting_there' && req.eventId ? await this.db.select({ name: t.venues.name }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(eq(t.events.id, req.eventId)) : [];
         const line = aside === 'closing' ? CLOSING_LINE : gettingThereLine(at?.name ?? null);
@@ -1017,12 +1032,18 @@ export class Concierge {
     }
     // A team named with no day, which is a side of a game this request already settled on, is that game again: "ok
     // stick with celtics" after a detour to the Nets game is Knicks vs Celtics, never a search for Celtics home games
-    // (eval #146). Not when it is a side of the game settled now: that is the same game, kept the ordinary way.
+    // (eval #146).
     if (!bound && revision > 1 && extraction.performerOrTeam && !extraction.resolvedLocalDate && !extraction.dateExpression && !ticketLinksIn(extraction.submittedUrls ?? []).length && !listing.fields && !extraction.notifyAsked) {
       const earlier = await this.threadEvents(req.id);
       const current = earlier.find(({ e }) => e.id === req.eventId);
       const named = extraction.performerOrTeam;
-      if (!(current && namesSide(current.e.name, named))) {
+      // A side of the game settled now is that game: "go with the kings. send me the link" right after the Kings game was
+      // compared and recommended went to the next Kings home game, a different night (#159). Not "another kings game".
+      // Nor a question about the team's games ("which rangers game has the lowest prices?").
+      if (current && namesSide(current.e.name, named) && !/\b(?:other|another|next|different|else|more|which|what|when|any)\b/i.test(flat(latestText)) && !asksCheapestGame(flat(latestText))) {
+        bound = current;
+        merged = await this.boundToEvent(merged, bound);
+      } else if (!(current && namesSide(current.e.name, named))) {
         const hits = earlier.filter(({ e }) => e.id !== req.eventId && namesSide(e.name, named));
         if (hits.length === 1) {
           bound = hits[0]!;
@@ -3881,7 +3902,10 @@ export class Concierge {
     // request's that sent any listing: this revision's, or the earlier one a follow-up is about ("which of those two
     // would you pick?", an answer to our question). Read from this revision's message alone, the pair was gone on the
     // next one and the newest screenshot or link was judged alone again, while intake had set the pair's price aside.
-    const listingMsgIds = await this.listingMessageIds(req.id, latestIds);
+    // A screenshot or link from an earlier message is judged again only when this one is about it: "do you think prices go
+    // up before wednesday?" two emails later got the screenshot verdict again on top (#159, #160).
+    const aboutOther = (TREND_ASKED.test(flat(said)) || OPTIONS_ASKED.test(flat(said)) || !!seatLevelWanted(said) || questionsAsked(said).view) && !ABOUT_THEIRS.test(flat(said));
+    const listingMsgIds = aboutOther ? latestIds : await this.listingMessageIds(req.id, latestIds);
     const listingSaid = listingMsgIds === latestIds ? said : (await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(inArray(t.messages.id, listingMsgIds))).map((m) => m.text ?? '').join('\n');
     let sideBySide: TextOffer[] = [];
     if (supplied.textOffers.length < 2 && !offersSetAside.length && listingMsgIds.length) {
@@ -3929,7 +3953,8 @@ export class Concierge {
     const evFields = ev ? (ev.fields as unknown as ListingFields) : null;
     // With two or more of their offers, the comparison is the answer: a single-listing read of the same email
     // mixes their fields (A's price and access with B's seat) and contradicts it (post-#54 QA, R3-B01).
-    const asRead: SubjectListing | null = judged ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
+    // Nor one from an earlier message when this one is about something else (aboutOther, above).
+    const asRead: SubjectListing | null = judged || (aboutOther && ev && !latestIds.includes(ev.messageId ?? '')) ? null : ev && evFields ? { ...evFields, section: cleanSeatField(evFields.section), row: cleanSeatField(evFields.row), source: ev.source as SubjectListing['source'], observedAt: ev.observedAt, confidence: (ev.confidence as SubjectListing['confidence']) ?? null } : null;
     // A results page with several rows: the one in the area they asked for ("we'd rather be on the floor"), or the
     // row whose price they quote, is the listing being checked (live Oct 2: three rows read as one merged section).
     const read = asRead ? chooseShownOffer(asRead, `${brief.seatingPreference ?? ''}\n${saidInThread}`, quotedFromText(said) ?? brief.quotedPriceCents) : null;
@@ -4077,7 +4102,19 @@ export class Concierge {
     const saleOpens = !official && event.publicSaleStartAt && event.publicSaleStartAt > now && event.localStartAt > now ? saleOpensLabel(event.publicSaleStartAt, venue.timezone) : null;
     // What intake assumed for this revision and didn't send on its own, because this answer follows within seconds.
     const preface = (await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.action, 'request.answer_notes'), eq(t.auditLog.entityKind, 'request'), eq(t.auditLog.entityId, req.id), eq(t.auditLog.revision, args.revision)))).flatMap((r) => ((r.diff as { notes?: string[] } | null)?.notes ?? []));
-    const packet = buildPacket({ preface, levelWanted: levelWanted && seatLevelWanted(said) === levelWanted.level ? levelWanted : null, saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // The seats last sent for this event, as the advice described them: when this reply's pick is the same seats at the
+    // same total, for the same party and budget, a follow-up is answered short, never the whole recommendation again (#160).
+    const [prevRun] = followUp ? await this.db.select({ packet: t.adviceRuns.packet }).from(t.recommendations).innerJoin(t.adviceRuns, eq(t.adviceRuns.id, t.recommendations.adviceRunId)).where(and(eq(t.recommendations.requestId, req.id), inArray(t.recommendations.reviewStatus, ['approved', 'sent']))).orderBy(desc(t.recommendations.revision)).limit(1) : [];
+    const prevPacket = prevRun?.packet as unknown as AdvicePacket | undefined;
+    const prevBest = prevPacket?.claimRecords.find((c) => c.id === 'C_BEST');
+    const samePick = !!best && !!prevBest && prevBest.values.section === (best.offer.section ?? null) && prevBest.values.totalCents === best.comparableTotalCents && prevBest.values.sourceId === best.offer.sourceId && prevBest.scope.quantity === quantity && ((prevPacket!.customerPriorities as { budgetTotalCents?: number | null }).budgetTotalCents ?? null) === (priorities.budgetTotalCents ?? null);
+    const short = samePick && !shown && !sentLink && !textOffers.length && !corrected.changes.length && !saleOpens && !seatVerdict && !staffFollowUp;
+    // "What are the options for the 5 of us?": the pick and up to two others, a together block over the budget included.
+    const noBudget = OPTIONS_ASKED.test(flat(said)) || (brief.togetherRequired && quantity > 1) ? compareOffers(allOffers, { ...constraints, budgetTotalCents: null }, event.id) : null;
+    const options = best && noBudget && OPTIONS_ASKED.test(flat(said)) ? ((seen) => [best, ...cmp.eligible, ...noBudget.eligible.filter((e) => e.offer.seatsTogether === true)].filter((e) => { const k = `${e.offer.section ?? e.offer.id}|${e.offer.seatsTogether}`; return !seen.has(k) && !!seen.add(k); }))(new Set<string>()).slice(0, 3) : null;
+    // Seats together asked for and none fit the budget: the cheapest together, named, with what it costs over.
+    const togetherOver = brief.togetherRequired && quantity > 1 && noBudget && !cmp.eligible.some((e) => e.offer.seatsTogether === true) ? noBudget.eligible.find((e) => e.offer.seatsTogether === true) ?? null : null;
+    const packet = buildPacket({ short, options, togetherOver, preface, levelWanted: levelWanted && seatLevelWanted(said) === levelWanted.level ? levelWanted : null, saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -6011,7 +6048,13 @@ const LISTING_SIGHTING_DAYS = 21;
 /** "Better to buy now or wait?", "do you have price history showing prices falling?", "trending down or up". */
 // "Should I hold off?" and "what would you do in my position? We can wait a couple of days" are the same timing
 // question (launch A15): both get the buy-or-wait answer, never only the price ask.
-export const TREND_ASKED = /\b(?:(?:a |any )?drops? in (?:the )?(?:ticket )?prices?|prices?\b[^.?!]{0,20}\b(?:drop|fall|come down|go down|get cheaper)\b|get(?:ting)? cheaper|(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop)|should (?:I|we) hold off|hold(?:ing)? off (?:for now|a bit|a few days|until)|what would you do|in (?:my|our) (?:position|shoes)|(?:we|I) can wait (?:a (?:couple|few)(?: of)? days|a (?:day|bit|while|week))|(?:buy )?now or later)\b/i;
+/** "What are the options for the 5 of us?", "so which seats would you go for?", "just tell me which one to buy": the pick, asked for again. */
+export const OPTIONS_ASKED = /\bwhat(?:'s| are| is)? (?:the |my |our |your )?(?:options|choices)\b|\b(?:which|what) (?:seats|ones?|tickets|pair|section)\b[^.?!]{0,15}\b(?:would|should|do|did) you (?:go for|pick|choose|recommend|suggest|buy|get|take)\b|\b(?:which|what) (?:one|seats|tickets) (?:should|would|do) (?:i|we) (?:buy|get|go for|pick)\b|\btell me which (?:one|seats|tickets)\b|\bwhat (?:would|do) you (?:recommend|suggest)\b/i;
+/** The message is about what they sent: the screenshot, the listing, "these", or a comparison with it. */
+export const ABOUT_THEIRS = /\b(?:these|those|them|this one|that one|the screenshot|screenshot|the listing|my (?:seats|tickets|listing|pair)|the ones? (?:i|we) (?:found|sent|saw|showed)|seatgeek|stubhub|vivid|ticketmaster|beat (?:it|that|this|them)|compare|versus|vs\.?)\b/i;
+/** "Which is the best value of the three?", "which of the two is cheaper?": a choice among the games already in the thread. */
+export const ACROSS_GAMES = /\b(?:best value|better value|best deal|better deal|cheap(?:er|est)|best price|lowest price)\b[^.?!]{0,40}\b(?:of (?:the|these|those|them|all)\b|between\b|(?:the )?(?:three|two|3|2) (?:games|of them|options)\b|both\b)|\b(?:which|what)(?: one| game)? (?:of (?:the|these|those) (?:three|two|3|2|games)|of (?:them|the three|the two))\b[^.?!]{0,40}\b(?:best|cheap|value|deal)/i;
+export const TREND_ASKED = /\b(?:(?:a |any )?drops? in (?:the )?(?:ticket )?prices?|prices?\b[^.?!]{0,20}\b(?:drop|fall|come down|go down|go up|rise|climb|increase|get cheaper|get more expensive)\b|get(?:ting)? cheaper|(?:buy|get|grab|take)\b[^.?!]{0,25}\bor (?:wait|hold off)\b|wait (?:until|till) (?:later|tomorrow|closer|the day)|price history|history window|trend(?:ing|s)?|prices? (?:are |be )?(?:falling|dropping|rising|going (?:up|down))|(?:are|is) (?:the )?prices?\b[^.?!]{0,20}\b(?:falling|dropping|rising|climbing|going (?:up|down))|buy (?:now|today) or wait|buy now or hold off|(?:is|would) waiting|should (?:I|we) wait|worth waiting|wait for (?:prices?|a drop)|should (?:I|we) hold off|hold(?:ing)? off (?:for now|a bit|a few days|until)|what would you do|in (?:my|our) (?:position|shoes)|(?:we|I) can wait (?:a (?:couple|few)(?: of)? days|a (?:day|bit|while|week))|(?:buy )?now or later)\b/i;
 /** "Please don't set up any alerts". */
 const NO_ALERTS = /\b(?:don'?t|do not|no need to)\s+set(?:\s+up)?\s+(?:any\s+)?(?:alerts?|a watch|watches)\b|\bno alerts?\b/i;
 /** "Could there be a drop nearer the game?", "what do you see historically?", "do they get cheaper on game day?" */

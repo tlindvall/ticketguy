@@ -1499,3 +1499,22 @@ Scheduled-eval issues #155 (45 threads with two emails for one message) and #158
 - in a rules-reader run of the 59 core, family and long threads, no step has two emails.
 
 **Not verified here:** the real-model eval. It runs in CI on the PR, and the score table goes in the PR.
+
+## 79. A follow-up gets an answer, not the recommendation again (Oct 14)
+
+Scheduled-eval issues #160 (a reply repeats the one before) and #159 (long threads lose coherence) shared one cause. Any message after seats were sent produced the whole recommendation again: the same header, left-out line, market paragraph, coverage and link. Whatever the customer asked was folded in somewhere, or not answered at all. In the eval there was a second cause: the harness never marked an answer as sent, so research never knew a reply was a follow-up.
+
+**Decisions.**
+- **The eval records sends as production does (own fix to the eval world).** The send gate never sends fixture data, so in the eval an approved answer stayed "approved". The next message then invalidated it as superseded, and every reply read as a first reply. After each step the harness now marks queued sends as provider-accepted, and approved answers as sent, which is what the dispatcher does seconds later in production. No scorer changed.
+- **Same seats, short reply.** When the reply is a follow-up and its pick is the same seats as last time, it is short. "Same" means the same section, total and source, for the same party and budget. A short reply also requires that nothing else is new in the message: no listing, link or offers of theirs, no correction, no sale date, no seat verdict. It carries what they asked, then "My pick hasn't changed:" with the seats and their link.
+- **"What are the options for the 5 of us?"** gets a list: the pick and up to two others, together blocks included even when over the budget, each with its total and any overage, and the pick marked. Each section appears once.
+- **"Anything cheaper where we still sit together?"** names the cheapest seats together for the party and what they cost over the budget. It replaces "0 qualifying listings" and the "I haven't been able to check these" line.
+- **"Which is the best value of the three for 2 of us?"** checks the games this request has been on against the listings for the party, at most four. It gets its own short reply naming the cheapest and what each costs, and offers that game's seats. The request stays on its game until they choose. "Go with the kings" then binds to the Kings game that was compared, not the next Kings home game. The same holds for any team named that is a side of the game settled now, unless they ask for another, next or which game.
+- **An earlier screenshot is judged again only when the message is about it.** A trend, options, level or view question without "these", "the screenshot", the marketplace's name or a comparison no longer gets the screenshot verdict on top.
+- **"Prices go up / rise / climb"** is a trend question too.
+
+**Verified:**
+- tests/acceptance/followups-159-160.test.ts;
+- `no_repeated_reply` is 1 for every core, family and long thread in a rules-reader run.
+
+**Not verified here:** the real-model eval. CI runs the PR suite; the long threads run nightly.

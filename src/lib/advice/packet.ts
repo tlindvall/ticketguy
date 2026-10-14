@@ -64,6 +64,11 @@ export type AdvicePacket = {
   claimRecords: ClaimRecord[];
   /** Questions the email ends with, server-written from what we still don't know (never model-authored). */
   followUps?: string[];
+  /**
+   * A follow-up about seats already sent, with the pick unchanged (#160): the email is the answer and the pick in one line,
+   * not the whole recommendation again.
+   */
+  short?: boolean;
   /** What we assumed to get here ("I've gone with the next home game…"), said under the answer: unreviewed, the answer is the only email. */
   preface?: string[];
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
@@ -96,6 +101,12 @@ export function packetHash(p: AdvicePacket): string {
 }
 
 export type BuildPacketArgs = {
+  /** The pick is the one already sent and nothing they asked for changed it: answer, then the pick in one line. */
+  short?: boolean;
+  /** "What are the options for the 5 of us?": the pick, then up to two others, together ones first, over-budget ones said so. */
+  options?: Evaluated[] | null;
+  /** Seats together asked for and none fit: the cheapest together without the budget, when any is listed. */
+  togetherOver?: Evaluated | null;
   /** The level they asked for ("lower bowl") when the pick isn't in it: its cheapest option without the budget, if any. */
   levelWanted?: { level: 'lower' | 'upper'; cheapest: Evaluated | null; block?: Evaluated | null; whole?: Evaluated | null } | null;
   /** Lines intake would have put in an acknowledgment: what it assumed, a date it moved to. */
@@ -2006,7 +2017,7 @@ function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
 }
 
 /** Claims that answer a question asked in the thread; with one of them, a follow-up reply is just the answer. */
-const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_VIEW', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
+const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_VIEW', 'C_OPTIONS', 'C_TOGETHER_OVER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
 /** The offer to narrow seats we named: said with the seats, so not again in a follow-up that answers a question about them. */
 const NARROW_PICKS = 'If you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.';
 
@@ -2185,6 +2196,20 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       url: a.best.offer.directPurchaseUrl,
       ...(vb ? { card: { head: vb.headline, title: vb.seatLine, price: vb.total, notes: vb.basis, others: [], after: [], brief: vb } } : {}),
     });
+  }
+  const seatsLine = (e: Evaluated) => `${q} seat${q > 1 ? 's' : ''}${q > 1 ? (e.offer.seatsTogether === true ? ' together' : e.offer.seatsTogether === false ? ', not all together,' : '') : ''}${e.offer.section ? ` in section ${e.offer.section}` : ''}`;
+  const overBy = (e: Evaluated) => (a.priorities.budgetTotalCents != null && e.comparableTotalCents != null && e.comparableTotalCents > a.priorities.budgetTotalCents ? e.comparableTotalCents - a.priorities.budgetTotalCents : 0);
+  // "What are the options for the 5 of us?" (#159: the same recommendation came back, with the one block of five together
+  // only counted, never named): each option on its own line, the pick marked, an over-budget one said so.
+  if (a.options && a.options.length > 1) {
+    const items = a.options.filter((e) => e.comparableTotalCents !== null).map((e) => `${capitalize(seatsLine(e))}: ${formatUsd(e.comparableTotalCents!)} total (${formatUsd(perPersonCents(e.comparableTotalCents!, q))} each)${overBy(e) ? `, ${formatUsd(overBy(e))} over your ${formatUsd(a.priorities.budgetTotalCents!)}` : ''}${e === a.best ? ' (my pick)' : ''}.`);
+    claims.push({ id: 'C_OPTIONS', kind: 'option_count', text: `Your options for ${q === 2 ? 'two' : q}, including the verified charges:\n${items.join('\n')}`, items, values: { count: items.length }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: a.options.map((e) => e.offer.evidenceId), methodVersion: null, limitations: [], customerVisible: true });
+  }
+  // "Anything cheaper where we still sit together?" with nothing together inside the budget: the cheapest together, named,
+  // with what it costs over (#159: "0 qualifying listings" and a line about requirements not checked yet).
+  if (a.togetherOver && a.togetherOver.comparableTotalCents !== null) {
+    const e = a.togetherOver;
+    claims.push({ id: 'C_TOGETHER_OVER', kind: 'alternative_offer', text: `Nothing for ${q} together fits inside ${a.priorities.budgetTotalCents != null ? `your ${formatUsd(a.priorities.budgetTotalCents)}` : 'what you asked'}: the cheapest ${q} together I can see ${q > 1 ? 'are' : 'is'}${e.offer.section ? ` in section ${e.offer.section}` : ''}, ${formatUsd(e.comparableTotalCents!)} total (${formatUsd(perPersonCents(e.comparableTotalCents!, q))} each) including the verified charges${overBy(e) ? `, ${formatUsd(overBy(e))} over` : ''}.`, values: { totalCents: e.comparableTotalCents, section: e.offer.section ?? null }, scope: { quantity: q, seatZone: e.offer.seatClass ?? null, feeBasis: e.offer.priceCompleteness, observedAt: obs }, evidenceIds: [e.offer.evidenceId], methodVersion: null, limitations: e.flags, customerVisible: true, ...(e.offer.directPurchaseUrl ? { url: e.offer.directPurchaseUrl, linkLabel: `The ${q} together` } : {}) });
   }
   // "And lower bowl, how much would that be?" with nothing there inside the budget: the price there, then the pick (#158).
   if (a.levelWanted && a.best) {
@@ -2442,7 +2467,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A listing link they sent is theirs too: the one ask for its price and seats covers it (FV-R1-03: "I haven't
   // been able to check this against any seats yet: 2 seats together" under the StubHub link it was about).
   // Seats already named for them say what is and isn't checked; "I haven't checked this against any seats" would contradict them.
-  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !picksAnswer(a)) {
+  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !(a.togetherOver && a.togetherOver.comparableTotalCents !== null) && !picksAnswer(a)) {
     const reqs = a.requirements;
     claims.push({
       id: 'C_REQS',
@@ -2828,6 +2853,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     ...(answered ? {} : headlineFor(a)),
     ...(a.preface?.length ? { preface: a.preface } : {}),
+    ...(a.short && claims.some((c) => c.id === 'C_BEST' && c.customerVisible) ? { short: true } : {}),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,
