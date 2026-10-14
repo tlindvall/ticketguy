@@ -204,7 +204,7 @@ const sha = (() => { try { return execSync('git rev-parse --short HEAD').toStrin
 const only = process.env.EVAL_ONLY?.split(',');
 
 Eval('My Project', {
-  experimentName: `conversations-${sha}`,
+  experimentName: process.env.EVAL_EXPERIMENT_NAME ?? `conversations-${sha}`,
   metadata: { gitSha: sha, model, effort, budgetUsd: env.aiGlobalDailyBudgetUsd ?? null },
   data: () => SCENARIOS.filter((s) => !only || only.includes(s.id)).map((s) => ({ input: s, metadata: { id: s.id, capability: s.capability, turns: s.turns.length } })),
   task: async (input: Scenario) => runThread(input),

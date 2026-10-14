@@ -1,0 +1,68 @@
+name: evals
+# Conversation evals (evals/ticketguy.eval.ts) against the real model with fixture inventory. Runs on PRs that touch
+# the AI, pipeline, advice, domain or email code, and on every push to main so each PR has a recent main run to be
+# compared with in Braintrust. Reports scores on the PR; it does not block merging yet (known open failures, #135-#138).
+on:
+  pull_request:
+    paths:
+      - 'src/lib/ai/**'
+      - 'src/lib/intake/**'
+      - 'src/lib/advice/**'
+      - 'src/lib/domain/**'
+      - 'src/lib/email/**'
+      - 'evals/**'
+      - '.github/workflows/evals.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Secrets are not passed to pull requests from forks; skip rather than fail there.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      NODE_ENV: test
+      APP_MODE: fixture
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
+      EVAL_BUDGET_USD: '5'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: run evals
+        env:
+          EVAL_EXPERIMENT_NAME: conversations-${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.ref_name }}-${{ github.sha }}
+        run: |
+          set -o pipefail
+          pnpm eval 2>&1 | tee eval.log
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo '### Conversation evals'
+            echo
+            echo '```'
+            sed -n '/Experiment summary/,/^View results/p' eval.log | grep -vE '^(prompt_cache|tool_|llm_errors|tool_errors)' | head -40
+            echo '```'
+            grep -o 'https://www.braintrust.dev/[^ ]*' eval.log | tail -1 | sed 's/^/Braintrust: /'
+          } > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: comment on PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md
