@@ -63,7 +63,8 @@ const SCENARIOS: Scenario[] = [
   { id: 'nickname-typo', capability: 'event-resolution', turns: [{ text: '2 NYR tix for the preseason game vs the isles pls', expect: { eventId: E.rangersPreseason, quantity: 2 } }] },
 ];
 
-type TurnOut = { customer: string; reply: string; state: string; eventId: string | null; brief: RequestExtraction | null; newRecommendations: number; expect?: Expect };
+type Email = { cls: string; subject: string; html: string };
+type TurnOut = { customer: string; reply: string; emails: Email[]; state: string; eventId: string | null; brief: RequestExtraction | null; newRecommendations: number; expect?: Expect };
 
 const env = testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10' });
 const openaiKey = process.env.OPENAI_API_KEY;
@@ -101,7 +102,8 @@ async function runThread(s: Scenario): Promise<TurnOut[]> {
       const inThread = (await h.db.select({ id: t.requests.id }).from(t.requests).where(eq(t.requests.conversationId, r.conversationId))).map((q) => q.id);
       const sends = (await h.db.select().from(t.sendIntents).where(eq(t.sendIntents.conversationId, r.conversationId))).filter((x) => !seenSends.has(x.id));
       const recs = (await h.db.select().from(t.recommendations).where(inArray(t.recommendations.requestId, inThread))).filter((x) => !seenRecs.has(x.id));
-      out.push({ customer: tu.text, reply: [...sends.map((x) => x.bodyText), ...recs.map((x) => x.bodyText)].filter(Boolean).join('\n----\n'), state: req!.state, eventId: req!.eventId, brief: (v?.brief as RequestExtraction) ?? null, newRecommendations: recs.length, expect: tu.expect });
+      const emails: Email[] = [...sends.map((x) => ({ cls: x.messageClass, subject: x.subject, html: x.bodyHtml })), ...recs.map((x) => ({ cls: 'recommendation', subject: x.subject, html: x.bodyHtml }))];
+      out.push({ customer: tu.text, reply: [...sends.map((x) => x.bodyText), ...recs.map((x) => x.bodyText)].filter(Boolean).join('\n----\n'), emails, state: req!.state, eventId: req!.eventId, brief: (v?.brief as RequestExtraction) ?? null, newRecommendations: recs.length, expect: tu.expect });
     }
     return out;
   } finally {
@@ -166,6 +168,21 @@ const scorers = [
     if (!urls.length) return null;
     const bad = urls.filter((u) => { if (OFFER_URLS.has(u)) return false; try { const host = new URL(u).hostname; return !(host === SERVICE_DOMAIN || host.endsWith('.' + SERVICE_DOMAIN)); } catch { return true; } });
     return { ok: bad.length ? 0 : 1, why: `unknown links: ${bad.join(' ')}` };
+  }),
+  // Design (DECISION_LOG #76, cc9a20d): every sent email is signed; every answer carries the ticket-brief
+  // card layout. Clarifications, acknowledgements, holding notes and watch alerts stay plain by design.
+  perTurn('email_design', (tu) => {
+    if (!tu.emails.length) return null;
+    const PLAIN = new Set(['acknowledgment', 'clarification', 'holding', 'watch_alert', 'watch_confirmation', 'verification', 'manual_attention', 'no_result']);
+    const bad = tu.emails.flatMap((e) => {
+      const why: string[] = [];
+      // First reply: full signature (name + tagline); later replies: the short "Ticket Guy" sign-off (signature.ts).
+      // Recommendations are stored unsigned while awaiting review; the signature is added when they're sent.
+      if (e.cls !== 'recommendation' && !/second opinion before you buy|>\s*Ticket Guy\s*<\/p>/i.test(e.html)) why.push(`${e.cls}: no signature`);
+      if (!PLAIN.has(e.cls) && !/border-radius:12px;border-collapse:separate/.test(e.html)) why.push(`${e.cls}: answer without the ticket-brief card`);
+      return why;
+    });
+    return { ok: bad.length ? 0 : 1, why: `${bad.join('; ')} (classes: ${tu.emails.map((e) => e.cls).join(', ')})` };
   }),
   perTurn('at_most_one_question', (tu) => {
     if (!tu.reply.trim()) return null;
