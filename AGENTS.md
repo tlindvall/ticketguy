@@ -24,7 +24,7 @@ an in-memory database and no email sent. Needs `OPENAI_API_KEY` in `.env.local` 
   or time passing (`kind: 'wait'`, optional market change, optional price-alert check).
 - Scores (`evals/scorers.ts`): per email (event, party, budget, grounded prices and links, "seats together" claims
   true, one question max, one email per message, design), across the thread (memory, repeated replies, re-asked
-  questions), and model-graded (answered the question; whole-thread coherence naming the step where it broke).
+  questions), and model-graded (answered the question; only what was asked, i.e. no unrequested content; whole-thread coherence naming the step where it broke).
 - Production flags: the eval runs with the app's defaults, which match `render.yaml` (price alerts and event alerts
   off), and sends drafts as written (`AUTO_SEND_RECOMMENDATIONS`), as production does with its testers' allowlist. Scenarios that test a feature that is off in production set `env` and carry the tag `flag-off-in-prod`.
 

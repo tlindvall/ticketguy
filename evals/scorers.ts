@@ -183,6 +183,11 @@ const Coherence = z.object({
   issues: z.array(z.object({ step: z.number().int(), kind: z.enum(['forgot', 'contradicted', 'repeated', 'ignored_new_info', 'did_not_progress', 'invented', 'other']), detail: z.string() })),
   summary: z.string(),
 });
+const OnPoint = z.object({
+  verdict: z.enum(['clean', 'some_extra', 'mostly_extra']),
+  extra: z.array(z.object({ quote: z.string(), why: z.string() })),
+  reason: z.string(),
+});
 const transcript = (output: TurnOut[], maxReply = 1800) => output.map((tu) => `[Step ${tu.step} · ${tu.at.slice(0, 16)}] Customer: ${tu.customer}\n[Step ${tu.step}] Ticket Guy:\n${tu.reply.slice(0, maxReply) || '(no email)'}`).join('\n\n');
 
 export function modelGraded(key: string, model: string) {
@@ -213,12 +218,37 @@ export function modelGraded(key: string, model: string) {
 5 = coherent throughout: remembers everything the customer established, never contradicts itself (a changed price is fine only if it says the market moved), uses new information (screenshots, links, changed prices, feedback) in the next reply, narrows toward a clear choice when asked, never repeats or restarts.
 3 = mostly coherent with one or two lapses.
 1 = loses the thread: forgets constraints, restarts, repeats itself, contradicts earlier replies, or invents facts.
-broke_at_step = the first step where it went wrong (null if it never did). List every issue with its step. Be strict and specific; quote the reply when useful.`,
+The first reply counts like any other: if it misses or buries what the customer asked, broke_at_step is 1. broke_at_step = the first step where it went wrong (null if it never did). List every issue with its step. Be strict and specific; quote the reply when useful.`,
       input: transcript(output),
       text: { format: zodTextFormat(Coherence, 'coherence') },
     });
     const v = res.output_parsed!;
     return { name: 'thread_coherence', score: (v.score - 1) / 4, metadata: v };
   };
-  return [answered, coherent];
+  /** Every reply carries only what the customer asked for or needs to act on. Calibrated on Tobias's review of the
+   *  Rangers thread (Oct 14): left-out listings, missing-history notes, source names and check timestamps are noise;
+   *  a needed question and one short "prices can change" line are fine. */
+  const onPoint = async ({ output }: Args) => {
+    const scores: number[] = [];
+    const failures: Array<{ step: number; why: string }> = [];
+    for (let i = 0; i < output.length; i++) {
+      const tu = output[i]!;
+      if (!isEmailStep(tu) || !tu.reply.trim()) continue;
+      const res = await judge(key).responses.parse({
+        model, reasoning: { effort: 'low' }, store: false,
+        instructions: `You review one email from Ticket Guy, an email ticket-buying assistant, for content the customer did not ask for. Ignore the greeting, the sign-off and a one-line offer to help further.
+First rule: anything that answers the customer's latest message is never extra, even if it fits a category below (asked whether prices will rise, what it knows or lacks about price history IS the answer; asked whether tickets still exist, saying it looks sold out IS the answer).
+Allowed: the direct answer; the header line with event, venue, date, ticket count and budget; a one-line buy-or-wait recommendation; the pick (seats, quantity, all-in price, link); a real problem with THAT pick (seats not together, obstructed view, over budget); stating an assumption it made (e.g. two tickets) so the customer can correct it; one question that is needed to go further; one short line that prices can change before checkout.
+Extra (count each one): listings it left out and why; notes about data it lacks or could not check; source or marketplace names it checked; when it checked prices; market context or trend talk the customer did not ask for; caveats about a screenshot or listing beyond the one that matters most; alternatives the customer did not ask for; anything repeated from its previous email that the customer did not ask about again; general disclaimers (e.g. who the service is for); invitations to send other listings.
+verdict: "clean" = no extra; "some_extra" = one or two short extras; "mostly_extra" = the answer is buried, or extra is a large share of the email. Quote each extra exactly (short) with why it is extra.`,
+        input: `${transcript(output.slice(Math.max(0, i - 2), i), 900)}\n\nCustomer (latest): ${tu.customer}\n\nTicket Guy (email to review):\n${tu.reply.split(/\nTicket Guy\n/)[0]!.slice(0, 4000)}`,
+        text: { format: zodTextFormat(OnPoint, 'on_point') },
+      });
+      const v = res.output_parsed!;
+      scores.push(v.verdict === 'clean' ? 1 : v.verdict === 'some_extra' ? 0.5 : 0);
+      if (v.verdict !== 'clean') failures.push({ step: i + 1, why: `${v.verdict}: ${v.extra.map((x) => `"${x.quote}"`).join('; ') || v.reason}` });
+    }
+    return { name: 'only_what_was_asked', score: avg(scores), metadata: { failures } };
+  };
+  return [answered, coherent, onPoint];
 }
