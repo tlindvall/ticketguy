@@ -208,6 +208,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   }
   if (packet.decision === 'wait_and_recheck' && !used.has('C_CHECKPOINT')) errors.push('a wait recommendation must include the checkpoint claim (C_CHECKPOINT)');
   if (errors.length) return { ok: false, errors };
+  if (packet.short) return { ok: true, ...renderShort(packet) };
 
   const lines: string[] = [];
   const html: string[] = [];
@@ -238,7 +239,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   const pickCard = claim('C_PICKS')?.card ? claim('C_PICKS')! : undefined;
   const bestBrief = claim('C_BEST')?.card?.brief ? claim('C_BEST')! : undefined;
   const brief: TicketBrief | undefined = pickCard?.card?.brief ?? bestBrief?.card?.brief;
-  const picksFirst = !!(pickCard ?? bestBrief) && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER') && !claim('C_TOGETHER') && !claim('C_VIEW') && !claim('C_LEVEL');
+  const picksFirst = !!(pickCard ?? bestBrief) && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER') && !claim('C_TOGETHER') && !claim('C_VIEW') && !claim('C_LEVEL') && !claim('C_OPTIONS') && !claim('C_TOGETHER_OVER');
   if (picksFirst && brief) {
     const top = briefTop(brief);
     lines.push(...top.text);
@@ -265,7 +266,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [claim('C_CORRECTION'), watch, claim('C_SALE_OPENS'), claim('C_NONE_LISTED'), claim('C_SEAT_VERDICT'), claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PRICE_ANSWER'), claim('C_TOGETHER'), claim('C_VIEW'), claim('C_PICKS'), claim('C_LEVEL'), bestBrief, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [claim('C_CORRECTION'), watch, claim('C_SALE_OPENS'), claim('C_NONE_LISTED'), claim('C_SEAT_VERDICT'), claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PRICE_ANSWER'), claim('C_TOGETHER'), claim('C_VIEW'), claim('C_OPTIONS'), claim('C_TOGETHER_OVER'), claim('C_PICKS'), claim('C_LEVEL'), bestBrief, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
     if (c.card) {
@@ -356,7 +357,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_SALE_OPENS', 'C_NONE_LISTED', 'C_SEAT_VERDICT', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PRICE_ANSWER', 'C_PRICE_ANSWER_ALT', 'C_TOGETHER', 'C_VIEW', 'C_LEVEL', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_ALTERNATIVES_ALT', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_SALE_OPENS', 'C_NONE_LISTED', 'C_SEAT_VERDICT', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PRICE_ANSWER', 'C_PRICE_ANSWER_ALT', 'C_TOGETHER', 'C_VIEW', 'C_OPTIONS', 'C_TOGETHER_OVER', 'C_LEVEL', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_ALTERNATIVES_ALT', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -372,7 +373,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   }
   // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
   // The alternative the verdict chose carries its own link (its page, or the marketplace's search): the next action.
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || c.id === 'C_LEVEL' || ((c.id === 'C_PRICE_ANSWER' || c.id === 'C_PRICE_ANSWER_ALT') && !!claim('C_PRICE_ANSWER')) || ((c.id === 'C_ALTERNATIVES' || c.id === 'C_ALTERNATIVES_ALT') && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || c.id === 'C_LEVEL' || c.id === 'C_TOGETHER_OVER' || ((c.id === 'C_PRICE_ANSWER' || c.id === 'C_PRICE_ANSWER_ALT') && !!claim('C_PRICE_ANSWER')) || ((c.id === 'C_ALTERNATIVES' || c.id === 'C_ALTERNATIVES_ALT') && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
   // The offer card carries its own links.
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
@@ -410,8 +411,48 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   return { ok: true, textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
 }
 
+/** What a follow-up answers, in the order a full reply would put it first. */
+const SHORT_ANSWERS = ['C_CORRECTION', 'C_WATCH', 'C_SALE_OPENS', 'C_SEAT_VERDICT', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PRICE_ANSWER', 'C_TOGETHER', 'C_VIEW', 'C_OPTIONS', 'C_TOGETHER_OVER', 'C_LEVEL', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING', 'C_SALES', 'C_STAFF'];
+
+/**
+ * A follow-up about seats already sent, the pick unchanged (#160): what they asked, answered, then the pick in one line
+ * with its link. The whole recommendation again was a near copy of the last email ("which seats would you go for?",
+ * "do you think prices go up?"), its answer buried in the middle.
+ */
+function renderShort(packet: AdvicePacket): { textBody: string; htmlBody: string } {
+  const byId = new Map(packet.claimRecords.filter((c) => c.customerVisible).map((c) => [c.id, c]));
+  const answers = SHORT_ANSWERS.map((id) => byId.get(id)).filter((c): c is ClaimRecord => !!c);
+  const best = byId.get('C_BEST')!;
+  const lines: string[] = [GREETING];
+  const html: string[] = [P(GREETING)];
+  for (const c of answers) {
+    if (c.items?.length && c.text.includes('\n')) {
+      const head = c.text.split('\n')[0]!;
+      lines.push(head, c.items.map((i) => `- ${i}`).join('\n'));
+      html.push(P(rich(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
+    } else {
+      lines.push(c.text);
+      html.push(P(rich(c.text)));
+    }
+  }
+  // What we assumed was said with the pick when it was sent; the pick is unchanged, so it isn't said again.
+  // Under a list of options the pick is already marked; anywhere else it's said once, as unchanged.
+  if (!answers.some((c) => c.id === 'C_OPTIONS')) {
+    const pick = `${answers.length ? 'My pick hasn’t changed' : 'Nothing has changed since my last email, and it’s still my pick'}: ${best.text}`;
+    lines.push(pick);
+    html.push(P(rich(pick)));
+  }
+  const linked = [...answers.filter((c) => c.url), ...(best.url ? [{ ...best, linkLabel: 'The seats I’d buy' }] : [])];
+  if (linked.length) {
+    lines.push(linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n'));
+    html.push(P(linked.map((c) => `<a href="${esc(c.url!)}" style="color:#142438;text-decoration:underline;font-weight:600;">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>')));
+  }
+  return { textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
+}
+
 /** Safe evidence-only fallback when generation fails repeatedly (no model prose at all). */
 export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boolean } = {}): { textBody: string; htmlBody: string } {
+  if (packet.short && packet.claimRecords.some((c) => c.id === 'C_BEST' && c.customerVisible)) return renderShort(packet);
   const visible: ClaimRecord[] = packet.claimRecords.filter((c) => c.customerVisible);
   const decisionLine: Record<AdvicePacket['decision'], string> = {
     buy_now: 'Given your priorities, securing the option below is reasonable.',
