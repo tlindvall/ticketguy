@@ -12,6 +12,9 @@ import { ModelDrafter, ModelExtractor, ModelListingReader } from '@/lib/ai/model
 import { OpenAiClient } from '@/lib/ai/openai';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
+import type { Extractor } from '@/lib/ai/extraction';
+import type { Drafter } from '@/lib/ai/drafting';
+import type { ListingReader } from '@/lib/ai/listing-evidence';
 import type { Offer, RequestExtraction } from '@/lib/domain/types';
 import { seedWorld, worldOffers } from './world';
 
@@ -95,19 +98,22 @@ export async function screenshot(s: Screenshot): Promise<Uint8Array<ArrayBuffer>
 const env = (over: Record<string, string> = {}) => testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10', ...over });
 
 let threadNo = 0;
-export async function runThread(s: Scenario, openaiKey: string): Promise<TurnOut[]> {
+/** The model's readers, or stand-ins: tests run the same threads with the rules reader and no API key. */
+export type ThreadDeps = { extractor: Extractor; drafter: Drafter; listingReader?: ListingReader };
+
+export async function runThread(s: Scenario, openaiKey: string, deps?: ThreadDeps): Promise<TurnOut[]> {
   const h = await openTestDb();
   try {
     await seedWorld(h.db);
     const e = env(s.env);
-    const client = new OpenAiClient(openaiKey);
+    const client = deps ? null : new OpenAiClient(openaiKey);
     const model = e.OPENAI_BASE_MODEL;
     const effort = e.OPENAI_BASE_EFFORT;
     let now = s.now ? new Date(s.now) : FIXTURE_NOW;
     const offers = worldOffers();
     const c = new Concierge({
       db: h.db, env: e, clock: () => now, emailProvider: null, fixtureOffers: offers,
-      extractor: new ModelExtractor(client, model, effort), drafter: new ModelDrafter(client, model, effort), listingReader: new ModelListingReader(client, model, effort),
+      ...(deps ?? { extractor: new ModelExtractor(client!, model, effort), drafter: new ModelDrafter(client!, model, effort), listingReader: new ModelListingReader(client!, model, effort) }),
     });
     const from = `eval-${++threadNo}-${s.id}@customer.example`;
     let prev: ReturnType<typeof inbound> | null = null;

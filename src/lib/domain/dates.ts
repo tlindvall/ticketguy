@@ -233,8 +233,41 @@ export function beforeWindowFor(expression: string, receivedAt: Date, timeZone: 
   return to >= today ? { from: today, to } : null;
 }
 
+/**
+ * "The week of Jan 12", "week of the 12th of january", "the week of 1/12", "jan 12 week", "1/12 week", "the week of
+ * 2027-01-12": the Monday-to-Sunday week that holds that day (eval #143: read as the single day Jan 12).
+ */
+export const WEEK_OF_RE = new RegExp(
+  `\\b(?:(?:the\\s+)?week\\s+(?:of|starting|beginning)\\s+(?:the\\s+)?(?:${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?|(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_RE}|(\\d{1,2})\\/(\\d{1,2})|(\\d{4})-(\\d{2})-(\\d{2}))|(?:${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?|(\\d{1,2})\\/(\\d{1,2}))\\s+week)\\b`,
+  'i',
+);
+
+export function weekOfWindow(expression: string, receivedAt: Date): { from: string; to: string } | null {
+  const w = WEEK_OF_RE.exec(expression.trim().toLowerCase());
+  if (!w) return null;
+  // Groups: [1 month, 2 day] | [3 day, 4 month] | [5 m, 6 d] | [7 y, 8 m, 9 d] | [10 month, 11 day] | [12 m, 13 d]
+  let y: number;
+  let m: number;
+  let d: number;
+  if (w[7]) [y, m, d] = [Number(w[7]), Number(w[8]), Number(w[9])];
+  else {
+    const named = w[1] ? [monthIndex(w[1]), Number(w[2])] : w[4] ? [monthIndex(w[4]), Number(w[3])] : w[10] ? [monthIndex(w[10]), Number(w[11])] : null;
+    const slash = w[5] ? [Number(w[5]), Number(w[6])] : w[12] ? [Number(w[12]), Number(w[13])] : null;
+    [m, d] = (named ?? slash)! as [number, number];
+    if (!m || m > 12) return null;
+    y = yearFor(m, receivedAt);
+  }
+  if (!d || d > lastDayOf(y, m)) return null;
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  const mon = addDaysToCalendar(y, m, d, dow === 0 ? -6 : 1 - dow);
+  const sun = addDaysToCalendar(mon.y, mon.m, mon.d, 6);
+  return { from: toIsoDate(mon.y, mon.m, mon.d), to: toIsoDate(sun.y, sun.m, sun.d) };
+}
+
 export function spanWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
   const e = expression.trim().toLowerCase();
+  const weekOf = weekOfWindow(e, receivedAt);
+  if (weekOf) return weekOf;
   const now = localDateParts(receivedAt, timeZone);
   const today = toIsoDate(now.y, now.m, now.d);
   const plus = (days: number) => {
