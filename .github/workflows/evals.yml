@@ -1,7 +1,11 @@
 name: evals
-# Conversation evals (evals/ticketguy.eval.ts) against the real model with fixture inventory. Runs on PRs that touch
-# the AI, pipeline, advice, domain or email code, and on every push to main so each PR has a recent main run to be
-# compared with in Braintrust. Reports scores on the PR; it does not block merging yet (known open failures, #135-#138).
+# Conversation evals (evals/ticketguy.eval.ts) against the real model with the eval world.
+# - PRs touching the AI, pipeline, advice, domain or email code: the pr suite (~55 threads), scores posted on the PR.
+# - Every push to main: the pr suite, so PRs have a fresh main run to compare against in Braintrust.
+# - Every 2 hours, 8am to midnight ET: the nightly suite (+ long threads + simulated customers); failures are filed
+#   and kept up to date as eval-failure issues (evals/report-failures.ts), and closed when they pass again.
+# - On demand: Actions > evals > Run workflow, with a suite to pick.
+# Report-only: nothing here blocks merging or deploys.
 on:
   pull_request:
     paths:
@@ -14,17 +18,30 @@ on:
       - '.github/workflows/evals.yml'
   push:
     branches: [main]
+  schedule:
+    # 12:00-22:00 and 00:00-04:00 UTC = 8am to midnight Eastern (EDT).
+    - cron: '0 12,14,16,18,20,22 * * *'
+    - cron: '0 0,2,4 * * *'
   workflow_dispatch:
+    inputs:
+      suite:
+        description: 'pr | nightly | core | families | long | sim'
+        default: nightly
+      file_issues:
+        description: 'File/update eval-failure issues from this run'
+        type: boolean
+        default: true
 concurrency:
-  group: evals-${{ github.ref }}
-  cancel-in-progress: true
+  group: evals-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 jobs:
   evals:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     # Secrets are not passed to pull requests from forks; skip rather than fail there.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
@@ -33,6 +50,9 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
       EVAL_BUDGET_USD: '5'
+      EVAL_SUITE: ${{ github.event_name == 'schedule' && 'nightly' || inputs.suite || 'pr' }}
+      EVAL_CONCURRENCY: '8'
+      EVAL_EXPERIMENT_NAME: conversations-${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'scheduled' || github.ref_name }}-${{ github.run_number }}-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -44,8 +64,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: run evals
-        env:
-          EVAL_EXPERIMENT_NAME: conversations-${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.ref_name }}-${{ github.sha }}
         run: |
           set -o pipefail
           pnpm eval 2>&1 | tee eval.log
@@ -53,10 +71,10 @@ jobs:
         if: always()
         run: |
           {
-            echo '### Conversation evals'
+            echo "### Conversation evals (${EVAL_SUITE})"
             echo
             echo '```'
-            sed -n '/Experiment summary/,/^View results/p' eval.log | grep -vE '^(prompt_cache|tool_|llm_errors|tool_errors)' | head -40
+            sed -n '/Experiment summary/,/^View results/p' eval.log | grep -vE '^(prompt_cache|tool_|llm_errors|tool_errors)' | head -45
             echo '```'
             grep -o 'https://www.braintrust.dev/[^ ]*' eval.log | tail -1 | sed 's/^/Braintrust: /'
           } > summary.md
@@ -66,3 +84,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md
+      - name: file or update eval-failure issues
+        if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.file_issues))
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm exec tsx evals/report-failures.ts
