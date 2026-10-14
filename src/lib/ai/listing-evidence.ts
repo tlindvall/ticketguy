@@ -188,7 +188,23 @@ export function restrictionCodesFrom(restrictions: string[]): string[] {
   return [...codes];
 }
 
+/**
+ * The fields the read itself says it couldn't make out ("Image is blurred; section, row, quantity and event date are less
+ * clear"): never stated as fact. A blurred "5" read as 3 was a whole reply about three tickets (#151); left unread, the
+ * count is asked instead.
+ */
+export function unclearFields(unreadable: string[] | null | undefined): Set<'quantity' | 'section' | 'row'> {
+  const said = (unreadable ?? []).join('; ');
+  const out = new Set<'quantity' | 'section' | 'row'>();
+  if (/\bquantit|\bqty\b|\bnumber of (?:tickets|seats)\b|\b(?:ticket|seat) count\b|\bhow many\b/i.test(said)) out.add('quantity');
+  if (/\bsections?\b/i.test(said)) out.add('section');
+  if (/\brows?\b/i.test(said)) out.add('row');
+  return out;
+}
+
 export function fieldsFromRead(r: ListingRead): ListingFields {
+  const unclear = unclearFields(r.unreadable);
+  if (unclear.size) r = { ...r, quantity: unclear.has('quantity') ? null : r.quantity, section: unclear.has('section') ? null : r.section, row: unclear.has('row') ? null : r.row };
   const price = cents(r.priceDollars);
   const total = cents(r.totalDollars);
   const q = r.quantity;

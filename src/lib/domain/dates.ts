@@ -32,13 +32,38 @@ export type RelativeDateResolution =
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
+/** Misspellings more than one keystroke off ("wensday"); anything one keystroke off ("thrusday") is caught generally. */
+const WEEKDAY_TYPOS: Record<string, string> = { wensday: 'wednesday', wendsday: 'wednesday', wedensday: 'wednesday', wednsday: 'wednesday', wenesday: 'wednesday', tusday: 'tuesday', tuseday: 'tuesday', thurday: 'thursday', thrusdy: 'thursday', satuday: 'saturday', saterday: 'saturday', saturdy: 'saturday', fryday: 'friday' };
+
+/** At most one insert, delete, substitution or swap of neighbours apart. */
+function oneEditApart(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1) || (a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2));
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+}
+
+/**
+ * A misspelled weekday spelled right ("this thrusday" → "this thursday", "firday" → "friday"), the rest untouched.
+ * Only a word ending in "day"/"dy" with the weekday's first letter, so "today", "funday" and "sundae" stay as they are.
+ */
+export function spellWeekdays(text: string): string {
+  return text.replace(/\b([a-z]{2,10}da?y)(s?)\b/gi, (word, stem: string, plural: string) => {
+    const w = stem.toLowerCase();
+    if (WEEKDAYS.includes(w) || w === 'today') return word;
+    const fix = WEEKDAY_TYPOS[w] ?? WEEKDAYS.find((d) => d[0] === w[0] && oneEditApart(w, d));
+    return fix ? `${stem[0] === stem[0]!.toUpperCase() ? fix[0]!.toUpperCase() + fix.slice(1) : fix}${plural}` : word;
+  });
+}
+
 /**
  * Resolves a small set of relative expressions. Anything else is unresolved and must be clarified.
  * Near-midnight (23:00–01:00 local) results are flagged ambiguous so the pipeline clarifies rather than guesses.
  */
 export function resolveRelativeDate(expression: string, receivedAt: Date, venueTimeZone: string | null): RelativeDateResolution {
   if (!venueTimeZone) return { kind: 'unresolved', reason: 'venue_timezone_unknown' };
-  const expr = expression.trim().toLowerCase();
+  const expr = spellWeekdays(expression.trim().toLowerCase());
   const now = localDateParts(receivedAt, venueTimeZone);
   const nearMidnight = now.hour >= 23 || now.hour < 1;
   const note = nearMidnight ? 'received near local midnight; confirm the date with the customer' : null;
@@ -308,6 +333,7 @@ export function spanWindowFor(expression: string, receivedAt: Date, timeZone: st
 
 /** Any span a date phrase names without naming a day: part of a month, a range, a month or a week. */
 export function dateWindowFor(expression: string, receivedAt: Date, timeZone: string): { from: string; to: string } | null {
+  expression = spellWeekdays(expression);
   return spanWindowFor(expression, receivedAt, timeZone) ?? monthWindowFor(expression, receivedAt) ?? weekWindowFor(expression, receivedAt, timeZone);
 }
 

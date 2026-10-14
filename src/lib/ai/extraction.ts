@@ -1,7 +1,7 @@
 import { unglue } from '@/lib/domain/event-constraints';
 import { z } from 'zod';
 import { RequestExtractionSchema, type RequestExtraction } from '@/lib/domain/types';
-import { dateWindowFor, deadlineInstant, localDateParts, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { dateWindowFor, deadlineInstant, localDateParts, resolveRelativeDate, spellWeekdays, toIsoDate } from '@/lib/domain/dates';
 import { classifyOptOutText } from '@/lib/domain/suppression';
 import { findResidenceStatement } from '@/lib/domain/country';
 import { BROWSE_ASK_TEST, categoryHintFrom } from '@/lib/domain/browse';
@@ -212,7 +212,7 @@ export function readDate(t: string, receivedAt: Date, venueTimeZone: string | nu
   const explicitDay = new RegExp(`\\b(${MONTH_DAY_SRC})\\b`, 'i').exec(t);
   // "knicks fri", "this coming Friday": the day, spelled out for the date reader.
   const FULL: Record<string, string> = { fri: 'friday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', sat: 'saturday', sun: 'sunday', mon: 'monday' };
-  const td = t.replace(/\bthis coming\b/gi, 'this').replace(/\b(fri|thurs?|thu|tues?|wed)\b\.?/gi, (m) => FULL[m.replace('.', '').toLowerCase()] ?? m).replace(/\b(this|next|on|for)\s+(sat|sun|mon)\b\.?/gi, (_m, a: string, d: string) => `${a} ${FULL[d.toLowerCase()]}`);
+  const td = spellWeekdays(t).replace(/\bthis coming\b/gi, 'this').replace(/\b(fri|thurs?|thu|tues?|wed)\b\.?/gi, (m) => FULL[m.replace('.', '').toLowerCase()] ?? m).replace(/\b(this|next|on|for)\s+(sat|sun|mon)\b\.?/gi, (_m, a: string, d: string) => `${a} ${FULL[d.toLowerCase()]}`);
   const dateM = explicitDay ?? DATE_EXPR.exec(td);
   const dateExpression = dateM ? dateM[1]! : null;
   let resolvedLocalDate: string | null = null;
