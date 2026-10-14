@@ -2655,8 +2655,10 @@ export class Concierge {
     if (Number.isNaN(day)) return [];
     const mk = marketFor(x.city, x.state);
     const from = new Date(Math.max(day - 10 * 86_400_000, this.now().getTime()));
+    // Their games as the visitor too: "the nets game sunday" is Knicks vs. Nets at the Garden, not only Nets home games
+    // at Barclays (#146).
     for (const entities of await this.entityTiers(name)) {
-      const rows = entities.length ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(inArray(t.events.primaryEntityId, entities.map((en) => en.id)), gte(t.events.localStartAt, from), lte(t.events.localStartAt, new Date(day + 10 * 86_400_000)), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40) : [];
+      const rows = entities.length ? await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(or(inArray(t.events.primaryEntityId, entities.map((en) => en.id)), inArray(t.events.opponentEntityId, entities.map((en) => en.id))), gte(t.events.localStartAt, from), lte(t.events.localStartAt, new Date(day + 10 * 86_400_000)), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40) : [];
       const fit = rows.filter(({ e, v }) => !isNonAdmission(e) && (!typedOpponent || isAgainst(e.name, typedOpponent) || isAgainstPlace(e.name, typedOpponent, name)) && (!x.city || (mk ? inMarket(v, mk) : (v.city ?? '').toLowerCase() === x.city.toLowerCase())));
       if (fit.length) return [...fit].sort((a, b) => Math.abs(a.e.localStartAt.getTime() - day) - Math.abs(b.e.localStartAt.getTime() - day)).slice(0, 3).sort((a, b) => a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
     }
