@@ -107,8 +107,10 @@ describe('side questions and a closing thanks get their own short answer (#136, 
   }, 60_000);
 
   it('a holding note goes only with a real change while a person reviews the answer', async () => {
-    const [, grows] = (await replay('party-grows')) as [TurnOut, TurnOut];
+    // The eval sends drafts as written, as production does (#155); a person reviewing is this test's case.
+    const reviewed = (id: string) => replay({ ...scenario(id), env: { AUTO_SEND_RECOMMENDATIONS: 'false' } });
+    const [, grows] = (await reviewed('party-grows')) as [TurnOut, TurnOut];
     expect(grows.reply).toContain('Got your update: 5 tickets.');
-    for (const t of await replay('side-question')) expect(t.reply).not.toContain('Got your note');
+    for (const t of await reviewed('side-question')) expect(t.reply).not.toContain('Got your note');
   }, 60_000);
 });
