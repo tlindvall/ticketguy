@@ -21,6 +21,9 @@ import { normalizeEmailLookup, resolveThread, stripQuotedContent, buildReference
 import { enqueueOutbox } from './outbox';
 import { inspectImage, selectProcessableImages, skippedImagesNote } from '@/lib/media/image-validation';
 import { createMediaStore } from '@/lib/media/storage';
+import { seatLevelOf, seatLevelWanted } from '@/lib/domain/seat-level';
+import { seatVerdictFor } from '@/lib/advice/seat-verdict';
+import { CLOSING_LINE, GETTING_THERE_LINE, bringsNothingNew, closingOnly, gettingThereAsked } from '@/lib/intake/asides';
 import { areaIntent, areaOf, chooseShownOffer, distinctActs, fieldsFromRead, looksLikeListingText, usableEvidence, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
 import { type Extractor, FixtureExtractor, missingMandatoryFields, clarificationQuestions, titleCaseName, NO_ACCESS_NEED, readDate, quantityIsOpenChoice, parseQuantity, withoutDeadline } from '@/lib/ai/extraction';
@@ -55,7 +58,7 @@ import { cleanSeatField, flat, minutesOf, offerHistory, offersInText, partyTerms
 import { breaks, displayVenue, eventConstraints, localStart, unglue, type EventConstraints } from '@/lib/domain/event-constraints';
 import { eventChangedSince } from '@/lib/domain/event-lifecycle';
 export { eventChangedSince };
-import { PRICE_ASKED, checkedAt, joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
+import { AVAILABILITY_ASKED, PRICE_ASKED, checkedAt, joinRequirements, suppliedOffersAnswer } from '@/lib/advice/packet';
 export { PRICE_ASKED };
 import { computeBenchmark, type HistoricalSnapshot, type DatasetRights, type EventContext, type BenchmarkResult } from '@/lib/advice/benchmark';
 import { computeTrend, type TrendResult } from '@/lib/advice/trend';
@@ -775,6 +778,16 @@ export class Concierge {
     if (priorVersion) {
       const done = await this.recordOutcomeReply({ req, msg, contact: contact!, extraction, prior: RequestExtractionSchema.parse(priorVersion.brief), listingSent: !!listing.fields || listing.images > 0 });
       if (done) return { state: done, revision: req.currentRevision, extraction };
+      // "Perfect, thanks — all set!" or "is MSG easy to get to from Penn Station?" mid-request: a short answer of its own,
+      // never the recommendation again with a holding note before it (#136). The request keeps its brief and state. Not
+      // while our own question is open: "thanks" then answers it, and the next step is the one it already had.
+      const aside = req.state !== 'needs_clarification' && bringsNothingNew(extraction, RequestExtractionSchema.parse(priorVersion.brief), !!listing.fields || listing.images > 0) ? (closingOnly(latestText) ? 'closing' : gettingThereAsked(latestText) ? 'getting_there' : null) : null;
+      if (aside) {
+        const line = aside === 'closing' ? CLOSING_LINE : GETTING_THERE_LINE;
+        const paras = aside === 'closing' ? ['Hey,', line] : ['Hey,', line, ASIDE_TAIL];
+        await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, aside === 'closing' ? 'Thanks' : 'Getting there'), template: 'raw_auto', vars: { text: paras.join('\n\n'), html: paras.map((x) => `<p style="margin:0 0 18px;">${x}</p>`).join('\n') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `aside:${msg.id}` });
+        return this.answeredAside(req, msg, aside === 'closing' ? 'closing_thanks' : 'getting_there');
+      }
     }
 
     // New revision.
@@ -1037,7 +1050,7 @@ export class Concierge {
     // answers something else ("the 21st" to "Which game, and how many tickets?"), which put off "asked twice, assume
     // two" by a round each time.
     const countRounds = req.state === 'needs_clarification' ? await this.roundsAskingCount(req.id) : 0;
-    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: !unseenListing && (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : Math.max(req.clarificationCount, countRounds) });
+    const { brief: withDefaults, assumed } = imageUnread ? { brief: merged, assumed: [] as Array<'quantity' | 'budget_basis'> } : applyDefaults(merged, { marketQuestion: !unseenListing && (TREND_ASKED.test(flat(latestText)) || PRICE_ASKED.test(flat(latestText)) || AVAILABILITY_ASKED.test(flat(latestText)) || questionsAsked(flat(latestText)).worth) && partyTerms(threadTexts).attendees == null, roundsAsked: VAGUE_QUANTITY.test(flat(latestText)) || req.state === 'manual_attention' ? 0 : Math.max(req.clarificationCount, countRounds) });
     merged = withDefaults;
     // A link that came through damaged is said once, in the reply to the message that sent it (LAUNCH-05).
     const garbled = garbledLinkNote(extraction.submittedUrls ?? []);
@@ -1583,7 +1596,9 @@ export class Concierge {
     // So is a "best" read as lowest price after the goal question went unanswered, whatever the revision (gap 4).
     if ((revision === 1 || picked || cameFromReferral || altDateNote || bestAskedBefore) && !selfContained && (!answeredUnreviewed || assumptions.length || picked || altDateNote)) {
       await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: altDateNote ? [...assumptions, altDateNote] : assumptions, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
-    } else if (revision > 1 && !answeredUnreviewed && (req.state === 'awaiting_review' || req.state === 'researching')) {
+    } else if (revision > 1 && !answeredUnreviewed && (req.state === 'awaiting_review' || req.state === 'researching') && revisionChanges(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null).length) {
+      // Only when they changed something: "Got your note" over a message that changed nothing was a second email saying
+      // nothing, seconds before the answer (#137).
       // A later message while a person reviews the answer: the pending draft was just invalidated and research
       // re-queued, and they heard nothing until the new draft was approved (audit gap 3). One line: what changed,
       // and that the updated answer comes here. Unreviewed, the answer itself follows in seconds, so nothing goes.
@@ -3762,7 +3777,10 @@ export class Concierge {
     // Deterministic comparison.
     const constraints: HardConstraints = { quantity, togetherRequired: brief.togetherRequired, budgetTotalCents: wholePartyBudgetCents(brief.budgetCents, brief.budgetBasis, quantity), excludeObstructedView: true, requireAccessible: !!brief.accessibilityNeeds, acceptableSections: null, eventStartAt: event.localStartAt.toISOString() };
     const cmp = compareOffers(allOffers, constraints, event.id);
-    const best = cmp.eligible[0] ?? null;
+    // "Lower bowl please" is what they want, not an optional upgrade (#138): the cheapest fitting option in that level
+    // leads; the cheapest anywhere only when nothing in it fits.
+    const level = seatLevelWanted(brief.seatingPreference);
+    const best = (level ? cmp.eligible.find((e) => seatLevelOf(e.offer) === level) : undefined) ?? cmp.eligible[0] ?? null;
     const alternatives = Object.entries(cmp.groups).filter(([k]) => k !== (best?.offer.seatClass ?? best?.offer.admissionType)).map(([, list]) => list[0]!).filter((e) => e.offer.id !== best?.offer.id).slice(0, 2);
     let entryRef: Evaluated | null = null;
     if (quantity > 1) {
@@ -4030,7 +4048,11 @@ export class Concierge {
     const artPath = (recsBefore?.n ?? 0) === 0 ? await loadBriefArtwork(this.db, artSubject).catch(() => null) : null;
     const artworkUrl = artPath?.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${artPath}` : artPath;
     const eventSport = sportFor(event.category, event.classification?.genre ?? null);
-    const packet = buildPacket({ followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    // "Are these good seats?": a verdict on the seats they named comes first, their level, row and price against the rest (#149).
+    const seatVerdict = await seatVerdictFor(this.db, { text: said, venue, quantity, offers: [...cmp.eligible, ...cmp.excluded.filter((e) => e.exclusions.every((x) => x === 'over_budget'))], quotedTotalCents: quote ? quote.perTicketCents * quantity : null });
+    // Not on sale yet, with a sale date on file: said up front, with the day it opens (#148).
+    const saleOpens = !official && event.publicSaleStartAt && event.publicSaleStartAt > now && event.localStartAt > now ? saleOpensLabel(event.publicSaleStartAt, venue.timezone) : null;
+    const packet = buildPacket({ saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -6218,14 +6240,20 @@ function draftExpired(rec: { expiresAt: Date | null }, now: Date): boolean {
  * promised, since a person reviews it.
  */
 export function revisionNote(prior: RequestExtraction | null, next: RequestExtraction, newEvent: string | null): string {
+  const changed = revisionChanges(prior, next, newEvent);
+  return changed.length
+    ? `Got your update: ${listAnd(changed)}. I’m rechecking with that, and the updated answer will come here in this thread.`
+    : 'Got your note. I’m taking it into account, and the updated answer will come here in this thread.';
+}
+
+/** What a later message changed in the brief, as the holding note says it: the event, the count, the budget, the seats. */
+export function revisionChanges(prior: RequestExtraction | null, next: RequestExtraction, newEvent: string | null): string[] {
   const changed: string[] = [];
   if (newEvent) changed.push(newEvent);
   if (next.quantity && next.quantity !== prior?.quantity) changed.push(`${next.quantity} ${next.quantity === 1 ? 'ticket' : 'tickets'}`);
   if (next.budgetCents !== null && next.budgetBasis && (next.budgetCents !== prior?.budgetCents || next.budgetBasis !== prior?.budgetBasis)) changed.push(`${formatUsd(next.budgetCents)} ${next.budgetBasis === 'whole_party' ? 'total' : 'a ticket'}`);
   if (next.seatingPreference && next.seatingPreference !== prior?.seatingPreference) changed.push(next.seatingPreference);
-  return changed.length
-    ? `Got your update: ${listAnd(changed)}. I’m rechecking with that, and the updated answer will come here in this thread.`
-    : 'Got your note. I’m taking it into account, and the updated answer will come here in this thread.';
+  return changed;
 }
 
 export function describeKnown(x: RequestExtraction, opts: { eventResolved?: boolean } = {}): string[] {

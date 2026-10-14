@@ -239,6 +239,10 @@ export type BuildPacketArgs = {
   travelling?: boolean;
   /** Where they want to sit ("lower level"), when they said: a venue-wide figure doesn't describe those seats. */
   seatingPreference?: string | null;
+  /** When the public sale opens ("Fri, Oct 2 at 10:00 AM EDT"), for an event not on sale yet with nothing to buy (#148). */
+  saleOpens?: string | null;
+  /** "Are these good seats?": the verdict on the seats they named, their level, row and price against the rest (#149). */
+  seatVerdict?: string | null;
 };
 
 /** `link_match`: the listing they linked, found by its listing number in the resale feed (never fetched from the marketplace). */
@@ -945,6 +949,8 @@ function notWatchingLine(reason: string | null, quantity: number): string {
  * "What are tickets like?", "how much are they?", "what's the price?", "how much are resale tickets selling for…?": a
  * question about the price itself, which the market answers.
  */
+/** "Do tickets still exist?", "is it sold out?", "r there still tix": a question about whether there are any at all (#147). */
+export const AVAILABILITY_ASKED = /\b(?:do|are|is) (?:there )?(?:any )?(?:tickets?|tix|seats?) (?:still )?(?:exist|available|left)\b|\b(?:still|any) (?:tickets?|tix|seats?) (?:left|available|out there)\b|\b(?:is it|are they|it's|it’s) sold out\b|\bsold out\?|\b(?:r|are|is) there (?:still|any)\b|\bcan (?:i|we) still (?:get|buy)\b|\bstill (?:exist|available)\b/i;
 export const PRICE_ASKED = /\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seats?|prices?) (?:like|going for|at)\b|\bhow much (?:are|is|do|would|for)\b|\bwhat(?:'s|’s| is| are) the (?:price|prices|cost|going rate)\b|\bhow (?:expensive|pricey)\b|\bwhat do (?:tickets|seats) (?:cost|go for|run)\b|\bprice check\b|\b(?:selling|going|trading|listed|priced) (?:for|at)\b|\bgoing rate\b|\b(?:ticket|resale) prices\b/i;
 
 /**
@@ -992,6 +998,9 @@ function linkLookupLead(link: NonNullable<BuildPacketArgs['link']>, noun: string
 /** Text on a page that addresses whoever reads it (an assistant, a model) rather than describing the tickets. */
 const ADDRESSED_TO_US = /\b(?:ignore|disregard|forget)\b[^.]{0,40}\b(?:instructions?|prompts?|rules)\b|\btell (?:the )?(?:customer|buyer|user)\b|\b(?:system prompt|as an ai|language model)\b/i;
 
+/** The customer said something about the view ("no obstructed view", "clear view", "limited view is fine"). */
+const VIEW_WORDS = /\b(?:obstruct\w*|unobstructed|clear view|full view|limited view|partial view|restricted view|view of the (?:stage|ice|court|field))\b/i;
+
 /** At most three questions, each one something that would change the answer and that we don't know yet. */
 function followUpQuestions(a: BuildPacketArgs): string[] {
   // The price answer ends on its own next step; a questionnaire under it buried the answer (live Oct 10).
@@ -1004,6 +1013,10 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
     if (!a.best) return [a.link && !a.link.eventPage ? `I can’t open ${a.link.marketplace} listings myself. Could you send a screenshot of it (price, section, row and delivery date), or tell me the price and section?` : 'Found seats you like? Send me the price, section and row (a screenshot works), and I’ll check them against what you need.'];
     return [];
   }
+  // Not on sale yet: there are no seats to send us, so the one question is the budget for when it opens (#148).
+  if (a.saleOpens && !a.best && !a.official && !a.subject && !a.quote) return a.priorities.budgetTotalCents === null ? [`What’s the most you’d pay in total for ${a.quantity === 1 ? 'the ticket' : a.quantity === 2 ? 'both' : `all ${a.quantity}`}, fees included?`] : [];
+  // Nothing listed for "do tickets still exist?": no budget to search with, just seats they may have seen elsewhere (#147).
+  if (!a.best && !a.official && !a.subject && !a.quote && !a.link && a.independentOptionCount === 0 && a.sourcesChecked.length && AVAILABILITY_ASKED.test(a.askedText ?? '')) return ['Seen tickets somewhere else? Send me the price, section and row (a screenshot works), and I’ll check them.'];
   // Seats already named: the one useful next step is narrowing them, not a questionnaire (live Oct 3).
   if (a.picks?.picks.length && picksAnswer(a)) return a.priorities.budgetTotalCents === null ? [NARROW_PICKS] : [];
   const out: string[] = [];
@@ -2264,7 +2277,49 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       });
     }
   }
-  if (a.independentOptionCount !== null && !noMarket) {
+  if (a.seatVerdict) {
+    claims.push({
+      id: 'C_SEAT_VERDICT',
+      kind: 'verdict',
+      text: a.seatVerdict,
+      values: {},
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['zones_from_venue_map', 'sources_checked_only'],
+      customerVisible: true,
+    });
+  }
+  // Not on sale yet and nothing listed: that's the answer, with the day it opens, not "0 qualifying listings" (#148).
+  const notOnSale = !!a.saleOpens && !a.best && !a.official && !a.subject && !a.quote;
+  if (notOnSale) {
+    claims.push({
+      id: 'C_SALE_OPENS',
+      kind: 'official_sale',
+      text: `It isn’t on sale yet: the public sale opens ${a.saleOpens}.${a.independentOptionCount === 0 || a.independentOptionCount === null ? ' I don’t see any resale listings for it yet either.' : ''}`,
+      values: { count: a.independentOptionCount ?? 0 },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['sale_window_not_inventory'],
+      customerVisible: true,
+    });
+  }
+  // "Do tickets still exist?" with nothing listed: that's the first line, said as what we checked, not "0 qualifying" (#147).
+  if (!notOnSale && !a.best && !a.official && !a.subject && !a.quote && !noMarket && a.independentOptionCount === 0 && AVAILABILITY_ASKED.test(a.askedText ?? '')) {
+    claims.push({
+      id: 'C_NONE_LISTED',
+      kind: 'option_count',
+      text: `I couldn’t find any tickets for it right now: no resale listings among the sources I checked${a.eventStartAt && a.eventStartAt.getTime() - a.observedAt.getTime() < 21 * 86_400_000 ? ', which usually means it’s sold out or close to it' : ''}. Listings can still turn up as people resell.`,
+      values: { count: 0 },
+      scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
+      evidenceIds: [],
+      methodVersion: null,
+      limitations: ['sources_checked_only'],
+      customerVisible: true,
+    });
+  }
+  if (a.independentOptionCount !== null && !noMarket && !notOnSale && !claims.some((c) => c.id === 'C_NONE_LISTED')) {
     claims.push({
       id: 'C_COUNT',
       kind: 'option_count',
@@ -2446,8 +2501,11 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   const weighed = claims.find((c) => c.id === 'C_VERDICT')?.values.leftOut;
   const leftOut = (a.leftOut ?? []).filter((_, i) => i !== weighed);
   if (leftOut.length) {
+    // An obstructed view is left out by default; "which you ruled out" only when they did (#138: it was said to people
+    // who never mentioned the view).
+    const viewRuledOut = VIEW_WORDS.test(`${a.threadText ?? ''}\n${a.askedText ?? ''}`);
     const say = (l: NonNullable<BuildPacketArgs['leftOut']>[number]) =>
-      l.reason === 'obstructed_view' ? 'one has an obstructed view, which you ruled out'
+      l.reason === 'obstructed_view' ? (viewRuledOut ? 'one has an obstructed view, which you ruled out' : 'one has an obstructed view')
         : l.reason === 'bigger_block' ? `one is a block of ${l.quantity} that may not sell as exactly ${q}, with its charges unknown`
           : l.reason === 'accessible_only' ? 'one is wheelchair or companion spaces, meant for people who need them'
             : l.reason === 'seats_not_together' ? 'one isn’t seats together'
@@ -2644,6 +2702,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // The $20 parking price is not a ticket price to judge against the market, and a question about what gets them in
   // is answered by that alone: no seat search, history or coverage note under it (live V03).
   if (a.asks?.parking) for (const c of claims) if (!['C_PARKING', 'C_CORRECTION'].includes(c.id)) c.customerVisible = false;
+  // Before the sale opens, or with nothing listed, there is no price to compare: no history or trend notes (#147, #148).
+  if (notOnSale || claims.some((c) => c.id === 'C_NONE_LISTED')) for (const c of claims) if (['C_BENCH', 'C_NOHIST', 'C_TREND', 'C_NOTREND'].includes(c.id)) c.customerVisible = false;
   if (shownAnswer) for (const c of claims) if (['C_VERDICT', 'C_QUOTE', 'C_MARKET', 'C_MARKET_TYPICAL', 'C_QUOTE_MARKET', 'C_READ', 'C_VERIFIED', 'C_TREND', 'C_NOTREND', 'C_NOHIST'].includes(c.id)) c.customerVisible = false;
   // A made-up example (their word): what it shows, and nothing about live listings, checking out or buying (A11).
   // The writing review's shape: the total and the per-ticket price with fees in one line, then the working, the
