@@ -18,9 +18,9 @@ const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.le
 const isEmailStep = (tu: TurnOut) => !tu.customer.startsWith('[');
 const mentions = (text: string, needle: string) => (needle.startsWith('re:') ? new RegExp(needle.slice(3), 'i').test(text) : text.includes(needle));
 
-function perTurn(name: string, f: (tu: TurnOut, i: number, all: TurnOut[]) => R) {
-  const fn = ({ output }: Args) => {
-    const rs = output.map((tu, i) => ({ i, r: f(tu, i, output) })).filter((x) => x.r);
+function perTurn(name: string, f: (tu: TurnOut, i: number, all: TurnOut[], input: Scenario) => R) {
+  const fn = ({ input, output }: Args) => {
+    const rs = output.map((tu, i) => ({ i, r: f(tu, i, output, input) })).filter((x) => x.r);
     return { name, score: avg(rs.map((x) => x.r!.ok)), metadata: { failures: rs.filter((x) => x.r!.ok < 1).map((x) => ({ step: x.i + 1, why: x.r!.why })) } };
   };
   Object.defineProperty(fn, 'name', { value: name });
@@ -80,10 +80,11 @@ export const perEmail = [
   perTurn('price_alert_raised', (tu) => (tu.expect?.alertsRaised != null ? { ok: tu.alertsRaised === tu.expect.alertsRaised ? 1 : 0, why: `${tu.alertsRaised} alerts raised, want ${tu.expect.alertsRaised}; watches ${JSON.stringify(tu.watches)}; run ${JSON.stringify(tu.alertRun)}` } : null)),
   perTurn('got_a_reply', (tu) => (!isEmailStep(tu) || tu.expect?.noNewRecommendation ? null : { ok: tu.reply.trim() ? 1 : 0, why: `no email produced (state ${tu.state})` })),
   perTurn('not_parked_for_staff', (tu) => (isEmailStep(tu) ? { ok: tu.state === 'manual_attention' ? 0 : 1, why: `state ${tu.state}` } : null)),
-  perTurn('prices_grounded', (tu, i, all) => {
+  perTurn('prices_grounded', (tu, i, all, input) => {
     const amounts = moneyIn(tu.reply);
     if (!amounts.length) return null;
     const allowed = new Set(GROUNDED);
+    for (const v of input?.groundedCents ?? []) allowed.add(v);
     for (const prior of all.slice(0, i + 1)) for (const v of moneyIn(prior.customer)) for (const q of [1, 2, 3, 4, 5, 6]) { allowed.add(v * q); allowed.add(Math.round(v / q)); }
     const bad = amounts.filter((v) => !near(v, allowed));
     return { ok: bad.length ? 0 : 1, why: `ungrounded: ${bad.map((v) => '$' + (v / 100).toFixed(2)).join(', ')}` };

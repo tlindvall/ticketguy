@@ -92,6 +92,8 @@ for (const e of events) {
     } else if (score < 1) {
       why = m.failures?.length ? m.failures.map((f) => `step ${f.step}: ${f.why}`).join(' · ') : m.summary ? `broke at step ${m.broke_at_step}: ${m.summary}` : (m.reason ?? `score ${score}`);
     }
+    // Real customer threads (prod/…) are private: issues are public, so they name the thread and step, never its words.
+    if (why && scenario.startsWith('prod/')) why = `${(why.match(/step \d+/g) ?? []).join(', ') || 'failed'} (real customer thread: read it in Braintrust)`;
     if (why) (fails.get(name) ?? fails.set(name, []).get(name)!).push({ scenario, why: why.slice(0, 400) });
   }
 }
@@ -129,6 +131,7 @@ for (const name of evaluated) {
     }
     continue;
   }
+  const example = list.find((f) => !f.scenario.startsWith('prod/'));
   const body = `${keyOf(name)}
 **Check:** \`${name}\` — ${TRACKED[name]}
 **Failing in ${list.length} thread(s)** as of ${stamp}. This issue is updated by every scheduled eval run.
@@ -137,8 +140,7 @@ for (const name of evaluated) {
 |---|---|
 ${list.map((f) => `| \`${f.scenario}\` | ${f.why.replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`).join('\n')}
 
-### Example: \`${list[0]!.scenario}\`
-${transcript(list[0]!.scenario, list[0]!.why)}
+${example ? `### Example: \`${example.scenario}\`\n${transcript(example.scenario, example.why)}` : '_All failures are in real customer threads; read them in Braintrust._'}
 
 **Reproduce:** \`EVAL_SUITE=nightly EVAL_ONLY=${[...new Set(list.map((f) => f.scenario))].slice(0, 6).join(',')} pnpm eval\`
 **Passes when:** \`${name}\` passes in every thread (this issue closes itself on the first run where it does).

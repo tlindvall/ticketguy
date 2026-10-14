@@ -40,7 +40,7 @@ export type Expect = {
 
 export type Screenshot = { marketplace: string; event: string; when: string; section: string; row: string; quantity: number; totalDollars: number; feesIncluded: boolean; blurry?: boolean };
 export type Step =
-  | { kind?: 'email'; text: string; screenshots?: Screenshot[]; expect?: Expect }
+  | { kind?: 'email'; text: string; screenshots?: Screenshot[]; expect?: Expect; /** Real images (production replay). */ images?: Array<{ mime: string; base64: string }>; /** Absolute send time (production replay); default 15 minutes after the last step. */ at?: string; subject?: string }
   | { kind: 'wait'; hours: number; market?: (offers: Record<string, Offer[]>) => void; checkAlerts?: boolean; expect?: Expect; note?: string };
 export type Scenario = {
   id: string; capability: string; tags?: string[]; now?: string; steps: Step[];
@@ -49,6 +49,14 @@ export type Scenario = {
   /** Simulated customer: writes the next step from the thread so far; null ends the thread. Steps run first. */
   next?: (soFar: TurnOut[]) => Promise<Step | null>;
   maxSteps?: number;
+  /** 'none' skips the eval world (production replay brings its own catalog slice). */
+  world?: 'eval' | 'none';
+  /** Extra catalog rows (production replay), seeded after the eval world. */
+  seed?: (db: Parameters<typeof seedWorld>[0]) => Promise<void>;
+  /** Extra listings by event id (production replay), added to the eval world's. */
+  offers?: Record<string, Offer[]>;
+  /** Prices the thread may quote beyond the eval world's (production replay), in cents. */
+  groundedCents?: number[];
 };
 
 export type Email = { cls: string; subject: string; text: string; html: string };
@@ -108,13 +116,14 @@ export type ThreadAi = { extractor: ConstructorParameters<typeof Concierge>[0]['
 export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): Promise<TurnOut[]> {
   const h = await openTestDb();
   try {
-    await seedWorld(h.db);
+    if (s.world !== 'none') await seedWorld(h.db);
+    await s.seed?.(h.db);
     const e = env(s.env);
     const client = ai ? null : new OpenAiClient(openaiKey);
     const model = e.OPENAI_BASE_MODEL;
     const effort = e.OPENAI_BASE_EFFORT;
     let now = s.now ? new Date(s.now) : FIXTURE_NOW;
-    const offers = worldOffers();
+    const offers = { ...(s.world === 'none' ? {} : worldOffers()), ...(s.offers ? Object.fromEntries(Object.entries(s.offers).map(([k, v]) => [k, v.map((x) => ({ ...x }))])) : {}) };
     const c = new Concierge({
       db: h.db, env: e, clock: () => now, emailProvider: null, fixtureOffers: offers,
       ...(ai ?? { extractor: new ModelExtractor(client!, model, effort), drafter: new ModelDrafter(client!, model, effort), listingReader: new ModelListingReader(client!, model, effort) }),
@@ -188,16 +197,20 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
         out.push({ ...(await collect(i, `[${st.note ?? `${st.hours}h pass`}]`, before, lastRequest, st.expect)), alertRun });
         continue;
       }
-      now = new Date(now.getTime() + 15 * 60_000); // a customer replies a little while after the last email
-      const attachments = await Promise.all((st.screenshots ?? []).map(async (sc, k) => ({ providerAttachmentId: `img-${threadNo}-${i}-${k}`, filename: `IMG_${4810 + k}.png`, declaredMimeType: 'image/png', bytes: await screenshot(sc), inline: false })));
-      const m = inbound({ text: st.text, from, subject: prev ? 'Re: Tickets' : 'Tickets', receivedAt: now, inReplyTo: prev?.rfcMessageId ?? null, references: prev?.rfcMessageId ?? null, attachments });
+      now = st.at ? new Date(st.at) : new Date(now.getTime() + 15 * 60_000); // a customer replies a little while after the last email
+      const attachments = [
+        ...(await Promise.all((st.screenshots ?? []).map(async (sc, k) => ({ providerAttachmentId: `img-${threadNo}-${i}-${k}`, filename: `IMG_${4810 + k}.png`, declaredMimeType: 'image/png', bytes: await screenshot(sc), inline: false })))),
+        ...(st.images ?? []).map((im, k) => ({ providerAttachmentId: `real-${threadNo}-${i}-${k}`, filename: `image-${k + 1}.${im.mime.split('/')[1] ?? 'png'}`, declaredMimeType: im.mime, bytes: new Uint8Array(Buffer.from(im.base64, 'base64')), inline: false })),
+      ];
+      const m = inbound({ text: st.text, from, subject: st.subject ?? (prev ? 'Re: Tickets' : 'Tickets'), receivedAt: now, inReplyTo: prev?.rfcMessageId ?? null, references: prev?.rfcMessageId ?? null, attachments });
       const r = (await c.ingestInbound(m)) as { requestId?: string; conversationId?: string };
       prev = m;
       if (r.conversationId) conversations.add(r.conversationId);
       if (r.requestId) lastRequest = r.requestId;
       await drain();
       await deliver();
-      out.push(await collect(i, st.text + (st.screenshots?.length ? `  [+${st.screenshots.length} screenshot]` : ''), before, lastRequest, st.expect));
+      const shots = (st.screenshots?.length ?? 0) + (st.images?.length ?? 0);
+      out.push(await collect(i, st.text + (shots ? `  [+${shots} screenshot]` : ''), before, lastRequest, st.expect));
     }
     return out;
   } finally {
