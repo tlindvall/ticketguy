@@ -93,7 +93,7 @@ describe('side questions and a closing thanks get their own short answer (#136, 
     const [, side, next] = (await replay('side-question')) as [TurnOut, TurnOut, TurnOut];
     expect(side.newRecommendations).toBe(0);
     expect(side.emails).toHaveLength(1);
-    expect(side.reply).toMatch(/Directions are outside what I check/);
+    expect(side.reply).toMatch(/built directly on top of Penn Station/);
     // The request carries on: the next question gets the recommendation, with no holding note before it.
     expect(next.emails.map((e) => e.cls)).toEqual(['recommendation']);
     expect(next.brief).toMatchObject({ quantity: 5, budgetCents: 50000 });

@@ -320,6 +320,8 @@ function renderBody(
         // Only what was running is said to have stopped: no watch, no "stopped keeping an eye" (TGQA-R6 1015).
         kind === 'bought'
           ? v.watched ? 'Glad you got them. I’ve stopped the price watch on this one. Enjoy it.' : 'Glad you got them. Enjoy it.'
+          : kind === 'buying'
+            ? `Good pick. Buy them from the link in my last email, and check the total at checkout before you pay, since prices can change.${v.watched ? ' I’ve stopped the price watch on this one.' : ''} Enjoy it.`
           : kind === 'stopped'
             ? v.watched ? 'Done: I’ve stopped keeping an eye on this one. Just reply if you want me to look again.' : 'Done. There was nothing running on this one, so nothing else will come from it. Just reply if you want me to look again.'
             : 'Thanks, that really helps.',

@@ -29,6 +29,25 @@ export function gettingThereAsked(text: string): boolean {
 }
 
 export const GETTING_THERE_LINE = 'Directions are outside what I check: I only help with tickets, so the venue’s own “getting here” page or a maps app is the reliable answer for the best route.';
+
+/**
+ * Where a venue sits against the transit it's known for: fixed facts about the building, nothing that changes by the
+ * day. "Is MSG easy to get to from Penn Station?" was answered with a pointer elsewhere when the one fact that answers
+ * it is that the Garden sits on top of the station (#158). Only venues whose station is part of the venue's identity.
+ */
+const VENUE_TRANSIT: Array<{ venue: RegExp; fact: string }> = [
+  { venue: /\bmadison square garden\b/i, fact: 'Madison Square Garden is built directly on top of Penn Station, so from the trains it’s a short walk up to the Garden’s entrances.' },
+  { venue: /\bbarclays cent(?:er|re)\b/i, fact: 'Barclays Center sits right on top of the Atlantic Avenue subway station (2, 3, 4, 5, B, D, N, Q and R trains), next to the LIRR’s Atlantic Terminal.' },
+  { venue: /\byankee stadium\b/i, fact: 'Yankee Stadium is across the street from the 161 St-Yankee Stadium subway station (4, B and D trains).' },
+  { venue: /\bciti field\b/i, fact: 'Citi Field is next to the Mets-Willets Point station, on the 7 train and the LIRR’s Port Washington line.' },
+  { venue: /\bcrypto\.com arena\b/i, fact: 'Crypto.com Arena is a short walk from Pico station on the Metro A and E lines.' },
+];
+
+/** The answer to a getting-there question: the venue's transit fact when we hold one, then where the route itself is. */
+export function gettingThereLine(venueName: string | null): string {
+  const known = venueName ? VENUE_TRANSIT.find((v) => v.venue.test(venueName)) : undefined;
+  return known ? `${known.fact} For the best route from where you are, a maps app or the venue’s own “getting here” page is the reliable answer.` : GETTING_THERE_LINE;
+}
 export const CLOSING_LINE = 'Glad that helps. Just reply here if you want me to look at anything else.';
 
 /** The message changes nothing about the request: no new event, count, date, budget, price, link or listing. */
