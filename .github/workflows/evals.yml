@@ -20,8 +20,8 @@ on:
     branches: [main]
   schedule:
     # 12:00-22:00 and 00:00-04:00 UTC = 8am to midnight Eastern (EDT).
-    - cron: '0 12,14,16,18,20,22 * * *'
-    - cron: '0 0,2,4 * * *'
+    - cron: '17 12,14,16,18,20,22 * * *'
+    - cron: '17 0,2,4 * * *'
   workflow_dispatch:
     inputs:
       suite:
