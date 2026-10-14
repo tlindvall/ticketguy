@@ -29,6 +29,8 @@ describe('a follow-up about seats already sent is answered short (#160)', () => 
     expect(t.reply).toContain('Your options for 5, including the verified charges:');
     expect(t.reply).toContain('5 seats in section 224: $410 total ($82 each) (my pick).');
     expect(t.reply).not.toMatch(/How this compares|Checked: fixture/);
+    // Still an answer with the brief's design: the event on its card under the headline (#76).
+    expect(t.emails[0]!.html).toMatch(/border-radius:12px;border-collapse:separate/);
     expect(repeats(s, out).score).toBe(1);
   }, 60_000);
 
@@ -39,6 +41,7 @@ describe('a follow-up about seats already sent is answered short (#160)', () => 
     expect(at(out, 2).reply).toMatch(/SeatGeek/);
     const t = at(out, 3);
     expect(t.reply).toMatch(/^Hey,\n\nOn buy or wait: /);
+    expect(t.emails[0]!.html).toMatch(/border-radius:12px;border-collapse:separate/);
     expect(t.reply).toContain('My pick hasn’t changed: 2 seats together in section 210: $420 total');
     expect(t.reply).not.toMatch(/SeatGeek|screenshot/i);
     expect(repeats(s, out).score).toBe(1);
