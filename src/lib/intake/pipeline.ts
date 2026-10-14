@@ -988,30 +988,35 @@ export class Concierge {
     // A reply to the games our last email offered is read against those games first: by the side it names (either team),
     // its day, its place in the list, "the earlier one", or a yes to the one we suggested. Only then is anything
     // searched again (eval #135, #144: the reply was re-resolved against the calendar and the list was lost).
-    if (revision > 1 && !supplied.textOffers.length && !listing.fields) {
+    // Not a browse pick: what follows treats a game they named the ordinary way (the goal question, the acknowledgement).
+    let bound: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
+    // "Yes please, let me know" answers the alert offer, not the show suggested beside it.
+    // Nor a new ask about the list ("anything else on Saturday?") or for another kind of event ("how about concerts on
+    // Thursday" after sports picks): the same guards a browse pick has.
+    if (revision > 1 && !supplied.textOffers.length && !listing.fields && !merged.notifyAsked && !extraction.notifyAsked && sameKind(extraction.categoryHint ?? null, priorBrief?.categoryHint ?? null) && !LIST_QUESTION.test(flat(latestText))) {
       const offered = await this.offeredRows(req);
       const idx = offered ? offeredChoice(flat(latestText), offered, extraction.performerOrTeam ?? null) : null;
       if (offered && idx !== null) {
-        picked = offered[idx]!;
-        merged = await this.boundToEvent(merged, picked);
+        bound = offered[idx]!;
+        merged = await this.boundToEvent(merged, bound);
       }
     }
     // A team named with no day, which is a side of a game this request already settled on, is that game again: "ok
     // stick with celtics" after a detour to the Nets game is Knicks vs Celtics, never a search for Celtics home games
     // (eval #146). Not when it is a side of the game settled now: that is the same game, kept the ordinary way.
-    if (!picked && revision > 1 && extraction.performerOrTeam && !extraction.resolvedLocalDate && !extraction.dateExpression && !ticketLinksIn(extraction.submittedUrls ?? []).length && !listing.fields) {
+    if (!bound && revision > 1 && extraction.performerOrTeam && !extraction.resolvedLocalDate && !extraction.dateExpression && !ticketLinksIn(extraction.submittedUrls ?? []).length && !listing.fields && !extraction.notifyAsked) {
       const earlier = await this.threadEvents(req.id);
       const current = earlier.find(({ e }) => e.id === req.eventId);
       const named = extraction.performerOrTeam;
       if (!(current && namesSide(current.e.name, named))) {
         const hits = earlier.filter(({ e }) => e.id !== req.eventId && namesSide(e.name, named));
         if (hits.length === 1) {
-          picked = hits[0]!;
-          merged = await this.boundToEvent(merged, picked);
+          bound = hits[0]!;
+          merged = await this.boundToEvent(merged, bound);
         }
       }
     }
-    if (!picked && isBrowseRequest(merged)) {
+    if (!bound && isBrowseRequest(merged)) {
       const b = await this.browse({ req, msg, contact: contact!, merged, revision, more: extraction.wantsMore === true && req.browseShown.length > 0, kinds: { said: extraction.categoryHint, page: priorBrief?.categoryHint ?? null } });
       if (!('pick' in b)) return b;
       picked = b.pick;
@@ -1065,10 +1070,12 @@ export class Concierge {
     // is no scope for it (Oct 10 review: asked in the thread that settled Oct 11, the date kept the answer on Oct 11).
     if (!picked && asksCheapestOfGames(flat(latestText)) && !extraction.resolvedLocalDate && merged.resolvedLocalDate) merged = { ...merged, resolvedLocalDate: null, dateExpression: extraction.dateExpression ?? null };
     const rules = await this.resolveRules(req, merged, venueTz, msg.receivedAt);
-    rules.cheapest = !picked && asksCheapestGame(flat(latestText));
+    rules.cheapest = !picked && !bound && asksCheapestGame(flat(latestText));
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
+      : bound
+      ? { kind: 'resolved', event: bound.e, venue: bound.v, label: eventLabel(bound.e, bound.v), entityKind: null }
       : await this.resolveEventWithDiscovery(merged, { requestId: req.id, receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id), rules });
     // The resolver's own answer, before any list choice, nearby pick or rule-fitting suggestion below replaces it. "When
     // do they play home next?" asks for that answer, whatever game was settled.
@@ -1103,7 +1110,7 @@ export class Concierge {
     // their order is the order they saw.
     // The ranking is read only while the reply is still choosing among its games: one it found already, or another
     // team's ("make it the knicks game on Saturday"), is their pick, never the list's Saturday (Oct 10 review).
-    if (!picked && revision > 1) {
+    if (!picked && !bound && revision > 1) {
       const sent = await this.listSent(req);
       const ranked = sent?.kind === 'games_ranked' && found.kind === 'ambiguous' && found.candidates.some((c) => sent.rows.some(({ e }) => e.id === c.id)) ? sent : null;
       const options = ranked ? ranked.rows : elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
@@ -1124,7 +1131,7 @@ export class Concierge {
     // "What about Dua Lipa instead?" names a new act, not another date for this one (audit gap 11).
     // "What about Saturday's game instead?" moves the request; only a question about another date keeps it (eval
     // long/rangers-group-saga: "instead" kept Thursday's game).
-    const altAsk = !picked && settledId && ALT_DATE_ASK.test(flat(latestText)) && !/\binstead\b|\bswitch (?:to|it)\b|\bchange (?:it )?to\b/i.test(flat(latestText)) ? await this.settledRow(settledId) : null;
+    const altAsk = !picked && !bound && settledId && ALT_DATE_ASK.test(flat(latestText)) && !/\binstead\b|\bswitch (?:to|it)\b|\bchange (?:it )?to\b/i.test(flat(latestText)) ? await this.settledRow(settledId) : null;
     let altDateNote: string | null = null;
     if (altAsk && (merged.resolvedLocalDate || merged.dateExpression)) {
       const tzA = altAsk.v.timezone;
@@ -1163,7 +1170,7 @@ export class Concierge {
       const ranked = await this.compareGames({ req, msg, contact: contact!, merged, revision, cands: found.candidates, said: flat(latestText) });
       if (ranked) return ranked;
     }
-    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !cheapestAsk && settledId ? ((await this.keepSettledEvent(settledId, found, extraction, rules, found === resolverFound && !asksNext)) ?? found) : found;
+    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !bound && !cheapestAsk && settledId ? ((await this.keepSettledEvent(settledId, found, extraction, rules, found === resolverFound && !asksNext)) ?? found) : found;
     // A choice they already made is never asked again, whatever reopened it: a new request in the same thread, a
     // revision that lost the event, a reply to an older email (live Oct 6: "Which show: Thu, Nov 19 … or Sat, Nov 21?"
     // straight after the Nov 19 seats were sent).
@@ -2621,7 +2628,7 @@ export class Concierge {
     return [exact, rest].filter((x) => x.length);
   }
 
-  async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null, depth = 0): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
+  async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null, depth = 0, awayGames = false): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     // The performance a pasted link names ("…/event/0300643DF03B25CE") is that performance, not the first show that day.
     // Links are read lower-cased; provider ids are compared the same way ("0300643DF03B25CE").
@@ -2749,14 +2756,17 @@ export class Concierge {
           // read the same way (TGQA-R8 S03), so "home game at Xfinity Mobile Arena?" is never asked.
           const homeMk = entity.kind === 'team' ? teamHomeMarket(entity.name) : null;
           const rows = homeMk ? loaded.map((r) => (r.e.isHome !== false && entity.homeVenueId !== r.v.id && !inMarket(r.v, homeMk) ? { ...r, e: { ...r.e, isHome: false } } : r)) : loaded;
-          let cands = windowFilter(rows, entity.kind === 'team', attempt.opponent, entity);
-          // No home game fits the day or opponent they named: the team's away games are searched too, so "the nets game
-          // sunday" is the Knicks hosting the Nets that Sunday, never the Nets' next home game (eval #146).
-          if (!cands.length && entity.kind === 'team' && !rules?.homeOnly && (x.resolvedLocalDate || x.dateExpression || attempt.opponent)) {
-            const away = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.opponentEntityId, entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
-            if (away.length) cands = windowFilter(away.map((r) => ({ ...r, e: { ...r.e, isHome: false } })), true, attempt.opponent, entity);
+          perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team', attempt.opponent, entity) });
+        }
+        // Asked for once the catalog and the provider have no home game that fits (resolveEventWithDiscovery): the team's
+        // away games, so "the nets game sunday" is the Knicks hosting the Nets that Sunday, never the Nets' next home game
+        // (eval #146).
+        if (awayGames && !perEntity.some((p) => p.cands.length > 0) && !rules?.homeOnly && (x.resolvedLocalDate || x.dateExpression || attempt.opponent)) {
+          for (const p of perEntity) {
+            if (p.entity.kind !== 'team') continue;
+            const away = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.opponentEntityId, p.entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+            if (away.length) p.cands = windowFilter(away.map((r) => ({ ...r, e: { ...r.e, isHome: false } })), true, attempt.opponent, p.entity);
           }
-          perEntity.push({ entity, cands });
         }
         if (perEntity.some((p) => p.cands.length > 0)) break;
       }
@@ -3505,6 +3515,14 @@ export class Concierge {
    * failure never fails the request — it is recorded and the customer gets the honest "not on file" answer.
    */
   async resolveEventWithDiscovery(x: RequestExtraction, ctx: { requestId?: string; receivedAt: Date; venueTimeZone: string | null; home?: Market | null; rules?: ResolveRules | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
+    const home = await this.resolveHomeWithDiscovery(x, ctx);
+    // Nothing at home that fits the day or the opponent named, here or at the provider: the team's away games, last.
+    if (home.kind !== 'no_match' || home.reason === 'no_performer' || home.reason === 'constraint_conflict' || !(x.resolvedLocalDate || x.dateExpression)) return home;
+    const away = await this.resolveEvent(x, ctx.home, ctx.rules, 0, true);
+    return away.kind === 'resolved' || away.kind === 'ambiguous' ? away : home;
+  }
+
+    private async resolveHomeWithDiscovery(x: RequestExtraction, ctx: { requestId?: string; receivedAt: Date; venueTimeZone: string | null; home?: Market | null; rules?: ResolveRules | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
     const local = await this.resolveEvent(x, ctx.home, ctx.rules);
     if (local.kind !== 'no_match' || local.reason === 'no_performer' || (local.reason === 'constraint_conflict' && local.conflict?.suggestion)) return local;
     const discovery = await this.discoveryAvailability();

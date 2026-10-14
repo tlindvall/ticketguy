@@ -1452,8 +1452,8 @@ Eval issues #135, #142, #143, #144, #145 and #146 (Braintrust conversation evals
   - "the earlier/later one";
   - with one game offered, a plain yes.
 
-  Anything that fits none of them, such as another team, another day or a "not", is a new request. The brief then takes the game's team, day and city, not the reply's words.
-- **A team named without a day that is a side of a game this request already settled on is that game again.** "Stick with celtics" after a detour to the Nets game goes back to Knicks vs Celtics. A team whose home games don't fit the named day or opponent also has its away games searched: "the nets game sunday" is Knicks vs Nets.
+  Anything that fits none of them, such as another team, another day or a "not", is a new request. So is a question about the list ("anything else on Saturday?"), another kind of event ("how about concerts on Thursday"), or a "let me know" to the alert offered beside a show. The brief then takes the game's team, day and city, not the reply's words. A bound game is not a browse pick: the goal question and the acknowledgement work as they do for a game named outright.
+- **A team named without a day that is a side of a game this request already settled on is that game again.** "Stick with celtics" after a detour to the Nets game goes back to Knicks vs Celtics. When neither the catalog nor Ticketmaster Discovery has a home game that fits the named day or opponent, the team's away games are searched last: "the nets game sunday" is Knicks vs Nets.
 - **"The week of Jan 12" is Monday to Sunday,** in every phrasing ("week of the 12th of january", "1/12 week", "jan 12 week"), whatever single day either reader pinned. "That week" is the week of the day already in the brief.
 - **"Whichever is cheaper" is ours to decide.** With up to four games offered, each is checked against the listings research would read, for the party. The cheapest is settled, and the reply says what each costs, including the verified charges. With nothing checkable, the SeatData ranking (#74) still answers.
 - **"What about X instead?" moves the request.** Only the question form ("did you check X too?") keeps the settled game.
@@ -1467,8 +1467,8 @@ A rules-reader run of every core, family and long eval thread, main against this
 
 | Measure | main | this branch |
 |---|---|---|
-| event correct | 40/70 | 50/70 |
+| event correct | 40/70 | 51/70 |
 | mentions | 18/34 | 23/34 |
-| "together" claims true | 42/46 | 48/48 |
+| "together" claims true | 42/46 | 47/47 |
 
 **Not verified:** the eval with the real model. This environment has no OPENAI_API_KEY or BRAINTRUST_API_KEY. CI runs the PR suite (core and families) on the PR; the long and simulated threads (#144, #145, #146) run nightly.
