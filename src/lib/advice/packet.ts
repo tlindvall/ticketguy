@@ -69,6 +69,8 @@ export type AdvicePacket = {
    * not the whole recommendation again.
    */
   short?: boolean;
+  /** A follow-up whose question is answered: the plain text opens on the answer, the HTML keeps the event card. */
+  followUpAnswer?: boolean;
   /** What we assumed to get here ("I've gone with the next home game…"), said under the answer: unreviewed, the answer is the only email. */
   preface?: string[];
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
@@ -2851,7 +2853,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     followUps: a.synthetic || a.asks?.parking || comparing || verdictCode === 'unreadable' ? [] : followUpQuestions(a).filter((x) => !(answered && x === NARROW_PICKS)),
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
-    ...(answered ? {} : headlineFor(a)),
+    // Every answer keeps the event card, a follow-up's too: its answer is the headline above it (#160, design #76).
+    ...headlineFor(a),
+    ...(answered || a.short ? { followUpAnswer: true } : {}),
     ...(a.preface?.length ? { preface: a.preface } : {}),
     ...(a.short && claims.some((c) => c.id === 'C_BEST' && c.customerVisible) ? { short: true } : {}),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,

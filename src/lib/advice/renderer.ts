@@ -253,7 +253,8 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // plain text keeps the event line first; a packet from before the card keeps the old header.
   const designed = !picksFirst && !!head && !!packet.headlineTitle && !!packet.headerCategory;
   if (head && !(picksFirst && brief)) {
-    lines.push(head.text);
+    // A follow-up's plain text opens on its answer (follow-up-answer-1009); its HTML keeps the card (#160).
+    if (!packet.followUpAnswer) lines.push(head.text);
     if (!designed) html.push(head.html);
   }
   // The answer to what they asked comes first: the verdict on their listing, the price they asked about, or,
@@ -423,31 +424,29 @@ function renderShort(packet: AdvicePacket): { textBody: string; htmlBody: string
   const byId = new Map(packet.claimRecords.filter((c) => c.customerVisible).map((c) => [c.id, c]));
   const answers = SHORT_ANSWERS.map((id) => byId.get(id)).filter((c): c is ClaimRecord => !!c);
   const best = byId.get('C_BEST')!;
+  // Under a list of options the pick is already marked; anywhere else it's said once, as unchanged. What we assumed was
+  // said with the pick when it was sent, so it isn't said again.
+  const pick = answers.some((c) => c.id === 'C_OPTIONS') ? [] : [{ text: `${answers.length ? 'My pick hasn’t changed' : 'Nothing has changed since my last email, and it’s still my pick'}: ${best.text}` }];
+  const blocks: Array<{ text: string; items?: string[] }> = [...answers.map((c) => ({ text: c.text, items: c.items?.length && c.text.includes('\n') ? c.items : undefined })), ...pick];
+  const head = (b: { text: string; items?: string[] }) => (b.items ? b.text.split('\n')[0]! : b.text);
+  const list = (items: string[]) => `<ul style="margin:0 0 18px;padding-left:22px;">${items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`;
   const lines: string[] = [GREETING];
   const html: string[] = [P(GREETING)];
-  for (const c of answers) {
-    if (c.items?.length && c.text.includes('\n')) {
-      const head = c.text.split('\n')[0]!;
-      lines.push(head, c.items.map((i) => `- ${i}`).join('\n'));
-      html.push(P(rich(head)), `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>`);
-    } else {
-      lines.push(c.text);
-      html.push(P(rich(c.text)));
-    }
-  }
-  // What we assumed was said with the pick when it was sent; the pick is unchanged, so it isn't said again.
-  // Under a list of options the pick is already marked; anywhere else it's said once, as unchanged.
-  if (!answers.some((c) => c.id === 'C_OPTIONS')) {
-    const pick = `${answers.length ? 'My pick hasn’t changed' : 'Nothing has changed since my last email, and it’s still my pick'}: ${best.text}`;
-    lines.push(pick);
-    html.push(P(rich(pick)));
-  }
+  // The answer is the headline and the event its card, as in every answer (#76); the plain text keeps the event line.
+  const top = header(packet);
+  const designed = !!packet.headlineTitle && !!packet.headerCategory;
+  blocks.forEach((b, i) => {
+    lines.push(head(b), ...(b.items ? [b.items.map((x) => `- ${x}`).join('\n')] : []));
+    html.push(i === 0 && designed ? briefHeadline(head(b)) : P(rich(head(b))));
+    if (i === 0) html.push(designed ? eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null }) : top?.html ?? '');
+    if (b.items) html.push(list(b.items));
+  });
   const linked = [...answers.filter((c) => c.url), ...(best.url ? [{ ...best, linkLabel: 'The seats I’d buy' }] : [])];
   if (linked.length) {
     lines.push(linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n'));
     html.push(P(linked.map((c) => `<a href="${esc(c.url!)}" style="color:#142438;text-decoration:underline;font-weight:600;">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>')));
   }
-  return { textBody: lines.join('\n\n'), htmlBody: html.join('\n') };
+  return { textBody: lines.join('\n\n'), htmlBody: html.filter(Boolean).join('\n') };
 }
 
 /** Safe evidence-only fallback when generation fails repeatedly (no model prose at all). */

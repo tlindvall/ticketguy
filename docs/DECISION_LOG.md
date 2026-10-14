@@ -1512,6 +1512,7 @@ Scheduled-eval issues #160 (a reply repeats the one before) and #159 (long threa
 - **"Which is the best value of the three for 2 of us?"** checks the games this request has been on against the listings for the party, at most four. It gets its own short reply naming the cheapest and what each costs, and offers that game's seats. The request stays on its game until they choose. "Go with the kings" then binds to the Kings game that was compared, not the next Kings home game. The same holds for any team named that is a side of the game settled now, unless they ask for another, next or which game.
 - **An earlier screenshot is judged again only when the message is about it.** A trend, options, level or view question without "these", "the screenshot", the marketplace's name or a comparison no longer gets the screenshot verdict on top.
 - **"Prices go up / rise / climb"** is a trend question too.
+- **A follow-up answer keeps the brief's card in HTML.** This partly reverses #76's "follow-ups not designed". That exclusion was written when follow-ups never registered in the eval, and the eval's `email_design` check holds every answer to the card. The plain text still opens on the answer with no event line (follow-up-answer-1009). Clarifications, acknowledgements and other one-question emails stay plain.
 
 **Verified:**
 - tests/acceptance/followups-159-160.test.ts;
