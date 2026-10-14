@@ -3,7 +3,7 @@
  * A thread is a list of steps: a customer email (text, optional screenshots), or time passing (the market can move
  * and price alerts are checked). Every email Ticket Guy produces is captured with its class, text and HTML.
  */
-import { desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import sharp from 'sharp';
 import { openTestDb, inbound, testEnv } from '../tests/harness';
 import * as t from '@/lib/db/schema';
@@ -136,6 +136,18 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
         }
       }
     };
+    // What production's dispatcher does seconds later, recorded here because the send gate never sends eval (fixture)
+    // data: the email is accepted and an approved answer is marked sent. Without it the next message found the answer
+    // still "approved", invalidated it as superseded, and every follow-up was read as a first reply (#160).
+    const deliver = async () => {
+      const queued = await h.db.select().from(t.sendIntents).where(and(eq(t.sendIntents.recipient, from), eq(t.sendIntents.state, 'queued')));
+      for (const x of queued) {
+        await h.db.update(t.sendIntents).set({ state: 'provider_accepted', providerMessageId: `eval-${x.id}`, submittedAt: now }).where(eq(t.sendIntents.id, x.id));
+        if (!x.approvalId) continue;
+        await h.db.update(t.recommendations).set({ reviewStatus: 'sent' }).where(and(eq(t.recommendations.id, x.approvalId), eq(t.recommendations.reviewStatus, 'approved')));
+        if (x.requestId) await h.db.update(t.requests).set({ state: 'recommendation_sent' }).where(and(eq(t.requests.id, x.requestId), eq(t.requests.state, 'awaiting_review')));
+      }
+    };
     const snapshot = async () => ({
       sends: new Set((await h.db.select({ id: t.sendIntents.id }).from(t.sendIntents)).map((r) => r.id)),
       recs: new Set((await h.db.select({ id: t.recommendations.id }).from(t.recommendations)).map((r) => r.id)),
@@ -172,6 +184,7 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
         st.market?.(offers);
         const alertRun = st.checkAlerts ? { watches: await c.evaluateDueWatches(50), events: await c.evaluateEventAlerts({ limit: 50 }) } : undefined;
         await drain();
+      await deliver();
         out.push({ ...(await collect(i, `[${st.note ?? `${st.hours}h pass`}]`, before, lastRequest, st.expect)), alertRun });
         continue;
       }
@@ -183,6 +196,7 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
       if (r.conversationId) conversations.add(r.conversationId);
       if (r.requestId) lastRequest = r.requestId;
       await drain();
+      await deliver();
       out.push(await collect(i, st.text + (st.screenshots?.length ? `  [+${st.screenshots.length} screenshot]` : ''), before, lastRequest, st.expect));
     }
     return out;
