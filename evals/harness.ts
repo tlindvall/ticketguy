@@ -95,19 +95,22 @@ export async function screenshot(s: Screenshot): Promise<Uint8Array<ArrayBuffer>
 const env = (over: Record<string, string> = {}) => testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10', ...over });
 
 let threadNo = 0;
-export async function runThread(s: Scenario, openaiKey: string): Promise<TurnOut[]> {
+/** Swap in other AI parts (the rule-based fixtures) to replay a scenario without a model key. */
+export type ThreadAi = { extractor: ConstructorParameters<typeof Concierge>[0]['extractor']; drafter: ConstructorParameters<typeof Concierge>[0]['drafter']; listingReader?: ConstructorParameters<typeof Concierge>[0]['listingReader'] };
+
+export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): Promise<TurnOut[]> {
   const h = await openTestDb();
   try {
     await seedWorld(h.db);
     const e = env(s.env);
-    const client = new OpenAiClient(openaiKey);
+    const client = ai ? null : new OpenAiClient(openaiKey);
     const model = e.OPENAI_BASE_MODEL;
     const effort = e.OPENAI_BASE_EFFORT;
     let now = s.now ? new Date(s.now) : FIXTURE_NOW;
     const offers = worldOffers();
     const c = new Concierge({
       db: h.db, env: e, clock: () => now, emailProvider: null, fixtureOffers: offers,
-      extractor: new ModelExtractor(client, model, effort), drafter: new ModelDrafter(client, model, effort), listingReader: new ModelListingReader(client, model, effort),
+      ...(ai ?? { extractor: new ModelExtractor(client!, model, effort), drafter: new ModelDrafter(client!, model, effort), listingReader: new ModelListingReader(client!, model, effort) }),
     });
     const from = `eval-${++threadNo}-${s.id}@customer.example`;
     let prev: ReturnType<typeof inbound> | null = null;
