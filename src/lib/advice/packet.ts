@@ -64,6 +64,8 @@ export type AdvicePacket = {
   claimRecords: ClaimRecord[];
   /** Questions the email ends with, server-written from what we still don't know (never model-authored). */
   followUps?: string[];
+  /** What we assumed to get here ("I've gone with the next home game…"), said under the answer: unreviewed, the answer is the only email. */
+  preface?: string[];
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
   headline?: string;
   /**
@@ -94,6 +96,10 @@ export function packetHash(p: AdvicePacket): string {
 }
 
 export type BuildPacketArgs = {
+  /** The level they asked for ("lower bowl") when the pick isn't in it: its cheapest option without the budget, if any. */
+  levelWanted?: { level: 'lower' | 'upper'; cheapest: Evaluated | null; block?: Evaluated | null; whole?: Evaluated | null } | null;
+  /** Lines intake would have put in an acknowledgment: what it assumed, a date it moved to. */
+  preface?: string[];
   requestId: string;
   revision: number;
   quantity: number;
@@ -210,7 +216,7 @@ export type BuildPacketArgs = {
   /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
   askedText?: string;
   threadText?: string;
-  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; together?: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
+  asks?: { deliveryRisk: boolean; accessibleSpaces: boolean; together?: boolean; view?: boolean; salesAsked?: boolean; parking?: { admissionEachCents: number | null; admissionAllIn: boolean } | null; gapAgainst?: { perTicketCents: number; beforeFees: boolean } | null; worth?: boolean; difference?: boolean; cheaper?: boolean; whichCheaper?: boolean; fits?: boolean; taxAsked?: boolean; quotedRows?: number[] } | null;
   /** They said the offer or screenshot is a made-up example: its facts, and no live-market or buying advice. */
   synthetic?: boolean;
   /** They asked whether to buy now or wait, or whether prices are trending (TGQA-R6 1011): answered first, or abstained. */
@@ -2000,7 +2006,7 @@ function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
 }
 
 /** Claims that answer a question asked in the thread; with one of them, a follow-up reply is just the answer. */
-const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
+const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_VIEW', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
 /** The offer to narrow seats we named: said with the seats, so not again in a follow-up that answers a question about them. */
 const NARROW_PICKS = 'If you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.';
 
@@ -2179,6 +2185,21 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       url: a.best.offer.directPurchaseUrl,
       ...(vb ? { card: { head: vb.headline, title: vb.seatLine, price: vb.total, notes: vb.basis, others: [], after: [], brief: vb } } : {}),
     });
+  }
+  // "And lower bowl, how much would that be?" with nothing there inside the budget: the price there, then the pick (#158).
+  if (a.levelWanted && a.best) {
+    const where = a.levelWanted.level === 'lower' ? 'lower-bowl' : 'upper-level';
+    const c = a.levelWanted.cheapest;
+    const budget = a.priorities.budgetTotalCents;
+    const seats = q === 2 ? 'pair' : q === 1 ? 'seat' : `${q} seats`;
+    const text = c && c.comparableTotalCents !== null
+      ? `The cheapest ${where} ${seats} I can see ${q === 2 || q === 1 ? 'is' : 'are'}${c.offer.section ? ` in section ${c.offer.section}` : ''}: ${formatUsd(c.comparableTotalCents)} total${q > 1 ? ` (${formatUsd(perPersonCents(c.comparableTotalCents, q))} each)` : ''}${c.offer.priceCompleteness === 'verified_total' ? ' including the verified charges' : ' (estimated; some charges unknown)'}${budget != null && c.comparableTotalCents > budget ? `, over your ${formatUsd(budget)}` : ''}. ${budget != null && c.comparableTotalCents > budget ? 'Inside your budget, these are the seats I’d buy:' : 'These are the seats I’d buy:'}`
+      : a.levelWanted.block
+        ? `The only ${where} listing I can see is a block of ${a.levelWanted.block.offer.quantity}${a.levelWanted.block.offer.section ? ` in section ${a.levelWanted.block.offer.section}` : ''}, which may not sell as exactly ${q}. These are the seats I’d buy:`
+        : a.levelWanted.whole
+          ? `I don’t see any ${where} seats for ${q} listed right now: the only ${where} listing is a block of ${a.levelWanted.whole.offer.quantity}${a.levelWanted.whole.offer.section ? ` in section ${a.levelWanted.whole.offer.section}` : ''}, and it isn’t offered as ${q}. These are the closest I can find:`
+          : `I don’t see any ${where} seats for ${q} listed right now, so these are the closest I can find:`;
+    claims.push({ id: 'C_LEVEL', kind: c ? 'alternative_offer' : 'coverage', text, values: { level: a.levelWanted.level, totalCents: c?.comparableTotalCents ?? null, section: c?.offer.section ?? null }, scope: { quantity: q, seatZone: c?.offer.seatClass ?? null, feeBasis: c?.offer.priceCompleteness ?? null, observedAt: obs }, evidenceIds: c ? [c.offer.evidenceId] : [], methodVersion: null, limitations: c?.flags ?? [], customerVisible: true, ...(c?.offer.directPurchaseUrl ? { url: c.offer.directPurchaseUrl, linkLabel: `The ${where} ${seats}` } : {}) });
   }
   a.alternatives.slice(0, 2).forEach((alt, i) => {
     if (alt.comparableTotalCents === null) return;
@@ -2663,6 +2684,15 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({ id: 'C_TOGETHER', kind: 'catches', text: `I can’t confirm that yet: the listing data for ${togetherSeat ?? 'the lowest listing'}${on} doesn’t say whether the ${qtyWord(q)} seats are next to each other. The checkout page shows the seat numbers before you pay, so send me a screenshot of it and I’ll check they’re together.`, values: { quantity: q }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['not_a_verified_offer'], customerVisible: true });
   }
 
+  // "Do they have an unobstructed view?" about the seats we'd buy: what the listing says, and what it can't show (#158: the
+  // recommendation came back with the view never mentioned).
+  if (a.asks?.view && a.best && !a.subject) {
+    const seat = seatPhrase(a.best.offer.section, a.best.offer.row);
+    const where = seat ? `${seat.replace(/^Section/, 'section').replace(/Row/, 'row')}` : 'the seats I’d buy';
+    const marked = a.best.offer.restrictions.find((r) => /obstructed|limited|partial|restricted/i.test(r));
+    claims.push({ id: 'C_VIEW', kind: 'catches', text: marked ? `The listing for ${where} says the view is ${marked.replace(/_/g, ' ').replace(/ view$/, '')}: check the seat view on the checkout page before you pay.` : `The listing for ${where} isn’t marked obstructed or limited view, and I leave out listings that are. It doesn’t show the sightline itself, so look at the seat view on the checkout page before you pay.`, values: { marked: marked ?? null }, scope: { quantity: q, seatZone: a.best.offer.seatClass ?? null, feeBasis: null, observedAt: obs }, evidenceIds: [a.best.offer.evidenceId], methodVersion: null, limitations: ['listing_data_only'], customerVisible: true });
+  }
+
   // Seats named for them are the price summary: the venue floor, its source line and a read worked out from that floor
   // would give a second, conflicting "cheapest" right under them (a block of five quoted under four seats picked).
   if (claims.some((c) => c.id === 'C_PICKS' && c.customerVisible)) for (const c of claims) if (['C_MARKET', 'C_MARKET_TYPICAL', 'C_READ'].includes(c.id) || (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text))) c.customerVisible = false;
@@ -2797,6 +2827,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     ...(answered ? {} : headlineFor(a)),
+    ...(a.preface?.length ? { preface: a.preface } : {}),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,

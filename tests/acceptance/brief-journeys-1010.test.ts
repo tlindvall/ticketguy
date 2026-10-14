@@ -397,12 +397,11 @@ describe(`brief journeys, end to end through dispatch (${ENFORCE ? 'SD enforce' 
       expect(text).toContain('I’d choose this alternative. Your pair is $360, and I can’t tell whether that includes fees; this comparable pair in section 112, row 12 is $326 before fees, in the same section: $34 less as listed, so compare the checkout totals.');
       expect(text).toMatch(/Search StubHub for section 112: http/);
       expect(text).not.toMatch(/send me the (?:price|link|screenshot)|what(?:\u2019|')s the price/i);
-      const breaks = rules(s!, ['event']);
-      // Two was assumed, so an acknowledgment ("Got it. Here's what I have:") goes out seconds before the answer even
-      // though nobody reviews it (pipeline: "anything we assumed still gets the acknowledgment").
-      const ack = (b: string) => b.startsWith('[acknowledgment] first paragraph');
-      knownGap('J2a: an acknowledgment email before the answer when a count was assumed', breaks.some(ack));
-      expect(breaks.filter((b) => !ack(b))).toEqual([]);
+      // Two was assumed: unreviewed, that is said in the answer, the one email for their one message (#155). It used to
+      // come as an acknowledgment ("Got it. Here's what I have:") seconds before the answer.
+      expect(s!.emails).toHaveLength(1);
+      expect(text).toContain('I\'ve assumed two tickets. Just tell me if you need a different number.');
+      expect(rules(s!, ['event'])).toEqual([]);
     });
     it('(b) with a screenshot of the listing', async () => {
       const [s] = await journey('j2b', [{ text: 'Is this Dua Lipa ticket a good deal?', subject: 'Dua Lipa', read: { ...DUA, quantity: null }, screenshots: [{ seller: 'StubHub', eventName: 'Dua Lipa: Radical Optimism Tour', eventDate: '2026-10-24', eventTime: '20:00', venue: 'Madison Square Garden', city: 'New York', quantity: 2, priceText: '$186 each + fees; total $446', priceDollars: 186, priceBasis: 'per_ticket', feeBasis: 'before_fees', totalDollars: 446, section: '109', row: '4', seatsTogether: true }] }]);

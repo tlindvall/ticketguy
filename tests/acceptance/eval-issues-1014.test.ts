@@ -93,7 +93,7 @@ describe('side questions and a closing thanks get their own short answer (#136, 
     const [, side, next] = (await replay('side-question')) as [TurnOut, TurnOut, TurnOut];
     expect(side.newRecommendations).toBe(0);
     expect(side.emails).toHaveLength(1);
-    expect(side.reply).toMatch(/Directions are outside what I check/);
+    expect(side.reply).toMatch(/built directly on top of Penn Station/);
     // The request carries on: the next question gets the recommendation, with no holding note before it.
     expect(next.emails.map((e) => e.cls)).toEqual(['recommendation']);
     expect(next.brief).toMatchObject({ quantity: 5, budgetCents: 50000 });
@@ -107,8 +107,10 @@ describe('side questions and a closing thanks get their own short answer (#136, 
   }, 60_000);
 
   it('a holding note goes only with a real change while a person reviews the answer', async () => {
-    const [, grows] = (await replay('party-grows')) as [TurnOut, TurnOut];
+    // The eval sends drafts as written, as production does (#155); a person reviewing is this test's case.
+    const reviewed = (id: string) => replay({ ...scenario(id), env: { AUTO_SEND_RECOMMENDATIONS: 'false' } });
+    const [, grows] = (await reviewed('party-grows')) as [TurnOut, TurnOut];
     expect(grows.reply).toContain('Got your update: 5 tickets.');
-    for (const t of await replay('side-question')) expect(t.reply).not.toContain('Got your note');
+    for (const t of await reviewed('side-question')) expect(t.reply).not.toContain('Got your note');
   }, 60_000);
 });

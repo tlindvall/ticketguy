@@ -26,7 +26,7 @@ an in-memory database and no email sent. Needs `OPENAI_API_KEY` in `.env.local` 
   true, one question max, one email per message, design), across the thread (memory, repeated replies, re-asked
   questions), and model-graded (answered the question; whole-thread coherence naming the step where it broke).
 - Production flags: the eval runs with the app's defaults, which match `render.yaml` (price alerts and event alerts
-  off). Scenarios that test a feature that is off in production set `env` and carry the tag `flag-off-in-prod`.
+  off), and sends drafts as written (`AUTO_SEND_RECOMMENDATIONS`), as production does with its testers' allowlist. Scenarios that test a feature that is off in production set `env` and carry the tag `flag-off-in-prod`.
 
 Rules:
 

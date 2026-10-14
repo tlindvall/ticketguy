@@ -1472,3 +1472,30 @@ A rules-reader run of every core, family and long eval thread, main against this
 | "together" claims true | 42/46 | 47/47 |
 
 **Not verified:** the eval with the real model. This environment has no OPENAI_API_KEY or BRAINTRUST_API_KEY. CI runs the PR suite (core and families) on the PR; the long and simulated threads (#144, #145, #146) run nightly.
+
+## 78. One email per customer message; each reply answers what was asked (Oct 14)
+
+Scheduled-eval issues #155 (45 threads with two emails for one message) and #158 (7 threads answering a different question).
+
+**#155. The eval measured a review queue production doesn't run.** The harness used the code default, an empty recipient allowlist, which holds every answer for a reviewer. Production has the testers' allowlist set, so drafts are auto-approved and go out within seconds. `AUTO_SEND_RECOMMENDATIONS` does the same at launch (owner's decision, Oct 9). The eval was therefore scoring a "checking your options" acknowledgment that production doesn't send.
+
+**Decisions.**
+- **The eval sends drafts as production does.** `evals/harness.ts` sets `AUTO_SEND_RECOMMENDATIONS=true`; a scenario about review sets it to `"false"`.
+- **An answer that went out is counted once.** Before, an answer counted twice, as its send and as its draft. The scorer is unchanged.
+- **Unreviewed, what we assumed rides in the answer.** Examples: two tickets, the next home game, a date we moved to. The acknowledgment still went out for these, seconds before the answer. The lines are now recorded for the revision (`request.answer_notes`). The answer says them under its headline and event card, in both the drafted and the evidence-only renderings. With review on, the acknowledgment goes as before.
+
+**#158. Decisions.**
+- **Getting there.** A venue whose station is part of what it is gets that fact as the answer: the Garden on Penn Station, Barclays on Atlantic Avenue, Yankee Stadium, Citi Field, Crypto.com Arena. Any other venue gets the pointer to its own page. No route is made up.
+- **A level they ask about gets its price.** "And lower bowl, how much would that be?" with nothing there inside the budget gives the cheapest lower-bowl option and that it's over the budget. The pick inside the budget follows, with both links. When the level has nothing for the party, the reply says so, including when it holds only a bigger block that isn't sold as their count. The line appears only when the latest message asks about the level, so "upper is ok" drops it.
+- **"Thanks, buying the 210 ones" is a choice, not a question.** It gets one line pointing to the link already sent and the checkout total. Any watch on it stops and the request closes. "Go with the kings" picks a game and is not read as this.
+- **The view, from the listing.** "Do those balcony seats have an unobstructed view?" is answered first. The reply says whether the listing marks them obstructed or limited, that such listings are left out, and that the sightline itself is to be checked at checkout.
+- **What they sent comes first.**
+  - A blurry screenshot with "can u beat this price" says the total it shows and that the count can't be read, then asks the count.
+  - A link to an event we can't place says that first, before anything about the night it points to.
+
+**Verified:**
+- `tests/acceptance/one-email-155.test.ts` and `tests/acceptance/answered-158.test.ts`;
+- the J2a known gap in brief-journeys is closed and is now a plain assertion;
+- in a rules-reader run of the 59 core, family and long threads, no step has two emails.
+
+**Not verified here:** the real-model eval. It runs in CI on the PR, and the score table goes in the PR.

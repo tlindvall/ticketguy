@@ -238,7 +238,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   const pickCard = claim('C_PICKS')?.card ? claim('C_PICKS')! : undefined;
   const bestBrief = claim('C_BEST')?.card?.brief ? claim('C_BEST')! : undefined;
   const brief: TicketBrief | undefined = pickCard?.card?.brief ?? bestBrief?.card?.brief;
-  const picksFirst = !!(pickCard ?? bestBrief) && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER') && !claim('C_TOGETHER');
+  const picksFirst = !!(pickCard ?? bestBrief) && !claim('C_CORRECTION') && !claim('C_WATCH') && !claim('C_ROWS_ANSWER') && !claim('C_REALISTIC') && !claim('C_TREND_ANSWER') && !claim('C_TOGETHER') && !claim('C_VIEW') && !claim('C_LEVEL');
   if (picksFirst && brief) {
     const top = briefTop(brief);
     lines.push(...top.text);
@@ -265,7 +265,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // they're confirmed on their own, from the saved state, before any advice.
   const watch = claim('C_WATCH');
   // State they asked about comes first (a watch running or not), then the question in their latest message.
-  const primary = [claim('C_CORRECTION'), watch, claim('C_SALE_OPENS'), claim('C_NONE_LISTED'), claim('C_SEAT_VERDICT'), claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PRICE_ANSWER'), claim('C_TOGETHER'), claim('C_PICKS'), bestBrief, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
+  const primary = [claim('C_CORRECTION'), watch, claim('C_SALE_OPENS'), claim('C_NONE_LISTED'), claim('C_SEAT_VERDICT'), claim('C_ROWS_ANSWER'), claim('C_REALISTIC'), claim('C_TREND_ANSWER'), claim('C_PRICE_ANSWER'), claim('C_TOGETHER'), claim('C_VIEW'), claim('C_PICKS'), claim('C_LEVEL'), bestBrief, claim('C_LINK_UNREAD'), claim('C_OFFERS'), claim('C_PARKING'), claim('C_DELIVERY'), claim('C_ACCESS'), claim('C_SALES'), verdict, quote, claim('C_REQS'), claim('C_STAFF')].filter((c): c is ClaimRecord => !!c);
   // A claim with bullets (their offers side by side) is its first line, then the bullets.
   const put = (c: ClaimRecord, lead = false) => {
     if (c.card) {
@@ -299,6 +299,11 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(designed ? briefHeadline(b.opening.trim()) : P(rich(b.opening.trim())));
   }
   if (designed) html.push(eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null }));
+  // What we assumed, under the answer and its event: with no acknowledgment before it, this is where it's said (#155).
+  for (const l of packet.preface ?? []) {
+    lines.push(l);
+    html.push(P(esc(l)));
+  }
   for (const c of primary.slice(1)) put(c);
 
   // A made-up example's details are short points (A11), anything else one sentence.
@@ -351,7 +356,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   // The model's paragraphs, for the claims the server hasn't placed. A paragraph left with no claim is
   // dropped: its prose only led into a claim now shown elsewhere ("That points to a simple way to judge any
   // seats you're eyeing:" followed by nothing).
-  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_SALE_OPENS', 'C_NONE_LISTED', 'C_SEAT_VERDICT', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PRICE_ANSWER', 'C_PRICE_ANSWER_ALT', 'C_TOGETHER', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_ALTERNATIVES_ALT', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
+  const SERVER_PLACED = new Set([...(official || linkOnly ? ['C_OFFICIAL'] : []), ...(bestBrief ? ['C_BEST', 'C_ALT1', 'C_ALT2'] : []), 'C_LINK', 'C_LINK_UNREAD', 'C_CORRECTION', 'C_SALE_OPENS', 'C_NONE_LISTED', 'C_SEAT_VERDICT', 'C_PARKING', 'C_SYNTHETIC', 'C_GAP', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_TREND_ANSWER', 'C_PRICE_ANSWER', 'C_PRICE_ANSWER_ALT', 'C_TOGETHER', 'C_VIEW', 'C_LEVEL', 'C_PICKS', 'C_PICKS_ALT', 'C_VERDICT', 'C_READ', 'C_WATCH', 'C_REQS', 'C_STAFF', 'C_OFFERS', 'C_SALES', 'C_DELIVERY', 'C_ACCESS', 'C_QUOTE', 'C_LEFT_OUT', 'C_SUBJECT', 'C_CATCHES', 'C_ALTERNATIVES', 'C_ALTERNATIVES_ALT', 'C_VERIFIED', 'C_QUOTE_MARKET', 'C_MARKET', 'C_MARKET_TYPICAL', ...(marketSource ? ['C_COVERAGE'] : [])]);
   for (const p of b.paragraphs) {
     const claimTexts = p.claimIds.filter((id) => !SERVER_PLACED.has(id)).map((id) => claimsById.get(id)!);
     if (!claimTexts.length) continue;
@@ -367,7 +372,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
   }
   // The show's own site they started on is always linked back (LAUNCH-07), whichever claims the draft used.
   // The alternative the verdict chose carries its own link (its page, or the marketplace's search): the next action.
-  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || ((c.id === 'C_PRICE_ANSWER' || c.id === 'C_PRICE_ANSWER_ALT') && !!claim('C_PRICE_ANSWER')) || ((c.id === 'C_ALTERNATIVES' || c.id === 'C_ALTERNATIVES_ALT') && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
+  const linked = packet.claimRecords.filter((c) => c.url && (used.has(c.id) || c === official || c === linkOnly || c.id === 'C_REFERENCE' || c.id === 'C_LEVEL' || ((c.id === 'C_PRICE_ANSWER' || c.id === 'C_PRICE_ANSWER_ALT') && !!claim('C_PRICE_ANSWER')) || ((c.id === 'C_ALTERNATIVES' || c.id === 'C_ALTERNATIVES_ALT') && c.customerVisible) || ((c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT') && c.customerVisible && !!claim('C_PICKS'))) && !(pickCard && (c.id === 'C_PICKS' || c.id === 'C_PICKS_ALT')) && !(bestBrief && ['C_BEST', 'C_ALT1', 'C_ALT2'].includes(c.id)));
   // The offer card carries its own links.
   // The follow-up questions end the email and replace the model's closing, which used to ask for things the
   // customer had already sent.
@@ -428,7 +433,8 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
   const said = rest.filter((c) => c.id !== 'C_ALTERNATIVES_ALT');
   // A single line that asks nothing stands on its own, as in the drafted email.
   const plain = asks.length === 1 && !asks[0]!.trim().endsWith('?');
-  const text = [GREETING, ...head, lead, ...said.map((c) => c.text), ...(plain ? [asks[0]!] : asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
-  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...said.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(plain ? [P(esc(asks[0]!))] : asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
+  const preface = packet.preface ?? [];
+  const text = [GREETING, ...head, lead, ...preface, ...said.map((c) => c.text), ...(plain ? [asks[0]!] : asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
+  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...preface.map((l) => P(esc(l))), ...said.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(plain ? [P(esc(asks[0]!))] : asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
   return { textBody: text, htmlBody: html };
 }

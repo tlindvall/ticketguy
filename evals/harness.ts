@@ -92,7 +92,14 @@ export async function screenshot(s: Screenshot): Promise<Uint8Array<ArrayBuffer>
   return new Uint8Array(await img.toBuffer());
 }
 
-const env = (over: Record<string, string> = {}) => testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10', ...over });
+/**
+ * Drafts go out as the system writes them, as they do in production: there the testers' allowlist turns on
+ * auto-approval (AUTO_APPROVE_WHILE_TESTING), and at launch AUTO_SEND_RECOMMENDATIONS does (owner's decision, Oct 9).
+ * The code default, an empty allowlist, holds every answer for a person no one is staffing, and the eval then scored
+ * the "a person is checking this" note as a second email the customer never gets (#155). A scenario about review
+ * sets AUTO_SEND_RECOMMENDATIONS to "false".
+ */
+const env = (over: Record<string, string> = {}) => testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10', AUTO_SEND_RECOMMENDATIONS: 'true', ...over });
 
 let threadNo = 0;
 /** Swap in other AI parts (the rule-based fixtures) to replay a scenario without a model key. */
@@ -146,7 +153,10 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
       const alertsNow = ws.length ? (await h.db.select({ id: t.watchAlerts.id }).from(t.watchAlerts).where(inArray(t.watchAlerts.watchId, ws.map((w) => w.id)))).length : 0;
       const alertsRaised = alertsNow - alertsSeen;
       alertsSeen = alertsNow;
-      const emails: Email[] = [...sends.map((x) => ({ cls: x.messageClass, subject: x.subject, text: x.bodyText, html: x.bodyHtml })), ...recs.map((x) => ({ cls: 'recommendation', subject: x.subject, text: x.bodyText, html: x.bodyHtml }))];
+      // An answer that went out (approved, or a price check sent on its own) is its send; counting its draft too
+      // made one email two ("no_result, recommendation", #155). A draft still waiting is the answer to come.
+      const sent = new Set(sends.flatMap((x) => [x.approvalId, /^rec:([^:]+):/.exec(x.dedupeKey ?? '')?.[1]]).filter(Boolean));
+      const emails: Email[] = [...sends.map((x) => ({ cls: x.messageClass, subject: x.subject, text: x.bodyText, html: x.bodyHtml })), ...recs.filter((x) => !sent.has(x.id)).map((x) => ({ cls: 'recommendation', subject: x.subject, text: x.bodyText, html: x.bodyHtml }))];
       return { step: i + 1, customer, at: now.toISOString(), reply: emails.map((m) => m.text).filter(Boolean).join('\n----\n'), emails, state: req?.state ?? null, eventId: req?.eventId ?? null, brief: (v?.brief as RequestExtraction) ?? null, newRecommendations: recs.length, watches, alertsRaised, expect };
     };
 
