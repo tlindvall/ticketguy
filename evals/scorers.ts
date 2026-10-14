@@ -44,6 +44,9 @@ const GROUNDED = (() => {
 const near = (v: number, allowed: Set<number>) => { for (const a of allowed) if (Math.abs(a - v) <= 100) return true; return false; };
 const OFFER_URLS = new Set([...Object.values(WORLD).flat().flatMap((o) => [o.directPurchaseUrl, o.affiliateUrl].filter(Boolean) as string[]), ...Object.values(LINKS)]);
 
+/** Marketplace search and city pages the product builds on purpose (never a specific listing). */
+const SEARCH_LINK = /^https:\/\/(www\.stubhub\.com\/search\?q=|www\.vividseats\.com\/search\?searchTerm=|ra\.co\/events\/[a-z]{2}\/[a-z-]+$)/;
+
 // ---------- per email ----------
 const PLAIN = new Set(['acknowledgment', 'clarification', 'holding', 'watch_alert', 'watch_confirmation', 'verification', 'manual_attention', 'no_result']);
 const questionsIn = (reply: string) => reply.split('\n----\n').flatMap((body) => body.match(/[^.!?\n]*\?(?=\s|$)/g)?.filter((s) => !/https?:/.test(s)) ?? []);
@@ -89,11 +92,12 @@ export const perEmail = [
     const bad = amounts.filter((v) => !near(v, allowed));
     return { ok: bad.length ? 0 : 1, why: `ungrounded: ${bad.map((v) => '$' + (v / 100).toFixed(2)).join(', ')}` };
   }),
-  perTurn('links_grounded', (tu) => {
+  perTurn('links_grounded', (tu, _i, _all, input) => {
     const urls = urlsIn(tu.reply);
     if (!urls.length) return null;
+    const extra = new Set((input?.groundedLinks ?? []).map((u) => u.replace(/\/+$/, '')));
     // Every listing link in the eval world is https://example.invalid/fixture/<listing>, including listings a test adds mid-thread.
-    const bad = urls.filter((u) => { if (OFFER_URLS.has(u) || u.startsWith('https://example.invalid/fixture/')) return false; try { const host = new URL(u).hostname; return !(host === SERVICE_DOMAIN || host.endsWith('.' + SERVICE_DOMAIN)); } catch { return true; } });
+    const bad = urls.filter((u) => { if (OFFER_URLS.has(u) || extra.has(u.replace(/\/+$/, '')) || SEARCH_LINK.test(u) || u.startsWith('https://example.invalid/fixture/')) return false; try { const host = new URL(u).hostname; return !(host === SERVICE_DOMAIN || host.endsWith('.' + SERVICE_DOMAIN)); } catch { return true; } });
     return { ok: bad.length ? 0 : 1, why: `unknown links: ${bad.join(' ')}` };
   }),
   /** "5 seats together in section 310" must match a listing that is actually together (not seatsTogether false). */
