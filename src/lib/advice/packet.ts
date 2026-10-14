@@ -64,6 +64,8 @@ export type AdvicePacket = {
   claimRecords: ClaimRecord[];
   /** Questions the email ends with, server-written from what we still don't know (never model-authored). */
   followUps?: string[];
+  /** What we assumed to get here ("I've gone with the next home game…"), said under the answer: unreviewed, the answer is the only email. */
+  preface?: string[];
   /** What the email is about, in one line at the top: "Knicks vs. Celtics, Madison Square Garden, Oct 24 · 5 tickets". */
   headline?: string;
   /**
@@ -94,6 +96,8 @@ export function packetHash(p: AdvicePacket): string {
 }
 
 export type BuildPacketArgs = {
+  /** Lines intake would have put in an acknowledgment: what it assumed, a date it moved to. */
+  preface?: string[];
   requestId: string;
   revision: number;
   quantity: number;
@@ -2797,6 +2801,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     ...(answered ? {} : headlineFor(a)),
+    ...(a.preface?.length ? { preface: a.preface } : {}),
     evidenceExpiresAt: a.evidenceExpiresAt?.toISOString() ?? null,
     eventStartAt: a.eventStartAt?.toISOString() ?? null,
     nextCheckpointAt: a.policy.nextCheckpointAt?.toISOString() ?? null,

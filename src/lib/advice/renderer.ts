@@ -299,6 +299,11 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     html.push(designed ? briefHeadline(b.opening.trim()) : P(rich(b.opening.trim())));
   }
   if (designed) html.push(eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null }));
+  // What we assumed, under the answer and its event: with no acknowledgment before it, this is where it's said (#155).
+  for (const l of packet.preface ?? []) {
+    lines.push(l);
+    html.push(P(esc(l)));
+  }
   for (const c of primary.slice(1)) put(c);
 
   // A made-up example's details are short points (A11), anything else one sentence.
@@ -428,7 +433,8 @@ export function renderEvidenceOnly(packet: AdvicePacket, _opts: { reviewed?: boo
   const said = rest.filter((c) => c.id !== 'C_ALTERNATIVES_ALT');
   // A single line that asks nothing stands on its own, as in the drafted email.
   const plain = asks.length === 1 && !asks[0]!.trim().endsWith('?');
-  const text = [GREETING, ...head, lead, ...said.map((c) => c.text), ...(plain ? [asks[0]!] : asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
-  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...said.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(plain ? [P(esc(asks[0]!))] : asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
+  const preface = packet.preface ?? [];
+  const text = [GREETING, ...head, lead, ...preface, ...said.map((c) => c.text), ...(plain ? [asks[0]!] : asks.length ? [questionsLead(asks.length), asks.map((q) => `- ${q}`).join('\n')] : []), ...(linked.length ? [linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n')] : [])].join('\n\n');
+  const html = [P(GREETING), ...(top ? [top.html] : []), P(rich(lead)), ...preface.map((l) => P(esc(l))), ...said.map((c) => (c.items?.length ? `<ul style="margin:0 0 18px;padding-left:22px;">${c.items.map((i) => `<li style="margin:0 0 8px;">${rich(i)}</li>`).join('')}</ul>` : P(rich(c.text)))), ...(plain ? [P(esc(asks[0]!))] : asks.length ? [P(esc(questionsLead(asks.length))), `<ul style="margin:0 0 18px;padding-left:22px;">${asks.map((q) => `<li style="margin:0 0 8px;">${esc(q)}</li>`).join('')}</ul>`] : []), ...(linked.length ? [P(linked.map((c) => `<a href="${esc(c.url!)}">${esc(c.linkLabel ?? 'View this offer')}</a>`).join('<br>'))] : [])].join('\n');
   return { textBody: text, htmlBody: html };
 }
