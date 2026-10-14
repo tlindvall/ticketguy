@@ -36,7 +36,7 @@ import { type CategoryHint, areaFor, venueInArea, browseLabel, genreFamilyFor, g
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { BEFORE_RE, dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { BEFORE_RE, WEEK_OF_RE, dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
@@ -134,7 +134,13 @@ const CHEAPEST_GAME_MAX_REFRESHES = 12;
  */
 const PRICE_LOW = /\b(?:cheapest|cheaper|least expensive|most affordable|affordable|lowest(?:[- ]priced)?|low(?:est)? prices?|best (?:price|deal|value)s?|cheap)\b/i;
 const GAME_CHOICE = /\b(?:which|what)\s+(?:\S+\s+){0,5}?(?:game|games|match|matches|date|dates|night|show|shows|one)\b|\b(?:cheapest|least expensive|most affordable|lowest[- ]priced|cheaper)\s+(?:\S+\s+){0,4}?(?:game|games|match|date|night|show)\b/i;
-export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && GAME_CHOICE.test(text);
+/**
+ * "Whichever is cheapest", "whichever's cheaper", "compare both and send the total": the customer leaves the choice of
+ * game to the price (eval #145: "2 tix to a rangers home game this week, whichever is cheapest" got "Which game?" three
+ * times).
+ */
+const WHICHEVER_CHEAPER = /\bwhichever(?:\s+(?:one|game|date|night|show))?\s*(?:is|'s|’s|s|works out|comes out)?\s*(?:the\s+)?(?:cheap(?:er|est)|lowest|least expensive|less expensive|best price)\b|\bcompare\s+(?:both|them|the\s+(?:two|2|games))\b/i;
+export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && (GAME_CHOICE.test(text) || WHICHEVER_CHEAPER.test(text));
 /**
  * A choice of games that names them: "which game is cheapest", never "which one is cheaper" ("one" can be a seat), and no
  * section or row in it. Only this sets aside a date from an earlier message (Oct 10 review: "Which one is cheaper,
@@ -468,6 +474,17 @@ export class Concierge {
       const source = own?.resolvedLocalDate ? extraction.dateExpression! : msg.sanitizedText ?? '';
       const kindOfDay = /^(?:this |next |on )?(?:sun|mon|tues|wednes|thurs|fri|satur)day$/i.test(read?.dateExpression?.trim() ?? '') && ((source.match(/\b(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?)(?:day)?s?\b/gi)?.length ?? 0) >= 2 || /\bweekends?\b|\bany\s+(?:sun|mon|tue|wed|thu|fri|sat)/i.test(source));
       if (read?.resolvedLocalDate && !kindOfDay) extraction = { ...extraction, resolvedLocalDate: read.resolvedLocalDate, dateExpression: extraction.dateExpression ?? read.dateExpression, ambiguities: (extraction.ambiguities as string[]).filter((x) => !['date_venue_timezone_unknown', 'date_unsupported_expression'].includes(x)) as typeof extraction.ambiguities };
+    }
+    // "The week of Jan 12" is that Monday-to-Sunday week, whatever day either reader pinned (eval #143: the model's
+    // Jan 12 listed one game). "That week" / "the same week" is the week of the day already in the brief (eval #144:
+    // "the kings game that week" after the Jan 12 Lakers game).
+    {
+      const said = msg.sanitizedText ?? '';
+      const weekOf = WEEK_OF_RE.exec(said);
+      const priorDay = (priorVersion?.brief as RequestExtraction | undefined)?.resolvedLocalDate ?? null;
+      const dateAmbiguities = (extraction.ambiguities as string[]).filter((x) => !x.startsWith('date_')) as typeof extraction.ambiguities;
+      if (weekOf) extraction = { ...extraction, dateExpression: weekOf[0], resolvedLocalDate: null, ambiguities: dateAmbiguities };
+      else if (priorDay && /\b(?:that|the same|same)\s+week\b/i.test(said)) extraction = { ...extraction, dateExpression: `week of ${priorDay}`, resolvedLocalDate: null, ambiguities: dateAmbiguities };
     }
     // "Connecticut" as the city is the state of Connecticut, not a town of that name.
     extraction = normalizePlace(extraction);
@@ -981,7 +998,38 @@ export class Concierge {
     let picked: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
     let pickNote: string | null = null;
     let pickLead: string | null = null;
-    if (isBrowseRequest(merged)) {
+    // A reply to the games our last email offered is read against those games first: by the side it names (either team),
+    // its day, its place in the list, "the earlier one", or a yes to the one we suggested. Only then is anything
+    // searched again (eval #135, #144: the reply was re-resolved against the calendar and the list was lost).
+    // Not a browse pick: what follows treats a game they named the ordinary way (the goal question, the acknowledgement).
+    let bound: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
+    // "Yes please, let me know" answers the alert offer, not the show suggested beside it.
+    // Nor a new ask about the list ("anything else on Saturday?") or for another kind of event ("how about concerts on
+    // Thursday" after sports picks): the same guards a browse pick has.
+    if (revision > 1 && !supplied.textOffers.length && !listing.fields && !merged.notifyAsked && !extraction.notifyAsked && sameKind(extraction.categoryHint ?? null, priorBrief?.categoryHint ?? null) && !LIST_QUESTION.test(flat(latestText))) {
+      const offered = await this.offeredRows(req);
+      const idx = offered ? offeredChoice(flat(latestText), offered, extraction.performerOrTeam ?? null) : null;
+      if (offered && idx !== null) {
+        bound = offered[idx]!;
+        merged = await this.boundToEvent(merged, bound);
+      }
+    }
+    // A team named with no day, which is a side of a game this request already settled on, is that game again: "ok
+    // stick with celtics" after a detour to the Nets game is Knicks vs Celtics, never a search for Celtics home games
+    // (eval #146). Not when it is a side of the game settled now: that is the same game, kept the ordinary way.
+    if (!bound && revision > 1 && extraction.performerOrTeam && !extraction.resolvedLocalDate && !extraction.dateExpression && !ticketLinksIn(extraction.submittedUrls ?? []).length && !listing.fields && !extraction.notifyAsked) {
+      const earlier = await this.threadEvents(req.id);
+      const current = earlier.find(({ e }) => e.id === req.eventId);
+      const named = extraction.performerOrTeam;
+      if (!(current && namesSide(current.e.name, named))) {
+        const hits = earlier.filter(({ e }) => e.id !== req.eventId && namesSide(e.name, named));
+        if (hits.length === 1) {
+          bound = hits[0]!;
+          merged = await this.boundToEvent(merged, bound);
+        }
+      }
+    }
+    if (!bound && isBrowseRequest(merged)) {
       const b = await this.browse({ req, msg, contact: contact!, merged, revision, more: extraction.wantsMore === true && req.browseShown.length > 0, kinds: { said: extraction.categoryHint, page: priorBrief?.categoryHint ?? null } });
       if (!('pick' in b)) return b;
       picked = b.pick;
@@ -1035,10 +1083,12 @@ export class Concierge {
     // is no scope for it (Oct 10 review: asked in the thread that settled Oct 11, the date kept the answer on Oct 11).
     if (!picked && asksCheapestOfGames(flat(latestText)) && !extraction.resolvedLocalDate && merged.resolvedLocalDate) merged = { ...merged, resolvedLocalDate: null, dateExpression: extraction.dateExpression ?? null };
     const rules = await this.resolveRules(req, merged, venueTz, msg.receivedAt);
-    rules.cheapest = !picked && asksCheapestGame(flat(latestText));
+    rules.cheapest = !picked && !bound && asksCheapestGame(flat(latestText));
     // Event resolution (a browse that found exactly one event has already resolved it).
     let found: Awaited<ReturnType<Concierge['resolveEvent']>> = picked
       ? { kind: 'resolved', event: picked.e, venue: picked.v, label: eventLabel(picked.e, picked.v), entityKind: null }
+      : bound
+      ? { kind: 'resolved', event: bound.e, venue: bound.v, label: eventLabel(bound.e, bound.v), entityKind: null }
       : await this.resolveEventWithDiscovery(merged, { requestId: req.id, receivedAt: msg.receivedAt, venueTimeZone: venueTz, home: merged.city || stateOnly(merged) ? null : await this.contactMarket(contact!.id), rules });
     // The resolver's own answer, before any list choice, nearby pick or rule-fitting suggestion below replaces it. "When
     // do they play home next?" asks for that answer, whatever game was settled.
@@ -1073,7 +1123,7 @@ export class Concierge {
     // their order is the order they saw.
     // The ranking is read only while the reply is still choosing among its games: one it found already, or another
     // team's ("make it the knicks game on Saturday"), is their pick, never the list's Saturday (Oct 10 review).
-    if (!picked && revision > 1) {
+    if (!picked && !bound && revision > 1) {
       const sent = await this.listSent(req);
       const ranked = sent?.kind === 'games_ranked' && found.kind === 'ambiguous' && found.candidates.some((c) => sent.rows.some(({ e }) => e.id === c.id)) ? sent : null;
       const options = ranked ? ranked.rows : elsewhere.length > 1 ? elsewhere.map(({ e, v }) => ({ e, v })) : found.kind === 'ambiguous' && found.candidates.length > 1 ? await this.eventRows(found.candidates.map((c) => c.id)) : [];
@@ -1092,7 +1142,9 @@ export class Concierge {
     // "Did you check Saturday too?" asks about another date; it doesn't move the request there (Research 1,
     // Brooklyn). The settled event stays, and the other date is answered for the same performer.
     // "What about Dua Lipa instead?" names a new act, not another date for this one (audit gap 11).
-    const altAsk = !picked && settledId && ALT_DATE_ASK.test(flat(latestText)) ? await this.settledRow(settledId) : null;
+    // "What about Saturday's game instead?" moves the request; only a question about another date keeps it (eval
+    // long/rangers-group-saga: "instead" kept Thursday's game).
+    const altAsk = !picked && !bound && settledId && ALT_DATE_ASK.test(flat(latestText)) && !/\binstead\b|\bswitch (?:to|it)\b|\bchange (?:it )?to\b/i.test(flat(latestText)) ? await this.settledRow(settledId) : null;
     let altDateNote: string | null = null;
     if (altAsk && (merged.resolvedLocalDate || merged.dateExpression)) {
       const tzA = altAsk.v.timezone;
@@ -1120,11 +1172,18 @@ export class Concierge {
     // brief followed). The game from an earlier email is no answer to it, so neither the settled nor the remembered
     // game is kept. Fewer than two games to compare falls through to the ordinary "which game?" question.
     const cheapestAsk = !picked && !altAsk && !!rules.cheapest && found.kind === 'ambiguous';
+    // "Whichever is cheaper, send the link": the choice is ours to make on price, so a handful of games are checked against
+    // the listings we can verify for their party and the cheaper one is settled, with what both cost said (eval #145:
+    // "Which game?" three times, then "I can't rank them on price for you" with listings for both on file).
+    if (cheapestAsk && found.kind === 'ambiguous' && WHICHEVER_CHEAPER.test(flat(latestText)) && found.candidates.length <= 4) {
+      const cheaper = await this.cheaperByCheckedListings(found.candidates.map((c) => c.id), merged);
+      if (cheaper) found = { kind: 'resolved', event: cheaper.e, venue: cheaper.v, label: eventLabel(cheaper.e, cheaper.v), entityKind: null, assumed: cheaper.line };
+    }
     if (cheapestAsk && found.kind === 'ambiguous') {
       const ranked = await this.compareGames({ req, msg, contact: contact!, merged, revision, cands: found.candidates, said: flat(latestText) });
       if (ranked) return ranked;
     }
-    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !cheapestAsk && settledId ? ((await this.keepSettledEvent(settledId, found, extraction, rules, found === resolverFound && !asksNext)) ?? found) : found;
+    const settled = altAsk ? { kind: 'resolved' as const, event: altAsk.e, venue: altAsk.v, label: eventLabel(altAsk.e, altAsk.v), entityKind: null } : !picked && !bound && !cheapestAsk && settledId ? ((await this.keepSettledEvent(settledId, found, extraction, rules, found === resolverFound && !asksNext)) ?? found) : found;
     // A choice they already made is never asked again, whatever reopened it: a new request in the same thread, a
     // revision that lost the event, a reply to an older email (live Oct 6: "Which show: Thu, Nov 19 … or Sat, Nov 21?"
     // straight after the Nov 19 seats were sent).
@@ -1449,6 +1508,11 @@ export class Concierge {
       // An electronic act we can't find is often only on Resident Advisor: point there for the customer's city.
       const ra = noMatch && genreFamilyFor(merged.genreHint)?.key === 'electronic' ? raPointer((await this.marketForRequest(merged, contact!.id))?.market.id) : null;
       await this.db.update(t.requests).set({ clarificationCount: count }).where(eq(t.requests.id, req.id));
+      // What this question offered them to choose from, in the order it showed it, so their reply is read against those
+      // games before anything is searched again (eval #135, #144: "The Islanders game" and "the lakers one on tuesday"
+      // started new searches; "The earlier one works" got the same question back).
+      const offeredIds = elsewhere.length ? elsewhere.map(({ e }) => e.id) : resolution.kind === 'no_match' && nearDates.length ? nearDates.map(({ e }) => e.id) : resolution.kind === 'ambiguous' ? (gameRows.length ? gameRows.map(({ e }) => e.id) : resolution.candidates.map((c) => c.id)) : resolution.kind === 'resolved' ? [resolution.event.id] : [];
+      if (offeredIds.length) await audit(this.db, { actor: 'system', action: 'request.options_offered', entityKind: 'request', entityId: req.id, revision, diff: { listed: offeredIds } });
       await this.transition(req.id, 'needs_clarification', unresolved.join(','));
       await this.queueSend({ messageClass: 'clarification', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'One quick question'), template: 'clarification', vars: { acknowledgement: imageUnread ? (skippedNote ? `${skippedNote} I haven’t assumed anything about the tickets.` : imageUnreadLine(imageUnread)) : (revision > 1 ? ownedMiss(latestText) : null) ?? (answerFirst && eventNote ? eventNote : acknowledgementLine(merged)), eventNote: imageUnread || (answerFirst && eventNote && !(revision > 1 && ownedMiss(latestText))) ? null : eventNote, questions, assumptions: imageUnread ? listingNotes.filter((n) => n !== skippedNote) : [...assumptions.filter((a) => !(settled && resolution.kind === 'resolved' && a === resolution.assumed)), ...(waitLine ? [waitLine] : [])], countryCheck, knownFacts, ra: imageUnread ? null : ra }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
       return { state: 'needs_clarification', revision, extraction: merged };
@@ -2579,7 +2643,7 @@ export class Concierge {
     return [exact, rest].filter((x) => x.length);
   }
 
-  async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null, depth = 0): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
+  async resolveEvent(x: RequestExtraction, home?: Market | null, rules?: ResolveRules | null, depth = 0, awayGames = false): Promise<{ kind: 'resolved'; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; label: string; entityKind: 'artist' | 'team' | null; assumed?: string | null } | { kind: 'ambiguous'; candidates: EventCandidate[] } | { kind: 'no_match'; reason: NoMatchReason; conflict?: ConstraintConflict } | { kind: 'non_us' }> {
     if (!x.performerOrTeam) return { kind: 'no_match', reason: 'no_performer' };
     // The performance a pasted link names ("…/event/0300643DF03B25CE") is that performance, not the first show that day.
     // Links are read lower-cased; provider ids are compared the same way ("0300643DF03B25CE").
@@ -2708,6 +2772,16 @@ export class Concierge {
           const homeMk = entity.kind === 'team' ? teamHomeMarket(entity.name) : null;
           const rows = homeMk ? loaded.map((r) => (r.e.isHome !== false && entity.homeVenueId !== r.v.id && !inMarket(r.v, homeMk) ? { ...r, e: { ...r.e, isHome: false } } : r)) : loaded;
           perEntity.push({ entity, cands: windowFilter(rows, entity.kind === 'team', attempt.opponent, entity) });
+        }
+        // Asked for once the catalog and the provider have no home game that fits (resolveEventWithDiscovery): the team's
+        // away games, so "the nets game sunday" is the Knicks hosting the Nets that Sunday, never the Nets' next home game
+        // (eval #146).
+        if (awayGames && !perEntity.some((p) => p.cands.length > 0) && !rules?.homeOnly && (x.resolvedLocalDate || x.dateExpression || attempt.opponent)) {
+          for (const p of perEntity) {
+            if (p.entity.kind !== 'team') continue;
+            const away = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.opponentEntityId, p.entity.id), gte(t.events.localStartAt, now), eq(t.events.status, 'scheduled'))).orderBy(asc(t.events.localStartAt)).limit(40);
+            if (away.length) p.cands = windowFilter(away.map((r) => ({ ...r, e: { ...r.e, isHome: false } })), true, attempt.opponent, p.entity);
+          }
         }
         if (perEntity.some((p) => p.cands.length > 0)) break;
       }
@@ -3111,6 +3185,68 @@ export class Concierge {
     return rows.length > 1 ? { kind: last.reason, rows, rankedBy: recorded ? d!.rankedBy ?? 'date' : 'date' } : null;
   }
 
+  /**
+   * The games our last email asked them to choose from, in the order it showed them: a "which game?" question, the games
+   * listed, the closest dates, a browse page or a ranking. Null when the last email offered none, or wasn't a question.
+   */
+  private async offeredRows(req: typeof t.requests.$inferSelect): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }> | null> {
+    if (req.state !== 'needs_clarification') return null;
+    const [row] = await this.db.select({ diff: t.auditLog.diff, revision: t.auditLog.revision }).from(t.auditLog).where(and(inArray(t.auditLog.action, ['request.options_offered', 'request.options_listed']), eq(t.auditLog.entityId, req.id))).orderBy(desc(t.auditLog.revision), desc(t.auditLog.createdAt)).limit(1);
+    if (!row || row.revision !== req.currentRevision) return null;
+    const ids = ((row.diff as { listed?: string[] } | null)?.listed ?? []).filter((x) => typeof x === 'string');
+    const rows = (await this.eventRows(ids)).filter(({ e }) => e.status === 'scheduled');
+    return rows.length ? rows : null;
+  }
+
+  /**
+   * The cheaper of a few games for their party, on the listings we can check now (the same sources research reads, none
+   * written down): each game's best eligible option for the party, all-in. Null unless at least one game has one; the
+   * line says what each costs, or that one had nothing for the party.
+   */
+  private async cheaperByCheckedListings(ids: string[], merged: RequestExtraction): Promise<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; line: string } | null> {
+    const q = merged.quantity && merged.quantity > 0 ? merged.quantity : 2;
+    const rows = (await this.eventRows(ids)).filter(({ e }) => e.status === 'scheduled' && e.localStartAt > this.now());
+    if (rows.length < 2) return null;
+    const configs = await this.db.select().from(t.adapterConfigs);
+    const cfgBySource = new Map(configs.map((c) => [c.sourceId, c]));
+    const facts = await adapterFacts(this.db);
+    const priced: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; total: number | null }> = [];
+    for (const { e, v } of rows) {
+      const planned = planSources({ category: e.category, maxAutomatedSources: Number.MAX_SAFE_INTEGER, adapters: facts, coveredSourceIds: await coveredSourceIds(this.db, e, facts), fixtureEvent: e.isFixture });
+      const offers: Offer[] = [];
+      for (const sourceId of planned.executable) {
+        const cfg = cfgBySource.get(sourceId);
+        const adapter = buildAdapter({ sourceId, implementation: (cfg?.implementation as AdapterActivation['implementation']) ?? 'not_integrated', enabled: cfg?.enabled ?? false, accessApprovalEvidence: cfg?.accessApprovalEvidence ?? null, monitoringAllowed: false }, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: this.env.TICKETMASTER_DISCOVERY_API_KEY ?? null, ticketmasterEnabled: this.env.TICKETMASTER_DISCOVERY_ENABLED, now: this.now });
+        const res = await adapter.search({ requestId: 'compare', revision: 0, eventId: e.id, providerEventId: null, quantity: q, hardConstraints: {} }).catch(() => null);
+        if (res) offers.push(...res.offers.filter((o) => o.eventId === e.id));
+      }
+      const best = compareOffers(offers, { quantity: q, togetherRequired: merged.togetherRequired, budgetTotalCents: null, excludeObstructedView: true, requireAccessible: !!merged.accessibilityNeeds, acceptableSections: null, eventStartAt: e.localStartAt.toISOString() }, e.id).eligible[0] ?? null;
+      priced.push({ e, v, total: best ? best.offer.payableTotalCents : null });
+    }
+    const withPrice = priced.filter((p): p is typeof p & { total: number } => p.total !== null).sort((a, b) => a.total - b.total || a.e.localStartAt.getTime() - b.e.localStartAt.getTime());
+    const top = withPrice[0];
+    if (!top) return null;
+    const day = (p: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => new Intl.DateTimeFormat('en-US', { timeZone: p.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(p.e.localStartAt);
+    const who = (p: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => `${readableTitle(p.e.name)} on ${day(p)}`;
+    const party = q === 1 ? 'for one' : `for ${countWordLower(q)}`;
+    const others = priced.filter((p) => p !== top).map((p) => (p.total !== null ? `${formatUsd(p.total)} for ${who(p)}` : `nothing checked ${party} for ${who(p)}`));
+    return { e: top.e, v: top.v, line: `Cheapest ${party}: ${who(top)}, ${formatUsd(top.total)} in total including the verified charges, against ${others.join('; ')}.` };
+  }
+
+  /** The games this request has settled on, newest first, still scheduled and still to come. */
+  private async threadEvents(requestId: string): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>> {
+    const logged = await this.db.select({ diff: t.auditLog.diff }).from(t.auditLog).where(and(eq(t.auditLog.action, 'request.event_settled'), sql`${t.auditLog.diff}->>'requestId' = ${requestId}`)).orderBy(desc(t.auditLog.createdAt)).limit(20);
+    const ids = [...new Set(logged.map((r) => String(r.diff?.eventId ?? '')).filter(Boolean))];
+    const now = this.now();
+    return (await this.eventRows(ids)).filter(({ e }) => e.status === 'scheduled' && e.localStartAt >= now);
+  }
+
+  /** The brief once a reply has picked one of the games offered: that game's team, day and city, not the words of the reply. */
+  private async boundToEvent(merged: RequestExtraction, picked: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }): Promise<RequestExtraction> {
+    const [ent] = picked.e.primaryEntityId ? await this.db.select({ name: t.entities.name }).from(t.entities).where(eq(t.entities.id, picked.e.primaryEntityId)) : [];
+    return { ...merged, performerOrTeam: ent?.name ?? merged.performerOrTeam, eventName: ent ? null : picked.e.name, resolvedLocalDate: eventLocalDate(picked.e.localStartAt, picked.v.timezone), dateExpression: null, city: picked.v.city ?? merged.city, state: picked.v.state ?? merged.state };
+  }
+
   private async eventRows(ids: string[]): Promise<Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>> {
     if (!ids.length) return [];
     const rows = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(inArray(t.events.id, ids));
@@ -3394,6 +3530,14 @@ export class Concierge {
    * failure never fails the request — it is recorded and the customer gets the honest "not on file" answer.
    */
   async resolveEventWithDiscovery(x: RequestExtraction, ctx: { requestId?: string; receivedAt: Date; venueTimeZone: string | null; home?: Market | null; rules?: ResolveRules | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
+    const home = await this.resolveHomeWithDiscovery(x, ctx);
+    // Nothing at home that fits the day or the opponent named, here or at the provider: the team's away games, last.
+    if (home.kind !== 'no_match' || home.reason === 'no_performer' || home.reason === 'constraint_conflict' || !(x.resolvedLocalDate || x.dateExpression)) return home;
+    const away = await this.resolveEvent(x, ctx.home, ctx.rules, 0, true);
+    return away.kind === 'resolved' || away.kind === 'ambiguous' ? away : home;
+  }
+
+    private async resolveHomeWithDiscovery(x: RequestExtraction, ctx: { requestId?: string; receivedAt: Date; venueTimeZone: string | null; home?: Market | null; rules?: ResolveRules | null }): Promise<Awaited<ReturnType<Concierge['resolveEvent']>>> {
     const local = await this.resolveEvent(x, ctx.home, ctx.rules);
     if (local.kind !== 'no_match' || local.reason === 'no_performer' || (local.reason === 'constraint_conflict' && local.conflict?.suggestion)) return local;
     const discovery = await this.discoveryAvailability();
@@ -4971,6 +5115,78 @@ export function nameChoice(text: string, names: string[]): number | null {
   const names_ = (k: string) => new RegExp(` the ${k} |\\b${k} (?:game|one|match)\\b`).test(said);
   const hits = distinct.map((ks, i) => (ks.some(names_) ? i : -1)).filter((i) => i >= 0);
   return hits.length === 1 ? hits[0]! : null;
+}
+
+/** Whether a team name is one side of a game's name: "Celtics", "Boston Celtics" or "the celtics" of "Knicks vs. Boston Celtics". */
+export function namesSide(eventName: string, team: string): boolean {
+  const norm = (x: string) => x.toLowerCase().replace(/[’']/g, '').replace(/\bst\.\s*/g, 'st ').replace(/\bthe\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const n = norm(team);
+  if (!n) return false;
+  const last = n.split(' ').at(-1)!;
+  // Whole words only: "nets" is not "hornets".
+  const within = (outer: string, inner: string) => ` ${outer} `.includes(` ${inner} `);
+  return eventName.replace(/\s*\([^)]*\)/g, '').split(/\s+(?:vs\.?|v\.?|at|@)\s+/i).map(norm).filter(Boolean).some((sd) => within(sd, n) || within(n, sd) || (last.length >= 4 && sd.split(' ').at(-1) === last));
+}
+
+/**
+ * Which of the games we offered a reply picks (eval #135, #144). Each thing the reply says narrows the games: a side it
+ * names (either team; a side every offered game shares narrows nothing), a day ("tuesday", "the 15th", "Jan 12"), a
+ * place in the list ("the second one"), "the earlier one" or "the later one". With one game offered, a plain yes picks
+ * it. Something said that fits none of them (another team, another day) is a new request, never forced onto the list.
+ * Null unless exactly one game is left.
+ */
+export function offeredChoice(text: string, rows: Array<{ e: { localStartAt: Date; name?: string | null }; v: { timezone: string } }>, named: string | null = null): number | null {
+  if (!rows.length) return null;
+  const t = text.toLowerCase().replace(/[’']/g, "'");
+  if (/\b(?:not|except|other than|rather than|instead of)\s+(?:the\s+)?\w/.test(t)) return null;
+  const all = rows.map((_, i) => i);
+  let left = all;
+  let signal = false;
+  const narrow = (hits: number[]) => {
+    signal = true;
+    left = left.filter((i) => hits.includes(i));
+  };
+  const norm = (x: string) => x.toLowerCase().replace(/[’']/g, '').replace(/\bst\.\s*/g, 'st ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const sides = rows.map(({ e }) => (e.name ?? '').replace(/\s*\([^)]*\)/g, '').split(/\s+(?:vs\.?|v\.?|at|@)\s+/i).map(norm).filter(Boolean));
+  const keys = (side: string) => { const w = side.split(' '); return [side, w.at(-1)!, w.slice(0, -1).join(' ')].filter((k) => k.length >= 4); };
+  const said = ` ${norm(text)} `;
+  const sideNamed = (side: string) => keys(side).some((k) => said.includes(` ${k} `));
+  // The team this message names, when it names one: it must be a side of an offered game, or the reply asks for another.
+  if (named) {
+    const hits = all.filter((i) => namesSide(rows[i]!.e.name ?? '', named));
+    if (!hits.length) return null;
+    if (hits.length < rows.length) narrow(hits);
+  }
+  const nameHits = all.filter((i) => sides[i]!.some(sideNamed));
+  if (nameHits.length && nameHits.length < rows.length) narrow(nameHits);
+  else if (nameHits.length && rows.length === 1) signal = true;
+  const dates = rows.map(({ e, v }) => eventLocalDate(e.localStartAt, v.timezone));
+  const dayHits = dayMatches(t, dates);
+  if (dayHits) narrow(dayHits);
+  const ord = ordinalChoice(text, rows.length);
+  if (ord !== null) narrow([ord]);
+  const byTime = all.slice().sort((a, b) => rows[a]!.e.localStartAt.getTime() - rows[b]!.e.localStartAt.getTime());
+  if (rows.length > 1 && /\b(?:earlier|earliest|sooner|soonest)\b/.test(t)) narrow([byTime[0]!]);
+  else if (rows.length > 1 && /\b(?:later|latest)\s+(?:one|game|show|date|night)\b|\bthe later\b/.test(t)) narrow([byTime.at(-1)!]);
+  if (rows.length === 1 && /^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|correct|that(?:'s| is)? (?:the )?one|that'?s it|perfect|great|sounds good)\b/.test(t)) signal = true;
+  return signal && left.length === 1 ? left[0]! : null;
+}
+
+/** The listed dates a reply's day fits ("tuesday", "the 15th", "Jan 12", "1/12"); null when it names no day. */
+function dayMatches(t: string, dates: string[]): number[] | null {
+  const fit = (pred: (m: number, d: number, wd: number) => boolean) => dates.map((iso, i) => {
+    const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+    return pred(m, d, new Date(Date.UTC(y, m - 1, d)).getUTCDay()) ? i : -1;
+  }).filter((i) => i >= 0);
+  const md = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:uary|ruary|ch|il|e|y|ust|t|tember|ober|ember)?\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/.exec(t);
+  if (md) return fit((m, d) => m === MONTH_NAMES.indexOf(md[1]!) + 1 && d === Number(md[2]));
+  const slash = /\b(\d{1,2})\/(\d{1,2})\b/.exec(t);
+  if (slash) return fit((m, d) => m === Number(slash[1]) && d === Number(slash[2]));
+  const day = /\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b/.exec(t);
+  if (day) return fit((_m, d) => d === Number(day[1]));
+  const wd = /\b(sun|mon|tue|wed|thu|fri|sat)(?:s|day|days|\.|nesday|rsday|rs|urday|sday)?(?:'s)?\b/.exec(t);
+  if (wd) return fit((_m, _d, w) => w === WEEKDAY_NAMES.indexOf(wd[1]!));
+  return null;
 }
 
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];

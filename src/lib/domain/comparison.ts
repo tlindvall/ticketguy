@@ -110,7 +110,10 @@ function rank(a: Evaluated, b: Evaluated): number {
 
 export function compareOffers(offers: Offer[], c: HardConstraints, eventId: string): ComparisonResult {
   const evaluated = offers.map((o) => evaluateOffer(o, c, eventId));
-  const eligible = evaluated.filter((e) => e.verdict === 'eligible').sort(rank);
+  // A group that didn't say splitting up is fine is shown seats together first: a block marked not together comes after
+  // every other option, whatever it costs, and is never the pick while a together option fits (eval #142).
+  const apart = (e: Evaluated) => (c.quantity > 1 && c.togetherRequired !== false && e.offer.seatsTogether === false ? 1 : 0);
+  const eligible = evaluated.filter((e) => e.verdict === 'eligible').sort((a, b) => apart(a) - apart(b) || rank(a, b));
   const needsReview = evaluated.filter((e) => e.verdict === 'needs_review').sort(rank);
   const excluded = evaluated.filter((e) => e.verdict === 'excluded');
   const groups: Record<string, Evaluated[]> = {};
