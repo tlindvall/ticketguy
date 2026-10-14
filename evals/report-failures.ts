@@ -96,11 +96,14 @@ for (const e of events) {
   }
 }
 
-const transcript = (scenario: string) => {
+/** Six steps of the thread, ending at the first step the failure names ("step 8: …"), so a late failure is shown. */
+const transcript = (scenario: string, why = '') => {
   const root = [...roots.values()].find((r) => r.metadata?.id === scenario);
   const steps = (root?.output as Array<{ step: number; customer: string; reply: string }> | undefined) ?? [];
+  const failing = Number(/\bstep (\d+)/.exec(why)?.[1] ?? 0);
+  const end = Math.max(6, steps.findIndex((s) => s.step === failing) + 1);
   return steps
-    .slice(0, 6)
+    .slice(end - 6, end)
     .map((s) => `**Customer (${s.step}):** ${s.customer}\n\n**Ticket Guy (${s.step}):**\n\`\`\`\n${(s.reply || '(no email)').replace(/\n+Ticket Guy\n[\s\S]*?AI-assisted[^\n]*/g, '').slice(0, 1200)}\n\`\`\``)
     .join('\n\n');
 };
@@ -135,7 +138,7 @@ for (const name of evaluated) {
 ${list.map((f) => `| \`${f.scenario}\` | ${f.why.replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`).join('\n')}
 
 ### Example: \`${list[0]!.scenario}\`
-${transcript(list[0]!.scenario)}
+${transcript(list[0]!.scenario, list[0]!.why)}
 
 **Reproduce:** \`EVAL_SUITE=nightly EVAL_ONLY=${[...new Set(list.map((f) => f.scenario))].slice(0, 6).join(',')} pnpm eval\`
 **Passes when:** \`${name}\` passes in every thread (this issue closes itself on the first run where it does).
