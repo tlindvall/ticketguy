@@ -62,7 +62,7 @@ describe('the view, from the listing', () => {
     // Production's service depth (shadow): under enforce a show goes to the Guide, which names no seats to judge.
     const s = { id: 'date-night/view', capability: 'x', env: { SERVICE_POLICY_MODE: 'shadow' }, steps: [{ text: 'Hi! Looking for 2 tickets to Hamilton on Saturday October 10, evening show, max $500 total.' }, { text: 'Balcony could work. Do those balcony seats have an unobstructed view?' }] } as unknown as Scenario;
     const view = at(await replay(s), 2);
-    expect(view.reply).toContain('The listing for section BALC, row C isn’t marked obstructed or limited view, and I leave out listings that are.');
+    expect(view.reply).toContain('The listing for section BALC, row C isn’t marked obstructed or limited view. I leave out listings that are.');
     // The pick is unchanged, so the reply is the answer and the pick in one line (#160).
     expect(view.reply.indexOf('isn’t marked obstructed')).toBeLessThan(view.reply.indexOf('My pick hasn’t changed: 2 seats together in section BALC'));
   }, 60_000);

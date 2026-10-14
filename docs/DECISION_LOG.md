@@ -1519,3 +1519,17 @@ Scheduled-eval issues #160 (a reply repeats the one before) and #159 (long threa
 - `no_repeated_reply` is 1 for every core, family and long thread in a rules-reader run.
 
 **Not verified here:** the real-model eval. CI runs the PR suite; the long threads run nightly.
+
+## 80. The cheapest, the row and the view are answered from the listings (Oct 14)
+
+Eval issue #158, its simulated threads at main-21: `sim/budget-dad` step 2 and `sim/date-night` step 2. Both replies repeated the recommendation and left the question open.
+
+**Decisions.**
+- **"Is that the cheapest option where all 4 of us sit together?"** gets yes or no from the listings whose full price is checked, comparing like for like (together with together). If no, it names the cheaper seats and the difference. A cheaper listing whose fees aren't shown is named with its before-fees price and the reason its total can't be compared. It is never counted as cheaper.
+- **"Which row?"** gets the row the listing gives. "Not the very top rows" also gets what the listing can't say, how far up that row sits, and where to check it (the seat map at checkout). Seat heights are not made up from section numbers.
+- **A view mentioned at all is answered.** That includes "balcony is fine as long as the view isn't obstructed", not only a question with a question mark. The answer covers the pick and one alternative shown with it: whether each listing marks the view, that obstructed listings are left out, and that the sightline is to be checked at checkout.
+- These are follow-up answers. With the pick unchanged, the reply is short (#79): the answers, then "My pick hasn't changed:".
+
+**Verified:** `tests/acceptance/answered-158-sims.test.ts` replays both persona questions in rules mode.
+
+**Not verified here:** the simulated customers. They need the real model and run only in the nightly suite.
