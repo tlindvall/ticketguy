@@ -107,6 +107,8 @@ export type BuildPacketArgs = {
   short?: boolean;
   /** "What are the options for the 5 of us?": the pick, then up to two others, together ones first, over-budget ones said so. */
   options?: Evaluated[] | null;
+  /** For "is that the cheapest?": the cheapest with its full price checked (same togetherness as the pick), and cheaper listings whose total isn't known. */
+  cheapestCheck?: { cheaper: Evaluated | null; unpriced: Evaluated[] } | null;
   /** Seats together asked for and none fit: the cheapest together without the budget, when any is listed. */
   togetherOver?: Evaluated | null;
   /** The level they asked for ("lower bowl") when the pick isn't in it: its cheapest option without the budget, if any. */
@@ -2019,7 +2021,7 @@ function timingCall(a: BuildPacketArgs): { lead: string; why: string } | null {
 }
 
 /** Claims that answer a question asked in the thread; with one of them, a follow-up reply is just the answer. */
-const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_VIEW', 'C_OPTIONS', 'C_TOGETHER_OVER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
+const FOLLOW_UP_ANSWERS = ['C_TREND_ANSWER', 'C_TOGETHER', 'C_VIEW', 'C_ROW', 'C_CHEAPEST', 'C_OPTIONS', 'C_TOGETHER_OVER', 'C_ROWS_ANSWER', 'C_REALISTIC', 'C_WATCH', 'C_DELIVERY', 'C_ACCESS', 'C_PARKING'];
 /** The offer to narrow seats we named: said with the seats, so not again in a follow-up that answers a question about them. */
 const NARROW_PICKS = 'If you have a budget with fees, or a part of the venue you’d rather sit in, tell me and I’ll look again.';
 
@@ -2713,11 +2715,36 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
 
   // "Do they have an unobstructed view?" about the seats we'd buy: what the listing says, and what it can't show (#158: the
   // recommendation came back with the view never mentioned).
-  if (a.asks?.view && a.best && !a.subject) {
-    const seat = seatPhrase(a.best.offer.section, a.best.offer.row);
-    const where = seat ? `${seat.replace(/^Section/, 'section').replace(/Row/, 'row')}` : 'the seats I’d buy';
-    const marked = a.best.offer.restrictions.find((r) => /obstructed|limited|partial|restricted/i.test(r));
-    claims.push({ id: 'C_VIEW', kind: 'catches', text: marked ? `The listing for ${where} says the view is ${marked.replace(/_/g, ' ').replace(/ view$/, '')}: check the seat view on the checkout page before you pay.` : `The listing for ${where} isn’t marked obstructed or limited view, and I leave out listings that are. It doesn’t show the sightline itself, so look at the seat view on the checkout page before you pay.`, values: { marked: marked ?? null }, scope: { quantity: q, seatZone: a.best.offer.seatClass ?? null, feeBasis: null, observedAt: obs }, evidenceIds: [a.best.offer.evidenceId], methodVersion: null, limitations: ['listing_data_only'], customerVisible: true });
+  // The view, the row and "is it the cheapest?" about the seats we'd buy (#158): answered from the listings, first, never
+  // the recommendation again with the question left over. A view mentioned at all ("balcony is fine as long as the view
+  // isn't obstructed") is answered like a view asked about, for the pick and the other seats shown with it.
+  const asked = (a.askedText ?? '').replace(/[’‘]/g, "'");
+  const seatAt = (e: Evaluated) => seatPhrase(e.offer.section, e.offer.row)?.replace(/^Section/, 'section').replace(/Row/, 'row') ?? null;
+  if ((a.asks?.view || /\b(?:obstruct\w*|unobstructed|clear view|(?:limited|partial|restricted)[- ]view|sightlines?)\b/i.test(asked)) && a.best && !a.subject) {
+    const seats = [a.best, ...a.alternatives.slice(0, 1)];
+    const one = (e: Evaluated) => {
+      const marked = e.offer.restrictions.find((r) => /obstructed|limited|partial|restricted/i.test(r));
+      const where = seatAt(e) ?? 'the seats I’d buy';
+      return marked ? `The listing for ${where} says the view is ${marked.replace(/_/g, ' ').replace(/ view$/, '')}.` : `The listing for ${where} isn’t marked obstructed or limited view.`;
+    };
+    claims.push({ id: 'C_VIEW', kind: 'catches', text: `${seats.map(one).join(' ')} I leave out listings that are. A listing doesn’t show the sightline itself, so look at the seat view on the checkout page before you pay.`, values: { seats: seats.length }, scope: { quantity: q, seatZone: a.best.offer.seatClass ?? null, feeBasis: null, observedAt: obs }, evidenceIds: seats.map((e) => e.offer.evidenceId), methodVersion: null, limitations: ['listing_data_only'], customerVisible: true });
+  }
+  // "Which row?", "not the very top rows": the row the listing gives, and what it can't tell (how high up that row is).
+  const height = /\b(?:(?:very )?top rows?|very top|high up|too high|nosebleeds?|last rows?|back rows?)\b/i.test(asked);
+  if ((/\b(?:which|what) rows?\b|\brows?\b[^.!?]{0,25}\?/i.test(asked) || height) && a.best?.offer.row && !a.subject && !claims.some((c) => c.id === 'C_VIEW')) {
+    const sec = a.best.offer.section ? ` of section ${a.best.offer.section}` : '';
+    claims.push({ id: 'C_ROW', kind: 'catches', text: `The seats I’d buy are in row ${a.best.offer.row}${sec}.${height ? ` The listing doesn’t say how far up row ${a.best.offer.row} sits${sec ? ` in section ${a.best.offer.section}` : ''}, so check the seat map at checkout before you pay.` : ''}`, values: { row: a.best.offer.row }, scope: { quantity: q, seatZone: a.best.offer.seatClass ?? null, feeBasis: null, observedAt: obs }, evidenceIds: [a.best.offer.evidenceId], methodVersion: null, limitations: ['listing_data_only'], customerVisible: true });
+  }
+  // "Is that the cheapest option where all 4 of us sit together?": yes or no from the listings with their full price, and
+  // a cheaper listing whose fees aren't shown named as that, never counted as cheaper.
+  if (a.cheapestCheck && a.best && a.best.comparableTotalCents !== null && /\b(?:is|are) (?:that|this|it|these|those|they)\b[^?.!]{0,50}\bcheapest\b|\bcheapest\b[^.!?]{0,60}\?/i.test(asked)) {
+    const c = a.cheapestCheck;
+    const together = q > 1 && a.best.offer.seatsTogether === true ? ' together' : '';
+    const lead = c.cheaper && c.cheaper.comparableTotalCents !== null && c.cheaper.offer.id !== a.best.offer.id
+      ? `No: ${seatsLine(c.cheaper)}${c.cheaper.offer.row ? `, row ${c.cheaper.offer.row},` : ''} come to ${formatUsd(c.cheaper.comparableTotalCents)} total including the verified charges, ${formatUsd(a.best.comparableTotalCents - c.cheaper.comparableTotalCents)} less.`
+      : `Yes: of the listings I can check with their full price, these are the cheapest ${q}${together}, at ${formatUsd(a.best.comparableTotalCents)} total including the verified charges.`;
+    const un = c.unpriced.map((e) => `section ${e.offer.section ?? 'unknown'}${e.offer.row ? `, row ${e.offer.row},` : ''} is listed at ${formatUsd(e.offer.baseTotalCents!)} before fees`).slice(0, 1);
+    claims.push({ id: 'C_CHEAPEST', kind: 'option_count', text: `${lead}${un.length ? ` One more: ${un[0]}, but its fees aren’t shown, so I can’t tell you its total.` : ''}`, values: { cheaper: c.cheaper?.offer.id ?? null, unpriced: c.unpriced.length }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [a.best.offer.evidenceId], methodVersion: null, limitations: [], customerVisible: true });
   }
 
   // Seats named for them are the price summary: the venue floor, its source line and a read worked out from that floor
