@@ -1431,3 +1431,44 @@ Live, Oct 10: "the emails are not readable. Just a block of text all of a sudden
 **Reverses:** the Oct 3 personal-email rule "no cards or buttons" for list emails (tests/unit/email-links.test.ts). The owner asked for the design back on the new logic.
 
 **Verified:** the unit and acceptance tests named in the PR, and Playwright renders at 420px using the app's own banner renderer. **Not verified live:** no real inbox has rendered these. Outlook desktop and dark-mode clients were not checked.
+
+## 77. A reply is read against the games we just offered; "the week of" is a week; together means together (Oct 14)
+
+Eval issues #135, #142, #143, #144, #145 and #146 (Braintrust conversation evals, PR #134 and PR #141) were all one failure seen several ways. A short reply after a list or a "which game?" question was resolved against the calendar instead of against the games we had just shown. "The Islanders game" became a search for Islanders home games. "The lakers one on tuesday" became the coming Tuesday, then a loop, then a hand-off to staff.
+
+**Decisions.**
+- **What we offered is recorded.** Every clarification that offers games records the game ids, in the order shown, as `request.options_offered`. Sources:
+  - a which-game question;
+  - the games listed;
+  - the closest dates;
+  - shows elsewhere;
+  - the one game we assumed.
+
+  Browse pages and rankings already record theirs as `request.options_listed`.
+- **A reply to an offer is bound before any search (`offeredChoice`).** Each thing the reply says narrows the offered games:
+  - either side it names (a side every offered game shares narrows nothing);
+  - its day ("tuesday" is the listed game's Tuesday);
+  - its place in the list;
+  - "the earlier/later one";
+  - with one game offered, a plain yes.
+
+  Anything that fits none of them, such as another team, another day or a "not", is a new request. So is a question about the list ("anything else on Saturday?"), another kind of event ("how about concerts on Thursday"), or a "let me know" to the alert offered beside a show. The brief then takes the game's team, day and city, not the reply's words. A bound game is not a browse pick: the goal question and the acknowledgement work as they do for a game named outright.
+- **A team named without a day that is a side of a game this request already settled on is that game again.** "Stick with celtics" after a detour to the Nets game goes back to Knicks vs Celtics. When neither the catalog nor Ticketmaster Discovery has a home game that fits the named day or opponent, the team's away games are searched last: "the nets game sunday" is Knicks vs Nets.
+- **"The week of Jan 12" is Monday to Sunday,** in every phrasing ("week of the 12th of january", "1/12 week", "jan 12 week"), whatever single day either reader pinned. "That week" is the week of the day already in the brief.
+- **"Whichever is cheaper" is ours to decide.** With up to four games offered, each is checked against the listings research would read, for the party. The cheapest is settled, and the reply says what each costs, including the verified charges. With nothing checkable, the SeatData ranking (#74) still answers.
+- **"What about X instead?" moves the request.** Only the question form ("did you check X too?") keeps the settled game.
+- **Seats together.** A group that didn't say splitting up is fine sees a listing marked not together ranked after every together option. It stays as a fallback. The plain best-option sentence says "together" only when the listing says so. The verified brief card already required it.
+
+**Verified:**
+- unit tests in tests/unit/list-binding-1014.test.ts;
+- acceptance tests in tests/acceptance/eval-issues-1014.test.ts, which run the eval world's own threads through the rules reader. To allow this, `evals/harness.ts` now takes optional reader stand-ins.
+
+A rules-reader run of every core, family and long eval thread, main against this branch, gave:
+
+| Measure | main | this branch |
+|---|---|---|
+| event correct | 40/70 | 51/70 |
+| mentions | 18/34 | 23/34 |
+| "together" claims true | 42/46 | 47/47 |
+
+**Not verified:** the eval with the real model. This environment has no OPENAI_API_KEY or BRAINTRUST_API_KEY. CI runs the PR suite (core and families) on the PR; the long and simulated threads (#144, #145, #146) run nightly.

@@ -2168,7 +2168,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_BEST',
       kind: 'current_offer',
-      text: `${q} seat${q > 1 ? 's' : ''} together${a.best.offer.section ? ` in section ${a.best.offer.section}` : ''}: ${formatUsd(total)} total (${formatUsd(pp)} each) including the verified charges, checked ${checkedAt(new Date(a.best.offer.observedAt), a.timeZone)}.`,
+      // "Together" only when the listing says so (eval #142: a split block of 5 was sent as "5 seats together").
+      text: `${q} seat${q > 1 ? 's' : ''}${q > 1 ? (a.best.offer.seatsTogether === true ? ' together' : a.best.offer.seatsTogether === false ? ', not all together,' : '') : ''}${a.best.offer.section ? ` in section ${a.best.offer.section}` : ''}${q > 1 && a.best.offer.seatsTogether === null ? ' (the listing doesn’t say whether they’re together)' : ''}: ${formatUsd(total)} total (${formatUsd(pp)} each) including the verified charges, checked ${checkedAt(new Date(a.best.offer.observedAt), a.timeZone)}.`,
       values: { totalCents: total, perPersonCents: pp, section: a.best.offer.section, sourceId: a.best.offer.sourceId },
       scope: { quantity: q, seatZone: a.best.offer.seatClass ?? null, feeBasis: a.best.offer.priceCompleteness, observedAt: obs },
       evidenceIds: [a.best.offer.evidenceId],
