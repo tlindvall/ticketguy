@@ -240,6 +240,15 @@ function cardCategory(e: { category: string; classification: { genre?: string | 
   return e.category.startsWith('ncaa') && sport ? `College ${sport}` : categoryLabel(e.category);
 }
 
+/**
+ * The US-only line is said only to someone who may be a visitor ("in New York for the weekend", "visiting", "on a
+ * trip"), not to every first-time customer: as a blanket line it is a general disclaimer the customer didn't ask
+ * for (#171). Someone who says where they live is handled by the residence rule instead.
+ */
+export function mayBeVisiting(text: string): boolean {
+  return /\b(?:(?:i'?m|we'?re|i am|we are|we'?ll be|i'?ll be) visiting|visiting from|for the (?:weekend|week)|on (?:a |our |my )?(?:trip|vacation|holiday)|in town for|tourists?|from abroad|overseas)\b/i.test(text.replace(/[’‘]/g, "'"));
+}
+
 export class Concierge {
   private readonly db: Db;
   private readonly env: Env;
@@ -1495,7 +1504,7 @@ export class Concierge {
       // Residency is an eligibility check, not part of the request: asked once, on its own line, on the first
       // clarification (ENGINEERING_SPEC §1), and remembered on the contact once answered.
       // Asked once, on the first reply in the thread, not on every follow-up (Research 1).
-      const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1;
+      const countryCheck = !contact!.countryConfirmed && count === 1 && revision === 1 && mayBeVisiting(msg.sanitizedText ?? '');
       const knownFacts = describeKnown(merged);
       const near = elsewhere.some((x) => x.miles !== null && x.miles <= NEARBY_TRAVEL_MILES);
       const nearNote = nearDates.length ? `\n\nThe closest ${titleCaseName(merged.performerOrTeam!)} ${eventNounFor(nearDates[0]?.e.category ?? null) === 'game' ? (nearDates.length === 1 ? 'game' : 'games') : nearDates.length === 1 ? 'date' : 'dates'} I have:\n${nearDates.map(({ e, v }) => `• ${friendlyWhen(e.localStartAt, v.timezone, this.now()).replace(/^./, (c) => c.toUpperCase())}: ${e.name}, ${v.name}`).join('\n')}` : '';
@@ -1589,7 +1598,7 @@ export class Concierge {
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1, category: cardCategory(resolution.event), artworkUrl },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1 && mayBeVisiting(msg.sanitizedText ?? ''), category: cardCategory(resolution.event), artworkUrl },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -1629,7 +1638,7 @@ export class Concierge {
     // before the answer was two emails for one message (#155, 45 eval threads, every one of them a first message).
     const notes = altDateNote ? [...assumptions, altDateNote] : assumptions;
     if ((revision === 1 || picked || cameFromReferral || altDateNote || bestAskedBefore) && !selfContained && !answeredUnreviewed) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: notes, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: notes, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 && mayBeVisiting(msg.sanitizedText ?? '') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     } else if (answeredUnreviewed && notes.length) {
       await audit(this.db, { actor: 'system', action: 'request.answer_notes', entityKind: 'request', entityId: req.id, revision, diff: { notes } });
     } else if (revision > 1 && !answeredUnreviewed && (req.state === 'awaiting_review' || req.state === 'researching') && revisionChanges(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null).length) {
@@ -2540,7 +2549,8 @@ export class Concierge {
     // With a start-time rule, the start time is what proves the fit, so it is shown (TGQA-R8 S04, writing review 6).
     const timed = !!(rules.after || rules.before || rules.exactTime !== null || rules.partOfDay);
     const startLabel = (e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect) => new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, hour: 'numeric', minute: '2-digit' }).format(e.localStartAt).replace(':00', '').replace(/\s?([AP])M/, (_m, x: string) => `${x.toLowerCase()}m`);
-    const unchecked = answer && toCheck.length && !(genre && !events.length) && !broadened ? `Not checked yet for any of these: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
+    // What isn't checked yet is named once, by the closing question ("Tell me which one, and I'll check the view"),
+    // not again as its own line above the list (#171: notes about what it hasn't checked read as extra).
     // "Tell me which you'd choose": named only when one is plainly closer on what's on file; otherwise the checks
     // decide, and the reply says so rather than picking at random (R1-DISCOVERY-CLOSURE-01).
     const askedChoice = ASKED_CHOICE.test(flat(threadText).replace(/[’‘]/g, "'"));
@@ -2609,7 +2619,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, `${label} in ${place}, ${span}`), template: 'browse_options',
-      vars: { answer, corrections: [...corrections, ...(unchecked ? [unchecked] : []), ...(choice ? [choice] : [])], pickNext: toCheck.length && options.length && !single ? (choice && fit[0]! > Math.max(...fit.slice(1)) ? `Want me to check ${listAnd([...new Set(toCheck.map(shortRequirement))])} for ${readableTitle(shown[0]!.e.name)}? Reply and I will, or name the other one.` : broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : `Tell me which one, and I’ll check ${listAnd([...new Set(toCheck.map(shortRequirement))])}.`) : null, headline: answer && !events.length ? '' : venueHeadline ?? headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length || asked ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate ?? (genre && !events.length && (merged.dateExpression || merged.resolvedLocalDate) ? `That’s everything I have on file for ${genreAsked} in ${place} that night. If the night or the area can change, tell me what and I’ll look again.`.replace(' that night', win.from === win.to ? ' that night' : ' those nights') : null), countryCheck: !contact.countryConfirmed && count === 1 && revision === 1, ra },
+      vars: { answer, corrections: [...corrections, ...(choice ? [choice] : [])], pickNext: toCheck.length && options.length && !single ? (choice && fit[0]! > Math.max(...fit.slice(1)) ? `Want me to check ${listAnd([...new Set(toCheck.map(shortRequirement))])} for ${readableTitle(shown[0]!.e.name)}? Reply and I will, or name the other one.` : broadened ? `Tell me which one appeals, and I’ll check it for ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : `Tell me which one, and I’ll check ${listAnd([...new Set(toCheck.map(shortRequirement))])}.`) : null, headline: answer && !events.length ? '' : venueHeadline ?? headline, options, picks, affiliate: picks.some((p) => p.affiliate), quantity: merged.quantity, single, moreCount: after?.events.length || asked ? 0 : events.length - shown.length, ...(genre && genreKept ? { narrowBy: 'an artist, venue or day', askFor: 'an artist' } : narrowByFor(merged.categoryHint)), assumption, emptyNote, nextStep: otherDate ?? (genre && !events.length && (merged.dateExpression || merged.resolvedLocalDate) ? `That’s everything I have on file for ${genreAsked} in ${place} that night. If the night or the area can change, tell me what and I’ll look again.`.replace(' that night', win.from === win.to ? ' that night' : ' those nights') : null), countryCheck: !contact.countryConfirmed && count === 1 && revision === 1 && mayBeVisiting(msg.sanitizedText ?? ''), ra },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
     });
     return { state: 'needs_clarification', revision, extraction: merged };
@@ -3428,7 +3438,7 @@ export class Concierge {
     await this.queueSend({
       messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
       subject: reSubject(msg.subject, best ? `Cheapest ${shortTeam} game${span}` : `${shortTeam} games${span}`), template: 'games_ranked',
-      vars: { headline, picks, unpriced: unpricedLine, nextStep, affiliate: picks.some((p) => p.affiliate), countryCheck: !contact.countryConfirmed && revision === 1 },
+      vars: { headline, picks, unpriced: unpricedLine, nextStep, affiliate: picks.some((p) => p.affiliate), countryCheck: !contact.countryConfirmed && revision === 1 && mayBeVisiting(msg.sanitizedText ?? '') },
       inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `games_ranked:${req.id}:${revision}`,
     });
     return { state: 'needs_clarification', revision, extraction: merged };
@@ -3652,7 +3662,7 @@ export class Concierge {
       .returning({ id: t.eventAlerts.id });
     await audit(this.db, { actor: 'system', action: 'event_alert.created', entityKind: 'event_alert', entityId: row!.id, diff: { kind, consentMessageId: msg.id } });
     await this.transition(req.id, 'monitoring', kind === 'on_sale' ? 'event_alert_on_sale' : 'event_alert_new_date');
-    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, kind === 'on_sale' ? 'I’ll tell you when it’s on sale' : 'I’ll tell you when there’s a date'), template: 'event_alert_set', vars: { ...vars, countryUnconfirmed: !contact.countryConfirmed && revision === 1 }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `event_alert_set:${row!.id}:${revision}` });
+    await this.queueSend({ messageClass: 'acknowledgment', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal, subject: reSubject(msg.subject, kind === 'on_sale' ? 'I’ll tell you when it’s on sale' : 'I’ll tell you when there’s a date'), template: 'event_alert_set', vars: { ...vars, countryUnconfirmed: !contact.countryConfirmed && revision === 1 && mayBeVisiting(msg.sanitizedText ?? '') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `event_alert_set:${row!.id}:${revision}` });
     return { state: 'monitoring', revision, extraction: merged };
   }
 
@@ -6012,7 +6022,9 @@ function listAnd(xs: string[]): string {
 }
 /** A requirement as the thing we'll check: "reserved seats, not general admission" → "reserved seating". */
 function shortRequirement(r: string): string {
-  return /reserved|general admission|standing/i.test(r) ? 'reserved seating' : /together/i.test(r) ? 'seats together' : /\bin total\b|fees/i.test(r) ? 'the all-in total' : r.replace(/^./, (c) => c.toLowerCase());
+  // The budget keeps its amount: with no separate "not checked yet" line (#171), this is where it's said back.
+  const amount = r.match(/\$[\d,]+(?:\.\d{2})?/)?.[0];
+  return /reserved|general admission|standing/i.test(r) ? 'reserved seating' : /together/i.test(r) ? 'seats together' : /\bin total\b|fees/i.test(r) ? `the all-in total${amount ? ` against your ${amount}` : ''}` : r.replace(/^./, (c) => c.toLowerCase());
 }
 /** They'd take another date: "later dates are fine", "or the week after", "other dates work too". */
 const LATER_OK = /\b(?:later|other|different)\s+(?:dates?|days?|nights?|weekends?)\s+(?:are|is|would be|work|works)\s*(?:also\s+|too\s+)?(?:fine|ok|okay|good|great|too)?\b|\b(?:open to|happy with|fine with)\s+(?:later|other|different)\s+(?:dates?|days?|nights?)\b|\bor (?:the week|the weekend|any time) after\b|\bflexible on (?:the )?dates?\b/i;

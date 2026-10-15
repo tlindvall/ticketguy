@@ -1533,3 +1533,25 @@ Eval issue #158, its simulated threads at main-21: `sim/budget-dad` step 2 and `
 **Verified:** `tests/acceptance/answered-158-sims.test.ts` replays both persona questions in rules mode.
 
 **Not verified here:** the simulated customers. They need the real model and run only in the nightly suite.
+
+## 81. Only what was asked: the pick and the answer, not the notes around them (Oct 15)
+
+Eval issue #171 (`only_what_was_asked`, 94 threads at main-45, the owner-calibrated scorer): the replies carried the pick plus several lines nobody asked for.
+
+**Decisions.**
+- **Beside a pick, these are left out unless the latest message asks for them:** listings left out and why ("other options", "cheaper", "better option" brings it back); history we lack, the benchmark and the trend ("good price", "going down", "wait" brings them back); listing counts and the single-seat reference ("how many", "available", "sold out"); alternatives. A comparison of the customer's own offers is unchanged.
+- **One catch per listing**, the one that matters most: a problem the listing shows (wrong night or venue, a tight transfer, an obstructed view) before a detail we weren't given or a fee check. A wrong count or an over-budget total is the verdict's reason, already said, so it ranks below a problem the verdict doesn't name.
+- **No source names and no check time** in the coverage line or the pick. "Prices can change before checkout" stays.
+- **The model's closing line is not rendered.**
+- **Browse candidates:** what isn't checked yet is said once, in the next step, and the budget there keeps its amount ("I'll check the all-in total against your $300"). The separate "Not checked yet for any of these" line is gone.
+- **Invitations to send other seats** ("Found seats you like?") are dropped beside a pick or a running watch. With neither, they are the way forward and stay.
+- **The budget question stays after a pick** when no budget is on file. It is the one question that takes the pick further, and customers answer it. Dropping it cost `ambiguous/giants` its only question on the first PR eval run (`asks_one_question` 66.67% → 33.33%).
+- **A running watch** hides the requirement list and the listing count. A refused watch keeps the requirements, since they are what blocks a pick.
+- **The US-only line** is said only when the first message suggests a visitor ("I'm visiting", "for the weekend", "on a trip"), not to every first-time customer. A stated residence is still handled by the residence rule. This changes a launch-boundary message; the owner should confirm it.
+- **Kept on purpose:** in "is that the cheapest?", a listing under the pick's total whose fees aren't shown. It could be cheaper, so a bare "yes" would mislead.
+
+**Fixed along the way.**
+- **A trend given as the answer** (C_TREND_ANSWER) now carries the trend's evidence ids. Before this, a dataset revoked after drafting did not block approval of an answer that quoted it (R2-TREND-RIGHTS-01).
+- The rights-gate tests now ask about the trend, so they still test the gate.
+
+**Verified:** `tests/acceptance/on-point-171.test.ts`, plus the updated expectations listed in the PR.

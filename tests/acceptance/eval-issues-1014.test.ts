@@ -59,7 +59,8 @@ describe('"are these good seats?" is answered with a verdict on them (#149)', ()
     expect(lead).toMatch(/upper level/);
     expect(lead).toMatch(/row G/);
     expect(lead).toMatch(/lower bowl starts at \$540/);
-    expect(answer(turn).indexOf(lead)).toBeLessThan(answer(turn).indexOf('I left out'));
+    // Listings it left out weren't asked about (#171).
+    expect(answer(turn)).not.toContain('I left out');
   }, 60_000);
 
   it('never judges seats for an event it can’t place', async () => {

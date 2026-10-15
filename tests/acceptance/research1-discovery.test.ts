@@ -88,13 +88,13 @@ describe('Research 1 discovery: hard dates, exclusions and a finished decision',
       expect(parts[1]).toBe('I haven’t verified a match for your dates and budget yet.');
       // The answer is the email's headline (Oct 10 design): first, and the most prominent line.
       expect(first!.html).toMatch(/<p style="margin:0 0 18px;">Hey,<\/p>\n<h1[^>]*>I haven’t verified a match for your dates and budget yet\.<\/h1>/);
-      expect(first!.text).toContain('Not checked yet for any of these: reserved seats, not general admission; 2 seats together; and $300 in total for both, once fees are added.');
+      expect(first!.text).not.toContain('Not checked yet'); // named once, by the next step, with the budget's amount (#171)
       expect(first!.text).toContain('Pop in Los Angeles, Oct 9 to 10: two I can check for you.');
       expect((first!.text.match(/^• /gm) ?? []).length).toBe(2);
       expect(first!.text).not.toMatch(/Lilyisthatyou|Constellation Room|Reply "more"/);
       // "Tell me which you'd choose": answered from what's listed, without inventing a reason.
       expect(first!.text).toContain('On what’s listed they’re equally close, so the checks will decide between them.');
-      expect(first!.text).toContain('Tell me which one, and I’ll check reserved seating, seats together and the all-in total.');
+      expect(first!.text).toContain('Tell me which one, and I’ll check reserved seating, seats together and the all-in total against your $300.');
       expect(first!.text).not.toContain('check it against those');
     });
     it('the correction rules the venue and Orange County out, keeps Saturday, and answers each status', async () => {

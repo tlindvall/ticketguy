@@ -182,7 +182,9 @@ describe('Research 2: supplied evidence is answered, and trends are gated', () =
   describe('trend gates through the research path (Rangers preseason, five upper together, $475 → $425 over 24h)', () => {
     const DS = '00000000-0000-4000-8000-0000000000d5';
     const basket = basketKeyFor(FX.events.rangersPreseason, 5, 'upper');
-    const ask = 'Hi! Five of us want to see the New York Rangers preseason game at MSG on Oct 3. We need to sit together, budget is $450 total. We definitely have to go.';
+    // They ask about the trend: an unasked trend is left out of the email (#171), and these cases are about the rights
+    // gate on one that is asked for.
+    const ask = 'Hi! Five of us want to see the New York Rangers preseason game at MSG on Oct 3. We need to sit together, budget is $450 total. We definitely have to go. Are prices going down?';
     const draft = async () => {
       const [r] = await converse([ask]);
       const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, r!.requestId));

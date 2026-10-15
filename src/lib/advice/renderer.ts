@@ -385,14 +385,9 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(asks[0]!);
     html.push(P(esc(asks[0]!)));
   } else if (asks.length) section(lines, html, questionsLead(asks.length), asks);
-  // Nor over their own question (delivery, their offers, access, sales): a model closing there drifted into
-  // generic buy-or-wait advice (post-#54 QA, R3-B03).
-  else if (b.closing.trim() && !subject && !['C_OFFERS', 'C_DELIVERY', 'C_ACCESS', 'C_SALES', 'C_PARKING', 'C_LINK_UNREAD', 'C_PICKS', 'C_VERDICT', 'C_PRICE_ANSWER'].some((id) => claimsById.has(id))) {
-    // With a listing of theirs, the verdict up top is the recommendation; a model closing would only repeat or,
-    // worse, ask for the listing they already sent.
-    lines.push(b.closing.trim());
-    html.push(P(esc(b.closing.trim())));
-  }
+  // The model's closing is not rendered: "This is a reasonable buy on the evidence we have; reply if you want us to keep
+  // looking" and "Review the final checkout details" repeated the decision or the prices line (#171). It drifted into
+  // generic advice over their own questions before that (post-#54 QA, R3-B03).
   // Where to buy, last, with the affiliate disclosure beside the links it's about.
   if (linked.length) {
     lines.push(linked.map((c) => `${c.linkLabel ?? 'Link'}: ${c.url}`).join('\n'));

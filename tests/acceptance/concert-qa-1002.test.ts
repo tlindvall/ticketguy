@@ -264,11 +264,11 @@ describe('jigitz with the live market: the row, the party total, then the contex
     expect(own).toMatchObject({ text: '', values: { sameSeller: 1 }, linkLabel: 'Event page on Ticketmaster' });
   });
 
-  it('reserved-seat control: a single seated listing keeps its together and seat-number checks', () => {
+  it('reserved-seat control: a single seated listing keeps its together check (one catch, #171)', () => {
     const seated: SubjectListing = { ...fieldsFromRead({ ...blank, kind: 'ticket_listing', confidence: 'high', seller: 'StubHub', quantity: 2, priceDollars: 120, priceBasis: 'per_ticket', feeBasis: 'all_in', section: '212', row: 'D' }), source: 'screenshot', observedAt: at, confidence: 'high' };
     const text = body(args(seated, { seatingPreference: null }));
     expect(text).toContain('The screenshot doesn’t show whether the seats are together.');
-    expect(text).toContain('The screenshot doesn’t show seat numbers.');
+    expect(text).not.toContain('The screenshot doesn’t show seat numbers.');
   });
 });
 
