@@ -1,4 +1,4 @@
-export {};
+import { providerErrorRefusal } from './run-health';
 
 /**
  * Turns one eval run into GitHub issues, grouped by check (scorer): one open issue per failing check, labelled
@@ -59,21 +59,53 @@ async function github<T>(path: string, init: { method?: string; body?: unknown }
   return res.json() as Promise<T>;
 }
 
-type Ev = { span_id: string; root_span_id: string; is_root?: boolean; metadata?: Record<string, unknown>; scores?: Record<string, number | null> | null; span_attributes?: { type?: string; name?: string }; output?: unknown };
+type Ev = { span_id: string; root_span_id: string; is_root?: boolean; metadata?: Record<string, unknown>; scores?: Record<string, number | null> | null; span_attributes?: { type?: string; name?: string }; output?: unknown; error?: unknown };
 type Fail = { scenario: string; why: string };
 
 const projects = await bt<{ objects: Array<{ id: string; name: string }> }>(`/project?project_name=${encodeURIComponent(PROJECT)}`);
 const projectId = projects.objects[0]?.id;
-const exps = await bt<{ objects: Array<{ id: string }> }>(`/experiment?project_id=${projectId}&experiment_name=${encodeURIComponent(experimentName)}`);
+const exps = await bt<{ objects: Array<{ id: string; metadata?: { scenarios?: number } }> }>(`/experiment?project_id=${projectId}&experiment_name=${encodeURIComponent(experimentName)}`);
 const expId = exps.objects[0]?.id;
 if (!expId) throw new Error(`experiment ${experimentName} not found`);
-const events: Ev[] = [];
-let cursor: string | undefined;
-do {
-  const page = await bt<{ events: Ev[]; cursor?: string }>(`/experiment/${expId}/fetch`, { limit: 200, ...(cursor ? { cursor } : {}) });
-  events.push(...page.events);
-  cursor = page.events.length ? page.cursor : undefined;
-} while (cursor);
+/** How many threads the run set out to score (Eval metadata); 0 if unknown. */
+const expected = Number(exps.objects[0]?.metadata?.scenarios ?? 0);
+
+async function fetchAll(): Promise<Ev[]> {
+  const out: Ev[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bt<{ events: Ev[]; cursor?: string }>(`/experiment/${expId}/fetch`, { limit: 200, ...(cursor ? { cursor } : {}) });
+    out.push(...page.events);
+    cursor = page.events.length ? page.cursor : undefined;
+  } while (cursor);
+  return out;
+}
+const scoredThreads = (evs: Ev[]) => new Set(evs.filter((e) => e.span_attributes?.type === 'score' && e.scores).map((e) => e.root_span_id)).size;
+
+/** A run we can't trust files and closes nothing: a GitHub error annotation, and the job fails. */
+function refuse(title: string, msg: string): never {
+  console.log(`::error title=${title}::${msg}`);
+  console.error(msg);
+  process.exit(1);
+}
+
+// Braintrust can lag a little behind the run, and on a bad day it drops rows without telling the run. Wait briefly
+// for every thread, then refuse to file or close anything from a partial result: a missing thread would otherwise
+// read as a passing one and close its issue.
+let events: Ev[] = [];
+for (let attempt = 0; attempt < 6; attempt++) {
+  events = await fetchAll();
+  if (expected > 0 && scoredThreads(events) >= expected) break;
+  if (attempt < 5) await new Promise((r) => setTimeout(r, 20_000));
+}
+const scored = scoredThreads(events);
+if (scored === 0 || (expected > 0 && scored < expected)) refuse('Eval results missing', `Braintrust has scores for ${scored} of ${expected || '?'} threads in ${experimentName}. The results were not fully recorded, so no issues were filed or closed. Re-run the workflow.`);
+console.log(`${scored}/${expected || scored} threads scored in ${experimentName}`);
+
+// A run whose model calls failed (llm_errors > 0, or a 429 / insufficient_quota in a task error) scores the outage:
+// unanswered threads and unscored judges would file issues that aren't real and close ones that are.
+const providerRefusal = providerErrorRefusal(events, experimentName);
+if (providerRefusal) refuse('Provider errors', providerRefusal);
 
 const roots = new Map(events.filter((e) => e.is_root).map((e) => [e.root_span_id, e]));
 const fails = new Map<string, Fail[]>();
