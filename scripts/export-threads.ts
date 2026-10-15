@@ -10,7 +10,7 @@
  * so a replay sees what the customer saw. Records are keyed by conversation id, so re-running updates them in place.
  * Nothing is written to the repo or printed beyond counts: the dataset is private to the Braintrust project.
  */
-import { and, asc, eq, gte, inArray, isNotNull, ne } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, ne, or } from 'drizzle-orm';
 import { openDatabase, openMigrationDatabase } from '../src/lib/db';
 import * as t from '../src/lib/db/schema';
 
@@ -55,11 +55,17 @@ for (const conv of convs) {
       .filter((x): x is NonNullable<typeof x> => !!x && x.mimeType.startsWith('image/') && x.byteLength <= MAX_IMAGE)
       .map((x) => ({ mime: x.mimeType, base64: Buffer.from(x.bytes).toString('base64') })),
   }));
-  const sent = await db.select({ at: t.sendIntents.createdAt, cls: t.sendIntents.messageClass, subject: t.sendIntents.subject, text: t.sendIntents.bodyText, state: t.sendIntents.state }).from(t.sendIntents).where(eq(t.sendIntents.conversationId, conv.id)).orderBy(asc(t.sendIntents.createdAt));
   const [contact] = await db.select({ firstName: t.contacts.firstName, email: t.contacts.emailOriginal }).from(t.contacts).where(eq(t.contacts.id, conv.contactId));
 
   // The catalog slice: every event the thread's requests resolved, listed, or recommended.
   const reqs = await db.select({ id: t.requests.id, eventId: t.requests.eventId, browseShown: t.requests.browseShown }).from(t.requests).where(eq(t.requests.conversationId, conv.id));
+  // What we sent: recommendations and alerts carry the request, not always the conversation.
+  const reqIds = reqs.map((r) => r.id);
+  const sent = await db
+    .select({ at: t.sendIntents.createdAt, cls: t.sendIntents.messageClass, subject: t.sendIntents.subject, text: t.sendIntents.bodyText, state: t.sendIntents.state })
+    .from(t.sendIntents)
+    .where(reqIds.length ? or(eq(t.sendIntents.conversationId, conv.id), inArray(t.sendIntents.requestId, reqIds)) : eq(t.sendIntents.conversationId, conv.id))
+    .orderBy(asc(t.sendIntents.createdAt));
   const chosen = reqs.length ? (await db.select({ ids: t.recommendations.chosenObservationIds }).from(t.recommendations).where(inArray(t.recommendations.requestId, reqs.map((r) => r.id)))).flatMap((r) => r.ids ?? []) : [];
   const recs = chosen.length ? await db.select({ eventId: t.offerObservations.eventId }).from(t.offerObservations).where(inArray(t.offerObservations.id, chosen)) : [];
   const eventIds = [...new Set([...reqs.flatMap((r) => [r.eventId, ...(r.browseShown ?? [])]), ...recs.map((r) => r.eventId)].filter((x): x is string => !!x))];

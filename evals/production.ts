@@ -8,6 +8,10 @@
  * answered the question, only what was asked, one email per message, coherence) do the judging, and each thread's
  * metadata keeps what we actually sent at the time for side-by-side reading in Braintrust.
  * The dataset is private; never copy its content into the repo (the repo is public).
+ *
+ * Not replayed yet: SeatData market data (market_snapshots / listing sightings), which is where production prices and
+ * picks come from. A replay answers from the recorded listings (offer_observations) only, so it tests understanding,
+ * clarifying and event resolution on real wording, not pricing; pricing is covered by the eval world.
  */
 import { getTableColumns, inArray } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
