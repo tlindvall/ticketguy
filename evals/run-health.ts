@@ -9,7 +9,9 @@
  */
 export type Span = { span_attributes?: { type?: string; name?: string }; error?: unknown };
 
-const PROVIDER = /\b429\b|insufficient_quota|rate[_ ]limit/i;
+// 429s and the account running dry, under every name the provider has used for it (insufficient_quota, and
+// credit_balance_exhausted on the eval key, Oct 15 runs 38765604297 and 38777273185).
+const PROVIDER = /\b429\b|insufficient_quota|credit_balance_exhausted|billing_hard_limit|rate[_ ]limit/i;
 
 const errorText = (e: unknown): string => (e == null ? '' : typeof e === 'string' ? e : JSON.stringify(e));
 

@@ -22,6 +22,8 @@ describe('provider errors in an eval run', () => {
     expect(providerErrors([task('Error: 429 You exceeded your current quota, please check your plan and billing details.')]).quotaOrRateLimit).toBe(1);
     expect(providerErrors([score({ message: 'quota exceeded', code: 'insufficient_quota' })]).quotaOrRateLimit).toBe(1);
     expect(providerErrors([task('RateLimitError: Rate limit reached for requests')]).quotaOrRateLimit).toBe(1);
+    // The Oct 15 outage named it credit_balance_exhausted; it counts with or without the status code beside it.
+    expect(providerErrors([task({ error: { code: 'credit_balance_exhausted' } })]).quotaOrRateLimit).toBe(1);
     expect(providerErrorRefusal([task('429 Too Many Requests')], 'exp-2')).not.toBeNull();
   });
 
