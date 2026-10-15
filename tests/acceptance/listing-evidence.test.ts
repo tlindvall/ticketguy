@@ -73,12 +73,15 @@ describe('reading the listing a customer sends', () => {
     expect(body).toContain('Worth checking before you buy:');
     // Missing details are about the screenshot, not claims about the seller's page (TG-B08).
     expect(body).toContain('- The screenshot doesn’t show whether the seats are together. Check the listing before you buy if that matters.');
-    expect(body).toContain('- The screenshot doesn’t show when the tickets will be delivered. Check the listing’s delivery date before you buy.');
-    expect(body).toContain('- The screenshot doesn’t show seat numbers. Check the listing if you want to know exactly where you’ll sit.');
+    // One catch, the one that matters most; the rest are caveats beyond it (#171).
+    expect(body).not.toContain('when the tickets will be delivered');
+    expect(body).not.toContain('doesn’t show seat numbers');
     expect(body).not.toContain('until after you buy');
     // A verified option (staff-checked here) that is cheaper comes first, with the difference for the whole party.
     expect(body.split('\n\n')[2]).toBe('I’d look at the verified option below first: it’s $250 less for both.');
-    expect(body).toContain('including the verified charges, checked Sep 22, 11:00 AM EDT.');
+    // When it was checked is ours to know (#171); "Prices can change before checkout" covers it.
+    expect(body).toContain('including the verified charges.');
+    expect(body).not.toContain('checked Sep 22');
     expect(body).not.toContain('I can’t see what sellers are charging');
   });
 

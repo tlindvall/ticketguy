@@ -707,7 +707,15 @@ function verifiedClaim(a: BuildPacketArgs, sub: SubjectListing, code: string): C
 const restrictionIsOther = (r: string) => !/\b(wheelchair|accessible|accessibility|ada|companion|obstructed|limited|partial|restricted|side view|vip|hospitality|package)\b/i.test(r);
 
 function catchesClaim(a: BuildPacketArgs, sub: SubjectListing): ClaimRecord | null {
-  const items = listingCatches(a, sub);
+  // The one catch that matters most; more were noise around the verdict (#171). A problem the listing shows (the wrong
+  // night, over budget, a tight transfer, an obstructed view) outranks a detail we weren't given or a fee check. A
+  // made-up example's details stay whole: they are what it shows.
+  const all = listingCatches(a, sub);
+  const gap = (x: string) => /doesn’t show|haven’t included|couldn’t read|Check the checkout total matches|Fees are extra|It also notes|It lists extras/.test(x);
+  // A wrong count or an over-budget total is the verdict's reason, already said above the listing.
+  const verdictsReason = (x: string) => /^It’s for \d+ tickets?, not the|it’s over your \$/.test(x);
+  const rank = (x: string) => (gap(x) ? 2 : verdictsReason(x) ? 1 : 0);
+  const items = a.synthetic ? all : [...all].sort((x, y) => rank(x) - rank(y)).slice(0, 1);
   if (!items.length) return null;
   return {
     id: 'C_CATCHES',
@@ -2190,7 +2198,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       id: 'C_BEST',
       kind: 'current_offer',
       // "Together" only when the listing says so (eval #142: a split block of 5 was sent as "5 seats together").
-      text: `${q} seat${q > 1 ? 's' : ''}${q > 1 ? (a.best.offer.seatsTogether === true ? ' together' : a.best.offer.seatsTogether === false ? ', not all together,' : '') : ''}${a.best.offer.section ? ` in section ${a.best.offer.section}` : ''}${q > 1 && a.best.offer.seatsTogether === null ? ' (the listing doesn’t say whether they’re together)' : ''}: ${formatUsd(total)} total (${formatUsd(pp)} each) including the verified charges, checked ${checkedAt(new Date(a.best.offer.observedAt), a.timeZone)}.`,
+      text: `${q} seat${q > 1 ? 's' : ''}${q > 1 ? (a.best.offer.seatsTogether === true ? ' together' : a.best.offer.seatsTogether === false ? ', not all together,' : '') : ''}${a.best.offer.section ? ` in section ${a.best.offer.section}` : ''}${q > 1 && a.best.offer.seatsTogether === null ? ' (the listing doesn’t say whether they’re together)' : ''}: ${formatUsd(total)} total (${formatUsd(pp)} each) including the verified charges.`,
       values: { totalCents: total, perPersonCents: pp, section: a.best.offer.section, sourceId: a.best.offer.sourceId },
       scope: { quantity: q, seatZone: a.best.offer.seatClass ?? null, feeBasis: a.best.offer.priceCompleteness, observedAt: obs },
       evidenceIds: [a.best.offer.evidenceId],
@@ -2627,7 +2635,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
           // Only a count is shown: calling it "resale prices" described numbers the email doesn't have (live Red Wings email).
           : `That count is from StubHub and Vivid Seats. It isn’t seats I’ve checked, and it can move quickly.`
         : `I can’t see live resale listings for this ${a.eventNoun ?? 'event'} yet, so this doesn’t compare other sellers’ prices.`
-      : `Checked: ${a.sourcesChecked.join(', ')}.${failed.length ? ` Couldn’t reach: ${failed.join(', ')}.` : ''} Prices can change before checkout.`,
+      // Which sources were checked is for staff (the review console); a source that failed is named, because it changes
+      // what the reply covers (#171: source names were noise to the customer).
+      : `${failed.length ? `I couldn’t reach ${failed.join(', ')}, so this covers the rest. ` : ''}Prices can change before checkout.`,
     values: { checked: a.sourcesChecked.length, unavailable: unavailable.length },
     scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
     evidenceIds: [],
@@ -2701,7 +2711,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     const past = late ? lateMoveNote(a) : null;
     const pastNote = past ? ` ${past.text}` : late && !pastShown ? ` I don’t have prices from past ${noun}s like this one at the same point before the ${noun}, so I can’t tell you whether they usually drop closer to the day.` : '';
     const answer = late && mt?.why && !view?.lead ? `${past?.mostlyFell ? 'A late drop is possible.' : 'I wouldn’t count on a drop.'} ${mt.facts}, so ${mt.why}.${risk}${view?.after ?? ''}` : text;
-    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${answer}${pastNote}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
+    // It carries the trend's evidence, so a dataset revoked after drafting blocks approval here too (R2-TREND-RIGHTS-01).
+    claims.push({ id: 'C_TREND_ANSWER', kind: 'trend_change', text: `${answer}${pastNote}${a.trendAsked.noAlerts ? ' I haven’t set an alert.' : ''}`, values: { supported: trendClaim || mt ? 1 : 0, source: trendClaim ? 'verified_totals' : mt ? 'resale_series' : 'none', direction: mt?.direction ?? null, scope: mt ? (zoneOf(a) ? `zone:${zoneOf(a)}` : 'venue') : null }, scope: { quantity: q, seatZone: mt ? zoneOf(a) : null, feeBasis: mt ? 'listed_before_fees' : null, observedAt: obs }, evidenceIds: trendClaim?.evidenceIds ?? [], methodVersion: mt ? a.market?.context?.methodVersion ?? null : null, limitations: trendClaim ? [] : mt ? ['listed_prices_before_fees', 'past_movement_does_not_predict'] : ['insufficient_history'], customerVisible: true });
   }
 
   // "Are the seats together?" about seats we named: answered first, from what the listing data says, which is
@@ -2743,6 +2754,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     const lead = c.cheaper && c.cheaper.comparableTotalCents !== null && c.cheaper.offer.id !== a.best.offer.id
       ? `No: ${seatsLine(c.cheaper)}${c.cheaper.offer.row ? `, row ${c.cheaper.offer.row},` : ''} come to ${formatUsd(c.cheaper.comparableTotalCents)} total including the verified charges, ${formatUsd(a.best.comparableTotalCents - c.cheaper.comparableTotalCents)} less.`
       : `Yes: of the listings I can check with their full price, these are the cheapest ${q}${together}, at ${formatUsd(a.best.comparableTotalCents)} total including the verified charges.`;
+    // A listing under this total whose fees aren't shown could still be cheaper, so it stays: it is part of the answer
+    // to "is that the cheapest?", not an extra (#171).
     const un = c.unpriced.map((e) => `section ${e.offer.section ?? 'unknown'}${e.offer.row ? `, row ${e.offer.row},` : ''} is listed at ${formatUsd(e.offer.baseTotalCents!)} before fees`).slice(0, 1);
     claims.push({ id: 'C_CHEAPEST', kind: 'option_count', text: `${lead}${un.length ? ` One more: ${un[0]}, but its fees aren’t shown, so I can’t tell you its total.` : ''}`, values: { cheaper: c.cheaper?.offer.id ?? null, unpriced: c.unpriced.length }, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [a.best.offer.evidenceId], methodVersion: null, limitations: [], customerVisible: true });
   }
@@ -2858,6 +2871,26 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // Resale figures in the answer keep the line that says what they are.
     if (picked && trend?.values.source === 'resale_series') for (const c of claims) if (c.id === 'C_COVERAGE' && /StubHub and Vivid Seats/.test(c.text)) c.customerVisible = true;
   }
+  // Only what they asked for, or need to act on (#171, the owner's review of the Rangers thread, Oct 14): listings left
+  // out, notes about history we lack, market and trend context, group counts, the single-seat reference and alternatives
+  // nobody asked about are noise around the pick. Each comes back when the latest message asks for it.
+  const said = (a.askedText ?? '').replace(/[’‘]/g, "'");
+  const askedTrend = !!a.trendAsked || !!a.asks?.worth || /\b(?:trend|history|historic\w*|typical\w*|usually|normal(?:ly)?|good (?:deal|price|value)|fair price|worth it|go(?:ing)? (?:up|down)|rise|drop|wait)\b/i.test(said);
+  const askedOthers = !!a.asks?.cheaper || !!a.asks?.whichCheaper || /\b(?:cheaper|left out|other (?:options?|seats|listings|sections)|anything else|alternatives?|options|lower|upper|better (?:options?|seats|deals?))\b/i.test(said);
+  const askedCount = /\bhow many\b[^.?!]{0,30}\b(?:listings?|options?|left|available)\b|\bavailab\w+\b|\bsold out\b|\bstill (?:exist|available|on sale)\b/i.test(said);
+  const pickShown = claims.some((c) => (c.id === 'C_BEST' || c.id === 'C_PICKS') && c.customerVisible);
+  if (pickShown && !comparing) {
+    for (const c of claims) {
+      if (c.id === 'C_LEFT_OUT' && !askedOthers) c.customerVisible = false;
+      if (['C_NOHIST', 'C_NOTREND', 'C_BENCH', 'C_TREND'].includes(c.id) && !askedTrend) c.customerVisible = false;
+      if (['C_COUNT', 'C_ENTRY'].includes(c.id) && !askedCount) c.customerVisible = false;
+      if (['C_ALT1', 'C_ALT2'].includes(c.id) && !askedOthers) c.customerVisible = false;
+    }
+  }
+  // A watch they asked for is the answer: what isn't checked yet and the count of none are not (#171, dodgers alerts).
+  // A running watch is the next step; a refused one leaves the requirements as what's blocking a pick, so they stay.
+  const watching = claims.some((c) => c.id === 'C_WATCH' && c.customerVisible && c.values.running === 1);
+  if (watching) for (const c of claims) if (['C_REQS', 'C_COUNT'].includes(c.id) && !askedCount) c.customerVisible = false;
   return {
     requestId: a.requestId,
     revision: a.revision,
@@ -2877,7 +2910,11 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     // A total that can't be read: the verdict already asks for it, and that is the whole next step (B6c).
     // A follow-up answered about seats we named already had the offer to narrow them, with the seats (brief journeys J7:
     // the same line came back under "One thing that would help me:").
-    followUps: a.synthetic || a.asks?.parking || comparing || verdictCode === 'unreadable' ? [] : followUpQuestions(a).filter((x) => !(answered && x === NARROW_PICKS)),
+    followUps: a.synthetic || a.asks?.parking || comparing || verdictCode === 'unreadable' ? [] : followUpQuestions(a).filter((x) => !(answered && x === NARROW_PICKS))
+      // An invitation to send other listings is not a question they need answered; nor is a budget once the pick is in
+      // front of them (#171): they can tell us if it's too much.
+      // An invitation to send other seats is noise beside a pick or a running watch; with neither, it's the way forward.
+    .filter((x) => !((pickShown || watching) && /^(?:Found seats you like|Seen tickets somewhere else)\?/.test(x)) && !(pickShown && /^What’s the most you’d pay in total/.test(x))),
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     // Every answer keeps the event card, a follow-up's too: its answer is the headline above it (#160, design #76).
