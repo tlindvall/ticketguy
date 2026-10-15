@@ -1544,7 +1544,8 @@ Eval issue #171 (`only_what_was_asked`, 94 threads at main-45, the owner-calibra
 - **No source names and no check time** in the coverage line or the pick. "Prices can change before checkout" stays.
 - **The model's closing line is not rendered.**
 - **Browse candidates:** what isn't checked yet is said once, in the next step, and the budget there keeps its amount ("I'll check the all-in total against your $300"). The separate "Not checked yet for any of these" line is gone.
-- **Invitations to send other seats** ("Found seats you like?") are dropped beside a pick or a running watch. With neither, they are the way forward and stay. The budget question is dropped once a pick is shown.
+- **Invitations to send other seats** ("Found seats you like?") are dropped beside a pick or a running watch. With neither, they are the way forward and stay.
+- **The budget question stays after a pick** when no budget is on file. It is the one question that takes the pick further, and customers answer it. Dropping it cost `ambiguous/giants` its only question on the first PR eval run (`asks_one_question` 66.67% → 33.33%).
 - **A running watch** hides the requirement list and the listing count. A refused watch keeps the requirements, since they are what blocks a pick.
 - **The US-only line** is said only when the first message suggests a visitor ("I'm visiting", "for the weekend", "on a trip"), not to every first-time customer. A stated residence is still handled by the residence rule. This changes a launch-boundary message; the owner should confirm it.
 - **Kept on purpose:** in "is that the cheapest?", a listing under the pick's total whose fees aren't shown. It could be cheaper, so a bare "yes" would mislead.

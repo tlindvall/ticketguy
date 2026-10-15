@@ -2914,7 +2914,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       // An invitation to send other listings is not a question they need answered; nor is a budget once the pick is in
       // front of them (#171): they can tell us if it's too much.
       // An invitation to send other seats is noise beside a pick or a running watch; with neither, it's the way forward.
-    .filter((x) => !((pickShown || watching) && /^(?:Found seats you like|Seen tickets somewhere else)\?/.test(x)) && !(pickShown && /^What’s the most you’d pay in total/.test(x))),
+    // The budget question stays: it is the one question that takes the pick further, and customers answer it.
+    .filter((x) => !((pickShown || watching) && /^(?:Found seats you like|Seen tickets somewhere else)\?/.test(x))),
     // The brief as we hold it, so a change ("six, up to $720") is visible in the reply (retest R02-F1).
     // A "budget" that is just the price they showed us ($210 each, four tickets) is not said back as one.
     // Every answer keeps the event card, a follow-up's too: its answer is the headline above it (#160, design #76).
