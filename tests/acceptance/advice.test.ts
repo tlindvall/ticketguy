@@ -232,7 +232,7 @@ describe('A61 commission cannot change advice', () => {
 describe('A63 response validation', () => {
   const best = evaluateOffer(fixtureOffer({ quantity: 5, payableTotalCents: 42500, seatClass: 'upper', section: '212' }), { quantity: 5, togetherRequired: true, budgetTotalCents: 45000, excludeObstructedView: true, requireAccessible: false, acceptableSections: null, eventStartAt: '2026-10-03T23:00:00Z' }, FIXTURE_EVENT_ID);
   const policy = decide(basePolicy);
-  const packet = buildPacket({ requestId: 'r1', revision: 1, quantity: 5, eventLabel: 'Fixture event', best, alternatives: [], entryReference: null, benchmark: basePolicy.benchmark, benchmarkRunId: 'b1', trend: basePolicy.trend, trendRunId: 't1', policy, priorities: basePolicy.priorities, sourcesChecked: ['fixture-source'], sourcesUnavailable: [{ sourceId: 'stubhub', status: 'not_integrated' }], independentOptionCount: 3, observedAt: NOW, evidenceExpiresAt: null, basketKey: 'b1', watchConsentReference: null, isFixture: true });
+  const packet = buildPacket({ requestId: 'r1', revision: 1, quantity: 5, eventLabel: 'Fixture event', best, alternatives: [], entryReference: null, benchmark: basePolicy.benchmark, benchmarkRunId: 'b1', trend: basePolicy.trend, trendRunId: 't1', policy, priorities: basePolicy.priorities, sourcesChecked: ['fixture-source'], sourcesUnavailable: [{ sourceId: 'stubhub', status: 'not_integrated' }], independentOptionCount: 3, observedAt: NOW, evidenceExpiresAt: null, basketKey: 'b1', watchConsentReference: null, isFixture: true, askedText: 'Is $425 a good price, or will it go down?' });
 
   const good = { decision: 'buy_now', opening: 'For five seats together, I would be comfortable taking this option.', paragraphs: [{ claimIds: ['C_BEST'], prose: 'Here is the best verified option for your group.' }, { claimIds: ['C_BENCH', 'C_TREND'], prose: 'For context on how this compares.' }], closing: 'Since sitting together matters more than the last few dollars, I would secure it rather than risk losing it.' };
 
@@ -241,7 +241,8 @@ describe('A63 response validation', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.textBody).toContain('$425 total ($85 each)');
-      expect(r.textBody).toContain('Checked: fixture-source');
+      // Which sources were checked is ours to know, not the customer's (#171: source names read as extra).
+      expect(r.textBody).not.toContain('fixture-source');
       expect(r.textBody).not.toContain('not integrated'); // our integrations are staff business, listed in the review console, not the email
     }
   });

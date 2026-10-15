@@ -82,9 +82,9 @@ describe('the clarification email', () => {
     expect(body).not.toContain('What we have so far');
     expect(body).not.toContain('Could you tell us');
     expect(body).not.toMatch(/which date "next week" means/i);
-    // Residency: asked once, on its own line, not as one of the request questions.
-    expect(body).toContain("Ticket Guy is for US-based fans for now, so if you're outside the US, just let me know.");
-    expect(body.match(/outside the US/g)).toHaveLength(1);
+    // Residency: never asked as a request question, and not said to someone with no sign of visiting (#171: a blanket
+    // line about who the service is for is a disclaimer they didn't ask for; residence.tourist_in_ny keeps it).
+    expect(body).not.toContain('outside the US');
     expect(body).not.toContain('are you based in the US?');
     // The canned closer is gone: the question is the ask (TGQA-R6 writing review).
     expect(body).not.toContain('Just reply and I’ll narrow it down.');

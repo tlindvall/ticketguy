@@ -284,7 +284,9 @@ describe('resale market tracking', () => {
     expect(body).toContain('section 112, row 2');
     expect(body).not.toMatch(/can’t open StubHub|send a screenshot/);
     // The feed doesn't carry seat numbers, adjacency or delivery: said as gaps in the data, not in what they sent.
-    expect(body).toContain('- The resale data for it doesn’t show when the tickets will be delivered.');
+    // One gap, the one that matters most (#171: further caveats about the listing are extra).
+    expect(body).toContain('- The resale data for it doesn’t show whether the seats are together.');
+    expect(body).not.toContain('when the tickets will be delivered');
     // Cheaper listings for the pair, from the same read: one paid call, not two. The cheaper equivalent in their area
     // is the one I'd choose, compared for the pair on the same basis, with the search to find it (Oct 10 framework, B6a).
     expect(body).toContain('I’d choose this alternative. Your pair is $310 before fees; this comparable pair in section 101, row 10 is $190 before fees: $120 less, also in the Lower Bowl.');

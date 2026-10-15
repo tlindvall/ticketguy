@@ -125,9 +125,9 @@ describe('Research 1: useful advice and email responses', () => {
         // One short status in bold, the requirements named after it, and the checks named in the next step
         // (Research 2 link/email review, R2-EMAIL-HIERARCHY-01).
         expect(r.text.split('\n\n')[1]).toBe('I haven’t verified a match for your dates and budget yet.');
-        expect(r.text).toContain('Not checked yet for any of these: reserved seats, not general admission; 2 seats together; and $300 in total for both, once fees are added.');
+        expect(r.text).not.toContain('Not checked yet'); // named once, by the next step, with the budget's amount (#171)
         expect(r.text).not.toMatch(/my (?:two|three) picks/);
-        expect(r.text).toContain('Tell me which one, and I’ll check reserved seating, seats together and the all-in total.');
+        expect(r.text).toContain('Tell me which one, and I’ll check reserved seating, seats together and the all-in total against your $300.');
       }
       writing(first!, { first: true });
       writing(second!, { first: false });

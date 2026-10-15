@@ -249,7 +249,9 @@ describe('Final launch review, Workstream A, replayed with the original screensh
       { text: 'Just give me your best two options that she can actually get into. Saturday would be ideal.', reads: [] },
     ]);
     expect(q1!.text).toContain('QA Launch Honky Tonk is out: it’s listed as 21+, and one of you is 12.');
-    expect(q1!.text).toContain('admission for your 12-year-old (the venue’s age policy) and $150 in total for both, once fees are added');
+    // What's still to check is said once, in the closing question, with the budget's amount (#171).
+    expect(q1!.text).toContain('I’ll check the all-in total against your $150 and admission for your 12-year-old (the venue’s age policy).');
+    expect(q1!.text).not.toContain('Not checked yet');
     expect(q2!.text).toContain('QA Launch Nashville Hall, Nashville · Tomorrow, Saturday, October 3, at 8 p.m. · 2 tickets · up to $150 in total');
     expect(q2!.text).toContain('admission for your 12-year-old (the venue’s age policy)');
     for (const r of [q1!, q2!]) expect(r.text).not.toMatch(/Honky Tonk[^\n]*(?:Tickets|Event page)|age (?:policy )?(?:is )?verified|verified for (?:her|your 12)/i);

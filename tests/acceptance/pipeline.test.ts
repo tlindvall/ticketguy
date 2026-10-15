@@ -49,10 +49,12 @@ describe('end-to-end fixture flow', () => {
     const [rec] = await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, req!.id));
     expect(rec!.reviewStatus).toBe('pending');
     expect(rec!.bodyText).toContain('$425 total ($85 each)');
-    expect(rec!.bodyText).toContain('comparable past events');
-    expect(rec!.bodyText).toMatch(/fallen from \$475 to \$425/);
-    expect(rec!.bodyText).toContain('cheapest single seat we verified is $35');
-    expect(rec!.bodyText).toContain('Checked: ');
+    // They asked for five together under $450: the pick, not the history, the trend, the single-seat reference or the
+    // sources checked (#171). Each comes back when asked (tests/acceptance/on-point-171.test.ts).
+    expect(rec!.bodyText).not.toContain('comparable past events');
+    expect(rec!.bodyText).not.toMatch(/fallen from \$475/);
+    expect(rec!.bodyText).not.toContain('cheapest single seat');
+    expect(rec!.bodyText).not.toContain('Checked: ');
     expect(rec!.bodyText).not.toContain('not integrated'); // staff see coverage in the console; the customer sees what was checked
     expect(rec!.reviewNote).toContain('FIXTURE DATA');
     const [advice] = await h.db.select().from(t.adviceRuns).where(eq(t.adviceRuns.requestId, req!.id));
@@ -93,7 +95,7 @@ describe('end-to-end fixture flow', () => {
     // searched listings: with no integrated source that is a statement about diligence we did not do.
     expect(intent!.bodyText).toContain("We don't have a scheduled Dua Lipa event");
     expect(intent!.bodyText).not.toContain('official listings');
-    expect(intent!.bodyText).toContain("if you're outside the US, just let me know");
+    expect(intent!.bodyText).not.toContain("if you're outside the US"); // no sign of visiting (#171)
     expect(await h.db.select().from(t.recommendations).where(eq(t.recommendations.requestId, req!.id))).toHaveLength(0);
   });
 
