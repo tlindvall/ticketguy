@@ -38,7 +38,7 @@ export type Expect = {
   alertsRaised?: number;
 };
 
-export type Screenshot = { marketplace: string; event: string; when: string; section: string; row: string; quantity: number; totalDollars: number; feesIncluded: boolean; blurry?: boolean };
+export type Screenshot = { marketplace: string; event: string; when: string; section: string; row: string; quantity: number; totalDollars: number; feesIncluded: boolean; blurry?: boolean; /** A "Home Games" side list of other dates on the page: navigation, never the event (#177). */ sidebar?: string[] };
 export type Step =
   | { kind?: 'email'; text: string; screenshots?: Screenshot[]; expect?: Expect; /** Real images (production replay). */ images?: Array<{ mime: string; base64: string }>; /** Absolute send time (production replay); default 15 minutes after the last step. */ at?: string; subject?: string }
   | { kind: 'wait'; hours: number; market?: (offers: Record<string, Offer[]>) => void; checkAlerts?: boolean; expect?: Expect; note?: string };
@@ -83,8 +83,15 @@ export type TurnOut = {
 export async function screenshot(s: Screenshot): Promise<Uint8Array<ArrayBuffer>> {
   const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const price = `$${s.totalDollars.toLocaleString('en-US')}`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="750" height="520" viewBox="0 0 750 520">
-  <rect width="750" height="520" fill="#ffffff"/>
+  const side = s.sidebar?.length
+    ? `<rect x="760" y="80" width="230" height="${60 + s.sidebar.length * 34}" rx="10" fill="#f4f4f7" stroke="#ddd"/>
+  <text x="776" y="114" font-family="Helvetica, Arial" font-size="18" font-weight="700" fill="#111">Home Games</text>
+  ${s.sidebar.map((g, k) => `<text x="776" y="${150 + k * 34}" font-family="Helvetica, Arial" font-size="15" fill="#555">${esc(g)}</text>`).join('\n  ')}`
+    : '';
+  const w = s.sidebar?.length ? 1000 : 750;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="520" viewBox="0 0 ${w} 520">
+  <rect width="${w}" height="520" fill="#ffffff"/>
+  ${side}
   <rect width="750" height="64" fill="#3b2a8c"/>
   <text x="28" y="42" font-family="Helvetica, Arial" font-size="26" font-weight="700" fill="#fff">${esc(s.marketplace)}</text>
   <text x="28" y="118" font-family="Helvetica, Arial" font-size="26" font-weight="700" fill="#111">${esc(s.event)}</text>

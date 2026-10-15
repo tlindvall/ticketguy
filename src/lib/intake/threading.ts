@@ -73,6 +73,19 @@ function isAttribution(next: string[]): boolean {
   return false;
 }
 
+/**
+ * An attached image's name in the plain-text body: Gmail's "[image: Screenshot 2026-10-04 at 12.14.58 AM.png]",
+ * "[cid:…]", Outlook's "<image001.png>". It is the file's name, not the customer's words, and a date in it is when
+ * the screenshot was taken, never the event's date (#177).
+ */
+export function withoutAttachmentNames(text: string): string {
+  return text
+    .replace(/\[(?:image|cid|inline image|attachment)\s*:[^\]\n]*\]/gi, ' ')
+    .replace(/<[^<>\n]*\.(?:png|jpe?g|gif|heic|webp|pdf)>/gi, ' ')
+    .replace(/^[ \t]*[^\n]*\.(?:png|jpe?g|gif|heic|webp)[ \t]*$/gim, '')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 /** The customer is the authenticated top-level sender, never someone quoted in a forward. */
 export function stripQuotedContent(text: string): string {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
@@ -88,5 +101,5 @@ export function stripQuotedContent(text: string): string {
     if (line.startsWith('>')) continue;
     out.push(line);
   }
-  return out.join('\n').trim();
+  return withoutAttachmentNames(out.join('\n')).trim();
 }

@@ -72,10 +72,24 @@ export function seatVerdict(i: SeatVerdictInput): string | null {
  * The verdict for the seats named in their message: their section's zone from the listing or the venue's seat zones,
  * their price from the matching listing or the one they gave, against the other listings checked for the party.
  */
-export async function seatVerdictFor(db: DbHandle['db'], a: { text: string; venue: { id: string; name: string; layoutVersion: string | null }; quantity: number; offers: Array<{ offer: Offer; comparableTotalCents: number | null }>; quotedTotalCents: number | null }): Promise<string | null> {
+/** The seats on a screenshot or pasted listing they sent: its section, row, price and the level the page itself names. */
+export type ShownSeats = { section: string | null; row: string | null; quantity: number | null; wholePartyCents: number | null; perTicketCents: number | null; listingType?: 'resale' | 'primary' | 'unknown' | null; seller?: string | null; words: string[] };
+
+const PAGE_LEVELS = ['mezzanine', 'balcony', 'orchestra', 'loge', 'terrace', 'floor', 'upper', 'lower', 'club', 'field', 'plaza', 'pavilion'];
+/** "Mezzanine level", "Upper Level", "Lower Bowl" as the page says it: the level when our seat zones don't place the section. */
+function pageLevel(words: string[]): string | null {
+  const said = words.join(' ').toLowerCase();
+  return PAGE_LEVELS.find((l) => new RegExp(`\\b${l}\\b`).test(said)) ?? null;
+}
+
+export async function seatVerdictFor(db: DbHandle['db'], a: { text: string; venue: { id: string; name: string; layoutVersion: string | null }; quantity: number; offers: Array<{ offer: Offer; comparableTotalCents: number | null }>; quotedTotalCents: number | null; shown?: ShownSeats | null }): Promise<string | null> {
   if (!GOOD_SEATS_ASKED.test(a.text)) return null;
-  const named = sectionAndRow(a.text);
+  // The seats they typed, else the ones on the screenshot they sent with "are these good?" (#177: Sec 415, Row 6 was only
+  // in the image).
+  const fromPage = a.shown?.section ? { section: a.shown.section.replace(/^\s*sec(?:tion)?\.?\s*/i, '').trim().toUpperCase(), row: a.shown.row?.replace(/^\s*row\s*/i, '').trim().toUpperCase() || null } : null;
+  const named = sectionAndRow(a.text) ?? fromPage;
   if (!named) return null;
+  const shownHere = !!fromPage && fromPage.section === named.section;
   const sections = [...new Set([named.section, ...a.offers.map((o) => o.offer.section?.toUpperCase()).filter((s): s is string => !!s)])];
   const zones = a.venue.layoutVersion
     ? await db.select({ section: t.venueSeatZones.section, zone: t.venueSeatZones.zone }).from(t.venueSeatZones).where(and(eq(t.venueSeatZones.venueId, a.venue.id), eq(t.venueSeatZones.layoutVersion, a.venue.layoutVersion), eq(t.venueSeatZones.status, 'active'), inArray(t.venueSeatZones.section, sections)))
@@ -83,13 +97,17 @@ export async function seatVerdictFor(db: DbHandle['db'], a: { text: string; venu
   const zoneOf = (section: string | null | undefined, seatClass?: string | null) => (section ? zones.find((z) => z.section.toUpperCase() === section.toUpperCase())?.zone : undefined) ?? seatClass ?? null;
   const priced = a.offers.filter((o) => o.comparableTotalCents !== null && o.offer.quantity === a.quantity);
   const theirs = priced.find((o) => o.offer.section?.toUpperCase() === named.section && (!named.row || o.offer.row?.toUpperCase() === named.row));
-  return seatVerdict({
+  const pageTotal = shownHere && a.shown ? a.shown.wholePartyCents ?? (a.shown.perTicketCents !== null ? a.shown.perTicketCents * a.quantity : null) : null;
+  const verdict = seatVerdict({
     section: named.section,
     row: named.row,
-    zone: zoneOf(named.section, theirs?.offer.seatClass),
+    zone: zoneOf(named.section, theirs?.offer.seatClass) ?? (shownHere ? pageLevel(a.shown!.words) : null),
     quantity: a.quantity,
-    theirTotalCents: theirs?.comparableTotalCents ?? a.quotedTotalCents,
+    theirTotalCents: theirs?.comparableTotalCents ?? a.quotedTotalCents ?? pageTotal,
     others: priced.filter((o) => o !== theirs).map((o) => ({ zone: zoneOf(o.offer.section, o.offer.seatClass), section: o.offer.section ?? null, totalCents: o.comparableTotalCents! })),
     venueName: a.venue.name,
   });
+  // Standard tickets from the official sale are the seller's own, at its price: said, since resale is the usual comparison.
+  const official = shownHere && a.shown?.listingType === 'primary' ? ` They’re standard tickets from the official sale${a.shown.seller ? ` on ${a.shown.seller}` : ''}, not resale.` : '';
+  return verdict ? `${verdict}${official}` : null;
 }

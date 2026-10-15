@@ -44,6 +44,11 @@ const screenshotCheaper: Scenario[] = [
   { id: 'screenshot-cheaper/before-fees', capability: 'screenshots', now: AS_OF.rangersWeek, tags: ['screenshot-cheaper', 'fees'], steps: [{ text: 'is this a good price or can you beat it', screenshots: [{ ...shot, totalDollars: 590, feesIncluded: false }], expect: { eventId: EV.rangersBruins, quantity: 5, mustMentionAny: ['re:fee'] } }] },
   { id: 'screenshot-cheaper/blurry', capability: 'screenshots', now: AS_OF.rangersWeek, tags: ['screenshot-cheaper', 'blurry'], // A blurry shot: read it right (5 tickets) or ask; never state a misread as fact.
     steps: [{ text: 'can u beat this price', screenshots: [{ ...shot, blurry: true }], expect: { quantity: 5, forbid: ['re:\\b(3|three|4|four|6|six) tickets'] } }] },
+  // "Are these good?" with a checkout whose page lists other home games beside it, and the screenshot's own file name in
+  // the email body (#177): the event is the page header's (Thu Oct 22 vs Bruins), never the side list's first game or
+  // the day the screenshot was taken, and the answer is a verdict on those seats.
+  { id: 'screenshot-good-tickets/side-list', capability: 'screenshots', now: AS_OF.rangersWeek, tags: ['screenshot-good-tickets'],
+    steps: [{ text: 'are these any good?\n\n[image: Screenshot 2026-10-17 at 11.40.02 PM.png]', screenshots: [{ ...shot, section: '224', row: 'G', quantity: 2, totalDollars: 260, sidebar: ['Sat, Oct 24 vs New Jersey Devils', 'Thu, Oct 22 vs Boston Bruins', 'Tue, Oct 27 vs Utah Mammoth'] }], expect: { eventId: EV.rangersBruins, quantity: 2, mustMentionAny: ['re:upper', '224'], forbid: ['re:October 17', 're:Oct 17', 're:October 24'] } }] },
 ];
 
 // "Do tickets still exist for this concert?"
