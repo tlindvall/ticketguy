@@ -116,7 +116,9 @@ export async function screenshot(s: Screenshot): Promise<Uint8Array<ArrayBuffer>
  * the "a person is checking this" note as a second email the customer never gets (#155). A scenario about review
  * sets AUTO_SEND_RECOMMENDATIONS to "false".
  */
-const env = (over: Record<string, string> = {}) => testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10', AUTO_SEND_RECOMMENDATIONS: 'true', ...over });
+/** Our public URL in the eval: https, as in production, so the email's images (served from it) are rendered. */
+export const EVAL_APP_URL = 'https://ticketguy.now';
+const env = (over: Record<string, string> = {}) => testEnv({ AI_GLOBAL_DAILY_BUDGET_USD: process.env.EVAL_BUDGET_USD ?? '10', AUTO_SEND_RECOMMENDATIONS: 'true', APP_URL: EVAL_APP_URL, ...over });
 
 let threadNo = 0;
 /** Swap in other AI parts (the rule-based fixtures) to replay a scenario without a model key. */

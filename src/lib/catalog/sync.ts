@@ -5,6 +5,7 @@ import type { DiscoveredAttraction, DiscoveredEvent, DiscoveredVenue, DiscoveryQ
 import type { SourceStatus } from '@/lib/domain/types';
 import { localTimeInstants } from '@/lib/domain/dates';
 import { upsertProviderImage } from '@/lib/brand/assets';
+import { upsertEventImage } from '@/lib/brand/event-image';
 import { inMarket, teamHomeMarket } from '@/lib/domain/markets';
 
 /**
@@ -332,11 +333,19 @@ export async function upsertDiscoveredEvent(db: DbOrTx, e: DiscoveredEvent, keyw
   if (existing[0]) {
     await db.update(t.events).set({ name: e.name, category, classification, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status }).where(eq(t.events.id, existing[0].eventId));
     await db.update(t.eventSourceMappings).set({ authoritativeUrl: e.url, verifiedAt: new Date() }).where(and(eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID), eq(t.eventSourceMappings.sourceEventId, e.providerEventId)));
+    await keepEventImage(db, existing[0].eventId, e);
     return { eventId: existing[0].eventId, entityIds };
   }
   const [row] = await db.insert(t.events).values({ name: e.name, category, classification, subtype, genre, ...sale, venueId, primaryEntityId, opponentEntityId, isHome, localStartAt: startAt, status, verifiedSourceId: DISCOVERY_SOURCE_ID, isFixture: false }).returning({ id: t.events.id });
   await db.insert(t.eventSourceMappings).values({ eventId: row!.id, sourceId: DISCOVERY_SOURCE_ID, sourceEventId: e.providerEventId, authoritativeUrl: e.url, role: 'discovery', confidence: 'provider_id', verifiedAt: new Date() }).onConflictDoNothing();
+  await keepEventImage(db, row!.id, e);
   return { eventId: row!.id, entityIds };
+}
+
+/** The event's own provider image, for the preview card (#179). A failure is never a failed sync. */
+async function keepEventImage(db: DbOrTx, eventId: string, e: DiscoveredEvent): Promise<void> {
+  if (!e.image || !/^https:\/\//.test(e.image.url)) return;
+  await upsertEventImage(db, { eventId, name: e.name, source: DISCOVERY_SOURCE_ID, imageUrl: e.image.url, width: e.image.width, height: e.image.height, sourceUrl: e.url }).catch(() => undefined);
 }
 
 export async function callsToday(db: DbOrTx, now = new Date()): Promise<number> {

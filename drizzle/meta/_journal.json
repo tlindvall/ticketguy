@@ -169,6 +169,13 @@
       "when": 1791316288425,
       "tag": "0023_brand_teams",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792029903675,
+      "tag": "0024_event_preview",
+      "breakpoints": true
     }
   ]
 }

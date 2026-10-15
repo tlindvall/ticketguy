@@ -300,7 +300,7 @@ export function validateAndRender(packet: AdvicePacket, blocks: unknown, opts: {
     lines.push(b.opening.trim());
     html.push(designed ? briefHeadline(b.opening.trim()) : P(rich(b.opening.trim())));
   }
-  if (designed) html.push(eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null }));
+  if (designed) html.push(eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null, alt: packet.headerAlt ?? null }));
   // What we assumed, under the answer and its event: with no acknowledgment before it, this is where it's said (#155).
   for (const l of packet.preface ?? []) {
     lines.push(l);
@@ -433,7 +433,7 @@ function renderShort(packet: AdvicePacket): { textBody: string; htmlBody: string
   blocks.forEach((b, i) => {
     lines.push(head(b), ...(b.items ? [b.items.map((x) => `- ${x}`).join('\n')] : []));
     html.push(i === 0 && designed ? briefHeadline(head(b)) : P(rich(head(b))));
-    if (i === 0) html.push(designed ? eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null }) : top?.html ?? '');
+    if (i === 0) html.push(designed ? eventCard({ category: packet.headerCategory!, name: packet.headlineTitle!, details: packet.headlineDetails!, artworkUrl: packet.headerArtworkUrl ?? null, alt: packet.headerAlt ?? null }) : top?.html ?? '');
     if (b.items) html.push(list(b.items));
   });
   const linked = [...answers.filter((c) => c.url), ...(best.url ? [{ ...best, linkLabel: 'The seats I’d buy' }] : [])];

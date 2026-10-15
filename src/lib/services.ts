@@ -50,6 +50,8 @@ export function getConcierge(): Promise<Concierge> {
         webEventFinder: !fixture && e.WEB_EVENT_SEARCH === 'on' && e.EXTRACTION_PROVIDER === 'anthropic' && e.ANTHROPIC_API_KEY ? new AnthropicWebEventFinder(e.ANTHROPIC_API_KEY, e.ANTHROPIC_BASE_MODEL) : undefined,
         emailProvider: e.EMAIL_SEND_ENABLED && e.RESEND_API_KEY ? new ResendProvider(e.RESEND_API_KEY) : null,
         fixtureOffers: fixture || e.DEV_FIXTURE_OFFERS ? FIXTURE_OFFERS : {},
+        // Event preview images (#179) are fetched only for real events; fixture mode uses stored copies.
+        previewFetch: fixture ? undefined : fetch,
       });
     })();
   }

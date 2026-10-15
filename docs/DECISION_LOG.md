@@ -1555,3 +1555,27 @@ Eval issue #171 (`only_what_was_asked`, 94 threads at main-45, the owner-calibra
 - The rights-gate tests now ask about the trend, so they still test the gate.
 
 **Verified:** `tests/acceptance/on-point-171.test.ts`, plus the updated expectations listed in the PR.
+
+## 82. Recommendations open with a picture of the event (Oct 15)
+
+Issue #179. Recommendation emails were text plus the ticket-brief card. Team banners covered sports; concerts, theatre and club nights looked flat.
+
+**Decisions.**
+- **Where the image comes from, in order:**
+  1. The event's own Ticketmaster Discovery image (16:9, at least 600px). It is kept at catalog sync as `brand_assets` kind `event`, `rights: provider_terms` (the owner's call in #179).
+  2. The `og:image` of the official event page we link to. Only catalog mappings count; never a link a customer sent and never a press or blog page. Stored as `provider_terms` with the page as `source_url`.
+  3. Today's banner (team colours, show colours or concert art).
+- **Fetching is guarded:**
+  - https only, with private, loopback and link-local destinations refused at every redirect (`security/url-safety`);
+  - at most 3 redirects, 3 seconds and 2 MB, with the byte cap enforced while reading;
+  - a failure means the fallback, never an error;
+  - a page with nothing usable isn't asked again for 7 days.
+- **Our copy, not a hotlink:** resized to 600px wide JPEG and kept in `preview_images`, then served from `/event-art/<asset id>.jpg`. Only images whose rights allow a sent email are served or used.
+- **Card:** the preview runs full width, with the title and date as alt text. The title, date and venue stay plain text under it, so the email reads correctly with images off. Drawn banners keep their size and now also get alt text.
+- **Every recommendation carries the image**, not only the first in a conversation. This reverses the Oct 6 first-only rule, because #179 asks for the card on every recommendation for a known event.
+- **Browse lists are unchanged:** one card per email, for the recommended event.
+- **Eval:** eval-world events carry a fixture image (no network). `email_design` now also checks that every recommendation for a known event has the card: an image on our domain, alt text, and title, date and venue in the text. The eval runs with an https `APP_URL`, as production does, so images render.
+
+**Verified:** `tests/acceptance/event-preview-179.test.ts`, covering the SSRF and size guards, a Ticketmaster image, an RA image, the fallback, rights, the card markup and the eval check on a rules-mode thread.
+
+**Not verified here:** real Ticketmaster and RA pages; there is no network in tests.
