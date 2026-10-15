@@ -1,3 +1,5 @@
+import { withoutTracking } from './event-links';
+
 /**
  * The market around one listing a customer showed us: cheaper listings for their party size in the same
  * section or the same part of the venue. Market listings are prices before fees with no link and no check
@@ -60,12 +62,12 @@ export function listingDrawback(l: MarketListing): ListingDrawback | null {
   return null;
 }
 
-/** A listing page we'd send a customer to: https on StubHub or Vivid Seats only, never any other host. */
+/** A listing page we'd send a customer to: https on StubHub or Vivid Seats only, never any other host, never a tracking parameter. */
 function listingUrl(v: unknown): string | null {
   if (typeof v !== 'string') return null;
   try {
     const u = new URL(v.trim());
-    return u.protocol === 'https:' && /^(?:www\.)?(?:stubhub\.com|vividseats\.com)$/.test(u.hostname) ? u.toString() : null;
+    return u.protocol === 'https:' && /^(?:www\.)?(?:stubhub\.com|vividseats\.com)$/.test(u.hostname) ? withoutTracking(u.toString()) : null;
   } catch {
     return null;
   }

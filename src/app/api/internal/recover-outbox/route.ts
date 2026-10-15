@@ -1,4 +1,4 @@
-import { runOutboxBatch } from '@/inngest/functions';
+import { checkMarketGaps, runOutboxBatch } from '@/inngest/functions';
 import { cronAuthorized } from '@/lib/util/cron-auth';
 
 export const dynamic = 'force-dynamic';
@@ -7,5 +7,6 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request) {
   if (!cronAuthorized(req)) return Response.json({ error: 'unauthorized' }, { status: 401 });
   const r = await runOutboxBatch(50);
+  await checkMarketGaps({ throttle: true }).catch(() => null);
   return Response.json(r);
 }

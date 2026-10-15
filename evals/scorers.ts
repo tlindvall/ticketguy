@@ -11,6 +11,7 @@ import { FIXTURE_HISTORICAL_EVENTS } from '@/lib/fixtures';
 import { SERVICE_DOMAIN } from '@/lib/config/brand';
 import { EVAL_APP_URL, type Expect, type Scenario, type TurnOut } from './harness';
 import { LINKS, worldOffers } from './world';
+import { marketplaceEventPage, withoutTracking } from '@/lib/market/event-links';
 
 type Args = { input: Scenario; output: TurnOut[] };
 type R = { ok: number; why?: string } | null;
@@ -123,8 +124,12 @@ export const perEmail = [
     const urls = urlsIn(tu.reply);
     if (!urls.length) return null;
     const extra = new Set((input?.groundedLinks ?? []).map((u) => u.replace(/\/+$/, '')));
+    // A marketplace's own event page for a game whose id is stored for it (event_source_mappings), whatever its quantity,
+    // and never with a tracking parameter on it.
+    const stored = new Set(tu.marketplaceEvents ?? []);
+    const storedPage = (u: string) => { const p = marketplaceEventPage(u); return !!p && stored.has(`${p.marketplace}:${p.id}`) && withoutTracking(u) === new URL(u).toString(); };
     // Every listing link in the eval world is https://example.invalid/fixture/<listing>, including listings a test adds mid-thread.
-    const bad = urls.filter((u) => { if (OFFER_URLS.has(u) || extra.has(u.replace(/\/+$/, '')) || SEARCH_LINK.test(u) || u.startsWith('https://example.invalid/fixture/')) return false; try { const host = new URL(u).hostname; return !(host === SERVICE_DOMAIN || host.endsWith('.' + SERVICE_DOMAIN)); } catch { return true; } });
+    const bad = urls.filter((u) => { if (OFFER_URLS.has(u) || extra.has(u.replace(/\/+$/, '')) || storedPage(u) || SEARCH_LINK.test(u) || u.startsWith('https://example.invalid/fixture/')) return false; try { const host = new URL(u).hostname; return !(host === SERVICE_DOMAIN || host.endsWith('.' + SERVICE_DOMAIN)); } catch { return true; } });
     return { ok: bad.length ? 0 : 1, why: `unknown links: ${bad.join(' ')}` };
   }),
   /** "5 seats together in section 310" must match a listing that is actually together (not seatsTogether false). */

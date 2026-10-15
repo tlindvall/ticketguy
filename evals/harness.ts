@@ -77,6 +77,8 @@ export type TurnOut = {
   alertsRaised: number;
   alertRun?: unknown;
   expect?: Expect;
+  /** Marketplace event ids stored for games by the end of this step ("stubhub:161415584"): their event pages are grounded. */
+  marketplaceEvents?: string[];
 };
 
 /** A plausible marketplace checkout screenshot, drawn locally (no real site is reproduced). */
@@ -189,7 +191,8 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
       // made one email two ("no_result, recommendation", #155). A draft still waiting is the answer to come.
       const sent = new Set(sends.flatMap((x) => [x.approvalId, /^rec:([^:]+):/.exec(x.dedupeKey ?? '')?.[1]]).filter(Boolean));
       const emails: Email[] = [...sends.map((x) => ({ cls: x.messageClass, subject: x.subject, text: x.bodyText, html: x.bodyHtml })), ...recs.filter((x) => !sent.has(x.id)).map((x) => ({ cls: 'recommendation', subject: x.subject, text: x.bodyText, html: x.bodyHtml }))];
-      return { step: i + 1, customer, at: now.toISOString(), reply: emails.map((m) => m.text).filter(Boolean).join('\n----\n'), emails, state: req?.state ?? null, eventId: req?.eventId ?? null, brief: (v?.brief as RequestExtraction) ?? null, newRecommendations: recs.length, watches, alertsRaised, expect };
+      const marketplaceEvents = (await h.db.select({ source: t.eventSourceMappings.sourceId, id: t.eventSourceMappings.sourceEventId }).from(t.eventSourceMappings).where(inArray(t.eventSourceMappings.sourceId, ['stubhub', 'vividseats']))).filter((m) => m.id).map((m) => `${m.source}:${m.id}`);
+      return { marketplaceEvents, step: i + 1, customer, at: now.toISOString(), reply: emails.map((m) => m.text).filter(Boolean).join('\n----\n'), emails, state: req?.state ?? null, eventId: req?.eventId ?? null, brief: (v?.brief as RequestExtraction) ?? null, newRecommendations: recs.length, watches, alertsRaised, expect };
     };
 
     let lastRequest: string | null = null;
