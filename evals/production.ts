@@ -1,27 +1,31 @@
 /**
  * Real customer threads, replayed. scripts/export-threads.ts copies each production conversation (the customer's
  * emails with their screenshots, what we sent, and the catalog slice it touched) into the private Braintrust dataset
- * "production-threads". Here each record becomes a Scenario: the same emails at the same times, against that catalog
- * slice and the listings as they were, so new code answers the same customer with the same market.
+ * "production-threads"; evals/export-threads-from-braintrust.ts moves that dataset, once, into an encrypted file
+ * (evals/threads-store.ts) kept as the workflow artifact "production-threads", so eval runs never call Braintrust.
+ * Here each record becomes a Scenario: the same emails at the same times, against that catalog slice and the
+ * listings as they were, so new code answers the same customer with the same market.
  *
  * Nothing about these threads is known in advance, so they carry no expectations: the general checks (grounding,
- * answered the question, only what was asked, one email per message, coherence) do the judging, and each thread's
- * metadata keeps what we actually sent at the time for side-by-side reading in Braintrust.
- * The dataset is private; never copy its content into the repo (the repo is public).
+ * answered the question, only what was asked, one email per message, coherence) do the judging.
+ * The threads are private and the repo is public: never copy their content into the repo, a log or eval-results.json
+ * (evals/results.ts keeps only their id and failing steps).
  *
  * Not replayed yet: SeatData market data (market_snapshots / listing sightings), which is where production prices and
  * picks come from. A replay answers from the recorded listings (offer_observations) only, so it tests understanding,
  * clarifying and event resolution on real wording, not pricing; pricing is covered by the eval world.
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { getTableColumns, inArray } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import * as t from '@/lib/db/schema';
 import type { Offer } from '@/lib/domain/types';
 import { FX } from '@/lib/fixtures';
 import type { Scenario } from './harness';
+import { openThreads, threadsKey } from './threads-store';
 
 type Row = Record<string, unknown>;
-type Record_ = {
+export type Record_ = {
   conversationId: string;
   subject: string | null;
   inbound: Array<{ at: string; subject: string | null; text: string; images: Array<{ mime: string; base64: string }> }>;
@@ -29,29 +33,12 @@ type Record_ = {
   world: { venues: Row[]; entities: Row[]; events: Row[]; mappings: Row[]; zones: Row[]; offers: Row[]; observations: Row[] };
 };
 
-const BT = 'https://api.braintrust.dev/v1';
-async function bt<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BT}${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${process.env.BRAINTRUST_API_KEY}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, redirect: 'manual' });
-  if (res.status >= 300 && res.status < 400) return (await fetch(res.headers.get('location')!)).json() as Promise<T>;
-  if (!res.ok) throw new Error(`braintrust ${path}: ${res.status} ${await res.text()}`);
-  return res.json() as Promise<T>;
-}
-
-/** Every exported thread, newest last. Empty (with a note) when there is no key or no dataset yet. */
-export async function loadProductionThreads(): Promise<Record_[]> {
-  if (!process.env.BRAINTRUST_API_KEY) { console.warn('production threads: no BRAINTRUST_API_KEY, skipping'); return []; }
-  const projects = await bt<{ objects: Array<{ id: string }> }>(`/project?project_name=${encodeURIComponent(process.env.BRAINTRUST_PROJECT ?? 'My Project')}`);
-  const projectId = projects.objects[0]?.id;
-  const sets = projectId ? await bt<{ objects: Array<{ id: string }> }>(`/dataset?project_id=${projectId}&dataset_name=production-threads`) : { objects: [] };
-  const id = sets.objects[0]?.id;
-  if (!id) { console.warn('production threads: dataset production-threads not found (run scripts/export-threads.ts on Render)'); return []; }
-  const out: Record_[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await bt<{ events: Array<{ input: Record_ }>; cursor?: string }>(`/dataset/${id}/fetch`, { limit: 100, ...(cursor ? { cursor } : {}) });
-    out.push(...page.events.map((e) => e.input).filter((x) => x?.inbound?.length));
-    cursor = page.events.length ? page.cursor : undefined;
-  } while (cursor);
+/** Every exported thread, newest last. Empty (with a note) when there is no file or no key: the suite runs without them. */
+export function loadProductionThreads(): Record_[] {
+  const path = process.env.EVAL_THREADS_FILE ?? '.eval-data/production-threads.enc';
+  if (!existsSync(path)) { console.warn(`production threads: no ${path} (the workflow downloads the production-threads artifact), skipping`); return []; }
+  if (!process.env.EVAL_THREADS_KEY) { console.warn('production threads: no EVAL_THREADS_KEY, skipping'); return []; }
+  const out = openThreads<Record_>(readFileSync(path), threadsKey(process.env.EVAL_THREADS_KEY)).filter((x) => x?.inbound?.length);
   return out.sort((a, b) => a.inbound[0]!.at.localeCompare(b.inbound[0]!.at));
 }
 
@@ -126,5 +113,5 @@ export function productionScenario(r: Record_): Scenario {
   };
 }
 
-/** Side-by-side material for Braintrust: what we actually sent at the time, in order. */
+/** What we actually sent at the time, in order (Braintrust metadata when a run is sent there). */
 export const originalReplies = (r: Record_) => r.sent.map((s) => ({ at: s.at, cls: s.cls, state: s.state, text: s.text.slice(0, 4000) }));

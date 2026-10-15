@@ -1,0 +1,35 @@
+name: export real threads
+# One-time (or occasional) move of the real customer threads from the Braintrust dataset "production-threads" into
+# the encrypted "production-threads" artifact that nightly evals replay, so eval runs never call Braintrust.
+# Needs the repository secrets BRAINTRUST_API_KEY (read only here) and EVAL_THREADS_KEY (32 random bytes, base64:
+# `openssl rand -base64 32`). The artifact is public like every artifact of this repo; without the key it is noise.
+# Each nightly run carries the file forward before it expires (evals.yml, "keep real threads").
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: seal threads
+        env:
+          BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
+          EVAL_THREADS_KEY: ${{ secrets.EVAL_THREADS_KEY }}
+        run: pnpm exec tsx evals/export-threads-from-braintrust.ts .eval-data/production-threads.enc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-threads
+          path: .eval-data/production-threads.enc
+          retention-days: 90
+          if-no-files-found: error

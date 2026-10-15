@@ -8,15 +8,23 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
-# Conversation evals (Braintrust)
+# Conversation evals
 
 `pnpm eval` runs `evals/ticketguy.eval.ts`: email threads through the real pipeline with the real model
 (`gpt-6.1-sol`), the eval world (`evals/world.ts`: ~40 NY/LA events, listings, price histories, seat zones, links),
-an in-memory database and no email sent. Needs `OPENAI_API_KEY` in `.env.local` and `BRAINTRUST_API_KEY` in
-`.env.braintrust` (both gitignored). Spend is capped per thread by `EVAL_BUDGET_USD` (default 10).
+an in-memory database and no email sent. Needs `OPENAI_API_KEY` in `.env.local` (gitignored). Spend is capped per
+thread by `EVAL_BUDGET_USD` (default 10).
 
-- Suites (`EVAL_SUITE`): `pr` (default, core + families, ~55 threads, runs in CI on AI/pipeline PRs), `nightly`
-  (+ long threads + simulated customers), or any of `core`, `families`, `long`, `sim`.
+- Local by default: nothing is sent to Braintrust (it bills per score). Results go to `eval-results.json` (per thread:
+  each check's pass/fail and reason; real customer threads keep only their id and failing steps). In CI the run's
+  summary compares every check's pass rate with the previous run and lists newly failing and newly passing threads;
+  the `eval-results` artifact (90 days) carries the file and `evals/history.csv`, one row per run, for trends.
+  `EVAL_SEND_TO_BRAINTRUST=1` (with `BRAINTRUST_API_KEY` in `.env.braintrust`) also records the run there, as one score
+  per thread, and refuses above 2,000.
+
+- Suites (`EVAL_SUITE`): `pr` (default, core + families, ~55 threads, runs in CI on PRs touching `src/` or `evals/`),
+  `nightly` (+ long threads + simulated customers + the latest `EVAL_PROD_LIMIT` real threads, default 10, from the
+  encrypted `production-threads` artifact), or any of `core`, `families`, `long`, `sim`, `prod`.
 - `EVAL_ONLY=rangers-this-thursday,long/ pnpm eval` runs ids containing any of those strings.
 - Scenarios live in `evals/scenarios/`: `core.ts`, `families.ts` (one job phrased clean / messy / ambiguous: typos,
   nicknames, text-speak), `long.ts` (10-12 email threads with the market moving mid-thread), `simulated.ts` (an AI
@@ -31,7 +39,7 @@ an in-memory database and no email sent. Needs `OPENAI_API_KEY` in `.env.local` 
 Rules:
 
 - Every behaviour fix to extraction, resolution, conversation state or drafting: run `pnpm eval` before and after and
-  put the score table (and the Braintrust experiment link it prints) in the PR. A fix that regresses another
+  put the score table (the run's summary, with its comparison against the previous run) in the PR. A fix that regresses another
   scenario is not done.
 - A live failure becomes a scenario first (customer's exact words, expected event/party/budget), then gets fixed.
   Unit tests stay; the eval is what proves it against the real model.
