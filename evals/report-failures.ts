@@ -84,7 +84,9 @@ for (const e of events) {
   for (const [name, score] of Object.entries(e.scores)) {
     if (!(name in TRACKED) || score == null) continue;
     evaluated.add(name);
-    const m = (e.metadata ?? {}) as { failures?: Array<{ step?: number; why?: string }>; reasons?: Array<{ step: number; verdict: string; reason: string }>; summary?: string; broke_at_step?: number; reason?: string };
+    // Checks run combined (evals/ticketguy.eval.ts) keep their details under their own name.
+    const raw = (e.metadata ?? {}) as Record<string, unknown>;
+    const m = ((raw[name] as object | undefined) ?? raw) as { failures?: Array<{ step?: number; why?: string }>; reasons?: Array<{ step: number; verdict: string; reason: string }>; summary?: string; broke_at_step?: number; reason?: string };
     let why: string | null = null;
     if (name === 'answered_the_question') {
       const no = (m.reasons ?? []).filter((r) => r.verdict === 'no');

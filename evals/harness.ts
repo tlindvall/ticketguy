@@ -57,6 +57,8 @@ export type Scenario = {
   offers?: Record<string, Offer[]>;
   /** Prices the thread may quote beyond the eval world's (production replay), in cents. */
   groundedCents?: number[];
+  /** Links the thread may contain beyond the eval world's (production replay: the recorded catalog and what the customer sent). */
+  groundedLinks?: string[];
 };
 
 export type Email = { cls: string; subject: string; text: string; html: string };

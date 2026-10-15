@@ -8,6 +8,10 @@
  * answered the question, only what was asked, one email per message, coherence) do the judging, and each thread's
  * metadata keeps what we actually sent at the time for side-by-side reading in Braintrust.
  * The dataset is private; never copy its content into the repo (the repo is public).
+ *
+ * Not replayed yet: SeatData market data (market_snapshots / listing sightings), which is where production prices and
+ * picks come from. A replay answers from the recorded listings (offer_observations) only, so it tests understanding,
+ * clarifying and event resolution on real wording, not pricing; pricing is covered by the eval world.
  */
 import { getTableColumns, inArray } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
@@ -85,6 +89,13 @@ export function productionScenario(r: Record_): Scenario {
   const grounded = new Set<number>();
   for (const o of w.observations) for (const v of [o.payableTotalCents, o.baseTotalCents, o.mandatoryFeeTotalCents] as Array<number | null>) if (v != null) { grounded.add(v); grounded.add(Math.round(v / Number(o.quantity))); }
 
+  // Links that are grounded for this thread: anything in the recorded catalog (official pages, mappings) or sent by the customer.
+  const links = new Set<string>();
+  const urlRe = /https?:\/\/[^\s<>"')\]]+/g;
+  const scan = (v: unknown): void => { if (typeof v === 'string') for (const m of v.matchAll(urlRe)) links.add(m[0].replace(/[.,;:]+$/, '')); else if (v && typeof v === 'object') for (const x of Object.values(v)) scan(x); };
+  scan([w.venues, w.entities, w.events, w.mappings]);
+  for (const m of r.inbound) scan(m.text);
+
   return {
     id: `prod/${r.conversationId.slice(0, 8)}`,
     capability: 'production-replay',
@@ -93,6 +104,7 @@ export function productionScenario(r: Record_): Scenario {
     now: r.inbound[0]!.at,
     offers,
     groundedCents: [...grounded],
+    groundedLinks: [...links],
     steps: r.inbound.map((m, i) => ({ text: m.text || '(no text)', at: m.at, subject: m.subject ?? (i ? 'Re: Tickets' : 'Tickets'), images: m.images })),
     seed: async (db) => {
       // Teams the fixture catalog already has (same slug) keep its id, so the slice's events point at them.
