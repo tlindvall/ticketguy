@@ -84,6 +84,8 @@ export type AdvicePacket = {
   /** The header as the brief's event card (Oct 10): its kind ("NHL", "Concert") and the banner, on the first reply only. */
   headerCategory?: string;
   headerArtworkUrl?: string | null;
+  /** The card image's alt text: the event and when (#179). */
+  headerAlt?: string;
   evidenceExpiresAt: string | null;
   /** The occurrence this advice was written for; approval and send check the event still has it (R2-LIFECYCLE-01). */
   eventStartAt?: string | null;
@@ -1515,7 +1517,7 @@ export function sameDay(start: Date | null | undefined, now: Date, tz: string | 
  * that is just the price they showed us ($210 each, four tickets) is not said back as one. "From the StubHub link
  * you sent" only for a listing: an event page told us the game and nothing else, and the line said so for no reason.
  */
-function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headlineTitle' | 'headlineDetails' | 'headerCategory' | 'headerArtworkUrl'> {
+function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headlineTitle' | 'headlineDetails' | 'headerCategory' | 'headerArtworkUrl' | 'headerAlt'> {
   const budget = a.priorities.budgetTotalCents;
   const party = a.quantity === 1 ? '1 ticket' : `${a.quantity} tickets`;
   const brief = [
@@ -1527,7 +1529,7 @@ function headlineFor(a: BuildPacketArgs): Pick<AdvicePacket, 'headline' | 'headl
   const parts = a.eventParts;
   return {
     headline: [a.eventLabel, ...brief].join(' · '),
-    ...(parts ? { headlineTitle: parts.title, headlineDetails: [parts.where, friendlyHeaderWhen(a, parts.when, soon), ...brief].join(' · '), headerCategory: briefCategory(a), headerArtworkUrl: a.artworkUrl ?? null } : {}),
+    ...(parts ? { headlineTitle: parts.title, headlineDetails: [parts.where, friendlyHeaderWhen(a, parts.when, soon), ...brief].join(' · '), headerCategory: briefCategory(a), headerArtworkUrl: a.artworkUrl ?? null, headerAlt: `${parts.title}, ${friendlyHeaderWhen(a, parts.when, soon)}` } : {}),
   };
 }
 

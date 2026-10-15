@@ -249,11 +249,21 @@ export function briefHeadlineHtml(head: string, rest = ''): string {
  * The event on its own card when no seats are named (their listing judged, a buy-or-wait answer): the banner on the
  * first reply, the kind of event, its name, and where and when, the same block as the brief's card above its price.
  */
-export function eventCard(e: { category: string; name: string; details: string; artworkUrl: string | null; action?: { label: string; url: string } | null }): string {
+/** An event's own preview image (#179), served from our domain: shown full width, unlike a drawn banner. */
+const isPreview = (u: string) => /\/event-art\/[0-9a-f-]{36}\.jpg$/.test(new URL(u).pathname);
+
+export function eventCard(e: { category: string; name: string; details: string; artworkUrl: string | null; alt?: string | null; action?: { label: string; url: string } | null }): string {
   const image = imageUrl(e.artworkUrl);
+  // The title and date as alt text (#179); the same facts are plain text below, so the card reads with images off.
+  const alt = esc(e.alt ?? e.name);
+  const img = !image
+    ? ''
+    : isPreview(image)
+      ? `<tr><td style="padding:0;font-size:0;line-height:0;"><img src="${esc(image)}" alt="${alt}" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;border-radius:12px 12px 0 0;"></td></tr>`
+      : `<tr><td style="padding:20px 24px 0;font-size:0;line-height:0;"><img src="${esc(image)}" alt="${alt}" width="300" height="100" style="display:block;width:300px;max-width:100%;height:auto;border:0;border-radius:8px;"></td></tr>`;
   return (
     `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e0e4e4;border-radius:12px;border-collapse:separate;margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;color:${INK};">` +
-    (image ? `<tr><td style="padding:20px 24px 0;font-size:0;line-height:0;"><img src="${esc(image)}" alt="" role="presentation" width="300" height="100" style="display:block;width:300px;max-width:100%;height:auto;border:0;border-radius:8px;"></td></tr>` : '') +
+    img +
     `<tr><td style="padding:${image ? '16px' : '22px'} 24px 20px;">${label(`${e.category} / Your ticket brief`)}` +
     `<h2 style="margin:6px 0 6px;font-size:22px;line-height:29px;letter-spacing:-.4px;font-weight:700;color:${INK};">${esc(e.name)}</h2>` +
     `<p style="margin:0;font-size:14px;line-height:22px;color:${MUTED};">${esc(e.details)}</p>` +
