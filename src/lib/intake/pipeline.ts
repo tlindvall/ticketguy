@@ -77,6 +77,7 @@ import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetEx
 import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { CONCERT_ARTWORK_PATH, loadBriefArtwork, sportFor, venueKeys } from '@/lib/brand/assets';
+import { eventPreview } from '@/lib/brand/event-image';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -102,6 +103,8 @@ export type ConciergeDeps = {
   listingReader?: ListingReader;
   /** Looks an event up on the open web when the catalog has nothing. Absent: never searched. */
   webEventFinder?: WebEventFinder;
+  /** Fetches event preview images and official pages (#179). Absent: only copies already stored are used. */
+  previewFetch?: typeof fetch;
 };
 
 export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } | { kind: 'ignored_recipient'; messageId: string } | { kind: 'duplicate'; messageId: string } | { kind: 'queued'; messageId: string; conversationId: string; requestId: string; contactId: string; isNewConversation: boolean };
@@ -1594,7 +1597,7 @@ export class Concierge {
     }
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
-      const artworkUrl = await this.bannerFor(resolution.event, resolution.venue);
+      const artworkUrl = (await this.previewFor(resolution.event)) ?? (await this.bannerFor(resolution.event, resolution.venue));
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
@@ -1744,6 +1747,11 @@ export class Concierge {
    * An event's banner as the brief draws it (both teams for a game, the show's own image, our concert art), as an
    * absolute URL. Decoration, so a failed lookup is no banner, never a held reply.
    */
+  /** The event's preview image on our domain (#179), or null for the banner. Never throws. */
+  private async previewFor(e: { id: string; name: string }): Promise<string | null> {
+    return (await eventPreview(this.db, e, this.env.APP_URL, { fetchImpl: this.deps.previewFetch, now: () => this.now() }))?.url ?? null;
+  }
+
   private async bannerFor(e: typeof t.events.$inferSelect, v: typeof t.venues.$inferSelect, loaded: Array<{ id: string; kind: string; slug: string; name: string }> | null = null, opts: { generic?: boolean } = {}): Promise<string | null> {
     const ids = [e.primaryEntityId, e.opponentEntityId].filter((x): x is string => !!x);
     const ents = loaded ?? (ids.length ? await this.db.select({ id: t.entities.id, kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(inArray(t.entities.id, ids)) : []);
@@ -4094,10 +4102,9 @@ export class Concierge {
     const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     const startMins = localStart(event.localStartAt, venue.timezone).minutes;
     const shownEvent = !event.doorsAt && shown?.doorsTime && shown.showTime && mins(shown.showTime) > mins(shown.doorsTime) && startMins === mins(shown.doorsTime) ? { ...event, doorsAt: event.localStartAt, localStartAt: new Date(event.localStartAt.getTime() + (mins(shown.showTime) - mins(shown.doorsTime)) * 60_000) } : event;
-    // The brief's artwork decorates the first recommendation in a conversation only (ticket brief design, Oct 6): a
-    // banner of both teams for a game, the show's own image or our concert art, never a picture of the seat. It is
-    // decoration, so a failed lookup sends the brief without it rather than holding the reply.
-    const [recsBefore] = await this.db.select({ n: sql<number>`count(*)::int` }).from(t.sendIntents).where(and(eq(t.sendIntents.conversationId, req.conversationId), sql`${t.sendIntents.dedupeKey} like 'rec:%'`, sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`));
+    // The brief's artwork: the event's own image (#179), else a banner of both teams for a game, the show's own image or
+    // our concert art, never a picture of the seat. It is decoration, so a failed lookup sends the brief without it
+    // rather than holding the reply.
     const [other] = event.opponentEntityId ? await this.db.select({ kind: t.entities.kind, slug: t.entities.slug, name: t.entities.name }).from(t.entities).where(eq(t.entities.id, event.opponentEntityId)) : [];
     const artSubject = { category: event.category, genre: event.classification?.genre ?? null, primary: ent ? { kind: ent.kind, slug: ent.slug, name: ent.name } : null, opponent: other ?? null, venueKeys: venueKeys(venue.externalIds) };
     // Seats already sent in this request for the event it's on now (none since it last changed): this reply is a
@@ -4105,8 +4112,11 @@ export class Concierge {
     const [lastRec] = await this.db.select({ revision: t.recommendations.revision }).from(t.recommendations).where(and(eq(t.recommendations.requestId, req.id), inArray(t.recommendations.reviewStatus, ['approved', 'sent']))).orderBy(desc(t.recommendations.revision)).limit(1);
     const [settled] = lastRec ? await this.db.select({ revision: t.auditLog.revision }).from(t.auditLog).where(and(eq(t.auditLog.action, 'request.event_settled'), sql`${t.auditLog.diff}->>'requestId' = ${req.id}`)).orderBy(desc(t.auditLog.revision)).limit(1) : [];
     const followUp = !!lastRec && lastRec.revision < args.revision && (settled?.revision == null || lastRec.revision >= settled.revision);
-    const artPath = (recsBefore?.n ?? 0) === 0 ? await loadBriefArtwork(this.db, artSubject).catch(() => null) : null;
-    const artworkUrl = artPath?.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${artPath}` : artPath;
+    // The event's own picture first (#179), then today's banner. Every recommendation carries it now, not only the
+    // first (#179 reverses the Oct 6 first-only rule): each email opens on the event it is about.
+    const preview = await this.previewFor(event);
+    const artPath = !preview ? await loadBriefArtwork(this.db, artSubject).catch(() => null) : null;
+    const artworkUrl = preview ?? (artPath?.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${artPath}` : artPath);
     const eventSport = sportFor(event.category, event.classification?.genre ?? null);
     // "Are these good seats?": a verdict on the seats they named comes first, their level, row and price against the rest (#149).
     const seatVerdict = await seatVerdictFor(this.db, { text: said, venue, quantity, offers: [...cmp.eligible, ...cmp.excluded.filter((e) => e.exclusions.every((x) => x === 'over_budget'))], quotedTotalCents: quote ? quote.perTicketCents * quantity : null });

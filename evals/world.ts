@@ -9,11 +9,13 @@
  * - Every listing price is synthetic. Listings are a mutable map, so a test can move the market between emails.
  */
 import { eq, inArray } from 'drizzle-orm';
+import sharp from 'sharp';
 import type { Db } from '@/lib/db';
 import * as t from '@/lib/db/schema';
 import { FX, FIXTURE_OFFERS, FIXTURE_NOW } from '@/lib/fixtures';
 import { basketKeyFor } from '@/lib/intake/pipeline';
 import { teamAliases } from '@/lib/catalog/sync';
+import { eventAssetKey } from '@/lib/brand/event-image';
 import type { Offer } from '@/lib/domain/types';
 
 const uid = (n: number) => `7e7e0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -275,4 +277,21 @@ export async function seedWorld(db: Db): Promise<void> {
   }
   await db.insert(t.marketSnapshots).values(snaps).onConflictDoNothing();
   await db.insert(t.eventSourceMappings).values(MAPPINGS).onConflictDoNothing();
+  await seedPreviewImages(db);
+}
+
+/**
+ * Every eval-world event has the provider image production keeps at catalog sync (#179), already copied: a plain
+ * 600x338 JPEG in a colour of its own, so the preview card is exercised with no network call.
+ */
+async function seedPreviewImages(db: Db): Promise<void> {
+  const ids = [...new Set(Object.values(EV))];
+  const events = await db.select({ id: t.events.id, name: t.events.name }).from(t.events).where(inArray(t.events.id, ids));
+  for (const [i, e] of events.entries()) {
+    const assetId = uid(900 + i);
+    const shade = (i * 47) % 200;
+    const bytes = await sharp({ create: { width: 600, height: 338, channels: 3, background: { r: 20 + shade, g: 60, b: 120 } } }).jpeg({ quality: 70 }).toBuffer();
+    await db.insert(t.brandAssets).values({ id: assetId, kind: 'event', key: eventAssetKey(e.id), name: e.name, imageUrl: `https://s1.ticketm.net/dam/eval/${e.id}_16_9.jpg`, imageKind: 'photo', imageWidth: 1024, imageHeight: 576, source: 'ticketmaster', rights: 'provider_terms', sourceUrl: `https://www.ticketmaster.com/event/eval-${i}` }).onConflictDoNothing();
+    await db.insert(t.previewImages).values({ assetId, mimeType: 'image/jpeg', width: 600, height: 338, bytes: new Uint8Array(bytes), sourceImageUrl: `https://s1.ticketm.net/dam/eval/${e.id}_16_9.jpg` }).onConflictDoNothing();
+  }
 }

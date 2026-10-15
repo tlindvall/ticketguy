@@ -208,6 +208,8 @@ export type DiscoveredEvent = {
   subGenre: string | null;
   venue: DiscoveredVenue | null;
   attractions: DiscoveredAttraction[];
+  /** The event's own image (16:9 and at least 600px wide when listed), for the email's preview card (#179). */
+  image?: ProviderImage | null;
 };
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
@@ -293,6 +295,7 @@ export function parseDiscoveryEvent(e: Record<string, unknown>): DiscoveredEvent
     providerEventId: id,
     name,
     url,
+    image: bestImage(e.images),
     startAt: shift ? new Date(new Date(startAt!).getTime() + shift).toISOString() : startAt,
     localDate: str(start.localDate),
     localTime: shift ? `${noted!.show}:00` : localTime,

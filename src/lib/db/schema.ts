@@ -411,7 +411,7 @@ export const brandAssets = pgTable(
   'brand_assets',
   {
     id: id(),
-    kind: text('kind').notNull(), // team | performer | production | venue | category
+    kind: text('kind').notNull(), // team | performer | production | venue | category | event ("event:<event id>")
     key: text('key').notNull(),
     name: text('name').notNull(),
     shortName: text('short_name'),
@@ -429,17 +429,41 @@ export const brandAssets = pgTable(
     source: text('source').notNull(), // seed | team_file | ticketmaster | staff
     rights: text('rights').notNull().default('unreviewed'), // approved | provider_terms | licensed | unreviewed
     attribution: text('attribution'),
+    /** The page the image was taken from (the official event page for Open Graph), so where it came from is on file. */
+    sourceUrl: text('source_url'),
     updatedAt: ts('updated_at').notNull().defaultNow(),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex('brand_assets_kind_key_uq').on(t.kind, t.key),
-    check('brand_assets_kind_ck', sql`${t.kind} in ('team','performer','production','venue','category')`),
+    check('brand_assets_kind_ck', sql`${t.kind} in ('team','performer','production','venue','category','event')`),
     check('brand_assets_rights_ck', sql`${t.rights} in ('approved','provider_terms','licensed','unreviewed')`),
     // An https image elsewhere, or a path to one we host ("/brand/logos/nhl/new-york-rangers.png").
     check('brand_assets_image_url_ck', sql`${t.imageUrl} is null or ${t.imageUrl} like 'https://%' or ${t.imageUrl} like '/%'`),
     index('brand_assets_aliases_idx').using('gin', t.aliases),
   ],
+);
+
+/**
+ * Our own copy of an event's preview image (#179): fetched once from the provider or the official page, resized to
+ * 600px wide and served from /event-art/<asset id>.jpg, so the email never hotlinks a CDN that expires or counts opens.
+ */
+export const previewImages = pgTable(
+  'preview_images',
+  {
+    id: id(),
+    assetId: uuid('asset_id')
+      .notNull()
+      .references(() => brandAssets.id, { onDelete: 'cascade' }),
+    mimeType: text('mime_type').notNull(),
+    width: integer('width').notNull(),
+    height: integer('height').notNull(),
+    bytes: bytea('bytes').notNull(),
+    /** The image URL it was made from. */
+    sourceImageUrl: text('source_image_url').notNull(),
+    fetchedAt: ts('fetched_at').notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('preview_images_asset_uq').on(t.assetId)],
 );
 
 export const events = pgTable(
@@ -1449,7 +1473,7 @@ export const schema = {
   user, session, account, verification, twoFactor,
   contacts, contactPreferences, conversations, messages, mediaObjects, attachments, listingEvidence,
   requests, requestVersions, requestTransitions, requestOutcomes, trackedLinks,
-  venues, entities, brandAssets, events, eventSourceMappings, catalogSyncs,
+  venues, entities, brandAssets, previewImages, events, eventSourceMappings, catalogSyncs,
   sourceRegistry, adapterConfigs, researchRuns, sourceChecks, offers, offerObservations,
   recommendations, watches, watchAlerts,
   interestTaxonomy, interestObservations, contactInterests, marketingPermissions, suppressions,
