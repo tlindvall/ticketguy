@@ -391,3 +391,12 @@ export function friendlyWhen(at: Date, timeZone: string, now: Date): string {
   if (day === today) return `${Number(parts.hour) >= 5 && String(parts.dayPeriod).toLowerCase() === 'pm' ? 'tonight' : 'today'} at ${time}`;
   return `${day === tomorrow ? 'tomorrow, ' : ''}${friendlyDay(day)}, at ${time}`;
 }
+
+/**
+ * Whether their words name a day at all: a weekday, a month, a calendar date, an ordinal, "today", "tomorrow",
+ * "this weekend". "Are these good tickets?" names none, so a screenshot's own date is the event's (#177).
+ */
+export function saysADay(text: string): boolean {
+  const t = spellWeekdays(text);
+  return /\b(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?s?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{1,2}\b|\b\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b|\b\d{4}-\d{2}-\d{2}\b|\b(?:today|tonight|tomorrow|weekend)\b/i.test(t);
+}

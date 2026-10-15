@@ -23,6 +23,7 @@ import { inspectImage, selectProcessableImages, skippedImagesNote } from '@/lib/
 import { createMediaStore } from '@/lib/media/storage';
 import { seatLevelOf, seatLevelWanted } from '@/lib/domain/seat-level';
 import { seatVerdictFor } from '@/lib/advice/seat-verdict';
+import { asksWhichDate, daysNamed, kindCorrection, kindCorrectionLine, weekdaysNamed, whichDateLine } from '@/lib/intake/answer-first';
 import { CLOSING_LINE, bringsNothingNew, closingOnly, gettingThereAsked, gettingThereLine } from '@/lib/intake/asides';
 import { areaIntent, areaOf, chooseShownOffer, distinctActs, fieldsFromRead, looksLikeListingText, usableEvidence, usableListing, type ListingFields, type ListingImage, type ListingReader } from '@/lib/ai/listing-evidence';
 import { audit } from '@/lib/util/audit';
@@ -36,7 +37,7 @@ import { type CategoryHint, areaFor, venueInArea, browseLabel, genreFamilyFor, g
 import type { Drafter } from '@/lib/ai/drafting';
 import { AMBIGUITY_KINDS, RequestExtractionSchema, type HardConstraints, type Offer, type RequestExtraction, type SourceResult } from '@/lib/domain/types';
 import { wholePartyBudgetCents, formatUsd } from '@/lib/domain/money';
-import { BEFORE_RE, WEEK_OF_RE, dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, toIsoDate } from '@/lib/domain/dates';
+import { BEFORE_RE, WEEK_OF_RE, dateWindowFor, deadlineInstant, eventLocalDate, friendlyDay, friendlyWhen, resolveRelativeDate, saysADay, toIsoDate } from '@/lib/domain/dates';
 import { compareOffers, independentOptionCount, type Evaluated } from '@/lib/domain/comparison';
 import { checkFreshness } from '@/lib/domain/freshness';
 import { deriveInterestObservations } from '@/lib/domain/interests';
@@ -551,7 +552,7 @@ export class Concierge {
     // kept as evidence; what it didn't show stays unknown.
     const listing = await this.readListingEvidence(msg, req);
     if (listing.fields) listing.fields = await this.matchupDate(listing.fields, known, req.id, msg.id);
-    if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known);
+    if (listing.fields) extraction = applyListingFields(extraction, listing.fields, known, latestText);
     // An image we didn't read is named, with why, in one line: a fourth image or one over the size budget was dropped
     // without a word, and a HEIC or a PDF got a generic "resend" (audit 2026-10-10 gaps 30, 41).
     const skippedNote = skippedImagesNote(await this.db.select({ filename: t.attachments.filename, declaredMimeType: t.attachments.declaredMimeType, validationState: t.attachments.validationState, validationReason: t.attachments.validationReason }).from(t.attachments).where(eq(t.attachments.messageId, msg.id)));
@@ -1586,10 +1587,14 @@ export class Concierge {
     if (official) {
       await this.transition(req.id, 'referred', 'official_sale_open');
       const artworkUrl = await this.bannerFor(resolution.event, resolution.venue);
+      // What their message says that this reply must answer first (#177): a correction of what kind of event it is, and
+      // "which date, Thursday or Saturday?" said against the dates we hold for that act there. A follow-up that would
+      // otherwise get the same email again says so, instead of repeating it word for word.
+      const answerFirst = await this.officialSaleAnswers({ req, revision, said: flat(latestText), receivedAt: msg.receivedAt, event: resolution.event, venue: resolution.venue });
       await this.queueSend({
         messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal,
         subject: reSubject(msg.subject, 'Still on general sale'), template: 'official_sale',
-        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: pickNote, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1, category: cardCategory(resolution.event), artworkUrl },
+        vars: { unverified: withFaceValueCheck(unverifiedRequirements(merged, latestText), merged, resolution.event), opening: [answerFirst, pickNote].filter(Boolean).join(' ') || null, recheck: revision > 1 && /\b(?:have|did|could) you (?:actually |already )?(?:check|checked|verif\w*|look(?:ed)? at)\b|\bhaven'?t (?:you )?checked\b/i.test(flat(latestText)), eventLabel: resolution.label, eventTitle: resolution.event.name, eventWhen: shortWhen(resolution.event.localStartAt, resolution.venue.timezone, resolution.event.subtype === 'time_tba'), venueName: resolution.venue.name, seller: official.seller, url: this.env.APP_MODE === 'fixture' ? official.buyUrl : await this.trackLink(req.id, official.buyUrl, `Buy on ${official.seller}`, official.affiliate, { eventId: resolution.event.id }), eventUrl: official.url, affiliate: official.affiliate, quantity: merged.quantity, notes: [...(resolution.assumed ? [resolution.assumed] : []), ...(altDateNote ? [altDateNote] : []), ...[categoryBuyingNote(resolution.event.category, resolution.venue.name)].filter((x): x is string => !!x)], sportsGame: ['nhl', 'nba', 'mlb', 'wnba', 'nfl', 'soccer'].includes(resolution.event.category), countryUnconfirmed: !contact!.countryConfirmed && revision === 1, category: cardCategory(resolution.event), artworkUrl },
         inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null,
         // One per revision: a follow-up ("have you checked the seats are together?") is answered, not deduplicated
         // into silence (audit replay A05-R1).
@@ -3481,6 +3486,33 @@ export class Concierge {
   }
 
   /** A side question answered in the middle of a request: the request carries on as it was (audit gap 4). */
+  /**
+   * The lines that open an official-sale reply to a follow-up: their correction owned, their "which date?" answered from
+   * the dates we hold for that act at that venue, or, with neither, that nothing has changed since the same email (#177).
+   */
+  private async officialSaleAnswers(a: { req: typeof t.requests.$inferSelect; revision: number; said: string; receivedAt: Date; event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect }): Promise<string | null> {
+    const lines: string[] = [];
+    const fix = kindCorrection(a.said);
+    if (fix) lines.push(kindCorrectionLine(fix));
+    if (asksWhichDate(a.said, a.receivedAt)) {
+      const ev = a.event;
+      const tz = a.venue.timezone;
+      const around = ev.primaryEntityId ? await this.db.select({ e: t.events }).from(t.events).where(and(eq(t.events.venueId, a.venue.id), eq(t.events.primaryEntityId, ev.primaryEntityId), eq(t.events.status, 'scheduled'), gte(t.events.localStartAt, new Date(ev.localStartAt.getTime() - 21 * 86_400_000)), lte(t.events.localStartAt, new Date(ev.localStartAt.getTime() + 21 * 86_400_000)))) : [];
+      const held = [...new Map([ev, ...around.map((r) => r.e)].filter((e) => !isNonAdmission(e)).map((e) => [eventLocalDate(e.localStartAt, tz), e])).values()].map((e) => {
+        const localDate = eventLocalDate(e.localStartAt, tz);
+        return { localDate, weekday: new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(new Date(`${localDate}T12:00:00Z`)).toLowerCase(), label: friendlyDay(localDate) };
+      });
+      const current = held.find((h) => h.localDate === eventLocalDate(ev.localStartAt, tz))!;
+      const line = whichDateLine({ asked: daysNamed(a.said, a.receivedAt), askedWeekdays: weekdaysNamed(a.said), held, current, noun: eventNounFor(ev.category) === 'game' ? 'game' : 'show', venue: a.venue.name });
+      if (line) lines.push(line);
+    }
+    if (!lines.length && a.revision > 1) {
+      const [before] = await this.db.select({ id: t.sendIntents.id }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, a.req.id), sql`${t.sendIntents.dedupeKey} like ${`official_sale:${a.req.id}:${a.event.id}:%`}`)).limit(1);
+      if (before) lines.push('Nothing has changed since my last email.');
+    }
+    return lines.length ? lines.join(' ') : null;
+  }
+
   private async answeredAside(req: typeof t.requests.$inferSelect, msg: typeof t.messages.$inferSelect, kind: string): Promise<{ state: string; revision: number; extraction: RequestExtraction | null }> {
     await audit(this.db, { actor: 'system', action: 'request.side_question_answered', entityKind: 'request', entityId: req.id, revision: req.currentRevision, diff: { kind, messageId: msg.id, state: req.state } });
     const prior = await this.latestVersion(req.id);
@@ -4099,7 +4131,7 @@ export class Concierge {
     const artworkUrl = artPath?.startsWith('/') ? `${this.env.APP_URL.replace(/\/$/, '')}${artPath}` : artPath;
     const eventSport = sportFor(event.category, event.classification?.genre ?? null);
     // "Are these good seats?": a verdict on the seats they named comes first, their level, row and price against the rest (#149).
-    const seatVerdict = await seatVerdictFor(this.db, { text: said, venue, quantity, offers: [...cmp.eligible, ...cmp.excluded.filter((e) => e.exclusions.every((x) => x === 'over_budget'))], quotedTotalCents: quote ? quote.perTicketCents * quantity : null });
+    const seatVerdict = await seatVerdictFor(this.db, { text: said, venue, quantity, offers: [...cmp.eligible, ...cmp.excluded.filter((e) => e.exclusions.every((x) => x === 'over_budget'))], quotedTotalCents: quote ? quote.perTicketCents * quantity : null, shown: shown ? { section: shown.section, row: shown.row, quantity: shown.quantity, wholePartyCents: shown.wholePartyCents, perTicketCents: shown.perTicketCents, listingType: shown.listingType ?? null, seller: shown.seller, words: [shown.section ?? '', shown.row ?? '', ...(shown.restrictions ?? []), shown.priceText ?? ''] } : null });
     // Not on sale yet, with a sale date on file: said up front, with the day it opens (#148).
     const saleOpens = !official && event.publicSaleStartAt && event.publicSaleStartAt > now && event.localStartAt > now ? saleOpensLabel(event.publicSaleStartAt, venue.timezone) : null;
     // What intake assumed for this revision and didn't send on its own, because this answer follows within seconds.
@@ -6194,7 +6226,7 @@ function knownNameIn(text: string, known: Array<{ name: string; aliases: string[
  * what they typed wins. A price whose wording didn't say per ticket or total stays "basis unknown", so the
  * reply says how it was read.
  */
-export function applyListingFields(x: RequestExtraction, f: ListingFields, known: Array<{ name: string; aliases: string[] }>): RequestExtraction {
+export function applyListingFields(x: RequestExtraction, f: ListingFields, known: Array<{ name: string; aliases: string[] }>, said?: string): RequestExtraction {
   const out: RequestExtraction = { ...x, ambiguities: [...x.ambiguities] };
   if (out.quantity == null && f.quantity) {
     out.quantity = f.quantity;
@@ -6203,6 +6235,14 @@ export function applyListingFields(x: RequestExtraction, f: ListingFields, known
   if (out.quotedPriceCents == null && f.perTicketCents) {
     out.quotedPriceCents = f.perTicketCents;
     out.quotedPriceBasis = f.priceBasis === 'unknown' ? null : 'per_ticket';
+  }
+  // A listing's own date is the event's when their words name no day ("are these good tickets?"): a day read from
+  // anything else (a screenshot's file name, when it arrived) never outranks the page they sent (#177).
+  const pageDated = !!f.eventDate && f.pageKind !== 'unrelated' && said !== undefined && !saysADay(said);
+  if (pageDated && out.resolvedLocalDate && out.resolvedLocalDate !== f.eventDate) {
+    out.resolvedLocalDate = f.eventDate;
+    out.dateExpression = f.eventDate;
+    out.ambiguities = out.ambiguities.filter((a) => !a.startsWith('date_'));
   }
   if (!out.resolvedLocalDate && f.eventDate) {
     out.resolvedLocalDate = f.eventDate;
