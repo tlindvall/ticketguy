@@ -54,7 +54,8 @@ const MONTH_OR_DAY = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]
 const unescape = (s: string) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 /**
  * The event preview card (#179) on a recommendation for a known event: an image served from our own domain with alt
- * text, and the title, the date and the venue in the plain text, so it reads the same with images off.
+ * text, and the title, the date and the venue as text in the card (not baked into the image), so it reads the same
+ * with images off. A short follow-up's plain text is answer-first by design (#79), so the card is what's checked.
  */
 export function previewCardProblems(e: { html: string; text: string }): string[] {
   const why: string[] = [];
@@ -68,12 +69,11 @@ export function previewCardProblems(e: { html: string; text: string }): string[]
   }
   if (host !== new URL(EVAL_APP_URL).hostname) why.push(`recommendation: image not on our domain (${host || 'unparseable'})`);
   if (!img[2]!.trim()) why.push('recommendation: image without alt text');
-  const title = /<h2[^>]*>([^<]+)<\/h2>/.exec(e.html)?.[1];
-  const details = /<h2[^>]*>[^<]+<\/h2>\s*<p[^>]*>([^<]+)<\/p>/.exec(e.html)?.[1];
-  if (!title || !e.text.includes(unescape(title).trim())) why.push('recommendation: event title not in the text');
-  if (!MONTH_OR_DAY.test(e.text)) why.push('recommendation: date not in the text');
-  const venue = details ? unescape(details).split(' · ')[0]!.split(',')[0]!.trim() : '';
-  if (!venue || !e.text.includes(venue)) why.push('recommendation: venue not in the text');
+  const card = /<h2[^>]*>([^<]+)<\/h2>\s*<p[^>]*>([^<]+)<\/p>/.exec(e.html);
+  if (!card || !unescape(card[1]!).trim()) why.push('recommendation: event title not in the card as text');
+  const details = card ? unescape(card[2]!) : '';
+  if (!MONTH_OR_DAY.test(details)) why.push('recommendation: date not in the card as text');
+  if (!details.split(' · ')[0]!.trim()) why.push('recommendation: venue not in the card as text');
   return why;
 }
 const questionsIn = (reply: string) => reply.split('\n----\n').flatMap((body) => body.match(/[^.!?\n]*\?(?=\s|$)/g)?.filter((s) => !/https?:/.test(s)) ?? []);

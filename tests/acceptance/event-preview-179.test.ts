@@ -162,6 +162,12 @@ describe('the eval check (email_design)', () => {
     expect(previewCardProblems(rec!)).toEqual([]);
     expect(rec!.html).toMatch(/src="https:\/\/ticketguy\.now\/event-art\/[0-9a-f-]{36}\.jpg"/);
   }, 60_000);
+  it('a short follow-up answer passes: its text is answer-first, the card keeps the event as text (side-question step 3)', async () => {
+    const turns = (await runThread({ id: 'side-question-179', capability: 'design', steps: [{ text: '5 tickets for the Rangers preseason game, $500 total.' }, { text: 'Quick question — is MSG easy to get to from Penn Station?' }, { text: 'Great. So which seats would you go for?' }] } as unknown as Scenario, '', { extractor: new FixtureExtractor(), drafter: new FixtureDrafter() })) as TurnOut[];
+    const recs = turns.flatMap((t) => t.emails).filter((e) => e.cls === 'recommendation');
+    expect(recs.length).toBeGreaterThan(0);
+    for (const r of recs) expect(previewCardProblems(r)).toEqual([]);
+  }, 60_000);
   it('flags an image hotlinked from elsewhere and one with no alt text', () => {
     const html = '<img src="https://s1.ticketm.net/x.jpg" alt=""><h2 style="">Game</h2><p style="">MSG, New York · Sat, Oct 3</p>';
     expect(previewCardProblems({ html, text: 'Game\nMSG, New York · Sat, Oct 3' })).toEqual(['recommendation: image not on our domain (s1.ticketm.net)', 'recommendation: image without alt text']);
