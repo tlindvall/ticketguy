@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { wrapOpenAI } from 'braintrust';
 import { FIXTURE_HISTORICAL_EVENTS } from '@/lib/fixtures';
 import { SERVICE_DOMAIN } from '@/lib/config/brand';
-import type { Expect, Scenario, TurnOut } from './harness';
+import { EVAL_APP_URL, type Expect, type Scenario, type TurnOut } from './harness';
 import { LINKS, worldOffers } from './world';
 
 type Args = { input: Scenario; output: TurnOut[] };
@@ -49,6 +49,33 @@ const SEARCH_LINK = /^https:\/\/(www\.stubhub\.com\/search\?q=|www\.vividseats\.
 
 // ---------- per email ----------
 const PLAIN = new Set(['acknowledgment', 'clarification', 'holding', 'watch_alert', 'watch_confirmation', 'verification', 'manual_attention', 'no_result']);
+
+const MONTH_OR_DAY = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2}\b|\b(?:Tonight|Today|Tomorrow)\b/;
+const unescape = (s: string) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+/**
+ * The event preview card (#179) on a recommendation for a known event: an image served from our own domain with alt
+ * text, and the title, the date and the venue in the plain text, so it reads the same with images off.
+ */
+export function previewCardProblems(e: { html: string; text: string }): string[] {
+  const why: string[] = [];
+  const img = /<img src="([^"]+)" alt="([^"]*)"/.exec(e.html);
+  if (!img) return ['recommendation: no event image'];
+  let host = '';
+  try {
+    host = new URL(unescape(img[1]!)).hostname;
+  } catch {
+    host = '';
+  }
+  if (host !== new URL(EVAL_APP_URL).hostname) why.push(`recommendation: image not on our domain (${host || 'unparseable'})`);
+  if (!img[2]!.trim()) why.push('recommendation: image without alt text');
+  const title = /<h2[^>]*>([^<]+)<\/h2>/.exec(e.html)?.[1];
+  const details = /<h2[^>]*>[^<]+<\/h2>\s*<p[^>]*>([^<]+)<\/p>/.exec(e.html)?.[1];
+  if (!title || !e.text.includes(unescape(title).trim())) why.push('recommendation: event title not in the text');
+  if (!MONTH_OR_DAY.test(e.text)) why.push('recommendation: date not in the text');
+  const venue = details ? unescape(details).split(' · ')[0]!.split(',')[0]!.trim() : '';
+  if (!venue || !e.text.includes(venue)) why.push('recommendation: venue not in the text');
+  return why;
+}
 const questionsIn = (reply: string) => reply.split('\n----\n').flatMap((body) => body.match(/[^.!?\n]*\?(?=\s|$)/g)?.filter((s) => !/https?:/.test(s)) ?? []);
 
 export const perEmail = [
@@ -109,7 +136,7 @@ export const perEmail = [
   }),
   perTurn('at_most_one_question', (tu) => (tu.reply.trim() ? { ok: questionsIn(tu.reply).length <= 1 ? 1 : 0, why: `${questionsIn(tu.reply).length} questions` } : null)),
   perTurn('one_email_per_message', (tu) => (isEmailStep(tu) && tu.emails.length ? { ok: tu.emails.length <= 1 ? 1 : 0, why: `${tu.emails.length} emails: ${tu.emails.map((e) => e.cls).join(', ')}` } : null)),
-  // Design (DECISION_LOG #76): every sent email is signed (full on the first reply, short after); every answer
+  // Design (DECISION_LOG #76, #82): every sent email is signed (full on the first reply, short after); every answer
   // carries the ticket-brief card. Recommendations are stored unsigned while awaiting review.
   perTurn('email_design', (tu) => {
     if (!tu.emails.length) return null;
@@ -117,6 +144,7 @@ export const perEmail = [
       const why: string[] = [];
       if (e.cls !== 'recommendation' && !/second opinion before you buy|>\s*Ticket Guy\s*<\/p>/i.test(e.html)) why.push(`${e.cls}: no signature`);
       if (!PLAIN.has(e.cls) && !/border-radius:12px;border-collapse:separate/.test(e.html)) why.push(`${e.cls}: answer without the ticket-brief card`);
+      if (e.cls === 'recommendation' && tu.eventId) why.push(...previewCardProblems(e));
       return why;
     });
     return { ok: bad.length ? 0 : 1, why: bad.join('; ') };
