@@ -1619,3 +1619,45 @@ Issue #179. Recommendation emails were text plus the ticket-brief card. Team ban
 - `budget-gap-1006`: the broader-than-asked series now shows, labelled.
 - `market-budget-1010`: the backfill is bounded by its own allowance.
 - `take-charge-1003`: `pickLinksFor` takes the stored ids.
+
+## 84. A customer's request always gets its listings read, and a reply always has a way forward (Oct 15)
+
+**Why.** A live reply for Rangers vs Ducks (2 tickets, $150 total) had:
+- no listing and no link;
+- prices 15 hours old;
+- a garbled headline.
+
+Background tracking had spent the day's SeatData allowance, so the request couldn't read listings.
+
+**Decisions.**
+- **Calls are split by who they're for.** `market_fetches.lane` is `customer` or `background`.
+  - Background tracking may spend at most 60% of `SEATDATA_DAILY_CALL_LIMIT` (`BACKGROUND_SHARE`). Background means the hourly pass and scheduled price-watch checks.
+  - A customer's request may spend whatever is left of the day, so tracking can never block it.
+  - The history backfill keeps its own allowance (#83).
+- **Staff alert on refusal.** A customer's read refused for the day's allowance records `skipped_budget` in the customer lane. It raises one staff email a day that says how the day was spent (customers vs background). It is sent from the research that was refused and from the hourly check.
+- **Each game's last listings read is kept** (`tracked_events.last_listings`). When a request's own read is refused or fails, the reply uses that read and says its age in one plain line. A watch never uses a kept read; its alert is about now. The retention purge clears kept reads with the rest.
+- **Prices older than 6 hours** are polled again before the reply when the allowance has room. When it doesn't, the reply says how old they are.
+- **No reply without a way forward.** When nothing fits the budget, the reply gives:
+  - **The closest listing:** its price, how far over the budget it is, and its link. This comes from the price lead, or from the cheapest checked seats when nothing fits (`closestOver`).
+  - **Other upcoming games for the team whose stored price fits.** These use cached prices only, never a new call: a checked total for exactly their party, else the licensed resale series with the fee allowance. At most two, within 36 hours, soonest first.
+  - **With no listing at all:** the other game that fits and this game's marketplace link. Never market figures alone.
+- **Copy.**
+  - The headline says the answer: "Nothing for two under $150 on Oct 19, but Oct 26 vs the Los Angeles Kings fits." With no other game: "Nothing for two under $150 on Oct 19 yet."
+  - The "$X of your $Y left for fees" arithmetic is gone.
+  - The question names the other game: "…or should I look at Oct 26 instead?"
+- **Eval.**
+  - New scenario `over-budget-way-forward`, with checks `has_a_link` and `has_next_step`. They apply where a step sets `hasLink` or `hasNextStep`.
+  - The eval world's Ducks and Kings games are dated Nov 16 and 23, so the October Rangers scenarios ("this week", "in October") see the same games as before.
+
+**Not seen here:** the garbled headline itself; the live email wasn't available. The new headline is built from the outcome and the budget, not from the market figures.
+
+**Verified:** `tests/acceptance/ducks-1015.test.ts` covers:
+- tracking spent its 60%;
+- the whole day spent, with a kept read and the staff alert;
+- no listings at all;
+- the 60% cap against a customer read.
+
+**Expectations changed on purpose:**
+- the headline in `brief-verdict-1009` and `budget-gap-1006`;
+- the fee arithmetic in `audit-0929`;
+- `price-watch-retest-expanded` X09: a watch is background, so its room is 60% of the day.

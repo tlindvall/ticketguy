@@ -68,7 +68,8 @@ describe('what I’d do, why, and the next action: the outcome follows their bud
 
   it('5. over budget and no watch can run: no indefinite waiting, one question that unlocks it, never a raised budget', () => {
     const { textBody: text, htmlBody: html } = email(args(market(), null));
-    expect(text).toContain('I haven’t found a confirmed pair under $1,500.');
+    // The headline says the answer (Oct 15 review), not "I haven’t found a confirmed pair under $1,500."
+    expect(text).toMatch(/Nothing for two under \$1,500 on [A-Z][a-z]{2} \d{1,2} yet\./);
     expect(text).toContain('The closest lead is Section 119, Row 26: about $1,841 for two tickets, including estimated fees, $341 over.');
     expect(text).toContain('Would you go up to about $1,841 for these, or should I look at other seats or another date?');
     expect(text).not.toMatch(/hold off|watch it|How prices are moving/);
@@ -77,7 +78,8 @@ describe('what I’d do, why, and the next action: the outcome follows their bud
 
   it('5. over budget, rising, no history: says it isn’t moving toward their target, and asks', () => {
     const { textBody: text } = email(args(market({ direction: 'up', h24: h(24, 66000), h72: h(72, 64000), late: null }), SOON));
-    expect(text).toContain('I haven’t found a confirmed pair under $1,500.');
+    // The headline says the answer (Oct 15 review), not "I haven’t found a confirmed pair under $1,500."
+    expect(text).toMatch(/Nothing for two under \$1,500 on [A-Z][a-z]{2} \d{1,2} yet\./);
     expect(text).toContain('Prices are rising.');
     expect(text).toContain('Would you go up to about $1,841');
     expect(text).not.toMatch(/watch it/);
@@ -143,7 +145,8 @@ describe('what I’d do, why, and the next action: the outcome follows their bud
   it('5. over budget and falling, but the game is in two days: no time to hold, so it asks', () => {
     const a = args(market({ direction: 'down', h24: h(24, 74000), h72: h(72, 80000), late: null }), null);
     const { textBody: text } = email({ ...a, eventStartAt: new Date(at.getTime() + 2 * 86_400_000) } as BuildPacketArgs);
-    expect(text).toContain('I haven’t found a confirmed pair under $1,500.');
+    // The headline says the answer (Oct 15 review), not "I haven’t found a confirmed pair under $1,500."
+    expect(text).toMatch(/Nothing for two under \$1,500 on [A-Z][a-z]{2} \d{1,2} yet\./);
     expect(text).toContain('Would you go up to about $1,841');
     expect(text).not.toMatch(/hold off|Check back/);
   });

@@ -120,3 +120,38 @@ export async function alertMarketGaps(db: DbOrTx, env: Env, provider: { send: (a
   await audit(db, { actor: 'system', action: 'market.stale_alert', entityKind: 'system', entityId: day, diff: { gaps: gaps.length, recipients: recipients.length, causes: causes.map((c) => c.slice(0, 120)) } });
   return { outcome: 'sent', gaps: gaps.length };
 }
+
+/**
+ * A customer's request refused a SeatData read for the day's allowance: one staff email a day, with how the day was
+ * spent. Background tracking is capped below the allowance, so this means the whole day is too small for the traffic
+ * (raise SEATDATA_DAILY_CALL_LIMIT) rather than tracking crowding a customer out. Recorded either way.
+ */
+export async function alertBudgetRefusals(db: DbOrTx, env: Env, provider: { send: (a: { idempotencyKey: string; from: string; to: string; subject: string; text: string; html: string; headers: Record<string, string> }) => Promise<unknown> } | null, now: Date): Promise<{ outcome: 'sent' | 'none' | 'skipped'; refused: number; reason?: string }> {
+  const day = now.toISOString().slice(0, 10);
+  const start = new Date(`${day}T00:00:00Z`);
+  const refusals = await db.select({ eventId: t.marketFetches.eventId, kind: t.marketFetches.kind }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.lane, 'customer'), eq(t.marketFetches.status, 'skipped_budget'), gte(t.marketFetches.at, start)));
+  if (!refusals.length) return { outcome: 'none', refused: 0 };
+  const [already] = await db.select({ id: t.auditLog.id }).from(t.auditLog).where(and(eq(t.auditLog.action, 'market.budget_refused_alert'), eq(t.auditLog.entityId, day))).limit(1);
+  if (already) return { outcome: 'skipped', refused: refusals.length, reason: 'already_sent_today' };
+  const spent = await db.select({ lane: t.marketFetches.lane, calls: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), gte(t.marketFetches.at, start), notInArray(t.marketFetches.kind, ['history_search', 'history_stats']))).groupBy(t.marketFetches.lane);
+  const by = Object.fromEntries(spent.map((r) => [r.lane, Number(r.calls)]));
+  const record = (outcome: string, reason?: string) => audit(db, { actor: 'system', action: outcome === 'sent' ? 'market.budget_refused_alert' : 'market.budget_refused_alert_skipped', entityKind: 'system', entityId: day, diff: { refused: refusals.length, customerCalls: by.customer ?? 0, backgroundCalls: by.background ?? 0, limit: env.SEATDATA_DAILY_CALL_LIMIT, ...(reason ? { reason } : {}) } });
+  const recipients = env.STAFF_ALERT_ADDRESSES.length ? env.STAFF_ALERT_ADDRESSES : env.STAFF_EMAIL_ALLOWLIST;
+  const skip = async (reason: string) => {
+    await record('skipped', reason);
+    return { outcome: 'skipped' as const, refused: refusals.length, reason };
+  };
+  if (!recipients.length) return skip('no_staff_addresses');
+  if (!provider) return skip('sending_disabled');
+  const switches = await loadSwitches(db);
+  if (switches.all_outbound === false) return skip('kill_switch_all_outbound');
+  if (testModeFrom(switches)) return skip('test_mode');
+  const games = new Set(refusals.map((r) => r.eventId).filter(Boolean)).size;
+  const subject = `Market data: a customer's request was refused SeatData reads (daily allowance)`;
+  const text = [`Today a customer's request was refused ${refusals.length} SeatData ${refusals.length === 1 ? 'read' : 'reads'} (${games} ${games === 1 ? 'game' : 'games'}) because the day's allowance of ${env.SEATDATA_DAILY_CALL_LIMIT} calls is spent: customers' requests ${by.customer ?? 0}, background tracking ${by.background ?? 0} (capped at 60%). Their replies use each game's last listings read, with its age said, where one was kept.`, 'If this repeats, raise SEATDATA_DAILY_CALL_LIMIT (and the SeatData plan with it).', `Open the market page: ${env.APP_URL.replace(/\/$/, '')}/admin/market`, 'This is an automatic alert, sent at most once a day.'].join('\n\n');
+  const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const html = text.split('\n\n').map((p) => `<p>${esc(p)}</p>`).join('');
+  for (const to of recipients) await provider.send({ idempotencyKey: `market-budget:${day}:${to}`, from: `Ticket Guy alerts <${env.CONCIERGE_FROM_ADDRESS}>`, to, subject, text, html, headers: { 'Auto-Submitted': 'auto-generated', 'X-TicketGuy-Staff-Alert': 'true' } });
+  await record('sent');
+  return { outcome: 'sent', refused: refusals.length };
+}

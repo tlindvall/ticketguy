@@ -1213,6 +1213,13 @@ export const trackedEvents = pgTable(
     lastObservedAt: ts('last_observed_at'),
     matchAttempts: integer('match_attempts').notNull().default(0),
     lastError: text('last_error'),
+    /**
+     * The last listings read for this game (ordinary seats, as MarketListing), kept so a reply whose own read is refused
+     * (the day's allowance, a provider error) still names the closest listing, with its age said. Never a quote.
+     */
+    lastListings: jsonb('last_listings').$type<unknown[]>(),
+    lastListingsAt: ts('last_listings_at'),
+    lastListingsAsOf: ts('last_listings_as_of'),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('tracked_events_event_provider_uq').on(t.eventId, t.provider), index('tracked_events_state_next_idx').on(t.state, t.nextPollAt)],
@@ -1260,6 +1267,8 @@ export const marketFetches = pgTable(
     calls: integer('calls').notNull().default(1),
     points: integer('points').notNull().default(0),
     detail: text('detail'),
+    /** Who the call was for: a customer's request, or background tracking (capped at a share of the day). */
+    lane: text('lane').notNull().default('customer'), // customer | background
     at: ts('at').notNull(),
   },
   (t) => [index('market_fetches_provider_at_idx').on(t.provider, t.at)],

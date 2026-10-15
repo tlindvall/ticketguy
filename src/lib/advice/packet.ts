@@ -114,6 +114,8 @@ export type BuildPacketArgs = {
   cheapestCheck?: { cheaper: Evaluated | null; unpriced: Evaluated[] } | null;
   /** Seats together asked for and none fit: the cheapest together without the budget, when any is listed. */
   togetherOver?: Evaluated | null;
+  /** Nothing checked fits the budget: the cheapest checked seats for the party, named with what they cost over. */
+  closestOver?: Evaluated | null;
   /** The level they asked for ("lower bowl") when the pick isn't in it: its cheapest option without the budget, if any. */
   levelWanted?: { level: 'lower' | 'upper'; cheapest: Evaluated | null; block?: Evaluated | null; whole?: Evaluated | null } | null;
   /** Lines intake would have put in an acknowledgment: what it assumed, a date it moved to. */
@@ -260,7 +262,12 @@ export type BuildPacketArgs = {
    * not questions). Listed prices before fees with the fee allowance said; `age` is the provider's refresh time.
    */
   /** Where to find the pick: the marketplace's event page or search, never a listing we haven't checked is still there. */
-  picks?: (ListingPicks & { age: 'undated' | 'recent' | number; links?: Array<{ label: string; url: string }> }) | null;
+  picks?: (ListingPicks & { age: 'undated' | 'recent' | number; links?: Array<{ label: string; url: string }>; /** From the game's last kept read: this request's own read was refused. */ kept?: boolean }) | null;
+  /**
+   * Nothing fits their budget here: the team's other upcoming games whose stored price does (cached prices only, no
+   * new calls), soonest first. `totalCents` is for the whole party, with the fee allowance unless `beforeFees`.
+   */
+  otherGames?: Array<{ label: string; shortDate: string; opponent: string | null; totalCents: number; beforeFees: boolean; checkedAt: Date; link: { label: string; url: string }; /** From the licensed resale series (shown only where its licence allows), not a checked total. */ resale: boolean }> | null;
   /** They're travelling to it (a flight, a drive in): waiting is riskier for them than the market shows. */
   travelling?: boolean;
   /** Where they want to sit ("lower level"), when they said: a venue-wide figure doesn't describe those seats. */
@@ -906,7 +913,8 @@ function marketRead(a: BuildPacketArgs, timingAnswered = false): ClaimRecord | n
       const party = q > 1 ? ` for ${countWord(q)} (${formatUsd(Math.floor(budget / q))} a ticket)` : '';
       parts.push(`your budget is ${formatUsd(budget)}${party}; ${atThat}, over it before any fees. That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.`);
     } else if (budget != null) {
-      parts.push(`${atThat}, which leaves ${formatUsd(budget - groupFloor)} of your ${formatUsd(budget)} for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.`);
+      // No "$X left for fees" arithmetic (Oct 15 review): the fees decide it, and only the checkout shows them.
+      parts.push(`${atThat}; fees aren’t in that, so the checkout total decides whether it fits your ${formatUsd(budget)}.`);
     }
   }
   const s = m.supply;
@@ -1701,14 +1709,20 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     : dir === 'down' ? (fitting >= 2 && !noTime ? 'wait_falling' : 'take_falling')
     : 'take';
   const comparable = trend?.comparable ?? null;
+  // Over budget here, but another of the team's games fits from prices we already hold: the headline says both
+  // (Oct 15: "Nothing for two under $150 on Oct 19, but Oct 26 vs the Kings fits").
+  const other = over ? a.otherGames?.[0] ?? null : null;
+  const day = a.eventStartAt ? new Intl.DateTimeFormat('en-US', { timeZone: a.timeZone ?? 'America/New_York', month: 'short', day: 'numeric' }).format(a.eventStartAt) : null;
+  const otherFits = other ? `${other.shortDate}${other.opponent ? ` vs the ${other.opponent}` : ''} fits` : null;
+  const nothing = `Nothing for ${n} under ${yours}${day ? ` on ${day}` : ''}`;
   const head = {
     take: `I’d go for these if checkout comes to about ${est} for ${n}.`,
     buy_rising: `I’d buy these if you’re set on going.`,
     wait_falling: `I’d give it another day.`,
     take_falling: noTime ? `I’d buy these now: there isn’t much time left to wait.` : `I’d take these: they’re the only ${q === 2 ? 'pair' : 'option'} ${budget != null ? 'inside your budget' : 'I can see for you'}.`,
-    hold_watch: `I’d hold off: you don’t need to stretch your budget yet.`,
-    hold: `I’d hold off for now.`,
-    ask: `I haven’t found a confirmed ${q === 2 ? 'pair' : q === 1 ? 'ticket' : `set of ${n}`} under ${yours}.`,
+    hold_watch: otherFits ? `${nothing}, but ${otherFits}.` : `I’d hold off: you don’t need to stretch your budget yet.`,
+    hold: otherFits ? `${nothing}, but ${otherFits}.` : `I’d hold off for now.`,
+    ask: otherFits ? `${nothing}, but ${otherFits}.` : `${nothing} yet.`,
   }[outcome];
   const rationale = {
     take: `${capitalize(lead)}: ${priceLine}${under ? `, ${under} under your ${yours}` : ''}. ${unconfirmed}`,
@@ -1735,11 +1749,17 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     ask: [
       dir === 'down' ? `${comparable ?? 'Prices are falling'}, but ${noTime ? `there isn’t time to wait for ${formatUsd(budget ?? 0)}` : `they haven’t reached ${formatUsd(budget ?? 0)}, and I can’t keep watching for you here`}.`
       : trend ? `${trend.sentence}` : `I don’t have enough price history to expect a drop to ${formatUsd(budget ?? 0)}.`,
-      `Would you go up to about ${est} for these, or should I look at other seats or another date?`,
+      other ? `Would you go up to about ${est} for these, or should I look at ${other.shortDate} instead?` : `Would you go up to about ${est} for these, or should I look at other seats or another date?`,
     ],
   }[outcome];
+  // The game that fits, said with its price and where it came from: prices we already hold, never a new read.
+  const otherLine = other ? `${other.shortDate}${other.opponent ? ` vs the ${other.opponent}` : ''}: ${otherPrice(other, n)}, from prices I checked ${hoursAgo(a.observedAt, other.checkedAt)}.` : null;
+  // Prices older than six hours are said in one plain line (the reply was sent with 15-hour-old prices and didn't say).
+  const ageHours = typeof p.age === 'number' ? p.age : null;
+  const oldLine = p.kept ? `These prices are from ${ageHours !== null ? `about ${ageHours} hours ago` : 'an earlier check'}: I couldn’t refresh them just now, so they may have moved.` : ageHours !== null && ageHours > 6 ? `These prices are from about ${ageHours} hours ago, so they may have moved.` : null;
   const trendShown = !!trend && (trend.broader || ['buy_rising', 'wait_falling', 'take_falling', 'hold_watch', 'hold'].includes(outcome));
-  const points = why;
+  // The game that fits goes before the question, which is the last line.
+  const points = [...(oldLine ? [oldLine] : []), ...(otherLine && outcome === 'ask' ? [...why.slice(0, -1), otherLine, ...why.slice(-1)] : [...why, ...(otherLine ? [otherLine] : [])])];
   const headline = head;
   // The next action follows the advice: a direct listing link to buy; the watch when holding off and one can run; the
   // question when asking. A big button to one marketplace when we don't know which one has the seats claims a confidence
@@ -1772,7 +1792,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
     ...(u && p.fits ? [`Why not cheaper: ${seatPhrase(u.listing.section, null) ?? 'a block'} at ${formatUsd(u.listing.priceCents)} each is ${u.listing.quantity} tickets, and sellers rarely leave a single seat.`] : []),
     ...(over && outcome === 'hold_watch' && !trendShown ? budgetGapNotes(a, budget, n, false, true) : []),
   ];
-  const links = p.links ?? [];
+  const links = [...(p.links ?? []), ...(other ? [other.link] : [])];
   const sure = !!links[0] && /^View /.test(links[0].label) && buying;
   const brief: TicketBrief = {
     kind: 'price_lead',
@@ -1921,6 +1941,17 @@ function lateMoveNote(a: BuildPacketArgs): { text: string; mostlyFell: boolean }
   const text = lateMoveLine(a);
   const l = a.market?.context?.late;
   return text && l ? { text, mostlyFell: l.fell * 2 > l.events } : null;
+}
+
+/** Another game's held price for the party: a checked total as that, a resale estimate with its fee basis. */
+function otherPrice(o: NonNullable<BuildPacketArgs['otherGames']>[number], n: string): string {
+  return !o.resale ? `${formatUsd(o.totalCents)} total for ${n} including the verified charges` : `about ${formatUsd(roundToDollar(o.totalCents))} for ${n}${o.beforeFees ? ' before fees' : ', including estimated fees'}`;
+}
+
+/** "about 3 hours ago", "in the last hour": how old a held price is, said plainly. */
+function hoursAgo(now: Date, at: Date): string {
+  const h = Math.round((now.getTime() - at.getTime()) / 3_600_000);
+  return h < 1 ? 'in the last hour' : `about ${h} hour${h === 1 ? '' : 's'} ago`;
 }
 
 /** A watch they could start now on their budget, as the offer the reply makes. */
@@ -2241,6 +2272,14 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   if (a.togetherOver && a.togetherOver.comparableTotalCents !== null) {
     const e = a.togetherOver;
     claims.push({ id: 'C_TOGETHER_OVER', kind: 'alternative_offer', text: `Nothing for ${q} together fits inside ${a.priorities.budgetTotalCents != null ? `your ${formatUsd(a.priorities.budgetTotalCents)}` : 'what you asked'}: the cheapest ${q} together I can see ${q > 1 ? 'are' : 'is'}${e.offer.section ? ` in section ${e.offer.section}` : ''}, ${formatUsd(e.comparableTotalCents!)} total (${formatUsd(perPersonCents(e.comparableTotalCents!, q))} each) including the verified charges${overBy(e) ? `, ${formatUsd(overBy(e))} over` : ''}.`, values: { totalCents: e.comparableTotalCents, section: e.offer.section ?? null }, scope: { quantity: q, seatZone: e.offer.seatClass ?? null, feeBasis: e.offer.priceCompleteness, observedAt: obs }, evidenceIds: [e.offer.evidenceId], methodVersion: null, limitations: e.flags, customerVisible: true, ...(e.offer.directPurchaseUrl ? { url: e.offer.directPurchaseUrl, linkLabel: `The ${q} together` } : {}) });
+  } else if (a.closestOver && a.closestOver.comparableTotalCents !== null) {
+    // Nothing checked fits at all: the closest, named, with what it costs over and its link (Oct 15). When another game
+    // fits, that leads (C_WAY_FORWARD) and this is the closest here.
+    const e = a.closestOver;
+    const where = `${e.offer.section ? `section ${e.offer.section}` : `${q} seats`}${e.offer.row ? `, row ${e.offer.row}` : ''}`;
+    const price = `${formatUsd(e.comparableTotalCents!)} total (${formatUsd(perPersonCents(e.comparableTotalCents!, q))} each) including the verified charges${overBy(e) ? `, ${formatUsd(overBy(e))} over` : ''}`;
+    const text = a.otherGames?.length ? `The closest here is ${where}: ${price}.` : `Nothing for ${q === 2 ? 'two' : q} fits inside your ${formatUsd(a.priorities.budgetTotalCents!)}: the closest is ${where}, ${price}.`;
+    claims.push({ id: 'C_TOGETHER_OVER', kind: 'alternative_offer', text, values: { totalCents: e.comparableTotalCents, section: e.offer.section ?? null }, scope: { quantity: q, seatZone: e.offer.seatClass ?? null, feeBasis: e.offer.priceCompleteness, observedAt: obs }, evidenceIds: [e.offer.evidenceId], methodVersion: null, limitations: e.flags, customerVisible: true, ...(e.offer.directPurchaseUrl ? { url: e.offer.directPurchaseUrl, linkLabel: `The closest seats (${where})` } : {}) });
   }
   // "And lower bowl, how much would that be?" with nothing there inside the budget: the price there, then the pick (#158).
   if (a.levelWanted && a.best) {
@@ -2498,7 +2537,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A listing link they sent is theirs too: the one ask for its price and seats covers it (FV-R1-03: "I haven't
   // been able to check this against any seats yet: 2 seats together" under the StubHub link it was about).
   // Seats already named for them say what is and isn't checked; "I haven't checked this against any seats" would contradict them.
-  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !(a.togetherOver && a.togetherOver.comparableTotalCents !== null) && !picksAnswer(a)) {
+  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !(a.togetherOver && a.togetherOver.comparableTotalCents !== null) && !(a.closestOver && a.closestOver.comparableTotalCents !== null) && !picksAnswer(a)) {
     const reqs = a.requirements;
     claims.push({
       id: 'C_REQS',
@@ -2512,6 +2551,20 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
       // A running market watch already says nothing is verified; twice is a contradiction in tone (PW QA wave 1).
       customerVisible: !marketWatching,
     });
+  }
+  // No price lead to name (no listings read, none kept) and nothing verified within their budget: never market figures
+  // alone (Oct 15). The team's other game that fits, from prices already held, and where this game's listings are.
+  const budgetGiven = a.priorities.budgetTotalCents != null;
+  if (budgetGiven && !picksAnswer(a) && !(a.best && a.best.comparableTotalCents !== null) && !a.subject && !a.quote && !(a.textOffers && a.textOffers.length) && !a.link) {
+    const other = a.otherGames?.[0] ?? null;
+    const n = q === 1 ? 'one' : qtyWord(q);
+    const scope = { quantity: q, seatZone: null, feeBasis: other && !other.beforeFees ? 'estimated_total' : 'listed_before_fees', observedAt: obs };
+    if (other) {
+      claims.push({ id: 'C_WAY_FORWARD', kind: 'alternative_market', text: `Nothing ${a.closestOver ? '' : 'I can check '}for ${n} under ${formatUsd(a.priorities.budgetTotalCents!)}${a.eventStartAt ? ` on ${new Intl.DateTimeFormat('en-US', { timeZone: a.timeZone ?? 'America/New_York', month: 'short', day: 'numeric' }).format(a.eventStartAt)}` : ''}${a.closestOver ? '' : ' yet'}, but ${other.shortDate}${other.opponent ? ` vs the ${other.opponent}` : ''} fits: ${otherPrice(other, n)}, from prices I checked ${hoursAgo(a.observedAt, other.checkedAt)}. Reply with that date and I’ll find seats for ${n}.`, url: other.link.url, linkLabel: other.link.label, values: { totalCents: other.totalCents }, scope, evidenceIds: [], methodVersion: null, limitations: ['stored_price_not_a_quote'], customerVisible: !other.resale || !!a.market?.visible });
+    }
+    // Where this game's listings are, unless the closest checked seats already carry their own link.
+    const here = marketplaceLinks(a.marketplaceIds, { eventName: a.eventParts?.title ?? a.eventLabel, quantity: q, noun: a.eventNoun ?? 'event' });
+    if (!a.closestOver?.offer.directPurchaseUrl) claims.push({ id: 'C_WAY_FORWARD_ALT', kind: 'coverage', text: here.stubhub.label, url: here.stubhub.url, linkLabel: here.stubhub.label, values: {}, scope, evidenceIds: [], methodVersion: null, limitations: ['search_page_not_a_listing'], customerVisible: true });
   }
   if (a.staffFollowUp) {
     // Owned, and said with its limits: what the person will do, where the answer comes, and no promised result.

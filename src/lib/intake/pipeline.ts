@@ -9,7 +9,7 @@ import { classifyOutcomeReply } from '@/lib/domain/outcome-replies';
 import { OFF_TOPIC_REPLY_EVERY_HOURS, isOffTopic, overInboundLimit } from './boundaries';
 import { raPointer } from '@/lib/sources/resident-advisor';
 import { venueCalendar } from '@/lib/sources/venue-calendars';
-import { and, asc, desc, eq, gte, inArray, lte, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import { REMOVED_REASON } from '@/lib/admin/remove-requests';
 import { createHash } from 'node:crypto';
 import type { Db } from '@/lib/db';
@@ -48,9 +48,9 @@ import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolve
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, loadMarketContext, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
-import { marketplaceLinks, resolveMarketplaceIds, stubhubEventUrl, withoutTracking, type MarketplaceEventLookup, type MarketplaceIds } from '@/lib/market/event-links';
+import { marketplaceLinks, resolveMarketplaceIds, storedMarketplaceIds, stubhubEventUrl, withoutTracking, type MarketplaceEventLookup, type MarketplaceIds } from '@/lib/market/event-links';
 import { stubhubCatalogLookup } from '@/lib/market/stubhub-catalog';
-import { SEATDATA_DATASET_ID, basisForQuantity, listingAge, type MarketBasis } from '@/lib/market/series';
+import { SEATDATA_DATASET_ID, basisForQuantity, listingAge, type MarketBasis, type MarketContext } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, isVenueTour, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
 import { exploreLink, sellerLink, type EmailLink } from '@/lib/email/links';
@@ -72,7 +72,7 @@ import { decide, type CustomerPriorities } from '@/lib/advice/policy';
 import { buildPacket, packetCoverage, packetHash, type AdvicePacket, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
-import { alertMarketGaps } from '@/lib/market/staleness';
+import { alertBudgetRefusals, alertMarketGaps } from '@/lib/market/staleness';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
 import { capturedIds, isTestConversation, testConversationIds, testModeFrom, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { renderTemplate } from '@/lib/email/templates';
@@ -132,6 +132,8 @@ export type ResolveRules = EventConstraints & { linkedEventIds: string[]; imageE
  * real limit: the first refresh that answers 'budget' ends the refreshing for every game after it.
  */
 const CHEAPEST_GAME_FRESH_MS = 36 * 3_600_000;
+/** Prices older than this are read again before a reply when the allowance has room, and said as old when it doesn't. */
+export const PRICES_OLD_MS = 6 * 3_600_000;
 const CHEAPEST_GAME_MAX_REFRESHES = 12;
 
 /**
@@ -2166,6 +2168,48 @@ export class Concierge {
     return e.STUBHUB_CATALOG_ENABLED && e.STUBHUB_CLIENT_ID && e.STUBHUB_CLIENT_SECRET ? [stubhubCatalogLookup({ clientId: e.STUBHUB_CLIENT_ID, clientSecret: e.STUBHUB_CLIENT_SECRET })] : [];
   }
 
+  /**
+   * The team's other upcoming games whose stored price fits the budget (Oct 15: "Nothing for two under $150 on Oct 19,
+   * but Oct 26 vs the Kings fits"). Cached prices only, never a new call: a checked total for exactly their party when
+   * we hold one, else the stored resale series for their group with the fee allowance (before fees when their budget
+   * is). Within the stored-price window (36 hours), soonest first, at most two.
+   */
+  private async otherGamesThatFit(a: { event: typeof t.events.$inferSelect; venue: typeof t.venues.$inferSelect; entityId: string | null; quantity: number; budgetCents: number; beforeFees: boolean; now: Date; resale: boolean }): Promise<NonNullable<Parameters<typeof buildPacket>[0]['otherGames']>> {
+    if (!a.entityId) return [];
+    const games = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId)).where(and(eq(t.events.primaryEntityId, a.entityId), eq(t.events.status, 'scheduled'), gt(t.events.localStartAt, a.now), ne(t.events.id, a.event.id))).orderBy(asc(t.events.localStartAt)).limit(12);
+    const basis = this.comparisonBasis(a.quantity);
+    const out: NonNullable<Parameters<typeof buildPacket>[0]['otherGames']> = [];
+    const since = new Date(a.now.getTime() - CHEAPEST_GAME_FRESH_MS);
+    for (const { e, v } of games) {
+      // A checked total for their party (fees included), the freshest within the window.
+      const [checked] = await this.db.select({ cents: t.marketSnapshots.cheapestEligibleTotalCents, at: t.marketSnapshots.observedAt }).from(t.marketSnapshots).where(and(eq(t.marketSnapshots.eventId, e.id), eq(t.marketSnapshots.quantity, a.quantity), eq(t.marketSnapshots.feeBasis, 'verified_total'), gte(t.marketSnapshots.observedAt, since), lte(t.marketSnapshots.observedAt, a.now))).orderBy(desc(t.marketSnapshots.observedAt), asc(t.marketSnapshots.cheapestEligibleTotalCents)).limit(1);
+      let total: { cents: number; at: Date; beforeFees: boolean; resale: boolean } | null = checked?.cents != null ? { cents: checked.cents, at: checked.at, beforeFees: false, resale: false } : null;
+      // The resale series only where the licence lets it be shown.
+      if (!total && a.resale && a.quantity <= 2) {
+        const ctx = await loadMarketContext(this.db, { eventId: e.id, basis, eventStartAt: e.localStartAt, now: a.now });
+        const c = ctx.current;
+        if (c && c.timeKnown !== false && c.at >= since) {
+          const listed = c.priceCents * a.quantity;
+          total = { cents: a.beforeFees ? listed : Math.round(listed * (1 + this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT / 100)), at: c.at, beforeFees: a.beforeFees, resale: true };
+        }
+      }
+      if (!total || total.cents > a.budgetCents) continue;
+      const shortDate = new Intl.DateTimeFormat('en-US', { timeZone: v.timezone, month: 'short', day: 'numeric' }).format(e.localStartAt);
+      const [opp] = e.opponentEntityId ? await this.db.select({ name: t.entities.name }).from(t.entities).where(eq(t.entities.id, e.opponentEntityId)) : [];
+      const opponent = opp?.name ?? (/\bvs\.?\s+(.+)$/i.exec(e.name)?.[1] ?? null);
+      const ids = await storedMarketplaceIds(this.db, e.id);
+      const page = marketplaceLinks(ids, { eventName: e.name, quantity: a.quantity, noun: eventNounFor(e.category) }).stubhub;
+      out.push({ label: eventLabel(e, v), shortDate, opponent, totalCents: total.cents, beforeFees: total.beforeFees, checkedAt: total.at, resale: total.resale, link: { label: `${shortDate}${opponent ? ` vs ${opponent}` : ''} on StubHub`, url: page.url } });
+      if (out.length >= 2) break;
+    }
+    return out;
+  }
+
+  /** A customer's request refused SeatData reads for the day's allowance: the daily staff alert (market/staleness.ts). */
+  async alertBudgetRefusals(): Promise<Awaited<ReturnType<typeof alertBudgetRefusals>>> {
+    return alertBudgetRefusals(this.db, this.env, this.deps.emailProvider, this.now());
+  }
+
   /** Requested games with no SeatData check in 36 hours: the daily staff alert (market/staleness.ts). */
   async alertMarketGaps(): Promise<Awaited<ReturnType<typeof alertMarketGaps>>> {
     return alertMarketGaps(this.db, this.env, this.deps.emailProvider, this.now());
@@ -3931,9 +3975,12 @@ export class Concierge {
       const zoneWanted = areaIntent(brief.seatingPreference ?? '').want;
       const read = () => marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now: this.now(), zone: zoneWanted ? { wanted: zoneWanted, matches: (z) => areaOf(z) === zoneWanted } : null });
       market = await read();
-      // The newest snapshot too old to say a trend (a game a week out polls once a day): poll it now, before replying,
-      // rather than send the reply without its trend. Only when this research hasn't just polled it; a refresh that can't run leaves it as was.
-      if (!polled && market.venue.reasons.some((r) => r.startsWith('stale'))) {
+      // The newest snapshot more than six hours old (a game a week out polls once a day): poll it now, before replying,
+      // rather than reply with old prices or without the trend (Oct 15: Rangers vs Ducks went out with prices 15 hours
+      // old). Only when this research hasn't just polled it; a refresh the allowance refuses leaves it, and the reply
+      // says how old the prices are.
+      const old = (c: MarketContext | null | undefined) => !!c?.current && this.now().getTime() - c.current.at.getTime() > PRICES_OLD_MS;
+      if (!polled && (old(market.venue) || market.venue.reasons.some((r) => r.startsWith('stale')))) {
         const again = await tracker.refreshEvent(event.id, { stale: true }).catch(() => ({ refreshed: false }));
         if (again.refreshed) market = await read();
       }
@@ -4105,12 +4152,17 @@ export class Concierge {
       // Ordered by what "best" means to them (audit gap 28), and a budget they gave before fees held against listed
       // prices, not against the fee estimate (audit gap 10).
       const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT, 3, { goal: brief.rankingGoal, budgetFeeBasis: brief.budgetFeeBasis }) : null;
-      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: [] };
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf ?? (around.kept ? around.retrievedAt : null), now), links: [], kept: !!around.kept };
+      // Refused for the day's allowance (the kept read stood in, or nothing did): staff hear about it the same day.
+      if (!around || around.kept) await this.alertBudgetRefusals().catch(() => null);
     }
     // The marketplaces' own event pages for this game, resolved once and kept (event_source_mappings); a search only
     // when neither SeatData nor the marketplace's catalog names the game. A link the customer sent is used, not kept.
     const marketplaceIds = await resolveMarketplaceIds(this.db, { eventId: event.id, name: ent?.name ?? event.name, venue: venue.name, city: venue.city, localDate: eventLocalDate(event.localStartAt, venue.timezone), seatData: around ? { stubhub: around.stubHubEventId ?? null } : null, fromLink: sentLink?.eventId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') ? { [sentLink.marketplace]: sentLink.eventId } : null, lookups: this.marketplaceLookups(), now }).catch(() => ({ stubhub: null, vividseats: null }));
     if (picks) picks.links = pickLinksFor(picks.picks[0]!.listing, event.name, quantity, marketplaceIds, eventNounFor(event.category));
+    // Nothing for them here within the budget: the team's other upcoming games that fit, from prices already held.
+    const overBudget = constraints.budgetTotalCents != null && !best && (!picks || !picks.fits);
+    const otherGames = overBudget ? await this.otherGamesThatFit({ event, venue, entityId: event.primaryEntityId, quantity, budgetCents: constraints.budgetTotalCents!, beforeFees: brief.budgetFeeBasis === 'before_fees', now, resale: uses.display }) : null;
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
     if (brief.intent === 'watch_request') {
@@ -4190,15 +4242,18 @@ export class Concierge {
     const samePick = !!best && !!prevBest && prevBest.values.section === (best.offer.section ?? null) && prevBest.values.totalCents === best.comparableTotalCents && prevBest.values.sourceId === best.offer.sourceId && prevBest.scope.quantity === quantity && ((prevPacket!.customerPriorities as { budgetTotalCents?: number | null }).budgetTotalCents ?? null) === (priorities.budgetTotalCents ?? null);
     const short = samePick && !shown && !sentLink && !textOffers.length && !corrected.changes.length && !saleOpens && !seatVerdict && !staffFollowUp;
     // "What are the options for the 5 of us?": the pick and up to two others, a together block over the budget included.
-    const noBudget = OPTIONS_ASKED.test(flat(said)) || (brief.togetherRequired && quantity > 1) ? compareOffers(allOffers, { ...constraints, budgetTotalCents: null }, event.id) : null;
+    const noBudget = OPTIONS_ASKED.test(flat(said)) || (brief.togetherRequired && quantity > 1) || (constraints.budgetTotalCents != null && !best) ? compareOffers(allOffers, { ...constraints, budgetTotalCents: null }, event.id) : null;
     const options = best && noBudget && OPTIONS_ASKED.test(flat(said)) ? ((seen) => [best, ...cmp.eligible, ...noBudget.eligible.filter((e) => e.offer.seatsTogether === true)].filter((e) => { const k = `${e.offer.section ?? e.offer.id}|${e.offer.seatsTogether}`; return !seen.has(k) && !!seen.add(k); }))(new Set<string>()).slice(0, 3) : null;
     // Seats together asked for and none fit the budget: the cheapest together, named, with what it costs over.
     const togetherOver = brief.togetherRequired && quantity > 1 && noBudget && !cmp.eligible.some((e) => e.offer.seatsTogether === true) ? noBudget.eligible.find((e) => e.offer.seatsTogether === true) ?? null : null;
+    // Nothing at all inside the budget: the closest checked seats, named with what they cost over (Oct 15: a reply with
+    // no listing and no link).
+    const closestOver = !togetherOver && !best && constraints.budgetTotalCents != null && noBudget ? noBudget.eligible.find((e) => e.comparableTotalCents !== null) ?? null : null;
     // "Is that the cheapest?": the cheapest with its full price checked, of the pick's togetherness, and cheaper listings
     // whose total can't be known (fees not shown).
     const sameKind = (e: Evaluated) => !best || quantity < 2 || (e.offer.seatsTogether === true) === (best.offer.seatsTogether === true);
     const cheapestCheck = best && best.comparableTotalCents !== null ? { cheaper: [...cmp.eligible].filter(sameKind).sort((x, y) => (x.comparableTotalCents ?? Infinity) - (y.comparableTotalCents ?? Infinity))[0] ?? null, unpriced: cmp.needsReview.filter((e) => e.offer.quantity === quantity && e.comparableTotalCents === null && e.offer.baseTotalCents != null && e.offer.baseTotalCents < best.comparableTotalCents!) } : null;
-    const packet = buildPacket({ cheapestCheck, short, options, togetherOver, preface, levelWanted: levelWanted && seatLevelWanted(said) === levelWanted.level ? levelWanted : null, saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, marketplaceIds, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ cheapestCheck, short, options, togetherOver, closestOver, preface, levelWanted: levelWanted && seatLevelWanted(said) === levelWanted.level ? levelWanted : null, saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, marketplaceIds, otherGames, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -4852,7 +4907,8 @@ export class Concierge {
    * approve like any alert. Returns how many alerts it created (0 or 1).
    */
   private async evaluateMarketWatch(w: typeof t.watches.$inferSelect, now: Date): Promise<number> {
-    const read = await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch }).listingsForWatch(w.eventId, w.quantity);
+    // A scheduled watch check is background: it spends from tracking's share of the day, never a customer's request's.
+    const read = await new MarketTracker({ db: this.db, env: this.env, now: this.now, fetchImpl: this.deps.marketFetch, lane: 'background' }).listingsForWatch(w.eventId, w.quantity);
     if (!read) {
       await audit(this.db, { actor: 'system', action: 'watch.market_unread', entityKind: 'watch', entityId: w.id });
       return 0;

@@ -185,7 +185,8 @@ describe('expanded independent price-watch controls', () => {
     const {w}=await create();await h.db.delete(t.marketFetches);let fails=2;failListings=false;listings=[listing(950,60,4)];
     const flaky=(async(input:string)=>{const u=new URL(input);if(u.pathname==='/api/v0.1.1/listings/get'&&fails>0){fails-=1;reads+=1;return new Response('{}',{status:503});}return fetchImpl(input);}) as unknown as typeof fetch;
     now=new Date(QA_NOW.getTime()+5*MIN);await h.db.update(t.watches).set({nextCheckAt:new Date('2026-10-29T00:00:00Z')}).where(ne(t.watches.id,w!.id));await h.db.update(t.watches).set({nextCheckAt:now}).where(eq(t.watches.id,w!.id));
-    const before=reads;const c=new Concierge({db:h.db,env:env({SEATDATA_DAILY_CALL_LIMIT:'3'}),extractor:new FixtureExtractor(),drafter:new FixtureDrafter(),clock:()=>now,emailProvider:null,marketFetch:flaky});
+    // A scheduled watch check is background (Oct 15): its room is 60% of the day, so a day of 5 leaves it 3 attempts.
+    const before=reads;const c=new Concierge({db:h.db,env:env({SEATDATA_DAILY_CALL_LIMIT:'5'}),extractor:new FixtureExtractor(),drafter:new FixtureDrafter(),clock:()=>now,emailProvider:null,marketFetch:flaky});
     const result=await c.evaluateDueWatches();
     expect(reads-before).toBe(3);expect(result.alertsCreated).toBe(1);
     const [log]=await h.db.select().from(t.marketFetches).where(and(eq(t.marketFetches.kind,'listings_watch'),eq(t.marketFetches.eventId,GAME)));

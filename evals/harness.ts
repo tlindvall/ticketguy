@@ -36,6 +36,10 @@ export type Expect = {
   watch?: { eventId: string; targetTotalCents?: number };
   /** After time passes: exactly this many alert emails. */
   alertsRaised?: number;
+  /** The reply must carry at least one link (a listing, an event page or a search): never figures alone. */
+  hasLink?: boolean;
+  /** The reply must offer a way forward: a question, or an action to take ("reply with…", "watch it", a link to buy). */
+  hasNextStep?: boolean;
 };
 
 export type Screenshot = { marketplace: string; event: string; when: string; section: string; row: string; quantity: number; totalDollars: number; feesIncluded: boolean; blurry?: boolean; /** A "Home Games" side list of other dates on the page: navigation, never the event (#177). */ sidebar?: string[] };

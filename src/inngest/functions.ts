@@ -165,7 +165,7 @@ export const trackMarkets = inngest.createFunction(
 
 export async function runMarketTracking() {
   const { db } = await getDb();
-  const r = await new MarketTracker({ db, env: env() }).run({ limit: 40 });
+  const r = await new MarketTracker({ db, env: env(), lane: 'background' }).run({ limit: 40 });
   // Every pass is recorded, a blocked or empty one too: a pass that left no trace looked exactly like a scheduler that
   // never fired (Oct 11-14, no SeatData calls and nothing saying why).
   await audit(db, { actor: 'system', action: 'market.tracking_pass', entityKind: 'system', entityId: 'market', diff: r });
@@ -183,7 +183,8 @@ export async function checkMarketGaps(opts: { throttle?: boolean } = {}) {
     const [recent] = await db.select({ id: t.auditLog.id }).from(t.auditLog).where(and(eq(t.auditLog.action, 'market.gap_check'), sql`${t.auditLog.createdAt} > now() - interval '55 minutes'`)).limit(1);
     if (recent) return null;
   }
-  const r = await (await getConcierge()).alertMarketGaps();
+  const c = await getConcierge();
+  const r = { gaps: await c.alertMarketGaps(), budget: await c.alertBudgetRefusals() };
   await audit(db, { actor: 'system', action: 'market.gap_check', entityKind: 'system', entityId: 'market', diff: r });
   return r;
 }

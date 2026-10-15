@@ -39,8 +39,9 @@ describe('TG-B03/B04: the budget is checked against the group total; a venue-wid
   it('A07: two under $180 total, floor $84.89: under before fees, with fees and seats still to check', () => {
     const p = buildPacket(args({ quantity: 2, priorities: priorities(18000) }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const read = claim(p, 'C_READ');
-    // $10.22 of room for every remaining charge: never a standalone "under budget" (remediation review §3).
-    expect(read).toContain('at that price, two come to $169.78 before fees, which leaves $10.22 of your $180 for fees. I can’t see those fees, so whether it fits is unconfirmed until you see the checkout total.');
+    // Never a standalone "under budget" (remediation review §3), and no "$X left for fees" arithmetic (Oct 15 review).
+    expect(read).toContain('at that price, two come to $169.78 before fees; fees aren’t in that, so the checkout total decides whether it fits your $180.');
+    expect(read).not.toMatch(/\$10\.22|left for fees|which leaves/);
     expect(read).not.toContain('$84.89');
     expect(read).not.toMatch(/fair|\$98|under your/);
   });
