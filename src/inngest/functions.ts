@@ -21,7 +21,10 @@ import { runTicketDataSync } from '@/lib/market/ticketdata-sync';
 export const dispatchOutbox = inngest.createFunction(
   { id: 'dispatch-outbox', concurrency: { limit: 1 }, triggers: [cron('* * * * *'), outboxKick] },
   async ({ step }) => {
-    return step.run('lease-and-run', async () => runOutboxBatch(50));
+    const r = await step.run('lease-and-run', async () => runOutboxBatch(50));
+    // A failed check costs the check, never the dispatch.
+    await step.run('market-gaps', async () => checkMarketGaps({ throttle: true }).catch((e: unknown) => ({ error: e instanceof Error ? e.message.slice(0, 120) : 'error' })));
+    return r;
   },
 );
 
@@ -163,7 +166,25 @@ export const trackMarkets = inngest.createFunction(
 export async function runMarketTracking() {
   const { db } = await getDb();
   const r = await new MarketTracker({ db, env: env() }).run({ limit: 40 });
-  if (!r.skipped && (r.polled || r.matched || r.scored)) await audit(db, { actor: 'system', action: 'market.tracking_pass', entityKind: 'system', entityId: 'market', diff: r });
+  // Every pass is recorded, a blocked or empty one too: a pass that left no trace looked exactly like a scheduler that
+  // never fired (Oct 11-14, no SeatData calls and nothing saying why).
+  await audit(db, { actor: 'system', action: 'market.tracking_pass', entityKind: 'system', entityId: 'market', diff: r });
+  await checkMarketGaps();
+  return r;
+}
+
+/**
+ * Requested games with no SeatData check in 36 hours: one staff email a day. Run from the market pass and, throttled to
+ * once an hour, from the outbox dispatcher, so it still fires when the market job itself is what stopped.
+ */
+export async function checkMarketGaps(opts: { throttle?: boolean } = {}) {
+  const { db } = await getDb();
+  if (opts.throttle) {
+    const [recent] = await db.select({ id: t.auditLog.id }).from(t.auditLog).where(and(eq(t.auditLog.action, 'market.gap_check'), sql`${t.auditLog.createdAt} > now() - interval '55 minutes'`)).limit(1);
+    if (recent) return null;
+  }
+  const r = await (await getConcierge()).alertMarketGaps();
+  await audit(db, { actor: 'system', action: 'market.gap_check', entityKind: 'system', entityId: 'market', diff: r });
   return r;
 }
 

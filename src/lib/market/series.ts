@@ -172,6 +172,12 @@ export type MarketContext = {
    * and the median change. Past games only, never a forecast for this one.
    */
   late?: LateMove;
+  /**
+   * The same, for past games in the same calendar month as this one ("Rangers home games in November"), beside the
+   * most recent ones: a November game is compared with Novembers too, not only with whatever came last. Null unless
+   * enough of them differ from the overall set.
+   */
+  lateMonth?: (NonNullable<LateMove> & { month: string }) | null;
   points: number;
   observations?: MarketObservations;
 };

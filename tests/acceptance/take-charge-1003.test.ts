@@ -148,11 +148,11 @@ describe('take charge: the next home game and seats for the party, not questions
     const l = (over: Partial<Parameters<typeof pickLinksFor>[0]>) => ({ priceCents: 7000, quantity: 4, section: '214', row: '10', zone: null, ...over });
     // The feed's own listing page, StubHub or Vivid Seats only.
     expect(pickLinksFor(l({ marketplace: 'stubhub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }), 'A vs. B', 4, null)).toEqual([{ label: 'View Section 214 on StubHub', url: 'https://www.stubhub.com/event/1590/?listingId=77' }]);
-    // StubHub's event id (their link, or the feed's reply) and a StubHub listing number: opened on that listing.
-    expect(pickLinksFor(l({ marketplace: 'stubhub', id: '6123456789' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'View Section 214 on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4&listingId=6123456789' }]);
-    expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, '159000123')).toEqual([{ label: 'Event page on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
+    // StubHub's event id (stored for the game, from SeatData or the catalog; or their link) and a StubHub listing number: opened on that listing.
+    expect(pickLinksFor(l({ marketplace: 'stubhub', id: '6123456789' }), 'A vs. B', 4, { stubhub: '159000123', vividseats: null })).toEqual([{ label: 'View Section 214 on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4&listingId=6123456789' }]);
+    expect(pickLinksFor(l({ marketplace: 'stubhub' }), 'A vs. B', 4, { stubhub: '159000123', vividseats: null })).toEqual([{ label: 'Event page on StubHub', url: 'https://www.stubhub.com/event/159000123/?quantity=4' }]);
     expect(pickLinksFor(l({ marketplace: 'vividseats' }), 'A vs. B', 2, null, 'game')).toEqual([{ label: 'Search Vivid Seats for this game', url: 'https://www.vividseats.com/search?searchTerm=A%20vs.%20B' }]);
-    expect(pickLinksFor(l({}), 'A vs. B', 2, 'not-an-id', 'game').map((x) => x.label)).toEqual(['Search StubHub for this game', 'Search Vivid Seats for this game']);
+    expect(pickLinksFor(l({}), 'A vs. B', 2, { stubhub: 'not-an-id', vividseats: null }, 'game').map((x) => x.label)).toEqual(['Search StubHub for this game', 'Search Vivid Seats for this game']);
     // A concert is a show (live Oct 5: "Search StubHub for this game" under a Brooklyn Steel concert), and a GA listing is general admission.
     expect(pickLinksFor(l({ section: 'General Admission', row: 'GA' }), 'Mind Enterprises', 2, null, 'show').map((x) => x.label)).toEqual(['Search StubHub for this show', 'Search Vivid Seats for this show']);
     expect(pickLinksFor(l({ marketplace: 'stubhub', section: 'General Admission', row: 'GA', url: 'https://www.stubhub.com/event/1/?listingId=2' }), 'Mind Enterprises', 2, null, 'show')[0]!.label).toBe('View the general admission listing on StubHub');

@@ -111,10 +111,17 @@ describe('how prices are moving, where it decides the advice', () => {
     expect(text).not.toContain('How prices are moving');
   });
 
-  it('no module from a series that can’t say it: too thin, stale, or broader than the seats they asked about', () => {
+  it('no module from a series that can’t say it: too thin or stale', () => {
     expect(email(fitting(ctx({ adequacy: 'insufficient', direction: 'insufficient', points: 1 })))).not.toContain('How prices are moving');
     expect(email(fitting(ctx({ direction: 'up', h72: h72(7100), reasons: ['stale_48h'] })))).not.toContain('How prices are moving');
+  });
+
+  it('broader than the seats they asked about: the whole venue’s module, said as that, and it decides nothing (Oct 15)', () => {
+    // Until Oct 15 this showed no module at all; the owner asked for the venue-wide series, labelled, instead.
     const zoned = { ...fitting(ctx({ direction: 'up', h72: h72(7100) })), seatingPreference: 'lower bowl' } as BuildPacketArgs;
-    expect(email(zoned)).not.toContain('How prices are moving');
+    const text = email(zoned);
+    expect(text).toContain('How prices are moving');
+    expect(text).toContain('No separate series for “lower bowl”.');
+    expect(text).not.toContain('I’d buy these if you’re set on going.');
   });
 });

@@ -48,6 +48,8 @@ import { isFoodDrink, isMarketWatch, operationsForClaims, outsideIntent, resolve
 import { buildAdapter, TicketmasterDiscoveryAdapter, type AdapterActivation, type TicketSourceAdapter } from '@/lib/sources/adapters';
 import { MarketTracker, loadMarketContext, marketForGroup, marketLicence, marketTrace, marketUses } from '@/lib/market/tracker';
 import { findAlternatives, matchLinkedListing, type MarketListing } from '@/lib/market/alternatives';
+import { marketplaceLinks, resolveMarketplaceIds, stubhubEventUrl, withoutTracking, type MarketplaceEventLookup, type MarketplaceIds } from '@/lib/market/event-links';
+import { stubhubCatalogLookup } from '@/lib/market/stubhub-catalog';
 import { SEATDATA_DATASET_ID, basisForQuantity, listingAge, type MarketBasis } from '@/lib/market/series';
 import { pickListings } from '@/lib/market/alternatives';
 import { syncFromDiscovery, isNonAdmission, isNonGameName, isVenueTour, DISCOVERY_SOURCE_ID } from '@/lib/catalog/sync';
@@ -70,6 +72,7 @@ import { decide, type CustomerPriorities } from '@/lib/advice/policy';
 import { buildPacket, packetCoverage, packetHash, type AdvicePacket, type QuotedPrice, type SubjectListing } from '@/lib/advice/packet';
 import { validateAndRender, renderEvidenceOnly } from '@/lib/advice/renderer';
 import { createSendIntent, claimSendIntent, releaseClaim, recordProviderAccepted, uncertainRetryDecision } from '@/lib/email/send-intents';
+import { alertMarketGaps } from '@/lib/market/staleness';
 import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } from '@/lib/email/send-gate';
 import { capturedIds, isTestConversation, testConversationIds, testModeFrom, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { renderTemplate } from '@/lib/email/templates';
@@ -2157,6 +2160,17 @@ export class Concierge {
     await enqueueOutbox(this.db, { eventType: 'staff.alert', eventKey: followUp ? `staff_alert:${req.id}:${revision}:${msg.id}` : `staff_alert:${req.id}:${revision}`, entityId: req.id, payload: { requestId: req.id, revision }, now: this.now() });
   }
 
+  /** The marketplaces' own event lookups this deployment may use: StubHub's catalog when enabled with its credentials. */
+  private marketplaceLookups(): MarketplaceEventLookup[] {
+    const e = this.env;
+    return e.STUBHUB_CATALOG_ENABLED && e.STUBHUB_CLIENT_ID && e.STUBHUB_CLIENT_SECRET ? [stubhubCatalogLookup({ clientId: e.STUBHUB_CLIENT_ID, clientSecret: e.STUBHUB_CLIENT_SECRET })] : [];
+  }
+
+  /** Requested games with no SeatData check in 36 hours: the daily staff alert (market/staleness.ts). */
+  async alertMarketGaps(): Promise<Awaited<ReturnType<typeof alertMarketGaps>>> {
+    return alertMarketGaps(this.db, this.env, this.deps.emailProvider, this.now());
+  }
+
   /**
    * One email per staff address for a request waiting on a person. Internal mail, so it does not pass the
    * customer send gate (whose test allowlist would drop staff), but "stop all outbound" still stops it. It
@@ -3907,14 +3921,22 @@ export class Concierge {
     if (licence.allows('tracking') && trackingOk && historyOk) {
       // A supplier read that fails costs this reply its market lines, never the reply (R1-HUMAN-01: a throwing
       // read sent a linked listing to a person four retries later, and its follow-up after it).
+      let polled = false;
       try {
-        await tracker.refreshEvent(event.id);
+        polled = (await tracker.refreshEvent(event.id)).refreshed;
       } catch (e) {
         await audit(this.db, { actor: 'system', action: 'market.read_failed', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { step: 'refresh', error: (e instanceof Error ? e.message : String(e)).slice(0, 200) } });
       }
       // The area they asked for ("floor seats"), read for its own series; the venue's stays alongside as context.
       const zoneWanted = areaIntent(brief.seatingPreference ?? '').want;
-      market = await marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now, zone: zoneWanted ? { wanted: zoneWanted, matches: (z) => areaOf(z) === zoneWanted } : null });
+      const read = () => marketForGroup(this.db, { eventId: event.id, quantity, eventStartAt: event.localStartAt, now: this.now(), zone: zoneWanted ? { wanted: zoneWanted, matches: (z) => areaOf(z) === zoneWanted } : null });
+      market = await read();
+      // The newest snapshot too old to say a trend (a game a week out polls once a day): poll it now, before replying,
+      // rather than send the reply without its trend. Only when this research hasn't just polled it; a refresh that can't run leaves it as was.
+      if (!polled && market.venue.reasons.some((r) => r.startsWith('stale'))) {
+        const again = await tracker.refreshEvent(event.id, { stale: true }).catch(() => ({ refreshed: false }));
+        if (again.refreshed) market = await read();
+      }
     }
     // Venue-wide prices never decide advice about part of the venue: with a seating preference and no series for
     // it, the direction is broader context and can't argue for waiting (TREND-ACC-04). Mixed never does either.
@@ -4083,8 +4105,12 @@ export class Concierge {
       // Ordered by what "best" means to them (audit gap 28), and a budget they gave before fees held against listed
       // prices, not against the fee estimate (audit gap 10).
       const chosen = around ? pickListings(around.listings, quantity, constraints.budgetTotalCents, this.env.MARKET_WATCH_FEE_ALLOWANCE_PCT, 3, { goal: brief.rankingGoal, budgetFeeBasis: brief.budgetFeeBasis }) : null;
-      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: pickLinksFor(chosen.picks[0]!.listing, event.name, quantity, around.stubHubEventId ?? (sentLink?.marketplace === 'stubhub' ? sentLink.eventId : null), eventNounFor(event.category)) };
+      if (chosen && around) picks = { ...chosen, age: listingAge(around.providerAsOf, now), links: [] };
     }
+    // The marketplaces' own event pages for this game, resolved once and kept (event_source_mappings); a search only
+    // when neither SeatData nor the marketplace's catalog names the game. A link the customer sent is used, not kept.
+    const marketplaceIds = await resolveMarketplaceIds(this.db, { eventId: event.id, name: ent?.name ?? event.name, venue: venue.name, city: venue.city, localDate: eventLocalDate(event.localStartAt, venue.timezone), seatData: around ? { stubhub: around.stubHubEventId ?? null } : null, fromLink: sentLink?.eventId && (sentLink.marketplace === 'stubhub' || sentLink.marketplace === 'vividseats') ? { [sentLink.marketplace]: sentLink.eventId } : null, lookups: this.marketplaceLookups(), now }).catch(() => ({ stubhub: null, vividseats: null }));
+    if (picks) picks.links = pickLinksFor(picks.picks[0]!.listing, event.name, quantity, marketplaceIds, eventNounFor(event.category));
     // A watch they asked for: running only when one is stored active and its alerts can actually be sent.
     let watchStatus: Parameters<typeof buildPacket>[0]['watchStatus'] = null;
     if (brief.intent === 'watch_request') {
@@ -4172,7 +4198,7 @@ export class Concierge {
     // whose total can't be known (fees not shown).
     const sameKind = (e: Evaluated) => !best || quantity < 2 || (e.offer.seatsTogether === true) === (best.offer.seatsTogether === true);
     const cheapestCheck = best && best.comparableTotalCents !== null ? { cheaper: [...cmp.eligible].filter(sameKind).sort((x, y) => (x.comparableTotalCents ?? Infinity) - (y.comparableTotalCents ?? Infinity))[0] ?? null, unpriced: cmp.needsReview.filter((e) => e.offer.quantity === quantity && e.comparableTotalCents === null && e.offer.baseTotalCents != null && e.offer.baseTotalCents < best.comparableTotalCents!) } : null;
-    const packet = buildPacket({ cheapestCheck, short, options, togetherOver, preface, levelWanted: levelWanted && seatLevelWanted(said) === levelWanted.level ? levelWanted : null, saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
+    const packet = buildPacket({ cheapestCheck, short, options, togetherOver, preface, levelWanted: levelWanted && seatLevelWanted(said) === levelWanted.level ? levelWanted : null, saleOpens, seatVerdict, followUp, eventCategory: event.category, eventSport, artworkUrl, marketplaceIds, askedText: said, threadText: saidInThread, eventIdentity, trendAsked, offersSetAside, synthetic, corrections: corrected.changes, correctionMatches: !!corrected.matches, staffFollowUp, requirements, textOffers, offerNeeds, eventNoun, leftOut, asks, watchStatus, watchOffer, subject: shown, linkMarket, marketAround, picks, travelling, seatingPreference: brief.seatingPreference, timeZone: venue.timezone, eventLocalDate: eventLocalDate(event.localStartAt, venue.timezone), eventStartAt: event.localStartAt, headerStartAt: shownEvent.localStartAt, accessibilityRequired: !!brief.accessibilityNeeds, link: sentLink && !comparedSent ? { marketplace: MARKETPLACE_NAMES[sentLink.marketplace], eventPage: !sentLink.listingId, lookup: linkLookup } : null, market: market ? { basis: market.basis, context: market.context, supply: market.supply, supplyScope: market.supplyScope, scope: market.scope, zoneWanted: market.zoneWanted, venue: market.scope === 'zone' ? market.venue : null, comparableLabel: ent?.name ?? null, visible: uses.display } : null, official: official ? { seller: official.seller, url: official.buyUrl, saleEndsAt: official.saleEndsAt } : null, officialReference, faceValue, quote, requestId: req.id, revision: args.revision, quantity, eventLabel: eventLabel(shownEvent, venue), eventParts: eventLabelParts(shownEvent, venue), best, alternatives, entryReference: entryRef, benchmark, benchmarkRunId, trend, trendRunId, trendDisplayAllowed, policy, priorities, sourcesChecked: checked, sourcesUnavailable: unavailable, independentOptionCount: independentOptionCount(cmp), observedAt: now, evidenceExpiresAt: new Date(now.getTime() + 15 * 60_000), basketKey, watchConsentReference: brief.intent === 'watch_request' ? version!.sourceMessageIds[0] ?? null : null, isFixture: isFixtureRun });
     // Each question they asked, and what this reply does about it (launch A23): kept with the request for review.
     const coverage = packetCoverage({ said: flat(said), trendAsked: !!trendAsked, asks }, packet);
     if (coverage.questions.length || coverage.gaps.length) await audit(this.db, { actor: 'system', action: 'answer.coverage', entityKind: 'request', entityId: req.id, diff: { route: 'advice_packet', revision: args.revision, questions: coverage.questions, gaps: coverage.gaps } });
@@ -6309,25 +6335,26 @@ export function mergeExtraction(prior: RequestExtraction, next: RequestExtractio
 }
 
 /**
- * Where to find a pick: StubHub's own event page when a link named it, otherwise the marketplace's search for the
- * game. Both marketplaces when the listings don't say which one the seats are on. Never a listing link: the feed's
- * listing numbers aren't confirmed to be the marketplace's own (DECISION_LOG #67).
+ * Where to find a pick: the marketplace's own event page when we know its id for the game (stored once per game in
+ * event_source_mappings, from SeatData or the marketplace's catalog), its search for the game only when we don't.
+ * Both marketplaces when the listings don't say which one the seats are on. A listing link only where the feed gives
+ * the listing's own page, or a StubHub listing number on a known StubHub event (DECISION_LOG #67). Never a tracking
+ * parameter.
  */
-export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, stubHubEventId: string | null, noun: EventNoun | 'event' = 'event'): Array<{ label: string; url: string }> {
+export function pickLinksFor(pick: MarketListing, eventName: string, quantity: number, ids: MarketplaceIds | null, noun: EventNoun | 'event' = 'event'): Array<{ label: string; url: string }> {
   const marketplace = pick.marketplace ?? null;
   // Descriptive link text (personal-email design, Oct 3): "View Section 214 on StubHub" for the listing itself,
   // "Event page" when it is only the event, "Search ... for this game" when it is only a search.
   const where = seatPhrase(pick.section, null);
   const seat = where ? (where.startsWith('general admission') ? `the ${where} listing` : where) : 'this listing';
-  if (pick.url) return [{ label: `View ${seat} on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: pick.url }];
-  // A search for the name as a fan types it: "Mind Enterprises (16 and over)" finds nothing; "Mind Enterprises" does.
-  const q = encodeURIComponent(eventName.replace(/\s*\([^)]*\)/g, '').trim() || eventName);
-  const sh = stubHubEventId && /^\d{4,15}$/.test(stubHubEventId) ? stubHubEventId : null;
+  if (pick.url) return [{ label: `View ${seat} on ${marketplace === 'vividseats' ? 'Vivid Seats' : 'StubHub'}`, url: withoutTracking(pick.url) }];
+  const sh = ids?.stubhub && /^\d{4,15}$/.test(ids.stubhub) ? ids.stubhub : null;
   // StubHub's event page opened on the listing: its event id and a StubHub listing number (the feed's StubHub ids
   // are StubHub's own; SDK 1.2 sales rows carry them as integers).
-  if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: `View ${seat} on StubHub`, url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}&listingId=${pick.id}` }];
-  const stubhub = sh ? { label: 'Event page on StubHub', url: `https://www.stubhub.com/event/${sh}/?quantity=${quantity}` } : { label: `Search StubHub for this ${noun}`, url: `https://www.stubhub.com/search?q=${q}` };
-  const vivid = { label: `Search Vivid Seats for this ${noun}`, url: `https://www.vividseats.com/search?searchTerm=${q}` };
+  if (marketplace === 'stubhub' && sh && pick.id && /^\d{3,15}$/.test(pick.id)) return [{ label: `View ${seat} on StubHub`, url: `${stubhubEventUrl(sh, quantity)}&listingId=${pick.id}` }];
+  const links = marketplaceLinks(ids, { eventName, quantity, noun });
+  const stubhub = { label: links.stubhub.label, url: links.stubhub.url };
+  const vivid = { label: links.vividseats.label, url: links.vividseats.url };
   if (marketplace === 'stubhub') return [stubhub];
   if (marketplace === 'vividseats') return [vivid];
   return [stubhub, vivid];

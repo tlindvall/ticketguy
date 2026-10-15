@@ -1579,3 +1579,43 @@ Issue #179. Recommendation emails were text plus the ticket-brief card. Team ban
 **Verified:** `tests/acceptance/event-preview-179.test.ts`, covering the SSRF and size guards, a Ticketmaster image, an RA image, the fallback, rights, the card markup and the eval check on a rules-mode thread.
 
 **Not verified here:** real Ticketmaster and RA pages; there is no network in tests.
+
+## 83. Marketplace event pages, price history that shows, and a SeatData silence that alerts (Oct 15)
+
+**Why.**
+- Recommendation emails linked a StubHub or Vivid Seats *search* for a game we had already identified (Rangers vs Canadiens, MSG, Nov 16: StubHub event 161415584, Vivid Seats production 7301115).
+- The trend and past-games lines dropped out while the data existed.
+- SeatData billed no requests from Oct 11 to 14 while Rangers requests stayed open, and nothing said so.
+
+**Decisions.**
+- **Event links.**
+  - Each marketplace's event id is resolved once per game and kept in `event_source_mappings` (sources `stubhub` and `vividseats`, role `marketplace`). The first source is SeatData's own fields: its event match, its listings reply, or a listing row's page link. The fallback is the marketplace's own catalog where one is enabled.
+  - Links are `https://www.stubhub.com/event/<id>/?quantity=<n>` and `https://www.vividseats.com/production/<id>`.
+  - Tracking parameters (`qid`, `iid`, `ut`, `lat`/`lg`, `utm_*`) are stripped from every marketplace link we send, the feed's own listing links included.
+  - A search is the fallback only when no id resolves.
+  - A link the customer sent is used for that reply and never stored: it could be for another game. An id another game already holds is never moved.
+- **StubHub catalog** (`STUBHUB_CATALOG_ENABLED` with `STUBHUB_CLIENT_ID`/`STUBHUB_CLIENT_SECRET`). It is off until the owner runs `scripts/probe-listing-api.ts stubhub` with real credentials. The adapter reads the payload defensively; it has not been checked against a live response.
+- **Vivid Seats has no catalog lookup.** PARTNER_ACCESS lists it as "no public API". Its site endpoints are page fetches, which #47 rules out, and the hosts are blocked from the build environment, so the `/production/<id>` redirect couldn't be checked from here. Vivid Seats ids come from SeatData only, until there is a partner arrangement.
+- **Price history.**
+  - **(a) Stale snapshot.** When the newest snapshot is too old to give a trend, research polls once more before replying, unless it has just polled.
+  - **(b) Unmapped seating preference.** When a preference maps to no zone series, the venue-wide series is shown, labelled "No separate series for "…"". It never decides the buy-or-wait call (TREND-ACC-04).
+  - **(c) Backfill budget.** The past-games backfill has its own daily allowance, `SEATDATA_HISTORY_CALL_LIMIT` (default 15), on top of `SEATDATA_DAILY_CALL_LIMIT`. Polling and the backfill can no longer starve each other. The hourly pass backfills every followed team or act at its venue ahead of time, up to 10 pairs a pass.
+  - **(d) Same-month comparables.** The backfill also reads past games in the same month as each upcoming game. The late-move line adds "In New York Rangers games here in November, it was X of Y" beside the most recent eight.
+  - "Only what was asked" (#81) still decides *whether* the trend is said beside a pick. (a)–(d) make the data present when it is.
+- **SeatData silence.**
+  - Every hourly tracking pass is recorded (`market.tracking_pass`), blocked or empty too. A dead scheduler and a blocked pass now look different. A pass stopped by an account refusal records which one.
+  - A game an open request asked about with no successful SeatData read in 36 hours raises one staff email a day. The email names the games (event names and dates only) and the likely cause: no key, the licence (including a passed "keep data until" date), no pass recorded, an account refusal, or not enrolled.
+  - The check runs from the market pass and, at most hourly, from the outbox dispatcher, so it still fires when the market job itself is what stopped.
+  - `scripts/diagnose-market-tracking.ts` answers the same questions read-only in the Render shell.
+
+**Not verified here.**
+- The cause of the Oct 11–14 silence. The repo can't see production data. The code makes three causes plausible:
+  - **Inngest.** Inngest registers functions only when the app is synced, and nothing in `render.yaml` syncs it after a deploy.
+  - **Licence.** The licence stops allowing tracking when its "keep data until" date passes.
+  - **Allowlist.** Once the test allowlist was emptied, the cheapest-game ranking refreshes only if the licence approves `advice`. Research's own refresh runs only when a customer writes, so for open requests with no new message the hourly job is the only caller.
+- The script tells these apart.
+
+**Verified:** `tests/acceptance/event-links-1015.test.ts`, `price-history-1015.test.ts`, `market-gaps-1015.test.ts`. Expectations changed on purpose:
+- `budget-gap-1006`: the broader-than-asked series now shows, labelled.
+- `market-budget-1010`: the backfill is bounded by its own allowance.
+- `take-charge-1003`: `pickLinksFor` takes the stored ids.

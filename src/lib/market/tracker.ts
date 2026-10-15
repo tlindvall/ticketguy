@@ -7,7 +7,8 @@ import { audit } from '@/lib/util/audit';
 import { gate as policyGate, policyForEvent } from '@/lib/intake/service-policy';
 import { SeatDataClient, SeatDataError, type SeatDataEvent } from './seatdata';
 import { inactiveListings, toMarketListing, type MarketListing } from './alternatives';
-import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, marketBasketKey, pointsFromListings, pointsFromSnapshot, providerTime, type MarketBasis, type MarketContext, type Point, type SeriesPoint } from './series';
+import { idsFromSeatData, rememberMarketplaceIds } from './event-links';
+import { MARKET_METHOD_VERSION, SEATDATA_DATASET_ID, SEATDATA_PROVIDER, basisForQuantity, basisSize, computeMarketContext, isGroupBasis, isOrdinarySeatListing, lateMoveFrom, marketBasketKey, pointsFromListings, pointsFromSnapshot, providerTime, type MarketBasis, type MarketContext, type Point, type SeriesPoint } from './series';
 
 /**
  * Market tracking (DECISION_LOG #44): every event a customer asks about, and the cohort named in
@@ -69,6 +70,12 @@ const HISTORY_EVENTS = 8;
 const HISTORY_PAGES = 3;
 const HISTORY_SAMPLE_HOURS = 6;
 const HISTORY_REFRESH_DAYS = 30;
+/** Past games in the same month as an upcoming tracked game ("Rangers games here in November"), beside the most recent. */
+const SAME_MONTH_EVENTS = 8;
+/** Past-games reads: their own daily allowance (SEATDATA_HISTORY_CALL_LIMIT), on top of live polling's. */
+const HISTORY_KINDS = ['history_search', 'history_stats'];
+/** Pairs (team or act, venue) whose history one pass prepares ahead of a customer asking. */
+const PREWARM_PAIRS = 10;
 const MAX_MATCH_ATTEMPTS = 4;
 
 type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; ent: typeof t.entities.$inferSelect | null };
@@ -123,12 +130,23 @@ export class MarketTracker {
    * The client, capped at what's left of today's allowance: every attempt counts, so a retried 503 can't take the
    * day past SEATDATA_DAILY_CALL_LIMIT (PW-CALL-BUDGET-01). Set again before each operation, from the logged total.
    */
-  private async api(): Promise<SeatDataClient> {
+  private async api(lane: 'live' | 'history' = 'live'): Promise<SeatDataClient> {
     if (!this.client) this.client = new SeatDataClient(this.deps.env.SEATDATA_API_KEY!, { fetchImpl: this.deps.fetchImpl, sleep: this.deps.sleep });
     // Calls this tracker made that no row counts yet are spent too: without them the cap ran past the limit (gap 34).
-    const left = Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - (await this.callsToday()) - this.unlogged());
+    const left = Math.max(0, (await this.callsLeft(lane)) - this.unlogged());
     this.client.callCap = this.client.calls + left;
     return this.client;
+  }
+
+  /**
+   * What's left today in one lane. Live reads (polling, listings, matching) have SEATDATA_DAILY_CALL_LIMIT; the
+   * past-games backfill has its own SEATDATA_HISTORY_CALL_LIMIT on top. Neither can spend the other's: a day of polling
+   * used to leave the backfill "tomorrow" every day, so the past-games line never appeared.
+   */
+  async callsLeft(lane: 'live' | 'history'): Promise<number> {
+    const history = await this.callsToday(HISTORY_KINDS);
+    if (lane === 'history') return Math.max(0, this.deps.env.SEATDATA_HISTORY_CALL_LIMIT - history);
+    return Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - ((await this.callsToday()) - history));
   }
 
   /** Calls already written to market_fetches by this tracker (log and finish), against the client's own count. */
@@ -142,10 +160,10 @@ export class MarketTracker {
     return Math.max(0, (this.client?.calls ?? 0) - this.logged);
   }
 
-  async callsToday(): Promise<number> {
+  async callsToday(kinds?: string[]): Promise<number> {
     const now = this.now();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const [r] = await this.db.select({ n: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), gte(t.marketFetches.at, day)));
+    const [r] = await this.db.select({ n: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), gte(t.marketFetches.at, day), ...(kinds ? [inArray(t.marketFetches.kind, kinds)] : [])));
     return r?.n ?? 0;
   }
 
@@ -166,9 +184,10 @@ export class MarketTracker {
     const limit = this.deps.env.SEATDATA_DAILY_CALL_LIMIT;
     // ISO strings, cast: postgres.js rejects a Date bound into raw SQL, and that made every listings read throw in
     // production while the embedded test database accepted it (Final Human QA 2026-10-02, R1-HUMAN-01).
+    // Live reads count against the live allowance only: the history backfill has its own (SEATDATA_HISTORY_CALL_LIMIT).
     const r = await this.db.execute(sql`insert into market_fetches (provider, kind, event_id, status, calls, points, detail, at)
       select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${now.toISOString()}::timestamptz
-      where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day.toISOString()}::timestamptz) < ${limit}
+      where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day.toISOString()}::timestamptz and kind not in ('history_search', 'history_stats')) < ${limit}
       returning id`);
     const rows = (Array.isArray(r) ? r : (r as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
     const id = rows[0]?.id;
@@ -177,7 +196,7 @@ export class MarketTracker {
       return null;
     }
     // The reserved call plus whatever is still free: a retry only when the allowance has room for it.
-    return { id, attempts: Math.max(1, limit - (await this.callsToday()) + 1) };
+    return { id, attempts: Math.max(1, (await this.callsLeft('live')) + 1) };
   }
 
   /** The reserved row, completed with what the read actually did. */
@@ -263,8 +282,8 @@ export class MarketTracker {
   }
 
   /** One pass: enrol, then match or poll what is due (customers' events first), then score shadow advice. */
-  async run(opts: { limit?: number } = {}): Promise<{ skipped?: string; enrolled: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number; paused: number }> {
-    const out = { enrolled: 0, matched: 0, polled: 0, points: 0, ended: 0, shadow: 0, scored: 0, budgetLeft: 0, paused: 0 };
+  async run(opts: { limit?: number } = {}): Promise<{ skipped?: string; enrolled: number; due: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number; paused: number; history: number; stoppedBy?: string }> {
+    const out: { enrolled: number; due: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number; paused: number; history: number; stoppedBy?: string } = { enrolled: 0, due: 0, matched: 0, polled: 0, points: 0, ended: 0, shadow: 0, scored: 0, budgetLeft: 0, paused: 0, history: 0 };
     const why = await this.blocked();
     if (why) return { ...out, skipped: why };
     out.enrolled = await this.enroll();
@@ -276,8 +295,9 @@ export class MarketTracker {
       .where(and(eq(t.trackedEvents.provider, SEATDATA_PROVIDER), inArray(t.trackedEvents.state, ['pending_match', 'requested', 'active']), lte(t.trackedEvents.nextPollAt, now)))
       .orderBy(desc(sql`${t.trackedEvents.reasons} ? 'request'`), asc(t.trackedEvents.nextPollAt))
       .limit(opts.limit ?? 40);
+    out.due = due.length;
     for (const tr of due) {
-      if ((await this.callsToday()) >= limit) {
+      if ((await this.callsLeft('live')) <= 0) {
         await this.log('stats', tr.eventId, 'skipped_budget', 0);
         break;
       }
@@ -306,14 +326,19 @@ export class MarketTracker {
         out.polled += 1;
         out.points += n;
         out.shadow += await this.recordShadow(ev);
-        await this.backfillHistory(ev);
       } catch (e) {
         const msg = e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e);
         await this.db.update(t.trackedEvents).set({ lastError: msg.slice(0, 300), nextPollAt: new Date(now.getTime() + 60 * 60_000) }).where(eq(t.trackedEvents.id, tr.id));
         await this.log('stats', tr.eventId, 'error', this.unlogged(), 0, msg);
-        if (e instanceof SeatDataError && (e.type === 'authentication_error' || e.type === 'subscription_required' || e.type === 'payment_required')) break; // the account itself is the problem
+        if (e instanceof SeatDataError && (e.type === 'authentication_error' || e.type === 'subscription_required' || e.type === 'payment_required')) {
+          out.stoppedBy = msg; // the account itself is the problem: said on the pass record, so it isn't silent
+          break;
+        }
       }
     }
+    // Past games for every team or act with a game coming up we follow, ahead of anyone asking: from the history's own
+    // share of the day, so polling never crowds it out and it never crowds out polling.
+    out.history = await this.prewarmHistory();
     out.scored = await this.scoreShadow();
     out.budgetLeft = Math.max(0, limit - (await this.callsToday()));
     return out;
@@ -337,7 +362,7 @@ export class MarketTracker {
     await this.db.insert(t.trackedEvents).values({ eventId, provider: SEATDATA_PROVIDER, reasons: ['request'], nextPollAt: now }).onConflictDoNothing();
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || !['pending_match', 'requested', 'active'].includes(tr.state)) return { refreshed: false, reason: tr?.state ?? 'missing' };
-    if ((await this.callsToday()) >= this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return { refreshed: false, reason: 'budget' };
+    if ((await this.callsLeft('live')) <= 0) return { refreshed: false, reason: 'budget' };
     if (tr.nextPollAt > now && !(opts.stale && tr.state === 'active' && tr.providerEventId)) {
       // The stats are current, but a group of three or more reads listings, and those are only as fresh as the last read.
       if (tr.state !== 'active' || !tr.providerEventId) return { refreshed: false, reason: 'fresh' };
@@ -387,6 +412,7 @@ export class MarketTracker {
       hit = sameDay.find((x) => norm(x.venue_name) === norm(ev.v.name)) ?? (sameDay.length === 1 ? sameDay[0] : undefined);
     }
     if (hit) {
+      await this.rememberMarketplaces(ev.e.id, hit as unknown as Record<string, unknown>, []);
       await this.db.update(t.trackedEvents).set({ providerEventId: String(hit.event_id), state: 'active', lastError: null, matchAttempts: tr.matchAttempts + 1 }).where(eq(t.trackedEvents.id, tr.id));
       await this.log('match', ev.e.id, 'success', api.calls - before, 0, String(hit.event_id));
       return String(hit.event_id);
@@ -544,6 +570,7 @@ export class MarketTracker {
       const providerAsOf = providerTime(r.last_refresh_timestamp, retrievedAt);
       await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw, r)}`);
       await this.rememberListings(eventId, raw, providerAsOf);
+      await this.rememberMarketplaces(eventId, r, raw);
       const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null), inactive: inactiveListings(raw.filter(isOrdinarySeatListing)) };
       this.lastRead.set(eventId, out);
       RECENT_READS.set(eventId, out);
@@ -611,11 +638,21 @@ export class MarketTracker {
     const points = pointsFromListings(listings, sizes, retrievedAt, asOf);
     await this.storePoints(ev, points);
     await this.rememberListings(ev.e.id, listings, asOf);
+    await this.rememberMarketplaces(ev.e.id, r, listings);
     const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null), inactive: inactiveListings(listings.filter(isOrdinarySeatListing)) };
     this.lastRead.set(ev.e.id, read);
     RECENT_READS.set(ev.e.id, read);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings, r)}`);
     return points.length;
+  }
+
+  /**
+   * The marketplaces' own event ids a SeatData reply names (its fields or its rows' page links), kept for the game so
+   * replies link its event pages, not a search. Never the id we asked by: only what SeatData itself said.
+   */
+  private async rememberMarketplaces(eventId: string, reply: Record<string, unknown>, rows: Array<Record<string, unknown>>): Promise<void> {
+    const ids = idsFromSeatData(reply, ...rows.slice(0, 200));
+    if (ids.stubhub || ids.vividseats) await rememberMarketplaceIds(this.db, eventId, ids, 'seatdata', this.now()).catch(() => null);
   }
 
   private async storePoints(ev: EventRow, points: SeriesPoint[]): Promise<void> {
@@ -628,13 +665,50 @@ export class MarketTracker {
   }
 
   /**
-   * Price history of past games of the same team (or performer) at the same venue, once a month per pair:
-   * the "what does this usually cost at this point" layer, so we are not starting blind.
+   * Every team or act with a game coming up that we follow, at that game's venue: their past games read ahead of time,
+   * so the first reply already has them. Pairs whose history is current cost nothing (backfillHistory's own check).
+   */
+  private async prewarmHistory(): Promise<number> {
+    const now = this.now();
+    const rows = await this.db
+      .select({ e: t.events, v: t.venues, ent: t.entities })
+      .from(t.trackedEvents)
+      .innerJoin(t.events, eq(t.events.id, t.trackedEvents.eventId))
+      .innerJoin(t.venues, eq(t.venues.id, t.events.venueId))
+      .innerJoin(t.entities, eq(t.entities.id, t.events.primaryEntityId))
+      .where(and(eq(t.trackedEvents.provider, SEATDATA_PROVIDER), inArray(t.trackedEvents.state, ['pending_match', 'requested', 'active']), gte(t.events.localStartAt, now)))
+      .orderBy(desc(sql`${t.trackedEvents.reasons} ? 'request'`), asc(t.events.localStartAt));
+    const seen = new Set<string>();
+    let done = 0;
+    for (const r of rows) {
+      const key = `${r.ent.id}:${r.v.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (seen.size > PREWARM_PAIRS || (await this.callsLeft('history')) < 1 + HISTORY_PAGES) break;
+      try {
+        await this.backfillHistory(r);
+        done += 1;
+      } catch {
+        // History is extra: one pair failing never stops the pass.
+      }
+    }
+    return done;
+  }
+
+  /**
+   * Price history of past games of the same team (or performer) at the same venue, once a month per pair and per set
+   * of months: the most recent games, and the ones in the same month as each upcoming game we follow there ("Rangers
+   * games here in November"). The "what does this usually cost at this point" layer, so we are not starting blind.
+   * It spends only the history's own share of the day.
    */
   private async backfillHistory(ev: EventRow): Promise<void> {
     if (!ev.ent) return;
     const now = this.now();
-    const key = `${ev.ent.id}:${ev.v.id}`;
+    const monthOf = (d: Date) => Number(new Intl.DateTimeFormat('en-US', { timeZone: ev.v.timezone, month: 'numeric' }).format(d));
+    const upcoming = await this.db.select({ start: t.events.localStartAt }).from(t.trackedEvents).innerJoin(t.events, eq(t.events.id, t.trackedEvents.eventId)).where(and(eq(t.trackedEvents.provider, SEATDATA_PROVIDER), eq(t.events.primaryEntityId, ev.ent.id), eq(t.events.venueId, ev.v.id), gte(t.events.localStartAt, now)));
+    const months = [...new Set([monthOf(ev.e.localStartAt), ...upcoming.map((u) => monthOf(u.start))])].sort((a, b) => a - b);
+    // A month we haven't read yet is a new backfill, not one to wait a month for.
+    const key = `${ev.ent.id}:${ev.v.id}:m${months.join(',')}`;
     // A backfill the budget cut short ('partial') is not a month's history: the rest is picked up on a later refresh.
     const [recent] = await this.db.select({ id: t.marketFetches.id }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), eq(t.marketFetches.kind, 'history_search'), eq(t.marketFetches.detail, key), eq(t.marketFetches.status, 'success'), gte(t.marketFetches.at, new Date(now.getTime() - HISTORY_REFRESH_DAYS * 86_400_000)))).limit(1);
     if (recent) return;
@@ -642,8 +716,8 @@ export class MarketTracker {
     // could spend 1 + HISTORY_EVENTS * HISTORY_PAGES; at the cap the client threw mid-loop and the live event's refresh
     // logged it as a stats error (audit 2026-10-10, budget guard "known to be loose"). Now the loop is bounded by
     // what is left before each game, so budget exhaustion is a skipped_budget row, never a phantom stats failure.
-    if ((await this.callsToday()) + this.unlogged() + 1 + HISTORY_PAGES > this.deps.env.SEATDATA_DAILY_CALL_LIMIT) return; // tomorrow
-    const api = await this.api();
+    if ((await this.callsLeft('history')) - this.unlogged() < 1 + HISTORY_PAGES) return; // tomorrow
+    const api = await this.api('history');
     const before = api.calls;
     const today = eventLocalDate(now, ev.v.timezone);
     const why = (e: unknown) => (e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e)).slice(0, 200);
@@ -656,7 +730,10 @@ export class MarketTracker {
       await this.log('history_search', ev.e.id, budget ? 'skipped_budget' : 'error', this.unlogged(), 0, `${key}; ${why(e)}`);
       return;
     }
-    const past = (r.data ?? []).filter((x) => x.event_date && x.event_date.slice(0, 10) < today && norm(x.venue_name) === norm(ev.v.name)).sort((a, b) => b.event_date.localeCompare(a.event_date)).slice(0, HISTORY_EVENTS);
+    const here = (r.data ?? []).filter((x) => x.event_date && x.event_date.slice(0, 10) < today && norm(x.venue_name) === norm(ev.v.name)).sort((a, b) => b.event_date.localeCompare(a.event_date));
+    const recentGames = here.slice(0, HISTORY_EVENTS);
+    const sameMonth = here.filter((x) => !recentGames.includes(x) && months.includes(Number(x.event_date.slice(5, 7)))).slice(0, SAME_MONTH_EVENTS);
+    const past = [...recentGames, ...sameMonth];
     const searchRow = await this.log('history_search', ev.e.id, 'success', api.calls - before, past.length, key);
     for (const p of past) {
       const exists = await this.db.select({ id: t.marketHistory.id }).from(t.marketHistory).where(eq(t.marketHistory.providerEventId, String(p.event_id))).limit(1);
@@ -667,7 +744,7 @@ export class MarketTracker {
       if (starts.length !== 1) continue;
       const start = starts[0]!;
       // Room for this game's pages, counted again before each one: other reads may have spent the day meanwhile.
-      const room = await this.api();
+      const room = await this.api('history');
       const stop = room.callCap !== null && room.callCap - room.calls < HISTORY_PAGES;
       let failure: unknown = null;
       if (!stop) {
@@ -804,9 +881,22 @@ export async function loadMarketContext(db: DbOrTx, a: { eventId: string; basis:
   // Past games' history is kept for singles and pairs only; groups have no "typical" yet.
   const histZone = zones.length === 1 ? zones[0] : undefined;
   const hist = ev?.ent && !isGroupBasis(a.basis) && histZone !== undefined
-    ? await db.select({ eventKey: t.marketHistory.providerEventId, lead: t.marketHistory.leadTimeMinutes, price: t.marketHistory.priceCents }).from(t.marketHistory).where(and(eq(t.marketHistory.entityId, ev.ent), eq(t.marketHistory.venueId, ev.venue), eq(t.marketHistory.quantity, basisSize(a.basis)), histZone ? eq(t.marketHistory.seatZone, histZone) : isNull(t.marketHistory.seatZone)))
+    ? await db.select({ eventKey: t.marketHistory.providerEventId, lead: t.marketHistory.leadTimeMinutes, price: t.marketHistory.priceCents, start: t.marketHistory.eventStartAt }).from(t.marketHistory).where(and(eq(t.marketHistory.entityId, ev.ent), eq(t.marketHistory.venueId, ev.venue), eq(t.marketHistory.quantity, basisSize(a.basis)), histZone ? eq(t.marketHistory.seatZone, histZone) : isNull(t.marketHistory.seatZone)))
     : [];
-  return computeMarketContext({ basis: a.basis, zone: zoneLabel, points: [...byTime.values()], now: a.now, eventStartAt: a.eventStartAt, comparables: hist.map((h) => ({ eventKey: h.eventKey, leadMinutes: h.lead, priceCents: h.price })) });
+  const comparables = (rows: typeof hist) => rows.map((h) => ({ eventKey: h.eventKey, leadMinutes: h.lead, priceCents: h.price }));
+  const ctx = computeMarketContext({ basis: a.basis, zone: zoneLabel, points: [...byTime.values()], now: a.now, eventStartAt: a.eventStartAt, comparables: comparables(hist) });
+  // Past games in this game's month, in the venue's own calendar, beside the overall set: only when they're a
+  // different set of games (otherwise it would say the same thing twice).
+  if (hist.length && ev) {
+    const [v] = await db.select({ tz: t.venues.timezone }).from(t.venues).where(eq(t.venues.id, ev.venue));
+    const monthOf = (d: Date) => new Intl.DateTimeFormat('en-US', { timeZone: v?.tz ?? 'America/New_York', month: 'long' }).format(d);
+    const month = monthOf(a.eventStartAt);
+    const same = hist.filter((h) => monthOf(h.start) === month);
+    const lead = Math.round((a.eventStartAt.getTime() - a.now.getTime()) / 60_000);
+    const m = same.length && new Set(same.map((h) => h.eventKey)).size < new Set(hist.map((h) => h.eventKey)).size ? lateMoveFrom(comparables(same), lead) : null;
+    ctx.lateMonth = m ? { ...m, month } : null;
+  }
+  return ctx;
 }
 
 /** Where a market figure applies: the zone the customer asked for, or the whole venue (said so whenever they asked for less). */

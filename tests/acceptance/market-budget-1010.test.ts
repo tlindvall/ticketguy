@@ -57,7 +57,7 @@ describe('SeatData calls are counted as made', () => {
     }
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;
-  const tracker = (limit: number) => new MarketTracker({ db: h.db, env: testEnv({ SEATDATA_API_KEY: KEY, SEATDATA_DAILY_CALL_LIMIT: String(limit) }), now: () => now, fetchImpl, sleep: async () => {} });
+  const tracker = (limit: number, history = 15) => new MarketTracker({ db: h.db, env: testEnv({ SEATDATA_API_KEY: KEY, SEATDATA_DAILY_CALL_LIMIT: String(limit), SEATDATA_HISTORY_CALL_LIMIT: String(history) }), now: () => now, fetchImpl, sleep: async () => {} });
   const fetches = () => h.db.select().from(t.marketFetches).where(eq(t.marketFetches.eventId, GAME));
   const historyGames = async () => (await h.db.select({ n: sql<number>`count(distinct ${t.marketHistory.providerEventId})::int` }).from(t.marketHistory))[0]!.n;
 
@@ -76,10 +76,11 @@ describe('SeatData calls are counted as made', () => {
 
   it('history backfill: bounded by what is left, a game the budget cannot cover is skipped_budget, never a stats error', async () => {
     fetched = 0;
-    // Match (1), rescan prompt (1), stats (1), history search (1), then three games of three pages: 13 of 15. A fourth
-    // game needs three more and only two are left. The old guard (calls + 9 <= 15) started the loop and the cap threw
-    // in the fourth game, logged as a 'stats' error with one call and the refresh reported failed.
-    const tr = tracker(15);
+    // Live: match (1), rescan prompt (1), stats (1). History, from its own allowance of 10 (Oct 15: separate from live
+    // polling): the search (1), then three games of three pages. A fourth game needs three more and none are left. The
+    // old guard started the loop and the cap threw in the fourth game, logged as a 'stats' error with one call and the
+    // refresh reported failed.
+    const tr = tracker(50, 10);
     expect(await tr.refreshEvent(GAME)).toEqual({ refreshed: true });
     const rows = await fetches();
     expect(rows.filter((r) => r.kind === 'stats' && r.status === 'error')).toHaveLength(0);
@@ -93,7 +94,7 @@ describe('SeatData calls are counted as made', () => {
     // A day later, with room, the partial backfill is picked up where it stopped rather than in 30 days.
     now = new Date(now.getTime() + 25 * H);
     fetched = 0;
-    const next = tracker(20);
+    const next = tracker(50, 30);
     expect(await next.refreshEvent(GAME)).toEqual({ refreshed: true });
     expect(await historyGames()).toBe(8);
     expect(await next.callsToday()).toBe(fetched);

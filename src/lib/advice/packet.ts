@@ -14,6 +14,7 @@ import { shownPriceParts } from './shown-prices';
 import { capitalize, categoryLabel, seatPhrase } from '@/lib/domain/event-noun';
 import { loadRegistry, sourceIdForHost } from '@/lib/sources/registry';
 import type { BriefTrend, TicketBrief } from '@/lib/email/ticket-brief';
+import { marketplaceLinks, withoutTracking, type MarketplaceIds } from '@/lib/market/event-links';
 import type { Sport } from '@/lib/brand/teams';
 import type { Alternative, AlternativesResult, ListingPicks, MarketListing } from '@/lib/market/alternatives';
 
@@ -229,6 +230,8 @@ export type BuildPacketArgs = {
   eventSport?: Sport | null;
   /** Decorative artwork for the brief: a team banner, a show's image or our concert art; first reply only. */
   artworkUrl?: string | null;
+  /** The marketplaces' own event ids for this game (event_source_mappings): their event pages, not a search. */
+  marketplaceIds?: MarketplaceIds | null;
   /** Questions they asked that aren't about price, answered first (TG-B02). */
   /** Their latest words and the thread's, for questions that name rows by label ("tier 2 or tier 3?"). */
   askedText?: string;
@@ -679,11 +682,12 @@ function alternativesClaims(a: BuildPacketArgs, sub: SubjectListing, alt: Altern
   const l = chosen.alt.listing;
   const market = l.marketplace === 'vividseats' ? 'Vivid Seats' : l.marketplace === 'stubhub' ? 'StubHub' : null;
   const section = l.section ? `section ${l.section}` : 'this listing';
-  // A search names the event as a fan types it, and the label names the section to look for on the results.
-  const query = encodeURIComponent((a.eventParts?.title ?? a.eventLabel).replace(/\s*\([^)]*\)/g, '').trim());
-  const stubhub = { url: `https://www.stubhub.com/search?q=${query}`, linkLabel: `Search StubHub for ${section}` };
-  const vivid = { url: `https://www.vividseats.com/search?searchTerm=${query}`, linkLabel: `Search Vivid Seats for ${section}` };
-  const link = l.url ? { url: l.url, linkLabel: `View ${section} on ${market ?? 'the marketplace'}` } : market === 'Vivid Seats' ? vivid : stubhub;
+  // The game's event page on each marketplace when we know its id, else a search naming the event as a fan types it;
+  // the label names the section to look for.
+  const pages = marketplaceLinks(a.marketplaceIds, { eventName: a.eventParts?.title ?? a.eventLabel, quantity: a.quantity, section: l.section });
+  const stubhub = { url: pages.stubhub.url, linkLabel: pages.stubhub.label };
+  const vivid = { url: pages.vividseats.url, linkLabel: pages.vividseats.label };
+  const link = l.url ? { url: withoutTracking(l.url), linkLabel: `View ${section} on ${market ?? 'the marketplace'}` } : market === 'Vivid Seats' ? vivid : stubhub;
   const caveat = 'It isn’t your seats, and I haven’t checked it’s still for sale or that the seats are together.';
   const text = market || l.url ? `That’s a ${market ?? 'resale'} listing. ${caveat}` : `The listing data doesn’t say whether it’s on StubHub or Vivid Seats, so look for ${section} on both. ${caveat}`;
   const scope = { quantity: a.quantity, seatZone: alt.zone, feeBasis: 'listed_before_fees', observedAt: a.observedAt.toISOString() };
@@ -1000,10 +1004,10 @@ function priceAnswer(a: BuildPacketArgs): { text: string; links: Array<{ label: 
   const face = a.faceValue;
   // The official sale itself ("It's on general sale on Ticketmaster…") is its own line; this gives only its price.
   const official = face ? ` ${a.official?.seller ?? 'Ticketmaster'}’s own price is ${face.minCents === face.maxCents ? formatUsd(face.minCents) : `${formatUsd(face.minCents)} to ${formatUsd(face.maxCents)}`} a ticket before fees.` : '';
-  const q = encodeURIComponent(title);
+  const pages = marketplaceLinks(a.marketplaceIds, { eventName: title, quantity: a.quantity, noun });
   const links = [
-    { label: `Search StubHub for this ${noun}`, url: `https://www.stubhub.com/search?q=${q}` },
-    { label: `Search Vivid Seats for this ${noun}`, url: `https://www.vividseats.com/search?searchTerm=${q}` },
+    { label: pages.stubhub.label, url: pages.stubhub.url },
+    { label: pages.vividseats.label, url: pages.vividseats.url },
   ];
   return {
     text: `I don’t have resale prices for ${title}: the StubHub and Vivid Seats listing data I use has no listings for this ${noun} right now.${official} You can see what resale sellers are asking with the links below, and if you send me a price you find, I’ll tell you how it compares.`,
@@ -1675,7 +1679,8 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
   // What I'd do → why → the next action (live Oct 9 review). Budget fit, value and timing are separate: over budget is
   // not overpriced, a fall is not automatically "wait" and a rise not automatically "buy". A lead is unchecked, so a
   // buy is said against the checkout total, never as a sure thing.
-  const dir = trend?.direction ?? null;
+  // The whole venue's movement, shown for seats we hold no series for, never decides (TREND-ACC-04).
+  const dir = trend && !trend.broader ? trend.direction : null;
   const daysLeft = a.eventStartAt ? (a.eventStartAt.getTime() - a.observedAt.getTime()) / 86_400_000 : Infinity;
   const deadline = a.priorities.decisionDeadline ? (a.priorities.decisionDeadline.getTime() - a.observedAt.getTime()) / 86_400_000 : null;
   const noTime = daysLeft < 3 || (deadline !== null && deadline < 2);
@@ -1733,7 +1738,7 @@ function picksAnswer(a: BuildPacketArgs): { head: string; items: string[]; card:
       `Would you go up to about ${est} for these, or should I look at other seats or another date?`,
     ],
   }[outcome];
-  const trendShown = !!trend && ['buy_rising', 'wait_falling', 'take_falling', 'hold_watch', 'hold'].includes(outcome);
+  const trendShown = !!trend && (trend.broader || ['buy_rising', 'wait_falling', 'take_falling', 'hold_watch', 'hold'].includes(outcome));
   const points = why;
   const headline = head;
   // The next action follows the advice: a direct listing link to buy; the watch when holding off and one can run; the
@@ -1822,7 +1827,7 @@ function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string, trendShow
         : t.direction === 'mixed'
           ? `${t.facts}, with no clear fall toward ${target}.`
           : `${t.facts}, so nothing yet points toward ${target}.`
-    : marketTrendGap(a, false) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
+    : marketTrendGap(a, true) ?? `I don’t have enough price history for this ${a.eventNoun ?? 'event'} yet to say whether prices are heading toward ${target}.`;
   const past = pastShown ? null : lateMoveLine(a);
   return [past ? `${trend} ${past}` : trend];
 }
@@ -1833,14 +1838,18 @@ function budgetGapNotes(a: BuildPacketArgs, budget: number, n: string, trendShow
  * reads and under the same gate: fresh, dated by the provider, a real window, the seats they asked about. The meaning
  * says what the movement has done so far, against their target when they're over budget; never where it goes next.
  */
-function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefTrend; sentence: string; direction: 'up' | 'down' | 'flat' | 'mixed'; comparable: string | null } | null {
+function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefTrend; sentence: string; direction: 'up' | 'down' | 'flat' | 'mixed'; comparable: string | null; broader: boolean } | null {
   const m = a.market;
   const c = m?.context;
-  if (!m?.visible || !trendReady(c) || !scopeFits(a) || c.direction === 'insufficient') return null;
+  if (!m?.visible || !trendReady(c) || c.direction === 'insufficient') return null;
   const w = c.h72 ?? c.h24;
   if (!w) return null;
+  // Seats they named that no zone series of ours covers ("club seats", "behind the bench"): the whole venue's series,
+  // said as that, instead of no trend at all. It's context, never their seats' movement and never a reason to wait
+  // (TREND-ACC-04): the caller doesn't let it decide.
+  const broader = !scopeFits(a);
   const size = m.basis === 'single' ? 1 : m.basis === 'pair' ? 2 : isGroupBasis(m.basis) ? basisSize(m.basis!) : 1;
-  const unit = size === 1 ? 'the cheapest listed ticket' : size === 2 ? 'the cheapest listed pair' : `the cheapest listing for ${qtyWord(size)}`;
+  const unit = `${size === 1 ? 'the cheapest listed ticket' : size === 2 ? 'the cheapest listed pair' : `the cheapest listing for ${qtyWord(size)}`}${broader ? ' across the whole venue' : ''}`;
   const z = zoneOf(a);
   // "8.5%", "1.5%", "23%": a tenth below ten, whole above, so a small move isn't rounded into a bigger one.
   const pct = (x: NonNullable<Change>) => { const v = Math.abs(x.pct) * 100; return `${v < 10 ? Math.round(v * 10) / 10 : Math.round(v)}%`; };
@@ -1855,8 +1864,10 @@ function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefT
     : c.direction === 'mixed' && d24 && d72
       ? `${capitalize(unit)} is ${d24.changeCents > 0 ? 'up' : 'down'} ${pct(d24)} since yesterday, but ${marketMoved(d72) ? `${d72.changeCents > 0 ? 'up' : 'down'} ${pct(d72)} on three days ago` : `only ${pct(d72)} ${d72.changeCents >= 0 ? 'above' : 'below'} three days ago`}.`
       : `${capitalize(unit)} is ${w.changeCents > 0 ? 'up' : 'down'} ${pct(w)} since ${then(w)}.`;
-  const meaning =
-    c.direction === 'up' ? (target ? `Waiting for ${target} hasn’t paid off so far.` : 'Waiting has cost money so far.')
+  const pref = a.seatingPreference?.trim();
+  const meaning = broader
+    ? `That includes seats outside ${pref ? `“${pref}”` : 'what you asked for'}, so it’s context for the market, not a reason to wait.`
+    : c.direction === 'up' ? (target ? `Waiting for ${target} hasn’t paid off so far.` : 'Waiting has cost money so far.')
     : c.direction === 'down' ? (target ? `That’s the direction you need, but it’s no promise they reach ${target}.` : 'That’s no promise they keep falling, and the seats you want could go.')
     : c.direction === 'flat' ? (target ? `Nothing yet points toward ${target}.` : 'No fall to wait for so far.')
     : 'There’s no sustained fall yet.';
@@ -1869,12 +1880,14 @@ function trendModule(a: BuildPacketArgs, target: string | null): { brief: BriefT
   const badge = c.direction === 'mixed' ? (reversal?.startsWith('Yesterday’s dip') ? 'Dip reversed' : reversal ? 'Rise eased' : 'Both ways') : null;
   // "Comparable pairs have risen 8% since yesterday": the movement alone, for a reply where it's one reason among others.
   const plural = size === 1 ? 'tickets' : size === 2 ? 'pairs' : `listings for ${qtyWord(size)}`;
-  const comparable = c.direction === 'up' || c.direction === 'down' ? `Comparable ${plural} have ${c.direction === 'up' ? 'risen' : 'fallen'} ${pct(w)} ${w.hours >= 72 ? 'over three days' : 'since yesterday'}` : null;
+  const comparable = !broader && (c.direction === 'up' || c.direction === 'down') ? `Comparable ${plural} have ${c.direction === 'up' ? 'risen' : 'fallen'} ${pct(w)} ${w.hours >= 72 ? 'over three days' : 'since yesterday'}` : null;
+  const lead = broader ? `I don’t have a separate price series for ${pref ? `“${pref}”` : 'those seats'}, so this is the whole venue. ` : '';
   return {
     direction: c.direction,
     comparable,
-    sentence: `${title} ${detail} ${meaning}`,
-    brief: { direction: c.direction, badge, rows, basis: `${capitalize(unit)}${z ? ` ${zonePhrase(z)}` : ''}, before fees, from StubHub and Vivid Seats.` },
+    broader,
+    sentence: `${lead}${title} ${detail} ${meaning}`,
+    brief: { direction: c.direction, badge, rows, basis: `${capitalize(unit)}${z ? ` ${zonePhrase(z)}` : ''}, before fees, from StubHub and Vivid Seats.${broader ? ` No separate series for ${pref ? `“${pref}”` : 'the seats you asked about'}.` : ''}` },
   };
 }
 
@@ -1893,7 +1906,11 @@ function lateMoveLine(a: BuildPacketArgs): string | null {
   const lead = l.fell * 2 > l.events
     ? `Late drops happened in ${l.fell} of ${l.events} ${where} we tracked.`
     : `Late drops happened in only ${l.fell} of ${l.events} ${where} we tracked${l.rose ? `; in ${l.rose} the price went up` : ''}.`;
-  return `${lead} That’s ${unit}, not these seats, so it’s a reason to keep watching, not a promise they’ll get cheaper.`;
+  // The same month in past seasons, beside the most recent games: "New York Rangers games here in November".
+  const mo = m.context?.lateMonth;
+  const whose = `${m.comparableLabel ? `${m.comparableLabel} ` : ''}${noun}s here`;
+  const month = mo ? ` In ${whose} in ${mo.month}, it was ${mo.fell} of ${mo.events}${mo.rose ? `, and ${mo.rose} went up` : ''}.` : '';
+  return `${lead}${month} That’s ${unit}, not these seats, so it’s a reason to keep watching, not a promise they’ll get cheaper.`;
 }
 
 /**

@@ -242,6 +242,19 @@ const rawSchema = z.object({
   SEATDATA_API_KEY: z.string().optional(),
   SEATDATA_DAILY_CALL_LIMIT: z.coerce.number().int().positive().default(50),
   /**
+   * Calls a day for the past-games history backfill, on top of SEATDATA_DAILY_CALL_LIMIT (which stays live polling's):
+   * a day of polling never leaves the history unread, and the backfill never spends polling's calls. 0 turns the
+   * backfill off. The day's most is the two together.
+   */
+  SEATDATA_HISTORY_CALL_LIMIT: z.coerce.number().int().min(0).default(15),
+  /**
+   * StubHub's Catalog API, for a game's StubHub event id when SeatData doesn't carry one (event links, not search
+   * links). Events only, never listings. Off unless set with both credentials, and only after the probe has been run.
+   */
+  STUBHUB_CATALOG_ENABLED: explicitBoolean,
+  STUBHUB_CLIENT_ID: z.string().optional(),
+  STUBHUB_CLIENT_SECRET: z.string().optional(),
+  /**
    * TicketData price intelligence (investigational vendor lead, ADVICE_ENGINE §3). No key: the public data
    * API needs none. TICKETDATA_ENABLED alone enables nothing: sync runs only once the TicketData licence
    * record in /admin/sources is approved for "tracking", and customer-facing use needs its own approved
@@ -371,6 +384,9 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
   }
   if (e.TEST_AGENT_TOKEN && e.TEST_AGENT_TOKEN.length < 32) {
     throw new ConfigurationError('TEST_AGENT_TOKEN must be at least 32 characters when set');
+  }
+  if (e.STUBHUB_CATALOG_ENABLED && !(e.STUBHUB_CLIENT_ID && e.STUBHUB_CLIENT_SECRET)) {
+    throw new ConfigurationError('STUBHUB_CATALOG_ENABLED=true requires STUBHUB_CLIENT_ID and STUBHUB_CLIENT_SECRET');
   }
   if (e.TICKETMASTER_DISCOVERY_ENABLED && !e.TICKETMASTER_DISCOVERY_API_KEY) {
     throw new ConfigurationError('TICKETMASTER_DISCOVERY_ENABLED=true requires TICKETMASTER_DISCOVERY_API_KEY');
