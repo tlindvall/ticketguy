@@ -48,6 +48,7 @@ const TRACKED: Record<string, string> = {
   mentions_required: 'Leaves out what the answer needed',
   forbidden_absent: 'Says something it must not',
   email_design: 'Email design missing',
+  no_coverage_talk: 'Says "haven’t been able to check" or "Nothing I can check automatically"',
   price_alert_set: 'Price alert not set up',
   price_alert_raised: 'Price alert not raised when the price drops',
   answered_the_question: 'Answers a different question',
