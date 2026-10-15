@@ -5,7 +5,14 @@ import type { ResponseBlocks } from '@/lib/advice/renderer';
  * Stage 3: explain the verified comparison. The drafter sees ONLY the packet (claim IDs + server text) and
  * minimal customer context (quantity, priorities). It returns structured blocks; the renderer validates.
  */
-export type DraftContext = { quantity: number; mustAttend: boolean | null; waitRiskTolerance: 'low' | 'medium' | 'high' | null; togetherRequired: boolean | null };
+export type DraftContext = {
+  quantity: number;
+  mustAttend: boolean | null;
+  waitRiskTolerance: 'low' | 'medium' | 'high' | null;
+  togetherRequired: boolean | null;
+  /** The first draft repeated our last email: what that email said and what the customer wrote since (live Oct 15). */
+  avoidRepeat?: { previous: string; latest: string };
+};
 
 export interface Drafter {
   readonly name: string;
