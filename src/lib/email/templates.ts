@@ -209,7 +209,9 @@ function renderBody(
       const headline = String(v.headline ?? '');
       const text = ['Hey,', headline, ...(picks.length ? [picks.map(pickText).join('\n\n')] : []), ...end];
       // The verdict as the brief's headline and the games as its cards, the cheapest marked (Oct 10: the design was gone).
-      const html = [para('Hey,'), briefHeadline(headline), ...(picks.length ? [picks.map((p, i) => pickCard(p, i === 0 ? 'Lowest listed price' : null)).join('')] : []), ...end.map(para)];
+      // The first card's badge: the cheapest by default; a list ordered otherwise (home games first) names its own.
+      const firstBadge = v.firstBadge === undefined ? 'Lowest listed price' : v.firstBadge === null ? null : String(v.firstBadge);
+      const html = [para('Hey,'), briefHeadline(headline), ...(picks.length ? [picks.map((p, i) => pickCard(p, i === 0 ? firstBadge : null)).join('')] : []), ...end.map(para)];
       return wrap(text, html);
     }
     case 'event_alert_set': {

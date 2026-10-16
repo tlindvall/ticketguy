@@ -38,8 +38,8 @@ export function testEnv(over: Record<string, string> = {}): Env {
   return parseEnv({ NODE_ENV: 'test', APP_MODE: 'fixture', ...(process.env.SD_MODE ? { SERVICE_POLICY_MODE: process.env.SD_MODE } : {}), ...over });
 }
 
-export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor; listingReader?: ListingReader } = {}) {
-  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS, listingReader: opts.listingReader });
+export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor; listingReader?: ListingReader; repeatGuard?: boolean } = {}) {
+  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS, listingReader: opts.listingReader, repeatGuard: opts.repeatGuard });
 }
 
 let seq = 0;
