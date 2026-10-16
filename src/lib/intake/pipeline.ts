@@ -82,6 +82,7 @@ import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { CONCERT_ARTWORK_PATH, loadBriefArtwork, sportFor, venueKeys } from '@/lib/brand/assets';
 import { eventPreview } from '@/lib/brand/event-image';
+import { answerBody, sameReply } from './repeat';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -109,6 +110,13 @@ export type ConciergeDeps = {
   webEventFinder?: WebEventFinder;
   /** Fetches event preview images and official pages (#179). Absent: only copies already stored are used. */
   previewFetch?: typeof fetch;
+  /**
+   * Hold back a drafted answer that still repeats the last one after it was redrafted against their latest message, and
+   * hand the thread to a person (live Oct 15). On wherever the drafter is a model, which can redraft (production, the
+   * eval); off with the rules drafter, which can't reword, where a restated question rightly gets the same facts again
+   * (TGQA-R6 14, R8 S01) and blocking would park every customer who asks twice. Tests switch it on.
+   */
+  repeatGuard?: boolean;
 };
 
 export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } | { kind: 'ignored_recipient'; messageId: string } | { kind: 'duplicate'; messageId: string } | { kind: 'queued'; messageId: string; conversationId: string; requestId: string; contactId: string; isNewConversation: boolean };
@@ -149,6 +157,23 @@ const GAME_CHOICE = /\b(?:which|what)\s+(?:\S+\s+){0,5}?(?:game|games|match|matc
  * times).
  */
 const WHICHEVER_CHEAPER = /\bwhichever(?:\s+(?:one|game|date|night|show))?\s*(?:is|'s|’s|s|works out|comes out)?\s*(?:the\s+)?(?:cheap(?:er|est)|lowest|least expensive|less expensive|best price)\b|\bcompare\s+(?:both|them|the\s+(?:two|2|games))\b/i;
+/**
+ * "What other games can I see for that price?", "any games under $150?", "which dates fit my budget?": the games are
+ * checked against their budget, not the game we were on again (live Oct 15, Rangers: "yes what other games can I see for
+ * that price? total yes." got the identical over-budget email back). A "yes" before it is not a yes to our question.
+ */
+export const OTHER_GAMES_FOR_BUDGET = /\b(?:what|which|any)\s+(?:other\s+|more\s+)?(?:games?|dates?|nights?|ones?)\b[^.?!]{0,40}?(?:\b(?:for|at|in|within|under|around|near)\s+(?:that|this|my|the|our|a)\s+(?:price|budget|amount|range)\b|\b(?:for|under|within|below|at)\s+(?:about\s+)?\$\s?\d|\bfits?\s+(?:in\s+)?(?:my|our|the|that)\s+budget\b|\bin\s+(?:my|our|that|the)\s+(?:budget|price range)\b)|\bother\s+games?\b[^.?!]{0,30}\b(?:that|this|my|the)\s+(?:price|budget)\b/i;
+export const asksOtherGamesForBudget = (text: string): boolean => OTHER_GAMES_FOR_BUDGET.test(text.replace(/[’‘]/g, "'"));
+/** Emails that answer a customer's message: what a new answer is compared with. */
+const REPLY_CLASSES = new Set<MessageClass>(['recommendation', 'no_result', 'clarification']);
+/**
+ * Drafted answers (a pick, or why there's none): never sent twice in the same words (live Oct 15). Clarifications are not
+ * held back here: the same question answered the same way is right (TGQA-R6 25), and a question asked again and again
+ * goes to a person after three rounds (questionRound) and is scored by no_reasked_question.
+ */
+const NO_REPEAT_CLASSES = new Set<MessageClass>(['recommendation', 'no_result']);
+/** Games checked for a budget search across a team's schedule: each is a listings search, so it is bounded. */
+const BUDGET_GAMES_MAX = 10;
 export const asksCheapestGame = (text: string) => PRICE_LOW.test(text) && (GAME_CHOICE.test(text) || WHICHEVER_CHEAPER.test(text));
 /**
  * A choice of games that names them: "which game is cheapest", never "which one is cheaper" ("one" can be a seat), and no
@@ -1037,6 +1062,13 @@ export class Concierge {
     // searched again (eval #135, #144: the reply was re-resolved against the calendar and the list was lost).
     // Not a browse pick: what follows treats a game they named the ordinary way (the goal question, the acknowledgement).
     let bound: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect } | null = null;
+    // A new question overrides the one we left open: "yes what other games can I see for that price? total yes." answers
+    // per-ticket-or-total ("total") and asks for the games their budget covers. It is never a yes to going up to our
+    // price, nor the same game researched again (live Oct 15, Rangers).
+    if (revision > 1 && asksOtherGamesForBudget(flat(latestText))) {
+      const r = await this.budgetGames({ req, msg, contact: contact!, merged, revision });
+      if (r) return r;
+    }
     // "Yes please, let me know" answers the alert offer, not the show suggested beside it.
     // Nor a new ask about the list ("anything else on Saturday?") or for another kind of event ("how about concerts on
     // Thursday" after sports picks): the same guards a browse pick has.
@@ -1733,7 +1765,7 @@ export class Concierge {
    * The picks as the email shows them: the line, why it fits, and at most two links — something to listen
    * to or explore, and the event's own ticket page (affiliate-wrapped after the picks were chosen).
    */
-  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, lines: string[], notes: Array<string | null> = []): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean; artworkUrl: string | null; category: string }>> {
+  private async picksFor(shown: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }>, lines: string[], notes: Array<string | null> = [], opts: { reasons?: boolean } = {}): Promise<Array<{ line: string; title: string; reason: string; eventUrl: string | null; links: EmailLink[]; affiliate: boolean; artworkUrl: string | null; category: string }>> {
     if (!shown.length) return [];
     const ids = shown.map(({ e }) => e.id);
     const maps = await this.db.select({ eventId: t.eventSourceMappings.eventId, url: t.eventSourceMappings.authoritativeUrl }).from(t.eventSourceMappings).where(and(inArray(t.eventSourceMappings.eventId, ids), eq(t.eventSourceMappings.sourceId, DISCOVERY_SOURCE_ID)));
@@ -1749,7 +1781,7 @@ export class Concierge {
       const explore = exploreLink(ent?.links, ent?.kind ?? null);
       // An event page, not a checked offer: neutral label everywhere (launch A22).
       const links = [...(explore ? [explore] : []), ...(tickets ? [{ label: 'Event page', url: tickets.url }] : [])];
-      return { line: lines[i]!, title: readableTitle(e.name), reason: [pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate, artworkUrl: art[i] ?? null, category: cardCategory(e) };
+      return { line: lines[i]!, title: readableTitle(e.name), reason: [opts.reasons === false ? null : pickReason(e), notes[i]].filter(Boolean).join(' '), eventUrl: seller ? url : null, links, affiliate: !!tickets?.affiliate, artworkUrl: art[i] ?? null, category: cardCategory(e) };
     });
   }
 
@@ -3330,19 +3362,9 @@ export class Concierge {
     const q = merged.quantity && merged.quantity > 0 ? merged.quantity : 2;
     const rows = (await this.eventRows(ids)).filter(({ e }) => e.status === 'scheduled' && e.localStartAt > this.now());
     if (rows.length < 2) return null;
-    const configs = await this.db.select().from(t.adapterConfigs);
-    const cfgBySource = new Map(configs.map((c) => [c.sourceId, c]));
-    const facts = await adapterFacts(this.db);
     const priced: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; total: number | null }> = [];
     for (const { e, v } of rows) {
-      const planned = planSources({ category: e.category, maxAutomatedSources: Number.MAX_SAFE_INTEGER, adapters: facts, coveredSourceIds: await coveredSourceIds(this.db, e, facts), fixtureEvent: e.isFixture });
-      const offers: Offer[] = [];
-      for (const sourceId of planned.executable) {
-        const cfg = cfgBySource.get(sourceId);
-        const adapter = buildAdapter({ sourceId, implementation: (cfg?.implementation as AdapterActivation['implementation']) ?? 'not_integrated', enabled: cfg?.enabled ?? false, accessApprovalEvidence: cfg?.accessApprovalEvidence ?? null, monitoringAllowed: false }, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: this.env.TICKETMASTER_DISCOVERY_API_KEY ?? null, ticketmasterEnabled: this.env.TICKETMASTER_DISCOVERY_ENABLED, now: this.now });
-        const res = await adapter.search({ requestId: 'compare', revision: 0, eventId: e.id, providerEventId: null, quantity: q, hardConstraints: {} }).catch(() => null);
-        if (res) offers.push(...res.offers.filter((o) => o.eventId === e.id));
-      }
+      const offers = await this.checkedOffers(e, q);
       const best = compareOffers(offers, { quantity: q, togetherRequired: merged.togetherRequired, budgetTotalCents: null, excludeObstructedView: true, requireAccessible: !!merged.accessibilityNeeds, acceptableSections: null, eventStartAt: e.localStartAt.toISOString() }, e.id).eligible[0] ?? null;
       priced.push({ e, v, total: best ? best.offer.payableTotalCents : null });
     }
@@ -3354,6 +3376,98 @@ export class Concierge {
     const party = q === 1 ? 'for one' : `for ${countWordLower(q)}`;
     const others = priced.filter((p) => p !== top).map((p) => (p.total !== null ? `${formatUsd(p.total)} for ${who(p)}` : `nothing checked ${party} for ${who(p)}`));
     return { e: top.e, v: top.v, line: `Cheapest ${party}: ${who(top)}, ${formatUsd(top.total)} in total including the verified charges, against ${others.join('; ')}.` };
+  }
+
+  /** The listings we can verify for one game and party, from every source its plan can run (no budget applied here). */
+  private async checkedOffers(e: typeof t.events.$inferSelect, q: number): Promise<Offer[]> {
+    const configs = await this.db.select().from(t.adapterConfigs);
+    const cfgBySource = new Map(configs.map((c) => [c.sourceId, c]));
+    const facts = await adapterFacts(this.db);
+    const planned = planSources({ category: e.category, maxAutomatedSources: Number.MAX_SAFE_INTEGER, adapters: facts, coveredSourceIds: await coveredSourceIds(this.db, e, facts), fixtureEvent: e.isFixture });
+    const offers: Offer[] = [];
+    for (const sourceId of planned.executable) {
+      const cfg = cfgBySource.get(sourceId);
+      const adapter = buildAdapter({ sourceId, implementation: (cfg?.implementation as AdapterActivation['implementation']) ?? 'not_integrated', enabled: cfg?.enabled ?? false, accessApprovalEvidence: cfg?.accessApprovalEvidence ?? null, monitoringAllowed: false }, { fixtureOffers: this.deps.fixtureOffers ?? {}, fixtureBehavior: this.deps.fixtureBehavior, ticketmasterKey: this.env.TICKETMASTER_DISCOVERY_API_KEY ?? null, ticketmasterEnabled: this.env.TICKETMASTER_DISCOVERY_ENABLED, now: this.now });
+      const res = await adapter.search({ requestId: 'compare', revision: 0, eventId: e.id, providerEventId: null, quantity: q, hardConstraints: {} }).catch(() => null);
+      if (res) offers.push(...res.offers.filter((o) => o.eventId === e.id));
+    }
+    return offers;
+  }
+
+  /**
+   * "What other games can I see for that price?": every upcoming game of their team, checked against their budget with
+   * the same party size, togetherness and fee rules as a recommendation (compareOffers). The games our last email listed
+   * come first in the checking, then the rest of the schedule, up to BUDGET_GAMES_MAX. Listed: the games with seats for
+   * the party inside the budget, cheapest first; home games first when they're local (the game they picked was at
+   * home), with away games said as away. None inside it: the cheapest game and its price. Null when there's no team to
+   * search (the request falls through to the ordinary flow).
+   */
+  private async budgetGames(a: { req: typeof t.requests.$inferSelect; msg: typeof t.messages.$inferSelect; contact: typeof t.contacts.$inferSelect; merged: RequestExtraction; revision: number }): Promise<{ state: string; revision: number; extraction: RequestExtraction } | null> {
+    const { req, msg, contact, merged, revision } = a;
+    const now = this.now();
+    const q = merged.quantity && merged.quantity > 0 ? merged.quantity : null;
+    const budget = merged.budgetCents && q ? (merged.budgetBasis === 'per_ticket' ? merged.budgetCents * q : merged.budgetCents) : null;
+    if (!q || !budget) return null;
+    // Their team: a side of the game this request settled on (the one they named), else of the last list's games.
+    const anchorIds = [req.eventId, ...req.browseShown].filter((x): x is string => !!x);
+    const anchors = await this.eventRows(anchorIds);
+    const anchor = anchors.find(({ e }) => e.id === req.eventId) ?? anchors[0];
+    if (!anchor) return null;
+    const sides = [anchor.e.primaryEntityId, anchor.e.opponentEntityId].filter((x): x is string => !!x);
+    if (!sides.length) return null;
+    const ents = await this.db.select({ id: t.entities.id, name: t.entities.name, homeVenueId: t.entities.homeVenueId }).from(t.entities).where(inArray(t.entities.id, sides));
+    const named = merged.performerOrTeam ?? '';
+    const team = (named && ents.find((x) => namesSide(x.name, named) || namesSide(named, x.name))) ?? ents.find((x) => x.id === anchor.e.primaryEntityId) ?? ents[0];
+    if (!team) return null;
+    const schedule = await this.db.select({ e: t.events, v: t.venues }).from(t.events).innerJoin(t.venues, eq(t.venues.id, t.events.venueId))
+      .where(and(eq(t.events.status, 'scheduled'), gt(t.events.localStartAt, now), or(eq(t.events.primaryEntityId, team.id), eq(t.events.opponentEntityId, team.id))))
+      .orderBy(asc(t.events.localStartAt));
+    // The last email's games first, then the rest in date order; bounded, and what wasn't checked is said.
+    const listedFirst = [...schedule.filter(({ e }) => req.browseShown.includes(e.id) || e.id === req.eventId), ...schedule.filter(({ e }) => !req.browseShown.includes(e.id) && e.id !== req.eventId)];
+    const toCheck = listedFirst.slice(0, BUDGET_GAMES_MAX);
+    const isHome = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => (team.homeVenueId ? r.v.id === team.homeVenueId : r.e.primaryEntityId === team.id && r.e.isHome !== false);
+    const local = isHome(anchor);
+    const constraints = (e: typeof t.events.$inferSelect, cap: number | null) => ({ quantity: q, togetherRequired: merged.togetherRequired, budgetTotalCents: cap, excludeObstructedView: true, requireAccessible: !!merged.accessibilityNeeds, acceptableSections: null, eventStartAt: e.localStartAt.toISOString() });
+    const checked: Array<{ e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; fit: number | null; cheapest: number | null; home: boolean }> = [];
+    for (const r of toCheck) {
+      const offers = await this.checkedOffers(r.e, q);
+      const fit = compareOffers(offers, constraints(r.e, budget), r.e.id).eligible[0]?.offer.payableTotalCents ?? null;
+      const cheapest = compareOffers(offers, constraints(r.e, null), r.e.id).eligible[0]?.offer.payableTotalCents ?? null;
+      checked.push({ ...r, fit: fit !== null && fit <= budget ? fit : null, cheapest, home: isHome(r) });
+    }
+    const fits = checked.filter((c): c is typeof c & { fit: number } => c.fit !== null).sort((x, y) => (local ? Number(y.home) - Number(x.home) : 0) || x.fit - y.fit || x.e.localStartAt.getTime() - y.e.localStartAt.getTime());
+    const priced = checked.filter((c): c is typeof c & { cheapest: number } => c.cheapest !== null).sort((x, y) => x.cheapest - y.cheapest);
+    const shortTeam = titleCaseName(team.name.split(' ').slice(-1)[0] ?? team.name);
+    const party = q === 1 ? 'one ticket' : q === 2 ? 'a pair' : `${countWordLower(q)} together`;
+    const forParty = q === 1 ? '' : q === 2 ? ' for both' : ` for all ${countWordLower(q)}`;
+    const capText = merged.budgetBasis === 'per_ticket' && q > 1 ? `${formatUsd(merged.budgetCents!)} a ticket (${formatUsd(budget)}${forParty})` : formatUsd(budget);
+    const day = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect }) => new Intl.DateTimeFormat('en-US', { timeZone: r.v.timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(r.e.localStartAt);
+    const where = (r: { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSelect; home: boolean }) => (r.home ? `at ${r.v.name}` : `at ${r.v.name} (away)`);
+    const shown = fits.length ? fits.slice(0, 5) : priced.slice(0, 1);
+    const lines = shown.map((r) => `${day(r)}: ${readableTitle(r.e.name)} ${where(r)}, ${formatUsd(fits.length ? (r as { fit: number }).fit : r.cheapest!)}${forParty}, all-in`);
+    const headline = fits.length
+      ? `${countWords(fits.length).replace(/^./, (c) => c.toUpperCase())} ${shortTeam} game${fits.length === 1 ? ' has' : 's have'} ${party} at ${capText} or less, all-in${local && fits.some((f) => !f.home) && fits.some((f) => f.home) ? ', home games first' : ''}:`
+      : priced.length
+        ? `None of the next ${countWordLower(checked.length)} ${shortTeam} games has ${party} at ${capText} or less, all-in. The cheapest is ${readableTitle(priced[0]!.e.name)} on ${day(priced[0]!)}, ${where(priced[0]!)}: ${formatUsd(priced[0]!.cheapest)}${forParty}.`
+        : `I can’t check ${party} for the next ${shortTeam} games right now, so I can’t say which fit ${capText}.`;
+    // The list answers the price question; why each game is on a calendar isn't asked (only what was asked, #171).
+    const picks = await this.picksFor(shown, lines, [], { reasons: false });
+    const unchecked = listedFirst.length - toCheck.length;
+    const note = unchecked > 0 ? `I checked the next ${countWordLower(toCheck.length)} games; ${countWordLower(unchecked)} later one${unchecked === 1 ? '' : 's'} I haven’t checked yet.` : null;
+    const nextStep = shown.length ? `Reply with the date and I’ll send the seats.` : null;
+    const listed = shown.map(({ e }) => e.id);
+    await this.db.insert(t.requestVersions).values({ requestId: req.id, revision, brief: merged, sourceMessageIds: [msg.id], unresolvedFields: ['event'], createdBy: 'system' });
+    await this.db.update(t.requests).set({ currentRevision: revision, eventId: null, mode: 'find_options', browseShown: listed, updatedAt: now }).where(eq(t.requests.id, req.id));
+    if (revision > 1) await this.invalidateForRevision(req.id, revision);
+    await audit(this.db, { actor: 'system', action: 'request.budget_games_listed', entityKind: 'request', entityId: req.id, revision, diff: { teamId: team.id, budgetCents: budget, quantity: q, local, checked: checked.map((c) => ({ eventId: c.e.id, fit: c.fit, cheapest: c.cheapest, home: c.home })), unchecked } });
+    await this.transition(req.id, 'needs_clarification', 'budget_games_listed');
+    await this.queueSend({
+      messageClass: 'clarification', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact.emailOriginal,
+      subject: reSubject(msg.subject, `${shortTeam} games for ${formatUsd(budget)}`), template: 'games_ranked',
+      vars: { headline, picks, unpriced: note, nextStep, affiliate: picks.some((p) => p.affiliate), firstBadge: fits.length && !(local && fits.some((f) => !f.home)) ? 'Cheapest' : null },
+      inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null, dedupeKey: `budget_games:${req.id}:${revision}`,
+    });
+    return { state: 'needs_clarification', revision, extraction: merged };
   }
 
   /** The games this request has settled on, newest first, still scheduled and still to come. */
@@ -4316,6 +4430,32 @@ export class Concierge {
     if (!body) body = renderEvidenceOnly(packet, renderOpts);
     // Staff approve exactly what the customer gets, so the house style is applied before review, not at send.
     body = { textBody: noDashes(body.textBody), htmlBody: noDashes(body.htmlBody) };
+    // The same reply twice in a thread is never sent (live Oct 15, Rangers). A draft that repeats our last email is
+    // drafted once more, against what the customer wrote since; one that still repeats is held back at send and a
+    // person answers (queueSend).
+    if (this.deps.drafter.name !== 'fixture') {
+      const [lastSent] = await this.db.select({ body: t.sendIntents.bodyText }).from(t.sendIntents)
+        .where(and(eq(t.sendIntents.conversationId, req.conversationId), inArray(t.sendIntents.messageClass, [...REPLY_CLASSES]), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`))
+        .orderBy(desc(t.sendIntents.createdAt)).limit(1);
+      if (lastSent?.body && sameReply(lastSent.body, body.textBody)) {
+        const [latestIn] = await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
+        const model = this.env.modelName ?? 'rules';
+        const est = estimateUsdMicros(model, 3500, 600, 0, this.env.modelPrices);
+        try {
+          const r = await reserveBudget(this.db, { requestId: req.id, revision: args.revision, runId, jobName: 'draft', model, estimatedUsdMicros: est, limits: this.limits(), now });
+          const blocks = await this.deps.drafter.draft(packet, { quantity, mustAttend: brief.mustAttend, waitRiskTolerance: brief.waitRiskTolerance, togetherRequired: brief.togetherRequired, avoidRepeat: { previous: answerBody(lastSent.body), latest: latestIn?.text ?? '' } });
+          const usage = (this.deps.drafter as { lastUsage?: { inputTokens: number; outputTokens: number } | null }).lastUsage ?? null;
+          if (usage) await settleBudget(this.db, r.ledgerId, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, toolCalls: 0, actualUsdMicros: estimateUsdMicros(model, usage.inputTokens, usage.outputTokens, 0, this.env.modelPrices) });
+          const v = validateAndRender(packet, blocks, renderOpts);
+          if (v.ok) body = { textBody: noDashes(v.textBody), htmlBody: noDashes(v.htmlBody) };
+        } catch (e) {
+          // Out of budget or a failed call: the first draft stands, and the send-time guard decides. A call that never
+          // reached the model keeps no reservation (the same rule as the draft loop above).
+          if (e instanceof ModelOutputError && (e.kind === 'transport' || e.kind === 'rejected')) await releaseBudget(this.db, { requestId: req.id, revision: args.revision, model, estimatedUsdMicros: est, jobName: 'draft' }).catch(() => undefined);
+        }
+        await audit(this.db, { actor: 'system', action: 'recommendation.redrafted_repeat', entityKind: 'request', entityId: req.id, revision: args.revision, diff: { stillRepeats: sameReply(lastSent.body, body.textBody) } });
+      }
+    }
 
     const isNoResult = !best && alternatives.length === 0;
     const subject = noDashes(isNoResult ? `Ticket Guy: what we found for ${eventLabel(event, venue)}` : `Ticket Guy: ${quantity} for ${event.name}`);
@@ -4512,7 +4652,7 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   // Outbound
   // ---------------------------------------------------------------------------------------------
-  async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean }> {
+  async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean; repeatBlocked?: true }> {
     // Loaded per send, never cached: staff copy must take effect at the next send, like the kill switches.
     const [overrides, brand] = await Promise.all([loadActiveTemplates(this.db), loadBrandSignature(this.db)]);
     // The full signature introduces us once per conversation; after that a thread signs "— Ticket Guy".
@@ -4539,6 +4679,22 @@ export class Concierge {
       headers['References'] = buildReferencesChain([...(priorRefs[0]?.r ?? '').matchAll(/<[^<>\s]+>/g)].map((m) => m[0]), inReplyTo);
     }
     if (a.containsFixtureData) headers['X-TicketGuy-Fixture'] = 'true';
+    // Never the same reply twice in a thread (live Oct 15, Rangers): an answer that repeats the last one we sent, same
+    // pick in the same words, is not sent. Research already redrafted it against their latest message; if it still
+    // repeats, a person answers instead, so the customer gets neither the same email again nor silence.
+    if (a.requestId && NO_REPEAT_CLASSES.has(a.messageClass) && (this.deps.repeatGuard ?? this.deps.drafter.name !== 'fixture')) {
+      const [last] = await this.db.select({ body: t.sendIntents.bodyText }).from(t.sendIntents)
+        .where(and(eq(t.sendIntents.conversationId, a.conversationId), inArray(t.sendIntents.messageClass, [...REPLY_CLASSES]), sql`${t.sendIntents.state} not in ('blocked', 'suppressed', 'failed')`))
+        .orderBy(desc(t.sendIntents.createdAt)).limit(1);
+      if (last?.body && sameReply(last.body, rendered.text)) {
+        const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, a.requestId));
+        const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, a.contactId));
+        const [msg] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, a.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
+        await audit(this.db, { actor: 'system', action: 'send.repeat_blocked', entityKind: 'request', entityId: a.requestId, revision: a.revision ?? null, diff: { messageClass: a.messageClass, dedupeKey: a.dedupeKey ?? null } });
+        if (req && contact && msg) await this.parkForStaff({ req, revision: a.revision ?? req.currentRevision, reason: 'repeat_reply_blocked', contact, msg });
+        return { id: '', created: false, repeatBlocked: true };
+      }
+    }
     return await this.db.transaction(async (tx) => {
       const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
       if (r.created) await enqueueOutbox(tx, { eventType: 'email.send_requested', eventKey: `send:${r.id}`, entityId: r.id, payload: { sendIntentId: r.id }, now: this.now() });

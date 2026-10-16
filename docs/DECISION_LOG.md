@@ -1620,7 +1620,33 @@ Issue #179. Recommendation emails were text plus the ticket-brief card. Team ban
 - `market-budget-1010`: the backfill is bounded by its own allowance.
 - `take-charge-1003`: `pickLinksFor` takes the stored ids.
 
-## 84. A customer's request always gets its listings read, and a reply always has a way forward (Oct 15)
+## 84. "Which other games fit my budget?" is answered across the schedule; a drafted answer never goes out twice (Oct 15)
+
+Live thread, Oct 15 14:06–14:21 ET (Rangers):
+1. The customer picked the Nov 16 Montreal game: "2 tickets. Max $150".
+2. We sent a $246 pair over budget and asked "Would you go up to about $246, or should I look at other seats or another date?".
+3. They wrote "yes what other games can I see for that price? total yes." and got the identical email back.
+
+**Decisions.**
+- **A new question overrides the one we left open.** "Yes" followed by a question is not a yes to our price. "Total" answers per-ticket-or-total; the question is the request.
+- **Budget search across games.** "What other games can I see for that price?", "any games under $150?" or "which dates fit my budget?" checks every upcoming game of their team:
+  - It uses the same party size, togetherness and fee rules as a recommendation (`compareOffers` over the listings each game's plan can verify). An obstructed pair never counts.
+  - The last email's games are checked first, then the rest of the schedule, up to 10 games. What wasn't checked is said.
+  - The reply lists the games with seats for the party at or under the budget, all-in, cheapest first. When the game they picked was at home (they're local), home games come first and away games are marked "(away)".
+  - If none fit, the reply names the cheapest game and its price.
+  - It is one list and one next step ("Reply with the date and I'll send the seats"), and the next reply picks from that list.
+- **Never the same drafted answer twice.**
+  - A recommendation or no-result draft is a repeat when it has the same prices and links as the last email in the thread and at least 90% of the same words.
+  - A repeat is redrafted once by the model drafter, shown the previous email and the customer's latest message as the thing to answer.
+  - One that still repeats is not sent: a person answers (manual attention, holding reply), so the customer gets neither the same email nor silence.
+  - The block applies wherever the drafter is a model (production, the eval). With the rules drafter it stays off: it can't reword, and a restated question rightly gets the same facts again (TGQA-R6 14, R8 S01).
+  - Clarifications are not held back. The same question answered the same way is right (TGQA-R6 25), and a question asked round after round already goes to a person after three rounds.
+
+**Eval:** `rangers-budget-other-games` (core). Steps 3 and 4 are the customer's exact words; steps 1 and 2 are paraphrased. The eval world gains four November Rangers games (Flyers $138, Islanders away $120, Canadiens $246, Sabres $149 plus an obstructed $110 pair).
+
+**Verified:** `tests/acceptance/budget-games-oct15.test.ts` and `tests/unit/repeat-reply.test.ts`.
+
+## 85. A customer's request always gets its listings read, and a reply always has a way forward (Oct 15)
 
 **Why.** A live reply for Rangers vs Ducks (2 tickets, $150 total) had:
 - no listing and no link;
@@ -1647,7 +1673,7 @@ Background tracking had spent the day's SeatData allowance, so the request could
   - The question names the other game: "…or should I look at Oct 26 instead?"
 - **Eval.**
   - New scenario `over-budget-way-forward`, with checks `has_a_link` and `has_next_step`. They apply where a step sets `hasLink` or `hasNextStep`.
-  - The eval world's Ducks and Kings games are dated Nov 16 and 23, so the October Rangers scenarios ("this week", "in October") see the same games as before.
+  - The eval world's Ducks and Kings games are dated Nov 18 and 25, so the October Rangers scenarios ("this week", "in October") see the same games as before.
 
 **Not seen here:** the garbled headline itself; the live email wasn't available. The new headline is built from the outcome and the budget, not from the market figures.
 

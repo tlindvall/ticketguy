@@ -21,8 +21,21 @@ export const CORE: Scenario[] = [
   { id: 'nickname-typo', capability: 'messy-input', steps: [{ text: '2 NYR tix for the preseason game vs the isles pls', expect: { eventId: EV.rangersPreseason, quantity: 2 } }] },
   // Live email, Oct 15 (Oct 19 vs the Ducks): no listing, no link, 15-hour-old prices, a garbled headline. Nothing fits
   // $150 for this game; the closest seats, how far over, and the Kings game a week later that fits. The world's dates are
-  // a month later (Nov 16 and 23) so the October Rangers scenarios see the same games.
-  { id: 'over-budget-way-forward', capability: 'recommendation', tags: ['live'], now: '2026-11-12T17:00:00Z', steps: [{ text: 'Rangers vs Ducks, 2 tickets, $150 total', expect: { eventId: EV.rangersDucks, quantity: 2, budgetCents: 15000, hasLink: true, hasNextStep: true, mustMentionAny: ['Nov 23', 'November 23'] } }] },
+  // a month later (Nov 18 and 25) so the October Rangers scenarios see the same games.
+  { id: 'over-budget-way-forward', capability: 'recommendation', tags: ['live'], now: '2026-11-12T17:00:00Z', steps: [{ text: 'Rangers vs Ducks, 2 tickets, $150 total', expect: { eventId: EV.rangersDucks, quantity: 2, budgetCents: 15000, hasLink: true, hasNextStep: true, mustMentionAny: ['Nov 25', 'November 25'] } }] },
   // Live email, Oct 13 (that run was hit by the tracing outage).
   { id: 'next-game-question', capability: 'event-discovery', tags: ['live'], steps: [{ text: 'when is the next rangers game in new york?', expect: { eventId: EV.rangersPreseason, mustMentionAny: ['Oct 3', 'October 3', '10/3'] } }] },
+  // Live thread, Oct 15 14:06-14:21 ET. Steps 3 and 4 are the customer's exact words; steps 1 and 2 are paraphrased
+  // (upcoming Rangers games, then the Nov 16 Montreal game). We sent a $246 pair over the $150 budget with "Would you
+  // go up to about $246…?", and answered step 4 with the identical email. "total yes" answers per-ticket-vs-total; the
+  // question is the request: which other games have a pair at $150 or less all-in.
+  {
+    id: 'rangers-budget-other-games', capability: 'budget', tags: ['live'], now: '2026-10-15T18:06:00Z',
+    steps: [
+      { text: 'what rangers games are coming up?' },
+      { text: 'Nov 16 vs Montreal', expect: { eventId: EV.rangersCanadiens } },
+      { text: '2 tickets. Max $150', expect: { eventId: EV.rangersCanadiens, quantity: 2, budgetCents: 15000 } },
+      { text: 'yes what other games can I see for that price? total yes.', expect: { quantity: 2, budgetCents: 15000, budgetBasis: 'whole_party', mustMentionAll: ['re:Flyers', 're:Sabres', 're:\\$138', 're:\\$149'], forbid: ['re:go up to about \\$246'] } },
+    ],
+  },
 ];

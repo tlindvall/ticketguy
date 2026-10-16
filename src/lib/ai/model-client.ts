@@ -213,7 +213,9 @@ export class ModelDrafter implements Drafter {
   async draft(packet: AdvicePacket, ctx: DraftContext): Promise<ResponseBlocks> {
     const claims = packet.claimRecords.filter((c) => c.customerVisible).map((c) => `${c.id} [${c.kind}]: ${c.text}`).join('\n');
     const input = `Decision: ${packet.decision}\nReason codes: ${packet.reasonCodes.join(', ')}\nAbstentions: ${packet.abstentions.join(', ') || 'none'}\nCustomer context: quantity=${ctx.quantity}, together=${ctx.togetherRequired ?? 'unknown'}, mustAttend=${ctx.mustAttend ?? 'unknown'}, waitRiskTolerance=${ctx.waitRiskTolerance ?? 'unknown'}\nFollow-up questions the server adds at the end: ${(packet.followUps ?? []).join(' | ') || 'none'}\nAvailable claims:\n${claims}`;
-    const { output, usage } = await this.client.parseStructured({ model: this.model, instructions: DRAFT_INSTRUCTIONS, input, schema: ResponseBlocksSchema, schemaName: 'response_blocks', maxOutputTokens: DRAFT_MAX_OUTPUT_TOKENS, effort: this.effort });
+    // A first draft that repeated our last email: the same reply twice in a thread is never sent (live Oct 15, Rangers).
+    const repeat = ctx.avoidRepeat ? `\n\nYour previous email to this customer already said:\n${ctx.avoidRepeat.previous.slice(0, 2000)}\n\nTheir latest message: ${ctx.avoidRepeat.latest.slice(0, 1000)}\nThe first draft repeated that previous email. Write the reply to their latest message: answer what it asks, from the claims, without restating the previous email.` : '';
+    const { output, usage } = await this.client.parseStructured({ model: this.model, instructions: DRAFT_INSTRUCTIONS, input: input + repeat, schema: ResponseBlocksSchema, schemaName: 'response_blocks', maxOutputTokens: DRAFT_MAX_OUTPUT_TOKENS, effort: this.effort });
     this.lastUsage = usage;
     return ResponseBlocksSchema.parse(output);
   }

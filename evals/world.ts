@@ -46,7 +46,7 @@ export const ENT = {
   bruins: uid(100), devils: uid(101), celtics: uid(102), nets: uid(103), heat: uid(104), mets: uid(105), phillies: uid(106),
   nyGiants: uid(107), cowboys: uid(108), lakers: uid(109), warriors: uid(110), clippers: uid(111), suns: uid(112),
   kings: uid(113), ducks: uid(114), rams: uid(115), seahawks: uid(116), dodgers: uid(117), sfGiants: uid(118),
-  rockies: uid(119), spurs: uid(120), txRangers: uid(121),
+  rockies: uid(119), spurs: uid(120), txRangers: uid(121), canadiens: uid(122), flyers: uid(123), sabres: uid(124),
   hamilton: uid(150), wicked: uid(151), billie: uid(152), olivia: uid(153), bruno: uid(154),
 } as const;
 
@@ -58,9 +58,11 @@ export const EV = {
   dodgersRockies: uid(220), dodgersGiants: uid(221), billieForum: uid(222),
   kingsJan9: uid(230), lakersWarriors: uid(231), clippersSuns: uid(232), kingsDucks: uid(233), wickedJan14: uid(234),
   lakersCeltics: uid(235), ramsSeahawks: uid(236), brunoForum: uid(237), lakersSpurs: uid(238),
+  rangersFlyers: uid(240), islandersRangersNov: uid(241), rangersCanadiens: uid(242), rangersSabres: uid(243),
   // Oct 15 live thread (Rangers vs Ducks, $150 for two): nothing fits here, but the Kings game a week later does. Dated
-  // in November so the Rangers-week scenarios ("this week", "in October") see the same games as before.
-  rangersDucks: uid(240), rangersKings: uid(241),
+  // in November so the Rangers-week scenarios ("this week", "in October") see the same games as before, and off the
+  // November dates #189's budget-across-games scenario uses (Nov 16 there is Montreal).
+  rangersDucks: uid(244), rangersKings: uid(245),
 } as const;
 
 const NY = 'America/New_York';
@@ -104,6 +106,9 @@ const ENTITIES: E[] = [
   { id: ENT.spurs, kind: 'team', name: 'San Antonio Spurs', league: 'NBA' },
   // No events on file: "Rangers" alone is ambiguous between the NHL and MLB teams.
   { id: ENT.txRangers, kind: 'team', name: 'Texas Rangers', league: 'MLB' },
+  { id: ENT.canadiens, kind: 'team', name: 'Montreal Canadiens', league: 'NHL' },
+  { id: ENT.flyers, kind: 'team', name: 'Philadelphia Flyers', league: 'NHL' },
+  { id: ENT.sabres, kind: 'team', name: 'Buffalo Sabres', league: 'NHL' },
   { id: ENT.hamilton, kind: 'production', name: 'Hamilton' },
   { id: ENT.wicked, kind: 'production', name: 'Wicked' },
   { id: ENT.billie, kind: 'performer', name: 'Billie Eilish' },
@@ -121,9 +126,14 @@ const EVENTS: Ev[] = [
   { id: EV.hamiltonEvening, name: 'Hamilton', category: 'theater', subtype: 'evening', venueId: V.rodgers, primaryEntityId: ENT.hamilton, localStartAt: at('2026-10-11T00:00:00Z') },
   { id: EV.rangersBruins, name: 'New York Rangers vs. Boston Bruins', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.bruins, isHome: true, localStartAt: at('2026-10-22T23:00:00Z') },
   { id: EV.rangersDevils, name: 'New York Rangers vs. New Jersey Devils', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.devils, isHome: true, localStartAt: at('2026-10-24T23:00:00Z') },
-  { id: EV.rangersDucks, name: 'New York Rangers vs. Anaheim Ducks', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.ducks, isHome: true, localStartAt: at('2026-11-16T23:00:00Z') },
-  { id: EV.rangersKings, name: 'New York Rangers vs. Los Angeles Kings', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.kings, isHome: true, localStartAt: at('2026-11-23T23:00:00Z') },
+  { id: EV.rangersDucks, name: 'New York Rangers vs. Anaheim Ducks', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.ducks, isHome: true, localStartAt: at('2026-11-18T23:00:00Z') },
+  { id: EV.rangersKings, name: 'New York Rangers vs. Los Angeles Kings', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.kings, isHome: true, localStartAt: at('2026-11-25T23:00:00Z') },
   { id: EV.islandersRangers, name: 'New York Islanders vs. New York Rangers', category: 'nhl', subtype: 'regular_season', venueId: V.ubs, primaryEntityId: ENT.islanders, opponentEntityId: ENT.rangers, isHome: true, localStartAt: at('2026-10-27T23:30:00Z') },
+  // November Rangers games for the budget search across games (live Oct 15: "what other games can I see for that price?").
+  { id: EV.rangersFlyers, name: 'New York Rangers vs. Philadelphia Flyers', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.flyers, isHome: true, localStartAt: at('2026-11-11T00:00:00Z') },
+  { id: EV.islandersRangersNov, name: 'New York Islanders vs. New York Rangers', category: 'nhl', subtype: 'regular_season', venueId: V.ubs, primaryEntityId: ENT.islanders, opponentEntityId: ENT.rangers, isHome: true, localStartAt: at('2026-11-15T00:00:00Z') },
+  { id: EV.rangersCanadiens, name: 'New York Rangers vs. Montreal Canadiens', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.canadiens, isHome: true, localStartAt: at('2026-11-17T00:00:00Z') },
+  { id: EV.rangersSabres, name: 'New York Rangers vs. Buffalo Sabres', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.sabres, isHome: true, localStartAt: at('2026-11-21T00:00:00Z') },
   { id: EV.knicksCeltics, name: 'New York Knicks vs. Boston Celtics', category: 'nba', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.knicks, opponentEntityId: ENT.celtics, isHome: true, localStartAt: at('2026-10-28T23:30:00Z') },
   { id: EV.netsHeat, name: 'Brooklyn Nets vs. Miami Heat', category: 'nba', subtype: 'regular_season', venueId: V.barclays, primaryEntityId: ENT.nets, opponentEntityId: ENT.heat, isHome: true, localStartAt: at('2026-10-30T23:30:00Z') },
   { id: EV.knicksNets, name: 'New York Knicks vs. Brooklyn Nets', category: 'nba', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.knicks, opponentEntityId: ENT.nets, isHome: true, localStartAt: at('2026-11-01T23:00:00Z') },
@@ -195,6 +205,12 @@ function baseWorldOffers(): Record<string, Offer[]> {
     [EV.rangersDucks]: [L(EV.rangersDucks, 'rdk-2-upper-312', 2, 290, 'upper', '312', 'H'), L(EV.rangersDucks, 'rdk-2-upper-305', 2, 330, 'upper', '305', 'B')],
     [EV.rangersKings]: [L(EV.rangersKings, 'rk-2-upper-318', 2, 140, 'upper', '318', 'F')],
     [EV.islandersRangers]: [L(EV.islandersRangers, 'ir-2-upper-211', 2, 280, 'upper', '211', 'F'), L(EV.islandersRangers, 'ir-4-lower-114', 4, 900, 'lower', '114', 'K')],
+    // Totals for two, all-in: Nov 16 Montreal's cheapest pair is $246 (the live thread); three other games have a pair
+    // at $150 or less, one of them away (Islanders' home), and Buffalo's cheaper pair is obstructed so doesn't count.
+    [EV.rangersFlyers]: [L(EV.rangersFlyers, 'rf-2-upper-302', 2, 138, 'upper', '302', 'K'), L(EV.rangersFlyers, 'rf-2-lower-110', 2, 410, 'lower', '110', 'E')],
+    [EV.islandersRangersNov]: [L(EV.islandersRangersNov, 'irn-2-upper-304', 2, 120, 'upper', '304', 'L')],
+    [EV.rangersCanadiens]: [L(EV.rangersCanadiens, 'rc-2-upper-214', 2, 246, 'upper', '214', 'F'), L(EV.rangersCanadiens, 'rc-2-lower-108', 2, 480, 'lower', '108', 'H')],
+    [EV.rangersSabres]: [L(EV.rangersSabres, 'rs-2-upper-225', 2, 149, 'upper', '225', 'H'), L(EV.rangersSabres, 'rs-2-upper-229-obs', 2, 110, 'upper', '229', 'B', { restrictions: ['obstructed_view'] })],
     [EV.knicksCeltics]: [
       L(EV.knicksCeltics, 'kc-2-upper-210', 2, 420, 'upper', '210', 'J'),
       L(EV.knicksCeltics, 'kc-2-lower-102', 2, 1100, 'lower', '102', 'E'),
