@@ -109,7 +109,7 @@ describe('the Sep 30 live QA (post-#55), replayed exactly', () => {
   it('M01-F1: buying six becomes allowed, the same offers are judged again: B at $480, $105 less than D (R4-B04)', () => {
     const body = all('M01-F1');
     expect(body).toContain('Offer B wins this one: $480 for six tickets, fees included. That’s $105 less than Offer D.');
-    expect(body).not.toMatch(/I haven’t been able to check these against any seats|Found seats you like/);
+    expect(body).not.toMatch(/I haven’t been able to check these against any seats|I don’t have seats to recommend yet that meet|Found seats you like/);
   });
 
   it('M03: none fits, each for its own reason, and the smallest change is named; M03-F1 at $230 picks A, keeping noon (R4-B02)', () => {
