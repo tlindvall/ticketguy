@@ -20,7 +20,7 @@ describe('the acknowledgment reads like a person jotting down the request', () =
 
   it('says what happens next, personally, and promises no review and no purchase line', () => {
     const r = renderTemplate('acknowledgment', { eventLabel: 'x', knownFacts: facts }, { appUrl: 'https://ticketguy.now', postalAddress: null, signature: 'full' });
-    expect(r.text.startsWith("Hey,\n\nGot it. Here's what I have:\n• Game: New York Rangers vs. Tampa Bay Lightning")).toBe(true);
+    expect(r.text.startsWith("Hey,\n\nHere's what I have:\n• Game: New York Rangers vs. Tampa Bay Lightning")).toBe(true);
     expect(r.text).toContain("I'll look at how the tickets are trading and come back to you shortly. If anything above is off, just reply.");
     for (const gone of ['a person checks every answer', 'No purchases happen', 'What we understood']) expect(r.text).not.toContain(gone);
   });

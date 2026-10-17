@@ -10,6 +10,7 @@ import * as t from '@/lib/db/schema';
 import { Concierge } from '@/lib/intake/pipeline';
 import { ModelDrafter, ModelExtractor, ModelListingReader } from '@/lib/ai/model-client';
 import { OpenAiClient } from '@/lib/ai/openai';
+import { ModelAnswerJudge } from '@/lib/email/answer-gate';
 import { leaseDueOutbox, markDispatched } from '@/lib/intake/outbox';
 import { FIXTURE_NOW } from '@/lib/fixtures';
 import type { Offer, RequestExtraction } from '@/lib/domain/types';
@@ -144,6 +145,8 @@ export async function runThread(s: Scenario, openaiKey: string, ai?: ThreadAi): 
     const c = new Concierge({
       db: h.db, env: e, clock: () => now, emailProvider: null, fixtureOffers: offers,
       ...(ai ?? { extractor: new ModelExtractor(client!, model, effort), drafter: new ModelDrafter(client!, model, effort), listingReader: new ModelListingReader(client!, model, effort) }),
+      // The answer gate runs as in production: a reply it holds reaches the customer as "a person is picking this up".
+      ...(ai ? {} : { answerJudge: new ModelAnswerJudge(client!, model, effort) }),
     });
     const from = `eval-${++threadNo}-${s.id}@customer.example`;
     let prev: ReturnType<typeof inbound> | null = null;

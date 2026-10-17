@@ -25,7 +25,7 @@ const REVIEWED_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We compar
 // no live customer saw it (audit 2026-10-10, critic: the scope line lived only in the reviewed footers).
 const AUTOMATED_FOOTER = 'AI-assisted ticket advice. We never buy, hold or resell tickets.';
 /** Templates that are only ever sent after a person approved that exact message. */
-const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert', 'watch_alert_market']);
+const REVIEWED_TEMPLATES: ReadonlySet<string> = new Set(['raw', 'watch_alert', 'watch_alert_market', 'staff_reply']);
 // A market heads-up has no link by design, so its footer doesn't promise one (PW QA wave 1).
 const MARKET_ALERT_FOOTER = 'Ticket Guy is AI-assisted and human-reviewed. We never buy, hold or resell tickets. Reply to this email any time.';
 const disclosureFor = (name: string) => (name === 'watch_alert_market' ? MARKET_ALERT_FOOTER : REVIEWED_TEMPLATES.has(name) ? REVIEWED_FOOTER : AUTOMATED_FOOTER);
@@ -137,7 +137,7 @@ function renderBody(
       const known = (v.knownFacts as string[]) ?? [];
       const assumed = (v.assumptions as string[] | undefined) ?? [];
       // A person's quick note back: what I have, laid out; what I'll do next. It promises no prices and no review.
-      const intro = known.length ? "Got it. Here's what I have:" : `Got it. I'm looking into ${String(v.eventLabel ?? 'your request')}.`;
+      const intro = known.length ? "Here's what I have:" : `I'm looking into ${String(v.eventLabel ?? 'your request')}.`;
       const next = "I'll look at how the tickets are trading and come back to you shortly. If anything above is off, just reply.";
       const country = v.countryUnconfirmed ? COUNTRY_CHECK_LINE : '';
       const paras = ['Hey,', known.length ? `${intro}\n${list(known)}` : intro, ...assumed, next, country].filter(Boolean);
@@ -379,6 +379,14 @@ function renderBody(
       const stop = 'Reply “stop” to end this watch.';
       const i = lead.indexOf(total);
       return wrap([lead, fit, limits, stop], [`<p style="margin:0 0 18px;">${esc(lead.slice(0, i))}<strong>${esc(total)}</strong>${esc(lead.slice(i + total.length))}</p>`, para(fit), para(limits), para(stop)]);
+    }
+    // A reply the answer gate held, sent by a person exactly as it was drafted: its own signature and footer are already in it.
+    case 'held_as_written':
+      return { text: String(v.text), html: String(v.html) };
+    // A reply a person wrote or edited after the answer gate held the draft: their paragraphs, the usual sign-off.
+    case 'staff_reply': {
+      const paras = String(v.body).split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
+      return wrap(paras, paras.map(block));
     }
     case 'raw':
     case 'raw_auto':

@@ -200,7 +200,7 @@ const ASKS: Record<string, RegExp> = {
 // the advice email (email-layout-0102 puts it first), the clarification's "... Got it." play-back, and its "That's <event>"
 // line naming the event it settled on.
 const HEADER = /^[^\n]+\n[^\n]*(?: \u00b7 |, at \d)/;
-const ECHO = /Got it\.$/;
+const ECHO = /^You’re after .+\.$|Got it\.$/;
 const SETTLED_LINE = /^(?:That\u2019s|I've gone with|I\u2019ve gone with) .+\.(?: Tell me if you meant a different one\.)?$/;
 const notes: string[] = [];
 /**

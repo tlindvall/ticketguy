@@ -22,6 +22,6 @@ describe('not playing where they asked, said as a person would', () => {
 
   it('a month they named is kept; "soon" is never played back', () => {
     expect(elsewhereNote('Metallica', [show('2026-11-20T00:00:00Z')], x({ dateExpression: 'in November' }), now)).toMatch(/^Metallica isn’t playing in New York in November\. The closest show is at Mohegan Sun Arena in Uncasville/);
-    expect(acknowledgementLine(x({ quantity: 2 }))).toBe('Two Metallica tickets. Got it.');
+    expect(acknowledgementLine(x({ quantity: 2 }))).toBe('You’re after two Metallica tickets.');
   });
 });

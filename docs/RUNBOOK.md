@@ -95,15 +95,26 @@ Defaults: raw text/attachments 30 days (`messages.purge_at`, `attachments.purge_
 
 ## Requests waiting on a person
 
-A request lands in `manual_attention` when three rounds of questions don't settle it, or when the model can't
-read the message (a refusal, malformed output, or the AI budget running out). Two things happen:
+A request lands in `manual_attention` when three rounds of questions don't settle it, when the model can't
+read the message (a refusal, malformed output, or the AI budget running out), or when the answer gate holds its
+reply (below). Two things happen:
 
 - **The customer** gets one reply per request: "this one needs a person, so I've passed it to the team",
   with the staffed hours (`STAFFED_HOURS_*`).
 - **Staff** get one email per request revision, sent to `STAFF_ALERT_ADDRESSES`, or to every
   `STAFF_EMAIL_ALLOWLIST` address when that is empty. It carries the reason and a link to the request, and
-  never the customer's words. It is skipped, with an audit row, when sending is off, `all_outbound` is
-  stopped, or someone already moved the request on.
+  never the customer's words, except for a held reply (below). It is skipped, with an audit row, when sending is
+  off, `all_outbound` is stopped, or someone already moved the request on.
+
+**Held replies (answer gate, DECISION_LOG #86).** Every reply is checked before it is sent: it must not carry a line we
+never send ("haven't been able to check", "Nothing I can check automatically", "Got it.", a feed name in capitals), and a
+reply to a customer's message must answer it and give a next step (a model's yes/no). A reply that fails is held as a
+blocked send, never dispatched; the request goes to `manual_attention`. The staff alert says why it was held and carries
+the customer's latest message and the held draft. On the request page, **Reply held before sending** shows the draft:
+send it unchanged (the original email, links and cards included), edit it, or write your own; it goes out in their
+thread as a staff reply, signed and with the human-reviewed footer. The same box answers any request waiting on a
+person. `send.answer_gate_held` in `audit_log` lists every hold with its codes; the model's reason is on the blocked
+send's `last_error`.
 
 The inbox shows a red banner while any request is waiting. Requests that were stuck before alerts existed:
 run `pnpm tsx scripts/alert-stuck-requests.ts` to list them, and add `--apply` to alert staff. Their

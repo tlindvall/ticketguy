@@ -169,13 +169,13 @@ describe('the clarification email', () => {
   });
 
   it('plays the request back in one sentence', () => {
-    expect(acknowledgementLine(brief({ performerOrTeam: 'rangers', quantity: 2, dateExpression: 'next week', budgetCents: 20000, budgetBasis: 'whole_party' }))).toBe('Two Rangers tickets next week, up to $200 total. Got it.');
-    expect(acknowledgementLine(brief({ performerOrTeam: 'Knicks', quantity: 1, budgetCents: 15000, budgetBasis: 'per_ticket' }))).toBe('One Knicks ticket, up to $150 each. Got it.');
-    expect(acknowledgementLine(brief({ performerOrTeam: 'Dua Lipa', quantity: 12, togetherRequired: true }))).toBe('12 Dua Lipa tickets together. Got it.');
+    expect(acknowledgementLine(brief({ performerOrTeam: 'rangers', quantity: 2, dateExpression: 'next week', budgetCents: 20000, budgetBasis: 'whole_party' }))).toBe('You’re after two Rangers tickets next week, up to $200 total.');
+    expect(acknowledgementLine(brief({ performerOrTeam: 'Knicks', quantity: 1, budgetCents: 15000, budgetBasis: 'per_ticket' }))).toBe('You’re after one Knicks ticket, up to $150 each.');
+    expect(acknowledgementLine(brief({ performerOrTeam: 'Dua Lipa', quantity: 12, togetherRequired: true }))).toBe('You’re after 12 Dua Lipa tickets together.');
     expect(acknowledgementLine(brief({ quantity: null }))).toBe('Thanks for getting in touch.');
     // A game reads as a game, with the matchup's "vs" left lower case.
     expect(acknowledgementLine(brief({ performerOrTeam: 'new york rangers vs tampa bay lightning', quantity: 2, togetherRequired: true, dateExpression: 'oct 1st', budgetCents: 40000, budgetBasis: 'whole_party' }))).toBe(
-      'Two tickets together for New York Rangers vs Tampa Bay Lightning oct 1st, up to $400 total. Got it.',
+      'You’re after two tickets together for New York Rangers vs Tampa Bay Lightning oct 1st, up to $400 total.',
     );
   });
 

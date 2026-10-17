@@ -30,7 +30,7 @@ describe('TGQA-R6 API QA (30 Sep 2026), replayed through test mode', () => {
     expect(turn('08', 2)).toContain("Preseason: New York Knicks v Philadelphia 76ers at Xfinity Mobile Arena, Philadelphia, Mon, Oct 5, 7:00 PM EDT doesn't fit: it's in Philadelphia, not at Madison Square Garden.");
     expect(turn('08', 2)).toContain('On another date, the next one that fits everything else you said is Preseason: New York Knicks v Washington Wizards at Madison Square Garden, New York, Thu, Oct 8, 7:30 PM EDT. Want that one instead?');
     expect(turn('08', 3)).toMatch(/^Hey Jordan,\n\nPreseason: New York Knicks v Washington Wizards\nMadison Square Garden, New York · Thursday, October 8/);
-    for (const n of [1, 2, 3]) expect(turn('08', n)).toContain(n === 2 ? 'Two New York Knicks tickets' : 'a wheelchair space with a companion seat beside it and a step-free route');
+    for (const n of [1, 2, 3]) expect(turn('08', n)).toContain(n === 2 ? 'two New York Knicks tickets' : 'a wheelchair space with a companion seat beside it and a step-free route');
     expect(all('08')).not.toMatch(/Buy on|Event page on/);
     expect(turn('08', 3)).not.toContain('Philadelphia');
   });

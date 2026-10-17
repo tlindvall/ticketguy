@@ -323,7 +323,7 @@ export type Env = Omit<z.infer<typeof rawSchema>, 'APP_URL'> & {
  * Mirrors MessageClass in @/lib/email/send-gate. Declared here rather than imported: send-gate imports Env,
  * and the cycle would leave one of the two undefined at module-evaluation time. A test pins the two in step.
  */
-export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'event_alert', 'follow_up', 'marketing', 'verification'] as const;
+export const MESSAGE_CLASSES = ['acknowledgment', 'clarification', 'recommendation', 'no_result', 'watch_confirmation', 'watch_alert', 'event_alert', 'follow_up', 'marketing', 'verification', 'staff_reply'] as const;
 export type MessageClass = (typeof MESSAGE_CLASSES)[number];
 
 export class ConfigurationError extends Error {

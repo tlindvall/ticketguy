@@ -1,3 +1,4 @@
+import type { AnswerJudge } from '@/lib/email/answer-gate';
 import type { ListingReader } from '@/lib/ai/listing-evidence';
 import { openDatabase, type DbHandle } from '@/lib/db';
 import { applyMigrations } from '@/lib/db/migrate';
@@ -38,8 +39,8 @@ export function testEnv(over: Record<string, string> = {}): Env {
   return parseEnv({ NODE_ENV: 'test', APP_MODE: 'fixture', ...(process.env.SD_MODE ? { SERVICE_POLICY_MODE: process.env.SD_MODE } : {}), ...over });
 }
 
-export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor; listingReader?: ListingReader; repeatGuard?: boolean } = {}) {
-  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS, listingReader: opts.listingReader, repeatGuard: opts.repeatGuard });
+export function makeConcierge(h: DbHandle, opts: { env?: Env; provider?: EmailProvider | null; now?: () => Date; extractor?: Extractor; listingReader?: ListingReader; repeatGuard?: boolean; answerGate?: boolean; answerJudge?: AnswerJudge } = {}) {
+  return new Concierge({ db: h.db, env: opts.env ?? testEnv(), extractor: opts.extractor ?? new FixtureExtractor(), drafter: new FixtureDrafter(), clock: opts.now ?? (() => FIXTURE_NOW), emailProvider: opts.provider === undefined ? null : opts.provider, fixtureOffers: FIXTURE_OFFERS, listingReader: opts.listingReader, repeatGuard: opts.repeatGuard, answerGate: opts.answerGate, answerJudge: opts.answerJudge });
 }
 
 let seq = 0;

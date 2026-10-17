@@ -77,12 +77,13 @@ import { evaluateGate, loadSwitches, loadSuppressionScopes, type MessageClass } 
 import { capturedIds, isTestConversation, testConversationIds, testModeFrom, TEST_PROVIDER } from '@/lib/email/test-mode';
 import { renderTemplate } from '@/lib/email/templates';
 import { loadActiveTemplates, loadBrandSignature } from '@/lib/email/template-store';
-import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError } from '@/lib/ai/budget';
+import { reserveBudget, settleBudget, releaseBudget, estimateUsdMicros, BudgetExceededError, recordUsage } from '@/lib/ai/budget';
 import type { WebEvent, WebEventFinder } from '@/lib/ai/web-events';
 import { ModelOutputError } from '@/lib/ai/model-client';
 import { CONCERT_ARTWORK_PATH, loadBriefArtwork, sportFor, venueKeys } from '@/lib/brand/assets';
 import { eventPreview } from '@/lib/brand/event-image';
 import { answerBody, sameReply } from './repeat';
+import { bannedLines, heldReasonText, type AnswerJudge } from '@/lib/email/answer-gate';
 import { cadenceMinutes, watchExpiry, shouldAlert, shouldAlertMarket, marketEstimate, marketWatchable, alertDedupeKey, constraintBasket, meetsDelivery, readBasket, MARKET_ALERT_MAX_AGE_MINUTES, MARKET_WATCH_MIN_CADENCE_MINUTES, WATCH_MAX_ACTIVE_PER_CONTACT, type ConstraintBasket } from '@/lib/domain/watches';
 
 export type Clock = () => Date;
@@ -117,6 +118,17 @@ export type ConciergeDeps = {
    * (TGQA-R6 14, R8 S01) and blocking would park every customer who asks twice. Tests switch it on.
    */
   repeatGuard?: boolean;
+  /**
+   * Whether a reply answers the customer's latest message, asked of a model before it is sent (fix plan Phase 0). Absent
+   * (the rules drafter, tests): only the deterministic part of the gate runs, the lines we never send.
+   */
+  answerJudge?: AnswerJudge;
+  /**
+   * The answer gate as a whole. On wherever the drafter is a model (production, the eval), like the repeat guard: the rules
+   * drafter's fixture replies still carry the old internal lines the gate exists to stop, and holding them would park every
+   * fixture request. Tests switch it on.
+   */
+  answerGate?: boolean;
 };
 
 export type IngestOutcome = { kind: 'stored_auto_response'; messageId: string } | { kind: 'ignored_recipient'; messageId: string } | { kind: 'duplicate'; messageId: string } | { kind: 'queued'; messageId: string; conversationId: string; requestId: string; contactId: string; isNewConversation: boolean };
@@ -165,7 +177,13 @@ const WHICHEVER_CHEAPER = /\bwhichever(?:\s+(?:one|game|date|night|show))?\s*(?:
 export const OTHER_GAMES_FOR_BUDGET = /\b(?:what|which|any)\s+(?:other\s+|more\s+)?(?:games?|dates?|nights?|ones?)\b[^.?!]{0,40}?(?:\b(?:for|at|in|within|under|around|near)\s+(?:that|this|my|the|our|a)\s+(?:price|budget|amount|range)\b|\b(?:for|under|within|below|at)\s+(?:about\s+)?\$\s?\d|\bfits?\s+(?:in\s+)?(?:my|our|the|that)\s+budget\b|\bin\s+(?:my|our|that|the)\s+(?:budget|price range)\b)|\bother\s+games?\b[^.?!]{0,30}\b(?:that|this|my|the)\s+(?:price|budget)\b/i;
 export const asksOtherGamesForBudget = (text: string): boolean => OTHER_GAMES_FOR_BUDGET.test(text.replace(/[’‘]/g, "'"));
 /** Emails that answer a customer's message: what a new answer is compared with. */
-const REPLY_CLASSES = new Set<MessageClass>(['recommendation', 'no_result', 'clarification']);
+/** Replies the answer gate asks a model about: the ones that answer a customer's message. */
+const JUDGED_CLASSES = new Set<MessageClass>(['acknowledgment', 'clarification', 'recommendation', 'no_result']);
+/** Why a request was handed to a person because its reply was held: the automatic flow doesn't move it on as if sent. */
+const HELD_REASONS = ['answer_gate', 'repeat_reply_blocked'];
+/** States the automatic flow moves a request to once its reply has gone out. */
+const AFTER_SEND_STATES = new Set(['recommendation_sent', 'referred', 'closed']);
+const REPLY_CLASSES = new Set<MessageClass>(['recommendation', 'no_result', 'clarification', 'staff_reply']);
 /**
  * Drafted answers (a pick, or why there's none): never sent twice in the same words (live Oct 15). Clarifications are not
  * held back here: the same question answered the same way is right (TGQA-R6 25), and a question asked again and again
@@ -1683,7 +1701,7 @@ export class Concierge {
     // before the answer was two emails for one message (#155, 45 eval threads, every one of them a first message).
     const notes = altDateNote ? [...assumptions, altDateNote] : assumptions;
     if ((revision === 1 || picked || cameFromReferral || altDateNote || bestAskedBefore) && !selfContained && !answeredUnreviewed) {
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: notes, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 && mayBeVisiting(msg.sanitizedText ?? '') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Checking your options'), template: 'acknowledgment', vars: { knownFacts: acknowledgedFacts(resolution.event, resolution.venue, merged, msg.sanitizedText ?? '', this.now()), eventLabel: resolution.label, assumptions: notes, countryUnconfirmed: !contact!.countryConfirmed && revision === 1 && mayBeVisiting(msg.sanitizedText ?? '') }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     } else if (answeredUnreviewed && notes.length) {
       await audit(this.db, { actor: 'system', action: 'request.answer_notes', entityKind: 'request', entityId: req.id, revision, diff: { notes } });
     } else if (revision > 1 && !answeredUnreviewed && (req.state === 'awaiting_review' || req.state === 'researching') && revisionChanges(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null).length) {
@@ -1694,7 +1712,7 @@ export class Concierge {
       // and that the updated answer comes here. Unreviewed, the answer itself follows in seconds, so nothing goes.
       // Only while an answer was already on its way (researching or a draft in review): a reply to our question
       // starts the research, and the answer is the next email, as before.
-      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Got it, updating your answer'), template: 'acknowledgment', vars: { update: revisionNote(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null) }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
+      await this.queueSend({ messageClass: 'acknowledgment', contactId: contact!.id, conversationId: req.conversationId, requestId: req.id, revision, recipient: contact!.emailOriginal, subject: reSubject(msg.subject, 'Updating your answer'), template: 'acknowledgment', vars: { update: revisionNote(priorBrief, merged, req.eventId && req.eventId !== resolution.event.id ? resolution.event.name : null) }, inReplyTo: msg.rfcMessageId, approvalId: null, approvedHash: null });
     }
     await this.db.transaction((tx) => enqueueOutbox(tx, { eventType: 'research.requested', eventKey: `research:${req.id}:${revision}`, entityId: req.id, revision, payload: { requestId: req.id, revision }, now }));
 
@@ -2250,7 +2268,9 @@ export class Concierge {
   /**
    * One email per staff address for a request waiting on a person. Internal mail, so it does not pass the
    * customer send gate (whose test allowlist would drop staff), but "stop all outbound" still stops it. It
-   * carries the reason and a link, never the customer's words, like the diagnostic scripts.
+   * carries the reason and a link. A reply the answer gate held also carries the customer's latest message and the held
+   * draft (fix plan Phase 0: "held drafts go to your inbox with the customer message"), so it can be judged from the
+   * inbox; every other alert carries no customer words, like the diagnostic scripts.
    */
   async alertStaff(args: { requestId: string; revision: number } | { inboundEventId: string }): Promise<{ outcome: 'sent' | 'skipped'; reason?: string }> {
     const entity = 'inboundEventId' in args ? { entityKind: 'inbound_event', entityId: args.inboundEventId } : { entityKind: 'request', entityId: args.requestId, revision: args.revision };
@@ -2288,15 +2308,22 @@ export class Concierge {
         : ['queued', 'claimed', 'submitted', 'uncertain'].includes(holding.state)
           ? 'A reply telling the customer a person is picking it up is on its way.'
           : `The reply telling the customer a person is picking it up was not sent (${holding.state}): reply to them from the request page.`;
+    // A held reply: what they wrote, what we would have sent and why it wasn't, to send, edit or rewrite on the request page.
+    const held = last?.reason?.startsWith('answer_gate') ? await this.heldReply(req.id) : null;
+    const [said] = held ? await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1) : [];
+    const heldParts = held ? [`Why it was held: ${held.reason}.`, `The customer wrote:\n${(said?.text ?? '(no text)').trim().slice(0, 4000)}`, `The held reply:\n${heldDraftBody(held.text).slice(0, 8000)}`] : [];
     const subject = `Needs a person: ${why}`;
     const text = [
       `A request is waiting on a person: ${why}.`,
       `Request ${req.id.slice(0, 8)}, revision ${args.revision}. ${told}`,
+      ...heldParts,
       `Open it: ${link}`,
-      'This is an automatic alert. Reply to the customer from the request page, not to this email.',
+      held ? 'This is an automatic alert. Send the held reply, edit it or write your own on the request page, not by replying to this email.' : 'This is an automatic alert. Reply to the customer from the request page, not to this email.',
     ].join('\n\n');
     const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    const html = `<p>A request is waiting on a person: <strong>${esc(why)}</strong>.</p><p>Request ${esc(req.id.slice(0, 8))}, revision ${args.revision}. ${esc(told)}</p><p><a href="${esc(link)}">Open the request</a></p><p style="color:#666;font-size:12px;">This is an automatic alert. Reply to the customer from the request page, not to this email.</p>`;
+    const quote = (x: string) => `<blockquote style="margin:0 0 12px;padding:8px 12px;border-left:3px solid #ccc;white-space:pre-wrap;">${esc(x)}</blockquote>`;
+    const heldHtml = held ? `<p><strong>Why it was held:</strong> ${esc(held.reason)}.</p><p><strong>The customer wrote:</strong></p>${quote((said?.text ?? '(no text)').trim().slice(0, 4000))}<p><strong>The held reply:</strong></p>${quote(heldDraftBody(held.text).slice(0, 8000))}` : '';
+    const html = `<p>A request is waiting on a person: <strong>${esc(why)}</strong>.</p><p>Request ${esc(req.id.slice(0, 8))}, revision ${args.revision}. ${esc(told)}</p>${heldHtml}<p><a href="${esc(link)}">Open the request</a></p><p style="color:#666;font-size:12px;">${held ? 'This is an automatic alert. Send the held reply, edit it or write your own on the request page, not by replying to this email.' : 'This is an automatic alert. Reply to the customer from the request page, not to this email.'}</p>`;
     for (const to of recipients) {
       await this.deps.emailProvider.send({
         idempotencyKey: `staff-alert:${req.id}:${args.revision}:${to}`,
@@ -2347,6 +2374,12 @@ export class Concierge {
 
   async transition(requestId: string, toState: string, reason: string, actor = 'system'): Promise<void> {
     const [r] = await this.db.select({ state: t.requests.state, rev: t.requests.currentRevision }).from(t.requests).where(eq(t.requests.id, requestId));
+    // A reply held for a person (the answer gate, the repeat guard) parked the request; the code that queued it moves on as
+    // if it had gone out ("recommendation sent", "closed"). It stays with the person until they answer.
+    if (r?.state === 'manual_attention' && actor === 'system' && AFTER_SEND_STATES.has(toState)) {
+      const [parked] = await this.db.select({ reason: t.requestTransitions.reason }).from(t.requestTransitions).where(and(eq(t.requestTransitions.requestId, requestId), eq(t.requestTransitions.toState, 'manual_attention'))).orderBy(desc(t.requestTransitions.createdAt)).limit(1);
+      if (parked?.reason && HELD_REASONS.some((h) => parked.reason!.startsWith(h))) return;
+    }
     await this.db.update(t.requests).set({ state: toState, updatedAt: this.now(), failureReason: toState === 'failed' || toState === 'unsupported' ? reason : null }).where(eq(t.requests.id, requestId));
     await this.db.insert(t.requestTransitions).values({ requestId, fromState: r?.state ?? null, toState, revision: r?.rev ?? 1, actor, reason });
   }
@@ -4652,7 +4685,7 @@ export class Concierge {
   // ---------------------------------------------------------------------------------------------
   // Outbound
   // ---------------------------------------------------------------------------------------------
-  async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean; repeatBlocked?: true }> {
+  async queueSend(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; subject: string; template: string; vars: Record<string, unknown>; inReplyTo: string | null; approvalId: string | null; approvedHash: string | null; dedupeKey?: string; containsFixtureData?: boolean }): Promise<{ id: string; created: boolean; repeatBlocked?: true; held?: true }> {
     // Loaded per send, never cached: staff copy must take effect at the next send, like the kill switches.
     const [overrides, brand] = await Promise.all([loadActiveTemplates(this.db), loadBrandSignature(this.db)]);
     // The full signature introduces us once per conversation; after that a thread signs "— Ticket Guy".
@@ -4695,11 +4728,100 @@ export class Concierge {
         return { id: '', created: false, repeatBlocked: true };
       }
     }
+    // The answer gate (fix plan Phase 0): no reply reaches a customer with a line we never send, or without answering their
+    // latest message. A reply that fails is kept as written for a person, who sends it, edits it or writes their own.
+    const gate = await this.answerGate(a, rendered.text);
+    if (gate) {
+      await this.holdReply(a, { subject, text: rendered.text, html: rendered.html, headers }, gate);
+      return { id: '', created: false, held: true };
+    }
     return await this.db.transaction(async (tx) => {
       const r = await createSendIntent(tx, { dedupeKey: a.dedupeKey ?? `${a.messageClass}:${a.requestId ?? a.conversationId}:${a.revision ?? 0}:${sha(rendered.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject, bodyText: rendered.text, bodyHtml: rendered.html, headers });
       if (r.created) await enqueueOutbox(tx, { eventType: 'email.send_requested', eventKey: `send:${r.id}`, entityId: r.id, payload: { sendIntentId: r.id }, now: this.now() });
       return r;
     });
+  }
+
+  /**
+   * The answer gate's verdict on a rendered reply: null to send it, or why it is held. Staff replies and our fixed "a person
+   * has this" reply are not checked: a person wrote the one, and the other is what a held reply sends instead.
+   */
+  private async answerGate(a: { messageClass: MessageClass; conversationId: string; requestId: string | null; revision: number | null; template: string }, text: string): Promise<{ codes: string[]; problem: string | null } | null> {
+    if (!(this.deps.answerGate ?? this.deps.drafter.name !== 'fixture')) return null;
+    if (a.messageClass === 'staff_reply' || a.template === 'holding') return null;
+    const codes = bannedLines(text, [this.env.BUSINESS_POSTAL_ADDRESS ?? '']);
+    let problem: string | null = null;
+    const judge = this.deps.answerJudge;
+    // The interim "looking into it" email is not the answer, so only the lines we never send apply to it.
+    if (!codes.length && judge && a.requestId && JUDGED_CLASSES.has(a.messageClass) && a.template !== 'acknowledgment') {
+      const [msg] = await this.db.select({ text: t.messages.sanitizedText }).from(t.messages).where(and(eq(t.messages.conversationId, a.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
+      const latest = msg?.text?.trim();
+      if (latest) {
+        try {
+          const v = await judge.judge({ latest, reply: text });
+          const model = this.env.modelName ?? judge.name;
+          if (judge.lastUsage) await recordUsage(this.db, { requestId: a.requestId, revision: a.revision ?? 1, jobName: 'answer_gate', model, usage: judge.lastUsage, overrides: this.env.modelPrices });
+          if (!v.answers) codes.push('not_answered');
+          if (!v.nextStep) codes.push('no_next_step');
+          if (codes.length) problem = v.problem.trim().slice(0, 500) || null;
+        } catch {
+          // A check that can't run doesn't wave the reply through: a person sends it.
+          codes.push('check_failed');
+        }
+      }
+    }
+    return codes.length ? { codes, problem } : null;
+  }
+
+  /**
+   * A reply the gate held: kept as written (a blocked send, never dispatched) so a person can send it as is or edit it, and
+   * the request handed to them, which tells the customer a person has it and alerts staff with their message and the draft.
+   */
+  private async holdReply(a: { messageClass: MessageClass; contactId: string; conversationId: string; requestId: string | null; revision: number | null; recipient: string; approvalId: string | null; approvedHash: string | null }, out: { subject: string; text: string; html: string; headers: Record<string, string> }, gate: { codes: string[]; problem: string | null }): Promise<void> {
+    const r = await createSendIntent(this.db, { dedupeKey: `held:${a.requestId ?? a.conversationId}:${sha(out.text).slice(0, 12)}`, messageClass: a.messageClass, contactId: a.contactId, conversationId: a.conversationId, requestId: a.requestId, requestRevision: a.revision, approvalId: a.approvalId, approvedHash: a.approvedHash, recipient: a.recipient, fromAddress: `Ticket Guy <${this.env.messageClassFromAddresses[a.messageClass]}>`, subject: out.subject, bodyText: out.text, bodyHtml: out.html, headers: out.headers });
+    await this.db.update(t.sendIntents).set({ state: 'blocked', lastError: `answer_gate:${gate.codes.join(',')}${gate.problem ? ` ${gate.problem}` : ''}`, resolvedAt: this.now() }).where(eq(t.sendIntents.id, r.id));
+    await audit(this.db, { actor: 'system', action: 'send.answer_gate_held', entityKind: 'send_intent', entityId: r.id, revision: a.revision ?? null, diff: { messageClass: a.messageClass, codes: gate.codes } });
+    if (!a.requestId) return;
+    const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, a.requestId));
+    const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, a.contactId));
+    const [msg] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, a.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
+    if (req && contact && msg) await this.parkForStaff({ req, revision: a.revision ?? req.currentRevision, reason: `answer_gate:${gate.codes.join(',')}`, contact, msg });
+  }
+
+  /** The reply the answer gate held for this request most recently, if a person hasn't answered since. */
+  async heldReply(requestId: string): Promise<{ id: string; subject: string; text: string; html: string; reason: string; heldAt: Date } | null> {
+    const [held] = await this.db.select().from(t.sendIntents).where(and(eq(t.sendIntents.requestId, requestId), eq(t.sendIntents.state, 'blocked'), sql`${t.sendIntents.dedupeKey} like ${`held:${requestId}:%`}`)).orderBy(desc(t.sendIntents.createdAt)).limit(1);
+    if (!held) return null;
+    const [answered] = await this.db.select({ id: t.sendIntents.id }).from(t.sendIntents).where(and(eq(t.sendIntents.requestId, requestId), eq(t.sendIntents.messageClass, 'staff_reply'), gte(t.sendIntents.createdAt, held.createdAt))).limit(1);
+    if (answered) return null;
+    return { id: held.id, subject: held.subject, text: held.bodyText, html: held.bodyHtml, reason: heldReasonText((held.lastError ?? '').replace(/^answer_gate:/, '').split(' ')[0]!.split(',').filter(Boolean), (held.lastError ?? '').split(' ').slice(1).join(' ') || null), heldAt: held.createdAt };
+  }
+
+  /**
+   * A person answers the customer from the request page: the held reply as it was drafted, that draft edited, or their own
+   * words. It goes out in the customer's thread as a staff reply, which the answer gate doesn't check, and the request is
+   * marked answered. The alert has always said "reply from the request page"; until now the page had no way to.
+   */
+  async sendStaffReply(args: { requestId: string; heldId: string | null; body: string; staffUserId: string }): Promise<{ ok: true; sendIntentId: string } | { ok: false; status: number; reason: string }> {
+    const [req] = await this.db.select().from(t.requests).where(eq(t.requests.id, args.requestId));
+    if (!req) return { ok: false, status: 404, reason: 'request_not_found' };
+    const held = await this.heldReply(req.id);
+    // Answering a held reply that has since been replaced (or answered) would send a stale draft.
+    if (args.heldId && held?.id !== args.heldId) return { ok: false, status: 409, reason: 'held_reply_changed' };
+    const body = args.body.replace(/\r\n/g, '\n').trim();
+    if (!body) return { ok: false, status: 400, reason: 'empty_reply' };
+    const [contact] = await this.db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
+    if (!contact) return { ok: false, status: 404, reason: 'contact_not_found' };
+    const [lastInbound] = await this.db.select().from(t.messages).where(and(eq(t.messages.conversationId, req.conversationId), eq(t.messages.direction, 'inbound'))).orderBy(desc(t.messages.receivedAt), desc(t.messages.createdAt)).limit(1);
+    const asWritten = !!held && !!args.heldId && body === heldDraftBody(held.text);
+    const intent = await this.queueSend({
+      messageClass: 'staff_reply', contactId: contact.id, conversationId: req.conversationId, requestId: req.id, revision: req.currentRevision, recipient: contact.emailOriginal,
+      subject: held?.subject ?? reSubject(lastInbound?.subject ?? null, 'Your tickets'), template: asWritten ? 'held_as_written' : 'staff_reply', vars: asWritten ? { text: held!.text, html: held!.html } : { body },
+      inReplyTo: lastInbound?.rfcMessageId ?? null, approvalId: null, approvedHash: null, dedupeKey: `staff_reply:${req.id}:${sha(body).slice(0, 12)}`,
+    });
+    await this.transition(req.id, 'recommendation_sent', asWritten ? 'staff_sent_held_reply' : held && args.heldId ? 'staff_rewrote_held_reply' : 'staff_replied', args.staffUserId);
+    await audit(this.db, { actor: args.staffUserId, action: 'send.staff_reply', entityKind: 'request', entityId: req.id, revision: req.currentRevision, diff: { heldId: args.heldId, asWritten } });
+    return { ok: true, sendIntentId: intent.id };
   }
 
   /**
@@ -5696,17 +5818,19 @@ export function ownedMiss(latestText: string): string | null {
 // The catalog's sport categories, plus the extractor's catch-all hint: one list, so a word never depends on which copy.
 const SPORT_HINTS = [...SPORT_CATEGORIES, 'sports'];
 
-/** One sentence playing back the request — "Two Rangers tickets next week, up to $200 total—got it." */
+/**
+ * One sentence playing back the request: "You’re after two Rangers tickets next week, up to $200 total." Never "... Got it."
+ * (fix plan Phase 0: "Rangers tickets for Monday, October 19. Got it." read as a form filed, not a person listening).
+ */
 export function acknowledgementLine(x: RequestExtraction): string {
   const who = x.performerOrTeam ? titleCaseName(x.performerOrTeam) : null;
   const n = x.quantity;
   if (!who && !n) return 'Thanks for getting in touch.';
-  const count = n ? (QTY_WORDS[n] ?? String(n)) : null;
+  const count = n ? (QTY_WORDS[n]?.toLowerCase() || String(n)) : null;
   const noun = n === 1 ? 'ticket' : 'tickets';
   // "Two Rangers tickets" reads naturally; "Two Rangers vs Lightning tickets" does not, so a game takes "for".
   const isGame = !!who && splitMatchup(who) !== null;
   let line = isGame ? [count, noun].filter(Boolean).join(' ') : [count, who, noun].filter(Boolean).join(' ');
-  line = line[0]!.toUpperCase() + line.slice(1);
   if (x.togetherRequired) line += ' together';
   if (isGame) line += ` for ${who}`;
   // A date as a person says it: never "10-13-2026" or "tickets next" played back (live Oct 3).
@@ -5718,7 +5842,7 @@ export function acknowledgementLine(x: RequestExtraction): string {
   }
   else if (x.dateExpression && !/\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(x.dateExpression) && !VAGUE_WHEN.test(x.dateExpression.trim())) line += ` ${x.dateExpression}`;
   if (x.budgetCents !== null) line += x.budgetBasis ? `, up to ${formatUsd(x.budgetCents)} ${x.budgetBasis === 'whole_party' ? 'total' : 'each'}` : `, around ${formatUsd(x.budgetCents)}`;
-  return `${line}. Got it.`;
+  return `You’re after ${line}.`;
 }
 
 /** A market alert is "now" only while the listings read behind it is recent (DECISION_LOG #62). */
@@ -6743,10 +6867,17 @@ export function questionRound(req: { state: string; clarificationCount: number }
 const SETTLED_BY_ANSWER = ['event', 'event_ambiguous', 'quantity', 'budget_basis', 'best_goal'];
 
 /** Why a request is waiting on a person, in words for the staff alert. */
+/** A held reply as a person edits it: the message without its sign-off and footer, which a staff reply adds back. */
+export function heldDraftBody(text: string): string {
+  return text.replace(/\n+Ticket Guy(?=\n|$)[\s\S]*$/, '').trim();
+}
+
 export function staffReasonLabel(reason: string): string {
   if (reason === 'clarification_limit_reached') return 'three rounds of questions did not settle the request';
   if (reason === 'deletion_verified_pending_completion') return 'a customer verified a data deletion request: complete it from their contact page';
   if (reason === 'staff_comparison') return 'a comparison was promised: find seats that meet their requirements';
+  if (reason.startsWith('answer_gate')) return 'the drafted reply was held before sending';
+  if (reason === 'repeat_reply_blocked') return 'the drafted reply repeated the last one';
   // Which cap it was: the whole service's day, or this request (post-#56 QA: "this request" was said for both).
   if (reason.startsWith('extraction_failed:budget_exceeded')) return /\(global_daily\)/.test(reason) ? 'the service’s daily AI budget is used up' : /\(call_count\)/.test(reason) ? 'this request made too many AI calls' : 'the AI budget for this request ran out';
   if (reason.startsWith('extraction_failed:rejected')) return `the AI provider refused the call (check the model name, API key and billing): ${reason.split(': ').slice(1).join(': ').slice(0, 160)}`;

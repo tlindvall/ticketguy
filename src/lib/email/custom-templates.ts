@@ -36,7 +36,7 @@ export const SLOTS: SlotSpec[] = [
     label: 'Clarification request',
     description: 'Asks the customer for missing details before any price research.',
     variables: [
-      { name: 'acknowledgement', kind: 'text', description: 'One sentence saying what we understood', sample: 'Two Rangers tickets next week, up to $200 total. Got it.' },
+      { name: 'acknowledgement', kind: 'text', description: 'One sentence saying what we understood', sample: 'You’re after two Rangers tickets next week, up to $200 total.' },
       { name: 'eventNote', kind: 'text', description: 'What we found (or did not) about the event, when there is something to say', sample: 'We don’t have a scheduled Dua Lipa event on file, so we haven’t looked at prices yet.' },
       { name: 'questions', kind: 'list', description: 'The one question that decides it (at most two asks in one sentence)', sample: ['Are you looking for a home game at Madison Square Garden, or are away games an option?'] },
       { name: 'countryCheck', kind: 'flag', description: 'True on the first clarification to a customer whose country is not yet confirmed', sample: true },
@@ -228,7 +228,7 @@ export type TemplateOverrides = Partial<Record<SlotName, ActiveTemplate>>;
 export const STARTER_BODY: Record<SlotName, string> = {
   acknowledgment: `Hey,
 
-Got it. Here's what I have:
+Here's what I have:
 {{knownFacts}}
 
 {{assumptions}}

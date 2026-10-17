@@ -1687,3 +1687,51 @@ Background tracking had spent the day's SeatData allowance, so the request could
 - the headline in `brief-verdict-1009` and `budget-gap-1006`;
 - the fee arithmetic in `audit-0929`;
 - `price-watch-retest-expanded` X09: a watch is background, so its room is 60% of the day.
+
+## 86. Nothing reaches a customer without passing the answer gate (Oct 16)
+
+The fix plan's Phase 0. On the evening of Oct 15 three of four live threads answered a different question from the one
+asked, and replies carried internal lines: "I haven't been able to check this against any seats yet" (the Ducks reply
+with no seats and no links), "New York Rangers tickets for Monday, October 19. Got it." to "Are these good tickets?",
+and "CBJ V. NEW YORK RANGERS". (#85 is left for the open #190.)
+
+**Decisions.**
+- **The answer gate runs on every customer email in `queueSend`, after the repeat guard.** About 40 call sites queue
+  replies directly with no approval step, so the last common point before a send intent is the only place that covers
+  them all.
+  - Lines we never send, every class: "haven't been able to check", "Nothing I can check automatically", "Got it.", and
+    three or more capitalised words in a row with one of four letters or more (a feed name; "GA", "VIP", "CONFIRM" pass;
+    the postal address is ignored).
+  - A model's yes/no on replies that answer a message (clarification, recommendation, no-result, and acknowledgments
+    that are answers; not the interim "looking into it" email): does it answer the customer's latest message, and does
+    it give a next step? Same provider and model as drafting, low effort. Its spend goes on the request's ledger as a
+    settled row; it is not counted against the per-revision call cap, which would otherwise hold good replies.
+  - A check that can't run holds the reply. Not sent unchecked.
+  - Not checked: a person's reply, and the fixed "a person is picking this up" reply.
+  - On wherever the drafter is a model (production, the eval), like the repeat guard: the rules drafter's fixture
+    replies still carry the internal lines, and holding them would park every fixture request. Tests switch it on.
+- **A held reply goes to a person, with the customer's words.** It is kept as a blocked send (`held:<request>:<hash>`),
+  the request is parked (the customer gets the holding reply), and the staff alert carries why it was held, the
+  customer's latest message and the draft. This reverses "never the customer's words" for held replies only, as the plan
+  asks ("held drafts go to your inbox with the customer message").
+- **Code that queued a held reply no longer moves the request on as if it were sent.** A `system` transition to
+  `recommendation_sent`, `referred` or `closed` is ignored while the request is parked for a held reply or a repeat. The
+  repeat guard had the same hole: the request left `manual_attention` straight after being parked.
+- **Staff answer from the request page.** The alert has always said "reply from the request page", and the page had no
+  way to. Now it has one box: the held draft sent unchanged (the original email), edited, or the person's own words.
+  It goes out as a new message class, `staff_reply`, which needs no approval (a person wrote it), carries the
+  human-reviewed footer, and marks the request answered. A held draft already answered, or replaced, is refused (409).
+- **No "Got it".** The play-back line is "You're after two Rangers tickets next week, up to $200 total." The
+  acknowledgment opens "Here's what I have:" or "I'm looking into…", and the subjects lose "Got it,".
+- **SeatData calls for replies** are #85's: background tracking is capped at 60% of the day, so this change adds
+  nothing there.
+
+**Not in this change.** The C_REQS line itself is still drafted where #85's way forward doesn't apply (the gate holds
+it); its replacement (a plain no-seats headline, a recheck when listings couldn't be read) is the next change. The
+search links (the stored marketplace ids depend on SeatData returning fields we guessed at), the away/home and
+feed-name copy, and the reader's request model are Phases 1 to 3.
+
+**Verified:** `tests/acceptance/answer-gate.test.ts` (holds, alert content, send as drafted, edited, model verdicts, a
+check that fails, a person's reply with nothing held). Expectations changed on purpose: the play-back and
+acknowledgment wording in nine tests.
+
