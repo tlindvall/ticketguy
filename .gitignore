@@ -11,3 +11,10 @@ next-env.d.ts
 # Added by Braintrust Wizard
 .env.braintrust
 .braintrust.json
+
+# Eval runs (evals/ticketguy.eval.ts, evals/report-failures.ts); real threads stay out of the repo
+eval-results.json
+eval.log
+summary.md
+evals/history.csv
+.eval-data/

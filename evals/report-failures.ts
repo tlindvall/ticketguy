@@ -1,24 +1,34 @@
-import { providerErrorRefusal } from './run-health';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendHistory, summaryMarkdown } from './report';
+import { readResults, scoredThreads } from './results';
+import { providerCountsRefusal } from './run-health';
 
 /**
- * Turns one eval run into GitHub issues, grouped by check (scorer): one open issue per failing check, labelled
- * eval-failure, listing every failing thread with its reason and one transcript. Re-runs update the same issue
- * (found by its <!-- eval-key --> marker) instead of opening duplicates; a check that passes everywhere closes its
- * issue with a comment. Run after `pnpm eval` in CI:
+ * Reports one eval run from eval-results.json (written by evals/ticketguy.eval.ts); nothing is read from Braintrust.
+ * Run after `pnpm eval` in CI:
  *
- *   EVAL_EXPERIMENT_NAME=... tsx evals/report-failures.ts
+ *   tsx evals/report-failures.ts
  *
- * Needs BRAINTRUST_API_KEY, GITHUB_TOKEN (issues: write) and GITHUB_REPOSITORY. Nothing here changes code.
+ * Always: a markdown summary (pass rate per check, the change against the previous run, newly failing and newly
+ * passing threads) to $GITHUB_STEP_SUMMARY and summary.md (posted on PRs).
+ * When the run can be trusted: one row appended to evals/history.csv.
+ * With EVAL_FILE_ISSUES=1 and a trusted run: GitHub issues grouped by check, one open issue per failing check,
+ * labelled eval-failure, listing every failing thread with its reason and one transcript. Re-runs update the same
+ * issue (found by its <!-- eval-key --> marker); a check that passes everywhere closes its issue.
+ *
+ * Env: EVAL_RESULTS_FILE (eval-results.json), EVAL_PREVIOUS_RESULTS (prev/eval-results.json),
+ * EVAL_PREVIOUS_RUN_URL, EVAL_HISTORY_FILE (evals/history.csv), EVAL_SUMMARY_FILE (summary.md); GITHUB_TOKEN and
+ * GITHUB_REPOSITORY for issues. Writes healthy=true|false to $GITHUB_OUTPUT. Nothing here changes code.
  */
-const BT = 'https://api.braintrust.dev/v1';
-const PROJECT = process.env.BRAINTRUST_PROJECT ?? 'My Project';
-const experimentName = process.env.EVAL_EXPERIMENT_NAME;
 const repo = process.env.GITHUB_REPOSITORY;
 const gh = process.env.GITHUB_TOKEN;
 const runUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}` : null;
-if (!experimentName || !repo || !gh || !process.env.BRAINTRUST_API_KEY) throw new Error('needs EVAL_EXPERIMENT_NAME, GITHUB_REPOSITORY, GITHUB_TOKEN, BRAINTRUST_API_KEY');
+const resultsFile = process.env.EVAL_RESULTS_FILE ?? 'eval-results.json';
+const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.csv';
+const summaryFile = process.env.EVAL_SUMMARY_FILE ?? 'summary.md';
+const fileIssues = process.env.EVAL_FILE_ISSUES === '1';
 
-/** Checks worth an issue. answered_the_question only counts outright "no" verdicts; the rest any failure. */
+/** Checks worth an issue. */
 const TRACKED: Record<string, string> = {
   event_correct: 'Wrong or no event resolved',
   party_size_kept: 'Party size not kept',
@@ -46,96 +56,69 @@ const TRACKED: Record<string, string> = {
   sim_customer_satisfied: 'Simulated customer gives up',
 };
 
-async function bt<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BT}${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${process.env.BRAINTRUST_API_KEY}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, redirect: 'manual' });
-  // Large results come back as a 303 to a presigned URL that must be fetched without our auth header.
-  if (res.status >= 300 && res.status < 400) return (await fetch(res.headers.get('location')!)).json() as Promise<T>;
-  if (!res.ok) throw new Error(`braintrust ${path}: ${res.status} ${await res.text()}`);
-  return res.json() as Promise<T>;
+const setOutput = (k: string, v: string) => { if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`); };
+const publish = (md: string) => {
+  writeFileSync(summaryFile, md);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
+  console.log(md);
+};
+/** A run we can't trust files and closes nothing, and adds no history row: a GitHub error annotation, and the job fails. */
+function refuse(title: string, msg: string): never {
+  setOutput('healthy', 'false');
+  console.log(`::error title=${title}::${msg}`);
+  console.error(msg);
+  process.exit(1);
 }
+
+const results = readResults(resultsFile);
+if (!results) {
+  publish(`### Conversation evals\n\n> [!WARNING]\n> No results: ${resultsFile} is missing or unreadable (the eval run failed before writing it).\n`);
+  refuse('Eval results missing', `${resultsFile} is missing or unreadable, so no issues were filed or closed. Re-run the workflow.`);
+}
+const label = `${results.suite} run at ${results.commit}`;
+const scored = scoredThreads(results).length;
+const notRun = results.threads.filter((t) => t.error).length;
+// A missing thread would read as a passing one and close its issue; a partial run decides nothing.
+const partial = scored === 0 || scored < results.expected ? `${label} scored ${scored} of ${results.expected} threads (${notRun} did not run). The results are partial, so no issues were filed or closed and no history row was added.` : null;
+// A run whose model calls failed scores the outage: unanswered threads and unscored judges would file issues that
+// aren't real and close ones that are.
+const providerRefusal = providerCountsRefusal(results.provider, label);
+const refusal = providerRefusal ?? partial;
+
+const previous = process.env.EVAL_PREVIOUS_RESULTS ? readResults(process.env.EVAL_PREVIOUS_RESULTS) : null;
+publish(summaryMarkdown(results, { previous, previousUrl: process.env.EVAL_PREVIOUS_RUN_URL || null, refusal }));
+
+if (providerRefusal) refuse('Provider errors', providerRefusal);
+if (partial) refuse('Eval results missing', partial);
+setOutput('healthy', 'true');
+
+writeFileSync(historyFile, appendHistory(existsSync(historyFile) ? readFileSync(historyFile, 'utf8') : null, results));
+console.log(`${scored}/${results.expected} threads scored; history row added to ${historyFile}`);
+
+if (!fileIssues) process.exit(0);
+if (!repo || !gh) throw new Error('filing issues needs GITHUB_REPOSITORY and GITHUB_TOKEN');
+
 async function github<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(`https://api.github.com/repos/${repo}${path}`, { method: init.method ?? 'GET', headers: { Authorization: `Bearer ${gh}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' }, body: init.body ? JSON.stringify(init.body) : undefined });
   if (!res.ok) throw new Error(`github ${path}: ${res.status} ${await res.text()}`);
   return res.json() as Promise<T>;
 }
 
-type Ev = { span_id: string; root_span_id: string; is_root?: boolean; metadata?: Record<string, unknown>; scores?: Record<string, number | null> | null; span_attributes?: { type?: string; name?: string }; output?: unknown; error?: unknown };
 type Fail = { scenario: string; why: string };
-
-const projects = await bt<{ objects: Array<{ id: string; name: string }> }>(`/project?project_name=${encodeURIComponent(PROJECT)}`);
-const projectId = projects.objects[0]?.id;
-const exps = await bt<{ objects: Array<{ id: string; metadata?: { scenarios?: number } }> }>(`/experiment?project_id=${projectId}&experiment_name=${encodeURIComponent(experimentName)}`);
-const expId = exps.objects[0]?.id;
-if (!expId) throw new Error(`experiment ${experimentName} not found`);
-/** How many threads the run set out to score (Eval metadata); 0 if unknown. */
-const expected = Number(exps.objects[0]?.metadata?.scenarios ?? 0);
-
-async function fetchAll(): Promise<Ev[]> {
-  const out: Ev[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await bt<{ events: Ev[]; cursor?: string }>(`/experiment/${expId}/fetch`, { limit: 200, ...(cursor ? { cursor } : {}) });
-    out.push(...page.events);
-    cursor = page.events.length ? page.cursor : undefined;
-  } while (cursor);
-  return out;
-}
-const scoredThreads = (evs: Ev[]) => new Set(evs.filter((e) => e.span_attributes?.type === 'score' && e.scores).map((e) => e.root_span_id)).size;
-
-/** A run we can't trust files and closes nothing: a GitHub error annotation, and the job fails. */
-function refuse(title: string, msg: string): never {
-  console.log(`::error title=${title}::${msg}`);
-  console.error(msg);
-  process.exit(1);
-}
-
-// Braintrust can lag a little behind the run, and on a bad day it drops rows without telling the run. Wait briefly
-// for every thread, then refuse to file or close anything from a partial result: a missing thread would otherwise
-// read as a passing one and close its issue.
-let events: Ev[] = [];
-for (let attempt = 0; attempt < 6; attempt++) {
-  events = await fetchAll();
-  if (expected > 0 && scoredThreads(events) >= expected) break;
-  if (attempt < 5) await new Promise((r) => setTimeout(r, 20_000));
-}
-const scored = scoredThreads(events);
-if (scored === 0 || (expected > 0 && scored < expected)) refuse('Eval results missing', `Braintrust has scores for ${scored} of ${expected || '?'} threads in ${experimentName}. The results were not fully recorded, so no issues were filed or closed. Re-run the workflow.`);
-console.log(`${scored}/${expected || scored} threads scored in ${experimentName}`);
-
-// A run whose model calls failed (llm_errors > 0, or a 429 / insufficient_quota in a task error) scores the outage:
-// unanswered threads and unscored judges would file issues that aren't real and close ones that are.
-const providerRefusal = providerErrorRefusal(events, experimentName);
-if (providerRefusal) refuse('Provider errors', providerRefusal);
-
-const roots = new Map(events.filter((e) => e.is_root).map((e) => [e.root_span_id, e]));
 const fails = new Map<string, Fail[]>();
 const evaluated = new Set<string>();
-for (const e of events) {
-  if (e.span_attributes?.type !== 'score' || !e.scores) continue;
-  const scenario = String(roots.get(e.root_span_id)?.metadata?.id ?? '?');
-  for (const [name, score] of Object.entries(e.scores)) {
-    if (!(name in TRACKED) || score == null) continue;
+for (const t of scoredThreads(results)) {
+  for (const [name, c] of Object.entries(t.checks)) {
+    if (!(name in TRACKED) || c.pass == null) continue;
     evaluated.add(name);
-    // Checks run combined (evals/ticketguy.eval.ts) keep their details under their own name.
-    const raw = (e.metadata ?? {}) as Record<string, unknown>;
-    const m = ((raw[name] as object | undefined) ?? raw) as { failures?: Array<{ step?: number; why?: string }>; reasons?: Array<{ step: number; verdict: string; reason: string }>; summary?: string; broke_at_step?: number; reason?: string };
-    let why: string | null = null;
-    if (name === 'answered_the_question') {
-      const no = (m.reasons ?? []).filter((r) => r.verdict === 'no');
-      if (no.length) why = no.map((r) => `step ${r.step}: ${r.reason}`).join(' · ');
-    } else if (score < 1) {
-      why = m.failures?.length ? m.failures.map((f) => `step ${f.step}: ${f.why}`).join(' · ') : m.summary ? `broke at step ${m.broke_at_step}: ${m.summary}` : (m.reason ?? `score ${score}`);
-    }
-    // Real customer threads (prod/…) are private: issues are public, so they name the thread and step, never its words.
-    if (why && scenario.startsWith('prod/')) why = `${(why.match(/step \d+/g) ?? []).join(', ') || 'failed'} (real customer thread: read it in Braintrust)`;
-    if (why) (fails.get(name) ?? fails.set(name, []).get(name)!).push({ scenario, why: why.slice(0, 400) });
+    // Real customer threads (prod/…) arrive redacted (evals/results.ts): their id and failing steps, never their words.
+    if (!c.pass) (fails.get(name) ?? fails.set(name, []).get(name)!).push({ scenario: t.id, why: (c.reason ?? 'failed').slice(0, 400) });
   }
 }
 
 /** Six steps of the thread, ending at the first step the failure names ("step 8: …"), so a late failure is shown. */
 const transcript = (scenario: string, why = '') => {
-  const root = [...roots.values()].find((r) => r.metadata?.id === scenario);
-  const steps = (root?.output as Array<{ step: number; customer: string; reply: string }> | undefined) ?? [];
+  const steps = results.threads.find((t) => t.id === scenario)?.transcript ?? [];
   const failing = Number(/\bstep (\d+)/.exec(why)?.[1] ?? 0);
   const end = Math.max(6, steps.findIndex((s) => s.step === failing) + 1);
   return steps
@@ -152,7 +135,7 @@ for (let page = 1; page < 10; page++) {
   if (batch.length < 100) break;
 }
 const keyOf = (name: string) => `<!-- eval-key: ${name} -->`;
-const stamp = `${experimentName}${runUrl ? ` ([run](${runUrl}))` : ''}`;
+const stamp = `${label}${runUrl ? ` ([run](${runUrl}))` : ''}`;
 
 for (const name of evaluated) {
   const list = fails.get(name) ?? [];
@@ -174,7 +157,7 @@ for (const name of evaluated) {
 |---|---|
 ${list.map((f) => `| \`${f.scenario}\` | ${f.why.replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`).join('\n')}
 
-${example ? `### Example: \`${example.scenario}\`\n${transcript(example.scenario, example.why)}` : '_All failures are in real customer threads; read them in Braintrust._'}
+${example ? `### Example: \`${example.scenario}\`\n${transcript(example.scenario, example.why)}` : '_All failures are in real customer threads; replay them locally with the production-threads file and EVAL_THREADS_KEY._'}
 
 **Reproduce:** \`EVAL_SUITE=nightly EVAL_ONLY=${[...new Set(list.map((f) => f.scenario))].slice(0, 6).join(',')} pnpm eval\`
 **Passes when:** \`${name}\` passes in every thread (this issue closes itself on the first run where it does).

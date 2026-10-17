@@ -1,23 +1,19 @@
 name: evals
-# Conversation evals (evals/ticketguy.eval.ts) against the real model with the eval world.
-# - PRs touching the AI, pipeline, advice, domain or email code: the pr suite (~55 threads), scores posted on the PR.
-# - Every push to main: the pr suite, so PRs have a fresh main run to compare against in Braintrust.
-# - Every 2 hours, 8am to midnight ET: the nightly suite (+ long threads + simulated customers); failures are filed
-#   and kept up to date as eval-failure issues (evals/report-failures.ts), and closed when they pass again.
-# - On demand: Actions > evals > Run workflow, with a suite to pick.
-# Report-only: nothing here blocks merging or deploys.
+# Conversation evals (evals/ticketguy.eval.ts) against the real model with the eval world. Local by default: nothing is
+# sent to Braintrust (it bills per score); results are eval-results.json, kept 90 days as the "eval-results" artifact.
+# - PRs touching src/ or evals/: the pr suite (~55 threads), summary posted on the PR.
+# - Every 2 hours, 8am to midnight ET: the nightly suite (+ long threads, simulated customers and the most recent
+#   EVAL_PROD_LIMIT real threads); failures are filed and kept up to date as eval-failure issues
+#   (evals/report-failures.ts), and closed when they pass again.
+# - On demand: Actions > evals > Run workflow, with a suite to pick; send_to_braintrust also records the run there as
+#   one score per thread.
+# Every run's summary compares it with the previous run (the latest main run when there is one) and adds a row to
+# evals/history.csv, which travels with the artifact. Report-only: nothing here blocks merging or deploys.
 on:
   pull_request:
     paths:
-      - 'src/lib/ai/**'
-      - 'src/lib/intake/**'
-      - 'src/lib/advice/**'
-      - 'src/lib/domain/**'
-      - 'src/lib/email/**'
+      - 'src/**'
       - 'evals/**'
-      - '.github/workflows/evals.yml'
-  push:
-    branches: [main]
   schedule:
     # 12:00-22:00 and 00:00-04:00 UTC = 8am to midnight Eastern (EDT).
     - cron: '17 12,14,16,18,20,22 * * *'
@@ -31,11 +27,16 @@ on:
         description: 'File/update eval-failure issues from this run'
         type: boolean
         default: true
+      send_to_braintrust:
+        description: 'Also record the run in Braintrust (one score per thread; refuses above 2,000)'
+        type: boolean
+        default: false
 concurrency:
   group: evals-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
+  actions: read
   pull-requests: write
   issues: write
 jobs:
@@ -48,11 +49,11 @@ jobs:
       NODE_ENV: test
       APP_MODE: fixture
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
       EVAL_BUDGET_USD: '5'
       EVAL_SUITE: ${{ github.event_name == 'schedule' && 'nightly' || inputs.suite || 'pr' }}
       EVAL_CONCURRENCY: '8'
-      EVAL_EXPERIMENT_NAME: conversations-${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'scheduled' || github.ref_name }}-${{ github.run_number }}-${{ github.sha }}
+      EVAL_PROD_LIMIT: '10'
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -63,29 +64,80 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: find previous results and real threads
+        id: find
+        run: |
+          # The baseline: the newest eval-results artifact from another run, preferring runs on main (scheduled and
+          # manual), so a PR compares with main and main's history.csv never picks up PR rows.
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=eval-results&per_page=100" > artifacts.json
+          prev=$(jq -r --arg run "$GITHUB_RUN_ID" '[.artifacts[] | select(.expired | not) | select((.workflow_run.id | tostring) != $run)] | sort_by(.created_at) | reverse | (map(select(.workflow_run.head_branch == "main")) + .) | .[0].workflow_run.id // empty' artifacts.json)
+          echo "previous_run=$prev" >> "$GITHUB_OUTPUT"
+          # Real customer threads only for suites that replay them, and never on pull requests.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$EVAL_SUITE" = nightly ] || [[ ",$EVAL_SUITE," == *",prod,"* ]]; }; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=production-threads&per_page=20" > threads.json
+            echo "threads_run=$(jq -r '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty' threads.json)" >> "$GITHUB_OUTPUT"
+            # Artifacts expire after 90 days: carry the file forward once the newest copy is 30 days old.
+            echo "threads_refresh=$(jq -r '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[0].created_at // empty | if . == "" then "false" else ((now - (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) > 2592000 | tostring) end' threads.json)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: download previous results
+        if: steps.find.outputs.previous_run != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: eval-results
+          path: prev
+          run-id: ${{ steps.find.outputs.previous_run }}
+          github-token: ${{ github.token }}
+      - name: download real threads
+        if: steps.find.outputs.threads_run != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: production-threads
+          path: .eval-data
+          run-id: ${{ steps.find.outputs.threads_run }}
+          github-token: ${{ github.token }}
       - name: run evals
+        env:
+          EVAL_SEND_TO_BRAINTRUST: ${{ github.event_name == 'workflow_dispatch' && inputs.send_to_braintrust && '1' || '' }}
+          # Only a run sent to Braintrust gets its key; a local run couldn't reach Braintrust even by mistake.
+          BRAINTRUST_API_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.send_to_braintrust && secrets.BRAINTRUST_API_KEY || '' }}
+          EVAL_EXPERIMENT_NAME: conversations-${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'scheduled' || github.ref_name }}-${{ github.run_number }}-${{ github.sha }}
+          EVAL_THREADS_KEY: ${{ github.event_name != 'pull_request' && secrets.EVAL_THREADS_KEY || '' }}
         run: |
           set -o pipefail
           pnpm eval 2>&1 | tee eval.log
-      - name: summary
+      - name: summary, history and issues
+        id: report
         if: always()
-        run: |
-          {
-            echo "### Conversation evals (${EVAL_SUITE})"
-            echo
-            echo '```'
-            sed -n '/Experiment summary/,/^View results/p' eval.log | grep -vE '^(prompt_cache|tool_|llm_errors|tool_errors)' | head -45
-            echo '```'
-            grep -o 'https://www.braintrust.dev/[^ ]*' eval.log | tail -1 | sed 's/^/Braintrust: /'
-          } > summary.md
-          cat summary.md >> "$GITHUB_STEP_SUMMARY"
-      - name: comment on PR
-        if: always() && github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md
-      - name: file or update eval-failure issues
-        if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.file_issues))
-        env:
+          EVAL_PREVIOUS_RESULTS: prev/eval-results.json
+          EVAL_PREVIOUS_RUN_URL: ${{ steps.find.outputs.previous_run && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, steps.find.outputs.previous_run) || '' }}
+          EVAL_FILE_ISSUES: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.file_issues)) && '1' || '' }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm exec tsx evals/report-failures.ts
+        run: |
+          # The artifact keeps the files' paths: prev/eval-results.json and prev/evals/history.csv.
+          if [ -f prev/evals/history.csv ]; then cp prev/evals/history.csv evals/history.csv; fi
+          pnpm exec tsx evals/report-failures.ts
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # A run that can't be trusted (provider errors, partial results) is kept under another name, so it never
+          # becomes the next run's baseline or history.
+          name: ${{ steps.report.outputs.healthy == 'true' && 'eval-results' || 'eval-results-unhealthy' }}
+          path: |
+            eval-results.json
+            evals/history.csv
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: keep real threads
+        if: always() && steps.find.outputs.threads_refresh == 'true' && hashFiles('.eval-data/production-threads.enc') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-threads
+          path: .eval-data/production-threads.enc
+          retention-days: 90
+      - name: comment on PR
+        if: always() && github.event_name == 'pull_request' && hashFiles('summary.md') != ''
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file summary.md

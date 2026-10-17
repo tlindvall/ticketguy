@@ -288,5 +288,7 @@ verdict: "clean" = no extra; "some_extra" = one or two short extras; "mostly_ext
     }
     return { name: 'only_what_was_asked', score: avg(scores), metadata: { failures } };
   };
+  // Named like their scores, so a judge call that throws is reported under the check it belongs to.
+  for (const [f, name] of [[answered, 'answered_the_question'], [coherent, 'thread_coherence'], [onPoint, 'only_what_was_asked']] as const) Object.defineProperty(f, 'name', { value: name });
   return [answered, coherent, onPoint];
 }
