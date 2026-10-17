@@ -118,7 +118,7 @@ describe('a price watch on SeatData resale listings', () => {
     // Monitoring vs seats checked, said once; the allowance as an assumption (reworded for PW QA wave 1).
     expect(rec!.bodyText).toContain('Your market-price watch is on. I haven’t verified a set of 4 seats together you can buy. I’ll email you a heads-up if resale listings with 4 or more tickets come to $400 or less in total, using an assumed 30% for fees (checkout fees can be higher).');
     expect(rec!.bodyText).toContain('it won’t have a link to the seats or a promise that they’re together or sold as exactly 4');
-    expect(rec!.bodyText).not.toMatch(/I can’t see live resale listings|I haven’t been able to check these against any seats|fees of up to/);
+    expect(rec!.bodyText).not.toMatch(/I can’t see live resale listings|I haven’t been able to check these against any seats|I don’t have seats to recommend yet that meet|fees of up to/);
     expect(rec!.bodyText).not.toContain('I’m watching this for you');
   });
 

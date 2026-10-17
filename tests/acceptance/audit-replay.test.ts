@@ -101,7 +101,9 @@ describe('the TGQA-0929 audit, replayed exactly', () => {
   it('A05-R1/R01-F1: asked again, each requirement is said as not yet checked, and nothing is endorsed', () => {
     for (const id of ['A05-R1', 'R01-F1']) {
       const body = all(id);
-      expect(body, id).toContain('I haven’t been able to check these against any seats yet: 3 seats together; $450 in total for all 3, once fees are added; and step-free access.');
+      // Enforce mode answers Hamilton on the official-only route, which reads no listings and says what to check instead.
+      const lead = process.env.SD_MODE === 'enforce' ? 'I can’t check seats for this one myself, so check these before you pay' : 'I don’t have seats to recommend yet that meet everything you asked for';
+      expect(body, id).toContain(`${lead}: 3 seats together; $450 in total for all 3, once fees are added; and step-free access.`);
       expect(body, id).not.toMatch(/where I'd buy|where I’d buy/);
     }
   });
@@ -157,7 +159,7 @@ describe('the TGQA-0929 audit, replayed exactly', () => {
       expect(body, id).not.toMatch(/I wouldn’t buy this one|You mentioned \$80|That’s 2 tickets, in section 211/);
       // Answered once: no "I'll look at how the tickets are trading" before an answer that needs no search.
       expect(body, id).not.toContain('look at how the tickets are trading');
-      expect(body, id).not.toMatch(/Offer B: 211|suits your needs|I haven’t been able to check/);
+      expect(body, id).not.toMatch(/Offer B: 211|suits your needs|I haven’t been able to check|I don’t have seats to recommend yet that meet/);
     }
   });
 

@@ -46,7 +46,7 @@ class FakeJudge implements AnswerJudge {
 
 const STAFF = 'staff@ticketguy.test';
 // Sent as production sends while testing: drafts go out unreviewed to the testers on the allowlist.
-const CUSTOMERS = ['held', 'asis', 'edit', 'judged', 'down', 'fine', 'plain'].map((x) => `${x}@customer.example`);
+const CUSTOMERS = ['plainnoseats', 'held', 'asis', 'edit', 'judged', 'down', 'fine', 'plain'].map((x) => `${x}@customer.example`);
 const env = testEnv({ APP_MODE: 'live', EMAIL_SEND_ENABLED: 'true', RESEND_API_KEY: 're_test_key', EXTRACTION_PROVIDER: 'rules', STAFF_EMAIL_ALLOWLIST: STAFF, EMAIL_TEST_RECIPIENT_ALLOWLIST: [...CUSTOMERS, STAFF].join(','), AUTO_APPROVE_WHILE_TESTING: 'true' });
 
 describe('the answer gate before every reply', () => {
@@ -79,25 +79,39 @@ describe('the answer gate before every reply', () => {
   };
   const writeIn = async (c: Concierge, from: string, text: string) => (await c.ingestInbound(inbound({ text, from, subject: 'Rangers' }))) as { requestId: string; conversationId: string; contactId: string };
 
-  it('holds a reply with an internal line: the customer hears a person has it, staff get their words and the draft', async () => {
+  // A check that fails, for the hold and what a person does with it.
+  const failing = () => new FakeJudge({ answers: false, nextStep: false, problem: 'It doesn’t say whether to buy now.' });
+
+  it('the no-seats reply says it in plain words and goes out unheld (it once led with "haven\'t been able to check")', async () => {
     const { c, provider, drain } = setup();
+    const from = 'plainnoseats@customer.example';
+    const r = await writeIn(c, from, 'Two Rangers tickets Oct 3, $300 total. Should I buy now?');
+    await drain();
+    const advice = provider.sent.filter((s) => s.to === from).map((s) => s.text).join('\n');
+    expect(advice).toContain('I don’t have seats to recommend yet that meet what you asked for: $300 in total for both, once fees are added.');
+    expect(advice).not.toMatch(/haven[’']t been able to check|Nothing I can check automatically/);
+    expect(await h.db.select().from(t.sendIntents).where(and(eq(t.sendIntents.requestId, r.requestId), like(t.sendIntents.dedupeKey, 'held:%')))).toHaveLength(0);
+  });
+
+  it('holds a reply the check fails: the customer hears a person has it, staff get their words and the draft', async () => {
+    const { c, provider, drain } = setup(failing());
     const from = 'held@customer.example';
     const r = await writeIn(c, from, 'Two Rangers tickets Oct 3, $300 total. Should I buy now?');
     await drain();
     const toCustomer = provider.sent.filter((s) => s.to === from);
-    // Only the hand-off reached the customer, never the line.
-    expect(toCustomer.map((s) => s.text).join('\n')).not.toMatch(/haven[’']t been able to check|Nothing I can check automatically/);
+    // Only the hand-off reached the customer, never the held draft.
+    expect(toCustomer.map((s) => s.text).join('\n')).not.toMatch(/I don’t have seats to recommend/);
     expect(toCustomer.some((s) => /a manual check|passed it to the team/.test(s.text))).toBe(true);
     const [held] = await h.db.select().from(t.sendIntents).where(and(eq(t.sendIntents.requestId, r.requestId), like(t.sendIntents.dedupeKey, `held:${r.requestId}:%`)));
     expect(held!.state).toBe('blocked');
-    expect(held!.lastError).toMatch(/^answer_gate:banned_cannot_check,banned_nothing_automatic/);
+    expect(held!.lastError).toBe('answer_gate:not_answered,no_next_step It doesn’t say whether to buy now.');
     // The code that queued it moved on as if sent; the request stays with the person.
     const [req] = await h.db.select().from(t.requests).where(eq(t.requests.id, r.requestId));
     expect(req!.state).toBe('manual_attention');
     // The alert carries what they wrote and what we would have sent.
     const alert = provider.sent.find((s) => s.to === STAFF);
     expect(alert?.subject).toBe('Needs a person: the drafted reply was held before sending');
-    expect(alert?.text).toContain('Why it was held: it says we haven’t been able to check; it says nothing can be checked automatically.');
+    expect(alert?.text).toContain('Why it was held: it doesn’t answer the customer’s message; it gives the customer no next step. It doesn’t say whether to buy now.');
     expect(alert?.text).toContain('The customer wrote:\nTwo Rangers tickets Oct 3, $300 total. Should I buy now?');
     expect(alert?.text).toContain('The held reply:\nHey,');
     const shown = await c.heldReply(r.requestId);
@@ -105,7 +119,7 @@ describe('the answer gate before every reply', () => {
   });
 
   it('sent as drafted: the original email goes out once, as a staff reply, and the request is answered', async () => {
-    const { c, provider, drain } = setup();
+    const { c, provider, drain } = setup(failing());
     const from = 'asis@customer.example';
     const r = await writeIn(c, from, 'Two Rangers tickets Oct 3, $300 total. Should I buy now?');
     await drain();
@@ -123,7 +137,7 @@ describe('the answer gate before every reply', () => {
   });
 
   it('edited: their words go out with the sign-off, and the gate does not check a person', async () => {
-    const { c, provider, drain } = setup();
+    const { c, provider, drain } = setup(failing());
     const from = 'edit@customer.example';
     const r = await writeIn(c, from, 'Two Rangers tickets Oct 3, $300 total. Should I buy now?');
     await drain();

@@ -52,7 +52,7 @@ describe('each question in a long thread gets its own answer (#159)', () => {
   it('"anything cheaper where we still sit together?" names the cheapest five together and what it costs over', async () => {
     const t = at(await replay(scenario('long/rangers-group-saga')), 6);
     expect(t.reply).toContain('Nothing for 5 together fits inside your $600: the cheapest 5 together I can see are in section 211, $640 total ($128 each) including the verified charges, $40 over.');
-    expect(t.reply).not.toMatch(/haven’t been able to check/);
+    expect(t.reply).not.toMatch(/haven’t been able to check|I don’t have seats to recommend yet that meet/);
     expect(t.reply).not.toMatch(/310[^\n]*together/);
   }, 120_000);
 

@@ -1735,3 +1735,25 @@ feed-name copy, and the reader's request model are Phases 1 to 3.
 check that fails, a person's reply with nothing held). Expectations changed on purpose: the play-back and
 acknowledgment wording in nine tests.
 
+
+## 87. A no-seats reply says it in plain words, never "haven't been able to check" (Oct 17)
+
+The fix plan's last Phase 0 item. Since #86 the answer gate held every reply carrying "I haven't been able to check this
+against any seats yet … Nothing I can check automatically has shown me seats…" (C_REQS). #85 already gives the over-budget
+reply its way forward (closest listing, another game that fits, the game's listings link); what was left was the line itself.
+
+**Decisions.**
+- C_REQS reads "I don't have seats to recommend yet that meet everything you asked for: 3 seats together and $450 in
+  total for all 3, once fees are added." It is true whether the listings were read or not, and the next step that already
+  follows it stays ("Found seats you like? Send me the price, section and row…").
+- The Guide route (official-only events, where we read no listings) says what to check: "I can't check seats for this one
+  myself, so check these before you pay: …".
+- Eval check `no_coverage_talk`: no customer email in any thread says "haven't been able to check" or "Nothing I can check
+  automatically".
+
+**Not in this change.** A recheck within the hour when the listings couldn't be read: #85's kept read and staff alert cover
+the refused read; a scheduled recheck is a separate decision.
+
+**Verified:** `tests/acceptance/answer-gate.test.ts` (the no-seats reply goes out unheld, in the new words). Assertions
+that named the old sentence now name the new one, positive and negative alike, so a "not here" check still means
+something.

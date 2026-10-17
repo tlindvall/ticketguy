@@ -2542,7 +2542,9 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
     claims.push({
       id: 'C_REQS',
       kind: 'coverage',
-      text: `I haven’t been able to check ${reqs.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}. Nothing I can check automatically has shown me seats that meet ${reqs.length === 1 ? 'it' : 'all of them'}, so I can’t recommend any yet.`,
+      // Plain words, true whether the listings were read or not (fix plan Phase 0: "I haven't been able to check this
+      // against any seats yet" led the live Ducks reply). The next step follows it.
+      text: `I don’t have seats to recommend yet that meet ${reqs.length === 1 ? 'what you asked for' : 'everything you asked for'}: ${joinRequirements(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.`,
       values: { requirements: reqs.length },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],
