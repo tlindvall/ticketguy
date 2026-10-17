@@ -75,6 +75,15 @@ export async function settleBudget(db: DbOrTx, ledgerId: string, actual: { input
   await db.update(usageLedger).set({ inputTokens: actual.inputTokens, outputTokens: actual.outputTokens, toolCalls: actual.toolCalls, actualUsdMicros: actual.actualUsdMicros, kind: 'settled' }).where(eq(usageLedger.id, ledgerId));
 }
 
+/**
+ * Spend for a call made outside a reservation (the answer gate, which runs at send time and must not be stopped by the
+ * per-revision call cap): recorded as settled, so the daily total and the request's spend include it.
+ */
+export async function recordUsage(db: DbOrTx, args: { requestId: string; revision: number; jobName: string; model: string; usage: { inputTokens: number; outputTokens: number }; overrides?: Record<string, Price> }): Promise<void> {
+  const usd = estimateUsdMicros(args.model, args.usage.inputTokens, args.usage.outputTokens, 0, args.overrides ?? {});
+  await db.insert(usageLedger).values({ requestId: args.requestId, revision: args.revision, jobName: args.jobName, model: args.model, inputTokens: args.usage.inputTokens, outputTokens: args.usage.outputTokens, estimatedUsdMicros: usd, actualUsdMicros: usd, priceTableVersion: PRICE_TABLE_VERSION, kind: 'settled' });
+}
+
 /** Release a reservation whose call never happened (e.g. transport failure before submission). */
 export async function releaseBudget(db: DbOrTx, args: { requestId: string; revision: number; model: string; estimatedUsdMicros: number; jobName: string }): Promise<void> {
   await db.insert(usageLedger).values({ requestId: args.requestId, revision: args.revision, jobName: args.jobName, model: args.model, estimatedUsdMicros: args.estimatedUsdMicros, priceTableVersion: PRICE_TABLE_VERSION, kind: 'released' });

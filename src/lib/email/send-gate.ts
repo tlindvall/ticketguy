@@ -7,7 +7,7 @@ import type { Env } from '@/lib/config/env';
  * Send gate (API_AND_DATA_CONTRACTS §5). Evaluated immediately before every provider submission, using
  * the CURRENT switch state, never a cached scheduling decision (A38). Fixture mode can never pass (A13).
  */
-export type MessageClass = 'acknowledgment' | 'clarification' | 'recommendation' | 'no_result' | 'watch_confirmation' | 'watch_alert' | 'event_alert' | 'follow_up' | 'marketing' | 'verification';
+export type MessageClass = 'acknowledgment' | 'clarification' | 'recommendation' | 'no_result' | 'watch_confirmation' | 'watch_alert' | 'event_alert' | 'follow_up' | 'marketing' | 'verification' | 'staff_reply';
 
 export type GateInput = {
   messageClass: MessageClass;
@@ -31,6 +31,8 @@ export type GateInput = {
 export type GateResult = { allowed: true } | { allowed: false; reasons: string[] };
 
 const REQUIRES_APPROVAL: MessageClass[] = ['recommendation', 'watch_alert', 'marketing'];
+// A staff reply is a person's own email to the customer (a reply the answer gate held, sent or rewritten from the request
+// page): written by the reviewer, so it needs no separate approval.
 
 export async function loadSwitches(db: DbOrTx): Promise<Record<string, boolean>> {
   const rows = await db.select({ key: killSwitches.key, enabled: killSwitches.enabled }).from(killSwitches);
@@ -77,7 +79,7 @@ export function evaluateGate(env: Env, switches: Record<string, boolean>, suppre
   if (suppressed.has('global')) reasons.push('suppressed_global');
   // The allowlist keeps real mail to named testers. A captured send reaches nobody, so test customers can be anyone.
   if (!input.testMode && env.EMAIL_TEST_RECIPIENT_ALLOWLIST.length > 0 && !env.EMAIL_TEST_RECIPIENT_ALLOWLIST.includes(input.recipientLookup)) reasons.push('recipient_not_in_test_allowlist');
-  if (REQUIRES_APPROVAL.includes(input.messageClass) || env.HUMAN_REVIEW_REQUIRED && input.messageClass !== 'acknowledgment' && input.messageClass !== 'clarification' && input.messageClass !== 'verification' && input.messageClass !== 'no_result' && input.messageClass !== 'event_alert' && input.messageClass !== 'follow_up') {
+  if (REQUIRES_APPROVAL.includes(input.messageClass) || env.HUMAN_REVIEW_REQUIRED && input.messageClass !== 'acknowledgment' && input.messageClass !== 'clarification' && input.messageClass !== 'verification' && input.messageClass !== 'no_result' && input.messageClass !== 'event_alert' && input.messageClass !== 'follow_up' && input.messageClass !== 'staff_reply') {
     if (!input.approved) reasons.push('not_approved');
     if (!input.approvalHashMatches) reasons.push('approval_hash_mismatch');
   }

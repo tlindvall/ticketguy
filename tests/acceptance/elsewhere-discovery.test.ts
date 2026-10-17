@@ -133,14 +133,14 @@ describe('a correction or a "why didn’t you" is owned before the answer', () =
   it('owns the miss, then gives the Connecticut dates; a second "why didn’t you" is owned again, not re-asked as new', async () => {
     const c = new Concierge({ db: h.db, env: testEnv(), extractor: new FixtureExtractor(), drafter: new FixtureDrafter(), clock: () => FIXTURE_NOW, emailProvider: null, fixtureOffers: FIXTURE_OFFERS });
     const first = await turn(c, 'Metallica tickets', null);
-    expect(first.body).toContain('Metallica tickets. Got it.');
+    expect(first.body).toContain('You’re after Metallica tickets.');
     const second = await turn(c, 'they are playing in CT. why would you not suggest that?', first.m);
     expect(second.body.split('\n\n')[1]).toBe('You’re right, I missed that. Here’s what I have now.');
-    expect(second.body).not.toContain('Got it.');
+    expect(second.body).not.toMatch(/Got it\.|You’re after /);
     expect(second.body).toMatch(/Mohegan Sun Arena/);
     const third = await turn(c, "why didn't you tell me about the CT show before suggesting las vegas?", second.m);
     expect(third.body.split('\n\n')[1]).toBe('You’re right, I missed that, and I should have checked the whole tour before suggesting anything further away. Here’s what I have now.');
     expect(third.body).toMatch(/Mohegan Sun Arena/);
-    expect(third.body).not.toContain('Got it.');
+    expect(third.body).not.toMatch(/Got it\.|You’re after /);
   });
 });

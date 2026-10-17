@@ -104,7 +104,7 @@ describe('a part of the country is a place', () => {
   });
 
   it('a concert is the next show, a team the next game', () => {
-    expect(acknowledgementLine({ ...live, quantity: 2 } as RequestExtraction)).toBe('Two Metallica tickets for the next show. Got it.');
-    expect(acknowledgementLine({ ...live, performerOrTeam: 'New York Rangers', categoryHint: 'nhl', quantity: 4 } as RequestExtraction)).toBe('Four New York Rangers tickets for the next game. Got it.');
+    expect(acknowledgementLine({ ...live, quantity: 2 } as RequestExtraction)).toBe('You’re after two Metallica tickets for the next show.');
+    expect(acknowledgementLine({ ...live, performerOrTeam: 'New York Rangers', categoryHint: 'nhl', quantity: 4 } as RequestExtraction)).toBe('You’re after four New York Rangers tickets for the next game.');
   });
 });

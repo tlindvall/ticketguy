@@ -17,6 +17,9 @@ import { marketForGroup, marketLicence, marketUses } from '@/lib/market/tracker'
 import { env as appEnv } from '@/lib/config/env';
 import type { MarketContext } from '@/lib/market/series';
 import { TestMessageForm } from '@/components/TestMessageForm';
+import { StaffReplyForm } from '@/components/StaffReplyForm';
+import { getConcierge } from '@/lib/services';
+import { heldDraftBody } from '@/lib/intake/pipeline';
 import { requestTrace, traceSummary, TRACE_SOURCE_LABEL, type TraceStep } from '@/lib/admin/request-trace';
 import { TEST_PROVIDER, testModeOn } from '@/lib/email/test-mode';
 import { ago, briefLines, type Tone, reasonText, sendClassLabel, sendStateInfo, stateInfo, toneClass, whenLocal, whenStaff } from '@/lib/admin/labels';
@@ -30,6 +33,7 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const [req] = await db.select().from(t.requests).where(eq(t.requests.id, id));
   if (!req) notFound();
   const [contact] = await db.select().from(t.contacts).where(eq(t.contacts.id, req.contactId));
+  const held = req.state === 'manual_attention' ? await (await getConcierge()).heldReply(req.id) : null;
   const messages = await db.select().from(t.messages).where(eq(t.messages.conversationId, req.conversationId)).orderBy(asc(t.messages.receivedAt), asc(t.messages.createdAt));
   const versions = await db.select().from(t.requestVersions).where(eq(t.requestVersions.requestId, id)).orderBy(desc(t.requestVersions.revision));
   const transitions = await db.select().from(t.requestTransitions).where(eq(t.requestTransitions.requestId, id)).orderBy(asc(t.requestTransitions.createdAt));
@@ -112,6 +116,19 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
           {why ? <p className="mt-1 text-sm text-gray-700"><strong>Why:</strong> {why}</p> : null}
         </div>}
       </header>
+
+      {req.state === 'manual_attention' ? (
+        <section className="rounded-lg border-2 border-rose-300 p-4">
+          <h2 className="text-lg font-semibold">{held ? 'Reply held before sending' : 'Reply to the customer'}</h2>
+          {held ? (
+            <>
+              <p className="mt-1 text-sm text-gray-700"><strong>Why it was held:</strong> {held.reason}.</p>
+              <p className="mt-1 text-sm text-gray-600">Send it as drafted, edit it, or write your own. Unchanged, the original email goes out with its links and cards; edited, it goes out as plain paragraphs. The sign-off is added either way.</p>
+            </>
+          ) : <p className="mt-1 text-sm text-gray-600">Goes out in the customer&rsquo;s thread from Ticket Guy, with the usual sign-off.</p>}
+          <div className="mt-3"><StaffReplyForm requestId={req.id} heldId={held?.id ?? null} draft={held ? heldDraftBody(held.text) : 'Hey,\n\n'} /></div>
+        </section>
+      ) : null}
 
       {pending ? (
         <section className="rounded-lg border-2 border-amber-300 p-4">
