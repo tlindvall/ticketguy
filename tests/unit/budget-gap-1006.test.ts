@@ -37,7 +37,8 @@ const email = (a: BuildPacketArgs) => {
 describe('over budget: the outcome follows the evidence and the time left, never a raised budget', () => {
   it('falling, but the game is tonight: no waiting for $200; one question instead', () => {
     const text = email(args(ctx({ direction: 'down', h72: { hours: 72, fromCents: 11000, toCents: 8469, changeCents: -2531, pct: -0.23 } }), { until: game }));
-    expect(text).toContain('I haven’t found a confirmed pair under $200.');
+    // The headline says the answer (Oct 15 review), not "I haven’t found a confirmed pair under $200."
+    expect(text).toMatch(/Nothing for two under \$200 on [A-Z][a-z]{2} \d{1,2} yet\./);
     expect(text).toContain('Comparable pairs have fallen 23% over three days, but there isn’t time to wait for $200.');
     expect(text).toContain('Would you go up to about $220 for these, or should I look at other seats or another date?');
     expect(text).not.toMatch(/hold off|watch it/);

@@ -59,6 +59,10 @@ export const EV = {
   kingsJan9: uid(230), lakersWarriors: uid(231), clippersSuns: uid(232), kingsDucks: uid(233), wickedJan14: uid(234),
   lakersCeltics: uid(235), ramsSeahawks: uid(236), brunoForum: uid(237), lakersSpurs: uid(238),
   rangersFlyers: uid(240), islandersRangersNov: uid(241), rangersCanadiens: uid(242), rangersSabres: uid(243),
+  // Oct 15 live thread (Rangers vs Ducks, $150 for two): nothing fits here, but the Kings game a week later does. Dated
+  // in November so the Rangers-week scenarios ("this week", "in October") see the same games as before, and off the
+  // November dates #189's budget-across-games scenario uses (Nov 16 there is Montreal).
+  rangersDucks: uid(244), rangersKings: uid(245),
 } as const;
 
 const NY = 'America/New_York';
@@ -122,6 +126,8 @@ const EVENTS: Ev[] = [
   { id: EV.hamiltonEvening, name: 'Hamilton', category: 'theater', subtype: 'evening', venueId: V.rodgers, primaryEntityId: ENT.hamilton, localStartAt: at('2026-10-11T00:00:00Z') },
   { id: EV.rangersBruins, name: 'New York Rangers vs. Boston Bruins', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.bruins, isHome: true, localStartAt: at('2026-10-22T23:00:00Z') },
   { id: EV.rangersDevils, name: 'New York Rangers vs. New Jersey Devils', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.devils, isHome: true, localStartAt: at('2026-10-24T23:00:00Z') },
+  { id: EV.rangersDucks, name: 'New York Rangers vs. Anaheim Ducks', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.ducks, isHome: true, localStartAt: at('2026-11-18T23:00:00Z') },
+  { id: EV.rangersKings, name: 'New York Rangers vs. Los Angeles Kings', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.kings, isHome: true, localStartAt: at('2026-11-25T23:00:00Z') },
   { id: EV.islandersRangers, name: 'New York Islanders vs. New York Rangers', category: 'nhl', subtype: 'regular_season', venueId: V.ubs, primaryEntityId: ENT.islanders, opponentEntityId: ENT.rangers, isHome: true, localStartAt: at('2026-10-27T23:30:00Z') },
   // November Rangers games for the budget search across games (live Oct 15: "what other games can I see for that price?").
   { id: EV.rangersFlyers, name: 'New York Rangers vs. Philadelphia Flyers', category: 'nhl', subtype: 'regular_season', venueId: V.msg, primaryEntityId: ENT.rangers, opponentEntityId: ENT.flyers, isHome: true, localStartAt: at('2026-11-11T00:00:00Z') },
@@ -195,6 +201,9 @@ function baseWorldOffers(): Record<string, Offer[]> {
       L(EV.rangersBruins, 'rb-5-upper-310-split', 5, 560, 'upper', '310', 'H', { seatsTogether: false }),
     ],
     [EV.rangersDevils]: [L(EV.rangersDevils, 'rd-2-upper-213', 2, 300, 'upper', '213', 'C'), L(EV.rangersDevils, 'rd-5-upper-220', 5, 760, 'upper', '220', 'E')],
+    // Over $150 for two.
+    [EV.rangersDucks]: [L(EV.rangersDucks, 'rdk-2-upper-312', 2, 290, 'upper', '312', 'H'), L(EV.rangersDucks, 'rdk-2-upper-305', 2, 330, 'upper', '305', 'B')],
+    [EV.rangersKings]: [L(EV.rangersKings, 'rk-2-upper-318', 2, 140, 'upper', '318', 'F')],
     [EV.islandersRangers]: [L(EV.islandersRangers, 'ir-2-upper-211', 2, 280, 'upper', '211', 'F'), L(EV.islandersRangers, 'ir-4-lower-114', 4, 900, 'lower', '114', 'K')],
     // Totals for two, all-in: Nov 16 Montreal's cheapest pair is $246 (the live thread); three other games have a pair
     // at $150 or less, one of them away (Islanders' home), and Buffalo's cheaper pair is obstructed so doesn't count.
@@ -250,6 +259,8 @@ const TRENDS: Array<{ eventId: string; quantity: number; zone: string; points: A
   { eventId: EV.knicksCeltics, quantity: 2, zone: 'upper', start: '2026-10-28T23:30:00Z', asOf: AS_OF.knicksWeek, points: [[72, 320], [48, 350], [24, 385], [0, 420]] },
   { eventId: EV.dodgersGiants, quantity: 2, zone: 'upper', start: '2026-10-01T02:10:00Z', asOf: AS_OF.dodgersWeek, points: [[72, 182], [48, 178], [24, 181], [0, 180]] },
   { eventId: EV.lakersWarriors, quantity: 2, zone: 'upper', start: '2027-01-13T03:30:00Z', asOf: AS_OF.laJanuary, points: [[0, 380]] },
+  // The Kings game's checked total for two, held from earlier the same day: the price the Ducks reply can offer instead.
+  { eventId: EV.rangersKings, quantity: 2, zone: 'upper', start: '2026-11-23T23:00:00Z', asOf: '2026-11-12T14:00:00Z', points: [[0, 140]] },
 ];
 
 /** Links a customer might paste, mapped to the events they name (event_source_mappings), plus links we don't know. */

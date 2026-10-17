@@ -48,6 +48,11 @@ const OFFER_URLS = new Set([...Object.values(WORLD).flat().flatMap((o) => [o.dir
 /** Marketplace search and city pages the product builds on purpose (never a specific listing). */
 const SEARCH_LINK = /^https:\/\/(www\.stubhub\.com\/search\?q=|www\.vividseats\.com\/search\?searchTerm=|ra\.co\/events\/[a-z]{2}\/[a-z-]+$)/;
 
+/** A question to answer, or an action to take: reply with something, start a watch, or a link to buy or look. */
+export function hasNextStep(reply: string): boolean {
+  return questionsIn(reply).length > 0 || /\b(?:reply|send me|tell me|watch it|let me know)\b/i.test(reply) || urlsIn(reply).some((u) => /stubhub\.com|vividseats\.com|ticketmaster\.com|example\.invalid\/fixture/.test(u));
+}
+
 // ---------- per email ----------
 const PLAIN = new Set(['acknowledgment', 'clarification', 'holding', 'watch_alert', 'watch_confirmation', 'verification', 'manual_attention', 'no_result']);
 
@@ -139,6 +144,9 @@ export const perEmail = [
     const bad = claims.filter((c) => { const ls = Object.values(WORLD).flat().filter((o) => o.section === c.section && o.quantity === c.q); return ls.length > 0 && ls.every((o) => o.seatsTogether === false); });
     return { ok: bad.length ? 0 : 1, why: `claims together but listing is not: ${bad.map((b) => `${b.q} in ${b.section}`).join(', ')}` };
   }),
+  // Oct 15 (Rangers vs Ducks): a reply with no listing, no link and no next step. Only where a step expects it.
+  perTurn('has_a_link', (tu) => (tu.expect?.hasLink && tu.reply.trim() ? { ok: urlsIn(tu.reply).length ? 1 : 0, why: 'no link in the reply' } : null)),
+  perTurn('has_next_step', (tu) => (tu.expect?.hasNextStep && tu.reply.trim() ? { ok: hasNextStep(tu.reply) ? 1 : 0, why: 'no question and no action to take' } : null)),
   perTurn('at_most_one_question', (tu) => (tu.reply.trim() ? { ok: questionsIn(tu.reply).length <= 1 ? 1 : 0, why: `${questionsIn(tu.reply).length} questions` } : null)),
   perTurn('one_email_per_message', (tu) => (isEmailStep(tu) && tu.emails.length ? { ok: tu.emails.length <= 1 ? 1 : 0, why: `${tu.emails.length} emails: ${tu.emails.map((e) => e.cls).join(', ')}` } : null)),
   // Design (DECISION_LOG #76, #82): every sent email is signed (full on the first reply, short after); every answer

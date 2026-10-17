@@ -23,12 +23,15 @@ describe('which other games fit the budget (live Oct 15, Rangers)', () => {
     const turns = await run([...head, '2 tickets. Max $150', 'yes what other games can I see for that price? total yes.']);
     const [three, four] = [turns[2]!, turns[3]!];
     expect(four.reply).not.toBe(three.reply);
-    expect(four.reply).toContain('Three Rangers games have a pair at $150 or less, all-in, home games first:');
+    // Four with #190's Nov 25 Kings game in the eval world ($140 for two).
+    expect(four.reply).toContain('Four Rangers games have a pair at $150 or less, all-in, home games first:');
     const flyers = four.reply.indexOf('Philadelphia Flyers at Madison Square Garden, $138 for both, all-in');
+    const kings = four.reply.indexOf('Los Angeles Kings at Madison Square Garden, $140 for both, all-in');
     const sabres = four.reply.indexOf('Buffalo Sabres at Madison Square Garden, $149 for both, all-in');
     const away = four.reply.indexOf('New York Islanders vs. New York Rangers at UBS Arena (away), $120 for both, all-in');
     expect(flyers).toBeGreaterThan(-1);
-    expect(sabres).toBeGreaterThan(flyers);
+    expect(kings).toBeGreaterThan(flyers);
+    expect(sabres).toBeGreaterThan(kings);
     expect(away).toBeGreaterThan(sabres);
     // Over budget, or only cheaper because it's obstructed: not offered.
     expect(four.reply).not.toMatch(/Montreal Canadiens|Boston Bruins|\$110|go up to about/);

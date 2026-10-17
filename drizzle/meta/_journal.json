@@ -176,6 +176,13 @@
       "when": 1792029903675,
       "tag": "0024_event_preview",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792097874016,
+      "tag": "0025_market_lanes",
+      "breakpoints": true
     }
   ]
 }

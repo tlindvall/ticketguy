@@ -74,6 +74,11 @@ const HISTORY_REFRESH_DAYS = 30;
 const SAME_MONTH_EVENTS = 8;
 /** Past-games reads: their own daily allowance (SEATDATA_HISTORY_CALL_LIMIT), on top of live polling's. */
 const HISTORY_KINDS = ['history_search', 'history_stats'];
+/** The share of SEATDATA_DAILY_CALL_LIMIT background tracking may spend; customers' requests have the rest, and more. */
+export const BACKGROUND_SHARE = 0.6;
+type Lane = 'customer' | 'background';
+/** Background's calls for the day: at least one, so a tiny allowance still polls. */
+const backgroundCap = (limit: number) => Math.max(1, Math.floor(limit * BACKGROUND_SHARE));
 /** Pairs (team or act, venue) whose history one pass prepares ahead of a customer asking. */
 const PREWARM_PAIRS = 10;
 const MAX_MATCH_ATTEMPTS = 4;
@@ -83,7 +88,13 @@ type EventRow = { e: typeof t.events.$inferSelect; v: typeof t.venues.$inferSele
 /** Listings reads by event, shared across requests in this process for a few minutes (see recentListings). */
 /** A listings read: when the provider refreshed it, when we fetched it, the rows, and StubHub's event id when known. */
 /** `inactive`: rows the feed marks no longer for sale, kept only to tell a linked listing that has gone (gap 6). */
-export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null; inactive?: MarketListing[] };
+export type ListingsRead = { providerAsOf: Date | null; retrievedAt: Date; listings: MarketListing[]; stubHubEventId?: string | null; inactive?: MarketListing[]; /** The game's last read, kept: this request's own read was refused. */ kept?: boolean };
+
+/** A tracked game's kept listings as a read, dated when they were read; null when none were kept. */
+function keptListings(tr: typeof t.trackedEvents.$inferSelect): ListingsRead | null {
+  if (!tr.lastListings?.length || !tr.lastListingsAt) return null;
+  return { providerAsOf: tr.lastListingsAsOf, retrievedAt: tr.lastListingsAt, listings: tr.lastListings as MarketListing[], kept: true };
+}
 
 /** StubHub's own event id, from the reply when it carries one (undocumented; read defensively) or the id we asked by. */
 export function replyStubHubEventId(r: Record<string, unknown>, askedBy: string | null): string | null {
@@ -117,7 +128,16 @@ export function listingShape(raw: Array<Record<string, unknown>>, reply?: Record
 
 export class MarketTracker {
   private client: SeatDataClient | null = null;
-  constructor(private readonly deps: { db: DbOrTx; env: Env; now?: () => Date; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }) {}
+  constructor(private readonly deps: { db: DbOrTx; env: Env; now?: () => Date; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void>; lane?: Lane }) {
+    this.lane = deps.lane ?? 'customer';
+  }
+
+  /**
+   * Who the calls are for. Background tracking (the hourly pass, price watches) may spend at most BACKGROUND_SHARE of
+   * SEATDATA_DAILY_CALL_LIMIT; a customer's request may spend whatever is left of the day, so tracking can never leave
+   * a request without its listings read (Oct 15: Rangers vs Ducks got a reply with no listing and no link).
+   */
+  private lane: Lane;
 
   private get db() {
     return this.deps.db;
@@ -146,7 +166,11 @@ export class MarketTracker {
   async callsLeft(lane: 'live' | 'history'): Promise<number> {
     const history = await this.callsToday(HISTORY_KINDS);
     if (lane === 'history') return Math.max(0, this.deps.env.SEATDATA_HISTORY_CALL_LIMIT - history);
-    return Math.max(0, this.deps.env.SEATDATA_DAILY_CALL_LIMIT - ((await this.callsToday()) - history));
+    const limit = this.deps.env.SEATDATA_DAILY_CALL_LIMIT;
+    const day = Math.max(0, limit - ((await this.callsToday()) - history));
+    if (this.lane === 'customer') return day;
+    const background = (await this.callsToday(undefined, 'background')) - (await this.callsToday(HISTORY_KINDS, 'background'));
+    return Math.max(0, Math.min(day, backgroundCap(limit) - background));
   }
 
   /** Calls already written to market_fetches by this tracker (log and finish), against the client's own count. */
@@ -160,15 +184,15 @@ export class MarketTracker {
     return Math.max(0, (this.client?.calls ?? 0) - this.logged);
   }
 
-  async callsToday(kinds?: string[]): Promise<number> {
+  async callsToday(kinds?: string[], lane?: Lane): Promise<number> {
     const now = this.now();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const [r] = await this.db.select({ n: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), gte(t.marketFetches.at, day), ...(kinds ? [inArray(t.marketFetches.kind, kinds)] : [])));
+    const [r] = await this.db.select({ n: sql<number>`coalesce(sum(${t.marketFetches.calls}), 0)::int` }).from(t.marketFetches).where(and(eq(t.marketFetches.provider, SEATDATA_PROVIDER), gte(t.marketFetches.at, day), ...(kinds ? [inArray(t.marketFetches.kind, kinds)] : []), ...(lane ? [eq(t.marketFetches.lane, lane)] : [])));
     return r?.n ?? 0;
   }
 
   private async log(kind: string, eventId: string | null, status: string, calls: number, points = 0, detail: string | null = null): Promise<string | null> {
-    const [r] = await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 600) ?? null, at: this.now() }).returning({ id: t.marketFetches.id });
+    const [r] = await this.db.insert(t.marketFetches).values({ provider: SEATDATA_PROVIDER, kind, eventId, status, calls, points, detail: detail?.slice(0, 600) ?? null, lane: this.lane, at: this.now() }).returning({ id: t.marketFetches.id });
     this.logged += calls;
     return r?.id ?? null;
   }
@@ -185,9 +209,12 @@ export class MarketTracker {
     // ISO strings, cast: postgres.js rejects a Date bound into raw SQL, and that made every listings read throw in
     // production while the embedded test database accepted it (Final Human QA 2026-10-02, R1-HUMAN-01).
     // Live reads count against the live allowance only: the history backfill has its own (SEATDATA_HISTORY_CALL_LIMIT).
-    const r = await this.db.execute(sql`insert into market_fetches (provider, kind, event_id, status, calls, points, detail, at)
-      select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${now.toISOString()}::timestamptz
+    // Background reads also stop at their share of the day; a customer's read is limited by the day alone.
+    const cap = this.lane === 'background' ? backgroundCap(limit) : limit;
+    const r = await this.db.execute(sql`insert into market_fetches (provider, kind, event_id, status, calls, points, detail, lane, at)
+      select ${SEATDATA_PROVIDER}, ${kind}, ${eventId}::uuid, 'reserved', 1, 0, null, ${this.lane}, ${now.toISOString()}::timestamptz
       where (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day.toISOString()}::timestamptz and kind not in ('history_search', 'history_stats')) < ${limit}
+        and (${this.lane} = 'customer' or (select coalesce(sum(calls), 0) from market_fetches where provider = ${SEATDATA_PROVIDER} and at >= ${day.toISOString()}::timestamptz and kind not in ('history_search', 'history_stats') and lane = 'background') < ${cap})
       returning id`);
     const rows = (Array.isArray(r) ? r : (r as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
     const id = rows[0]?.id;
@@ -283,6 +310,8 @@ export class MarketTracker {
 
   /** One pass: enrol, then match or poll what is due (customers' events first), then score shadow advice. */
   async run(opts: { limit?: number } = {}): Promise<{ skipped?: string; enrolled: number; due: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number; paused: number; history: number; stoppedBy?: string }> {
+    // The hourly pass is background tracking, whoever constructed the tracker: it spends at most its share of the day.
+    this.lane = 'background';
     const out: { enrolled: number; due: number; matched: number; polled: number; points: number; ended: number; shadow: number; scored: number; budgetLeft: number; paused: number; history: number; stoppedBy?: string } = { enrolled: 0, due: 0, matched: 0, polled: 0, points: 0, ended: 0, shadow: 0, scored: 0, budgetLeft: 0, paused: 0, history: 0 };
     const why = await this.blocked();
     if (why) return { ...out, skipped: why };
@@ -362,7 +391,11 @@ export class MarketTracker {
     await this.db.insert(t.trackedEvents).values({ eventId, provider: SEATDATA_PROVIDER, reasons: ['request'], nextPollAt: now }).onConflictDoNothing();
     const [tr] = await this.db.select().from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, eventId), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
     if (!tr || !['pending_match', 'requested', 'active'].includes(tr.state)) return { refreshed: false, reason: tr?.state ?? 'missing' };
-    if ((await this.callsLeft('live')) <= 0) return { refreshed: false, reason: 'budget' };
+    if ((await this.callsLeft('live')) <= 0) {
+      // On record, so a customer's request refused for the day's allowance raises the staff alert (staleness.ts).
+      await this.log('stats', eventId, 'skipped_budget', 0, 0, 'refresh');
+      return { refreshed: false, reason: 'budget' };
+    }
     if (tr.nextPollAt > now && !(opts.stale && tr.state === 'active' && tr.providerEventId)) {
       // The stats are current, but a group of three or more reads listings, and those are only as fresh as the last read.
       if (tr.state !== 'active' || !tr.providerEventId) return { refreshed: false, reason: 'fresh' };
@@ -557,7 +590,11 @@ export class MarketTracker {
       await this.log(kind, eventId, 'error', 0, 0, `reserve: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`).catch(() => undefined);
       return null;
     });
-    if (!slot) return null;
+    // A comparison the allowance or the provider refuses falls back to this game's last read, said with its age: the
+    // closest listing and its links, never a reply with market statistics alone (Oct 15). A watch never does: its
+    // alert is about now.
+    const kept = () => (kind === 'listings_compare' && tr ? keptListings(tr) : null);
+    if (!slot) return kept();
     const api = await this.api();
     api.callCap = api.calls + slot.attempts;
     const before = api.calls;
@@ -571,14 +608,20 @@ export class MarketTracker {
       await this.finish(slot.id, 'success', api.calls - before, listings.length, `${raw.length} listings; provider as of ${providerAsOf ? providerAsOf.toISOString() : 'unknown'}; ${listingShape(raw, r)}`);
       await this.rememberListings(eventId, raw, providerAsOf);
       await this.rememberMarketplaces(eventId, r, raw);
+      if (tr) await this.keepListings(tr.id, listings, retrievedAt, providerAsOf);
       const out: ListingsRead = { providerAsOf, retrievedAt, listings, stubHubEventId: replyStubHubEventId(r, bySh ? stubHubEventId : null), inactive: inactiveListings(raw.filter(isOrdinarySeatListing)) };
       this.lastRead.set(eventId, out);
       RECENT_READS.set(eventId, out);
       return out;
     } catch (e) {
       await this.finish(slot.id, 'error', api.calls - before, 0, e instanceof SeatDataError ? `${e.type}${e.status ? `:${e.status}` : ''}` : e instanceof Error ? e.message : String(e));
-      return null;
+      return kept();
     }
+  }
+
+  /** The game's last listings read, kept for a reply whose own read is refused. Never fails the read. */
+  private async keepListings(trackedId: string, listings: MarketListing[], at: Date, asOf: Date | null): Promise<void> {
+    await this.db.update(t.trackedEvents).set({ lastListings: listings.slice(0, 400), lastListingsAt: at, lastListingsAsOf: asOf }).where(eq(t.trackedEvents.id, trackedId)).catch(() => undefined);
   }
 
   /**
@@ -640,6 +683,8 @@ export class MarketTracker {
     await this.rememberListings(ev.e.id, listings, asOf);
     await this.rememberMarketplaces(ev.e.id, r, listings);
     const read: ListingsRead = { providerAsOf: asOf, retrievedAt, listings: listings.filter(isOrdinarySeatListing).map(toMarketListing).filter((l): l is MarketListing => l !== null), stubHubEventId: replyStubHubEventId(r, null), inactive: inactiveListings(listings.filter(isOrdinarySeatListing)) };
+    const [kept] = await this.db.select({ id: t.trackedEvents.id }).from(t.trackedEvents).where(and(eq(t.trackedEvents.eventId, ev.e.id), eq(t.trackedEvents.provider, SEATDATA_PROVIDER)));
+    if (kept) await this.keepListings(kept.id, read.listings, retrievedAt, asOf);
     this.lastRead.set(ev.e.id, read);
     RECENT_READS.set(ev.e.id, read);
     await this.log('listings', ev.e.id, 'success', api.calls - before, points.length, `${listings.length} listings; sizes ${sizes.join(',')}; provider as of ${asOf ? asOf.toISOString() : 'unknown'}; ${listingShape(listings, r)}`);
@@ -990,6 +1035,7 @@ export async function purgeExpiredMarketData(db: DbOrTx, now: Date): Promise<{ s
   if (!lic.row?.rawRetentionUntil || lic.row.rawRetentionUntil > now) return { snapshots: 0, history: 0 };
   const s = await db.delete(t.marketSnapshots).where(eq(t.marketSnapshots.datasetId, SEATDATA_DATASET_ID)).returning({ id: t.marketSnapshots.id });
   const h = await db.delete(t.marketHistory).where(eq(t.marketHistory.datasetId, SEATDATA_DATASET_ID)).returning({ id: t.marketHistory.id });
+  await db.update(t.trackedEvents).set({ lastListings: null, lastListingsAt: null, lastListingsAsOf: null }).where(eq(t.trackedEvents.provider, SEATDATA_PROVIDER));
   await audit(db, { actor: 'system', action: 'market.retention_purge', entityKind: 'dataset', entityId: SEATDATA_DATASET_ID, diff: { snapshots: s.length, history: h.length } });
   return { snapshots: s.length, history: h.length };
 }
