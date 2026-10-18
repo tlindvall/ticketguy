@@ -1757,3 +1757,35 @@ the refused read; a scheduled recheck is a separate decision.
 **Verified:** `tests/acceptance/answer-gate.test.ts` (the no-seats reply goes out unheld, in the new words). Assertions
 that named the old sentence now name the new one, positive and negative alike, so a "not here" check still means
 something.
+
+## 88. "How much?" is answered with the price, first; nothing on waiting unless they raised it (Oct 18)
+
+Live email, Oct 17 4:38 PM. The customer wrote "How much are tickets to rangers v Anaheim 2 tickets?". The reply opened, in
+headline type, "My read: prices have been easing, but that doesn't tell me they'll keep falling. Whether waiting is worth
+it depends on when you need to decide and how much you'd mind missing out, which I don't know yet." The price sat in the
+market lines under the picture.
+
+**Why it kept happening.** Three rules, each reasonable alone:
+- The price answer (`C_PRICE_ANSWER`) existed only for "no listings at all". With a market read, nothing answered "how much".
+- The market read (`C_READ`) added a buy-or-wait sentence whenever prices were moving, asked or not. When it had nothing to
+  say, it said that ("doesn't tell me they'll keep falling").
+- With nothing else to lead, the read became the headline, labelled "My read:".
+
+**Decisions.**
+- **A price question gets the price as its first line**, from the licensed resale read: "Tickets for two start at $130 a
+  ticket before fees, so about $260 for both, on StubHub and Vivid Seats when I checked 2 hours ago. Fees are added at
+  checkout. Tell me your budget and where you'd like to sit, and I'll pick the seats." When the read is for fewer tickets
+  than they want, it says where prices start and that seats for their whole group can cost more. Unlicensed data is
+  never shown.
+- **Buy-or-wait only for someone who raised timing**: asked it, gave a deadline or how much risk they'd take, is
+  travelling, or can't miss it. The sentence that said nothing is gone, and so is "There isn't enough recent history … to
+  say whether waiting would help". The timing questions ("When do you need tickets sorted by…") follow the same rule.
+- **No "My read:" label.** The read is plain sentences; its budget line says "at the cheapest listed price" rather than
+  "at that price", which pointed at nothing.
+
+**Eval:** `how-much-price-first` (core), the customer's exact words: a price in the reply; never "My read", "keep falling"
+or "whether waiting is worth it".
+
+**Verified:** `tests/unit/timing-advice.test.ts` (the live case: the price is the first line after the event; no timing
+talk or questions unless raised; asked, they come back). Expectations changed on purpose in `audit-0929` and
+`market-tracking` (no label, the budget sentence's wording).

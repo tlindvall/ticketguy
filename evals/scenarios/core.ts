@@ -23,6 +23,9 @@ export const CORE: Scenario[] = [
   // $150 for this game; the closest seats, how far over, and the Kings game a week later that fits. The world's dates are
   // a month later (Nov 18 and 25) so the October Rangers scenarios see the same games.
   { id: 'over-budget-way-forward', capability: 'recommendation', tags: ['live'], now: '2026-11-12T17:00:00Z', steps: [{ text: 'Rangers vs Ducks, 2 tickets, $150 total', expect: { eventId: EV.rangersDucks, quantity: 2, budgetCents: 15000, hasLink: true, hasNextStep: true, mustMentionAny: ['Nov 25', 'November 25'] } }] },
+  // Live email, Oct 17, the customer's exact words. The reply opened "My read: prices have been easing, but that doesn't
+  // tell me they'll keep falling" and the price sat under the picture. The price answers it, and nothing on waiting.
+  { id: 'how-much-price-first', capability: 'recommendation', tags: ['live'], now: '2026-11-12T17:00:00Z', steps: [{ text: 'How much are tickets to rangers v Anaheim 2 tickets?', expect: { eventId: EV.rangersDucks, quantity: 2, mustMentionAny: ['re:\\$\\d'], forbid: ['My read', 'keep falling', 're:whether waiting is worth it'] } }] },
   // Live email, Oct 13 (that run was hit by the tracing outage).
   { id: 'next-game-question', capability: 'event-discovery', tags: ['live'], steps: [{ text: 'when is the next rangers game in new york?', expect: { eventId: EV.rangersPreseason, mustMentionAny: ['Oct 3', 'October 3', '10/3'] } }] },
   // Live thread, Oct 15 14:06-14:21 ET. Steps 3 and 4 are the customer's exact words; steps 1 and 2 are paraphrased

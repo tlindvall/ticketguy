@@ -14,10 +14,30 @@ const args = (over: Partial<BuildPacketArgs>, market: MarketContext = ctx()) => 
 const read = (a: BuildPacketArgs) => buildPacket(a).claimRecords.find((c) => c.id === 'C_READ')?.text ?? '';
 
 describe('timing advice follows the buyer, not just the market', () => {
-  it('falling prices alone are "not enough to say", with the deadline and risk asked for', () => {
+  it('falling prices say nothing about waiting to someone who never raised timing (live Oct 17)', () => {
     const p = buildPacket(args({}));
-    expect(p.claimRecords.find((c) => c.id === 'C_READ')!.text).toContain('Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out');
+    // "Prices have been easing, but that doesn't tell me they'll keep falling. Whether waiting is worth it depends on…"
+    // opened a reply to "How much are tickets?": an answer to a question nobody asked.
+    expect(p.claimRecords.find((c) => c.id === 'C_READ')).toBeUndefined();
+    expect((p.followUps ?? []).join(' ')).not.toMatch(/sorted by|lock in seats|wait for a better price/);
+  });
+  it('asked whether to wait, the timing questions come back', () => {
+    const p = buildPacket(args({ trendAsked: { noAlerts: false, riskOk: false } }));
     expect(p.followUps).toEqual(expect.arrayContaining(['When do you need tickets sorted by, and would you rather lock in seats now or wait for a better price and risk missing out?']));
+  });
+  it('"How much are tickets?" is answered with the price, first, for their number (live Oct 17, Rangers vs Ducks)', async () => {
+    const { validateAndRender } = await import('@/lib/advice/renderer');
+    const p = buildPacket(args({ askedText: 'How much are tickets to rangers v Anaheim 2 tickets?', eventLabel: 'New York Rangers vs. Anaheim Ducks' }));
+    const answer = p.claimRecords.find((c) => c.id === 'C_PRICE_ANSWER')!;
+    expect(answer.text).toBe('Tickets for two start at $130 a ticket before fees, so about $260 for both, on StubHub and Vivid Seats when I checked in the last hour. Fees are added at checkout. Tell me your budget and where you’d like to sit, and I’ll pick the seats.');
+    expect(p.claimRecords.find((c) => c.id === 'C_READ')).toBeUndefined();
+    const r = validateAndRender(p, { decision: p.decision, opening: '', paragraphs: [{ claimIds: ['C_MARKET'], prose: '' }], closing: '' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const body = r.textBody.split('\n\n');
+    // The answer is the first thing after the event line: no "My read", no buy-or-wait.
+    expect(body[2]).toMatch(/^Tickets for two start at \$130 a ticket before fees/);
+    expect(r.textBody).not.toMatch(/My read|easing|keep falling|missing out/);
   });
   it('a buyer who can wait, with a deadline, keeps the risk and the date; venue-wide counts are not their supply', () => {
     // R2-SUPPLY-COPY-01: 400 listings across the venue say nothing about blocks of two together.
@@ -30,10 +50,11 @@ describe('timing advice follows the buyer, not just the market', () => {
     expect(read(args({ travelling: true }))).toContain('since you can’t risk missing it, I wouldn’t hold out for a lower price');
   });
   it('stale or venue-wide figures give no trend call for the seats they asked about', () => {
-    expect(read(args({}, ctx({ reasons: ['stale_48h'] })))).not.toContain('easing');
+    const trendAsked = { noAlerts: false, riskOk: false };
+    expect(read(args({ trendAsked }, ctx({ reasons: ['stale_48h'] })))).not.toContain('easing');
     const lower = buildPacket(args({ seatingPreference: 'lower level' }));
     expect(lower.claimRecords.find((c) => c.id === 'C_MARKET')!.text).toContain('These cover every seat in the venue, so they don’t reflect your preference (“lower level”).');
-    expect(lower.claimRecords.find((c) => c.id === 'C_READ')!.text).not.toContain('easing');
+    expect(lower.claimRecords.find((c) => c.id === 'C_READ')?.text ?? '').not.toContain('easing');
   });
 });
 
@@ -45,7 +66,8 @@ describe('timing advice follows the buyer, not just the market', () => {
 describe('the advice email reads at a glance', () => {
   it('event line, the read first, market bullets, source in small print, and no prose left hanging', async () => {
     const { validateAndRender } = await import('@/lib/advice/renderer');
-    const p = buildPacket(args({ quantity: 5, eventLabel: 'Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24', seatingPreference: 'No obstructed views' }));
+    // With a budget, the read is how the market sits against it (and nothing on timing they didn't raise).
+    const p = buildPacket(args({ quantity: 5, eventLabel: 'Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24', seatingPreference: 'No obstructed views', priorities: { mustAttend: null, waitRiskTolerance: null, decisionDeadline: null, budgetTotalCents: 50000, togetherRequired: null, splitGroupAllowed: null, watchConsentGiven: false } }));
     const blocks = {
       decision: p.decision,
       opening: 'For five together, I’d use the current resale market as the yardstick rather than force a buy call yet.',
@@ -56,10 +78,11 @@ describe('the advice email reads at a glance', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const parts = r.textBody.split('\n\n');
-    expect(parts[1]).toBe('Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24 · 5 tickets');
-    // The read gives the judgment; the floor is in the market lines, said once (PW-EMAIL-FOCUS-01).
-    expect(parts[2]).toMatch(/^My read: /);
+    expect(parts[1]).toBe('Knicks vs. Celtics at Madison Square Garden, Sat, Oct 24 · 5 tickets · up to $500 in total');
+    // The read gives the judgment against their budget, in plain words; the floor is in the market lines, said once (PW-EMAIL-FOCUS-01).
+    expect(parts[2]).toMatch(/^Your budget is \$500 for five/);
     expect(parts[2]).not.toContain('$130');
+    expect(r.textBody).not.toMatch(/My read|keep falling|missing out/);
     expect(parts[3]).toBe('The resale market when I last checked:');
     expect(parts[4]!.split('\n').every((l) => l.startsWith('- '))).toBe(true);
     expect(r.textBody).toContain('- These cover every seat in the venue, so they don’t reflect your preference (“no obstructed views”).');
@@ -67,7 +90,7 @@ describe('the advice email reads at a glance', () => {
     expect(r.textBody).not.toContain('yardstick');
     expect(r.textBody).not.toContain('not only No');
     // The opener's first sentence carries the emphasis; amounts elsewhere aren't each bolded.
-    expect(r.htmlBody).toMatch(/<strong>My read: [^<]+<\/strong>/);
+    expect(r.htmlBody).toMatch(/<strong>Your budget is [^<]+<\/strong>/);
     expect(r.htmlBody).not.toContain('<strong>$130</strong>');
     // The source line is the small print: 14/21 in the supporting grey (personal-email design, Oct 3).
     expect(r.htmlBody).toContain('font-size:14px;line-height:21px;color:#536174;');

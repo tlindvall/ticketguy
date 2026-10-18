@@ -906,7 +906,8 @@ function marketRead(a: BuildPacketArgs, timingAnswered = false): ClaimRecord | n
   if (!a.quote) {
     const budget = a.priorities.budgetTotalCents;
     const groupFloor = floor * q;
-    const atThat = q > 1 ? `at that price, ${countWord(q)} come to ${formatUsd(groupFloor)} before fees` : `at that price, it’s ${formatUsd(groupFloor)} before fees`;
+    // Said on its own terms: the floor itself is in the market lines, so "at that price" would point at nothing.
+    const atThat = q > 1 ? `at the cheapest listed price, ${countWord(q)} come to ${formatUsd(groupFloor)} before fees` : `at the cheapest listed price, it’s ${formatUsd(groupFloor)} before fees`;
     if (budget != null && groupFloor > budget) {
       // A floor times their number is what that price would come to, not a sellable offer for exactly them, and
       // one sampled floor over the cap doesn't prove the whole market is (remediation review §3).
@@ -942,16 +943,21 @@ function marketRead(a: BuildPacketArgs, timingAnswered = false): ClaimRecord | n
   const thin = supplyKnown && s.now! < SUPPLY_ADEQUATE_MIN && (q > 1 || s.now! <= 1);
   const listingsWord = (n: number) => `${n} listing${n === 1 ? '' : 's'}`;
   const deadline = p.decisionDeadline ? ` by ${checkedAt(p.decisionDeadline, a.timeZone).replace(/,? \d{1,2}:\d{2} [AP]M [A-Z]{2,5}$/, '')}` : '';
-  if (fresh && groupCounts && s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait.');
+  // Buy-or-wait is said only to someone who raised timing: asked it, gave a deadline or how much risk they'd take, or
+  // can't miss it (live Oct 17: "How much are tickets?" opened on "prices have been easing, but that doesn't tell me
+  // they'll keep falling", an answer to a question nobody asked).
+  const timingRaised = !!a.trendAsked || p.decisionDeadline !== null || p.waitRiskTolerance != null || !!a.travelling || p.mustAttend === true;
+  if (!timingRaised) {
+    // Nothing on timing to say.
+  } else if (fresh && groupCounts && s.trend === 'shrinking') parts.push('Listings for a group your size are thinning out, so if you find seats that meet what you need at a price you’re happy with, I wouldn’t wait.');
   else if (thin) parts.push(`${trendKnown && c.direction === 'down' ? 'Prices have been easing, but there' : 'There'} ${s.now === 1 ? 'was only 1 listing' : `were only ${listingsWord(s.now!)}`} ${q > 1 ? `with ${countWord(q)} or more tickets` : ''} when I checked, so I wouldn’t count on waiting: if you find seats that meet what you need at a price you’re happy with, I wouldn’t hold out.`.replace(/ {2,}/g, ' '));
   else if (trendKnown && c.direction === 'down') {
     if (a.travelling || p.mustAttend === true) parts.push('Prices have been easing, but since you can’t risk missing it, I wouldn’t hold out for a lower price.');
     else if (canWait && supplyKnown) parts.push(`Prices have been easing, and there were ${listingsWord(s.now!)}${q > 1 ? ` with ${countWord(q)} or more tickets` : ''} when I checked${q > 1 ? ' (some may not split into exactly your number or sit together)' : ''}. Waiting${deadline} is reasonable if you’re ok with the risk that the seats you want go; it isn’t a promise prices keep falling.`);
     else if (canWait) parts.push(`Prices have been easing, but I can’t see how many listings there are for a group your size, so that alone isn’t a reason to wait. If you do wait, it’s a risk that the seats you want go${deadline ? `, and I’d decide${deadline}` : ''}.`);
-    else parts.push('Prices have been easing, but that doesn’t tell me they’ll keep falling. Whether waiting is worth it depends on when you need to decide and how much you’d mind missing out, which I don’t know yet.');
+    else if (p.waitRiskTolerance === 'low') parts.push('Prices have been easing, but since you’d rather not risk missing out, I wouldn’t hold out for a lower price.');
   } else if (trendKnown && c.direction === 'up') parts.push(`Prices have been climbing, so waiting hasn’t been paying off for this ${a.eventNoun ?? 'event'}.`);
   else if (trendKnown && c.direction === 'mixed') parts.push('Prices have gone both ways over the last few days, so they don’t point to waiting.');
-  else if (!trendKnown && !timingAnswered && !a.quote) parts.push('There isn’t enough recent history for your group and seats to say whether waiting would help.');
   if (!parts.length) return null;
   return readClaim(a, parts, c, s);
 }
@@ -960,7 +966,8 @@ function readClaim(a: BuildPacketArgs, parts: string[], c: MarketContext, s: Mar
   return {
     id: 'C_READ',
     kind: 'market_read',
-    text: `My read: ${parts.join(' ').replace(/^./, (ch) => ch.toLowerCase())}`,
+    // Said as a person would, without a "My read:" label.
+    text: parts.join(' ').replace(/^./, (ch) => ch.toUpperCase()),
     values: { floorCents: c.current!.priceCents, budgetTotalCents: a.priorities.budgetTotalCents ?? null, direction: c.direction, supplyTrend: s.trend, listings: s.now },
     scope: { quantity: a.quantity, seatZone: c.zone, feeBasis: 'listed_before_fees', observedAt: c.current!.at.toISOString() },
     evidenceIds: [],
@@ -1005,6 +1012,10 @@ export const PRICE_ASKED = /\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seat
 function priceAnswer(a: BuildPacketArgs): { text: string; links: Array<{ label: string; url: string }> } | null {
   if (!PRICE_ASKED.test(a.askedText ?? '')) return null;
   if (a.quote || a.subject || a.link || (a.best && a.best.comparableTotalCents !== null) || (a.textOffers && a.textOffers.length) || picksAnswer(a)) return null;
+  // "How much are tickets?" with the market read: the price is the answer and the first line (live Oct 17: the reply
+  // opened "My read: prices have been easing, but that doesn't tell me they'll keep falling" and the price sat under
+  // the picture). Licensed prices only, always a ticket before fees.
+  if (a.market?.context?.current && !a.picks?.picks.length && !a.marketAround) return a.market.visible ? marketPriceAnswer(a) : null;
   // Only when there is truly nothing: data held but not shown (licence) isn't "no listings".
   if (a.market?.context?.current || a.marketAround || a.picks?.picks.length) return null;
   const title = (a.eventParts?.title ?? a.eventLabel).replace(/\s*\([^)]*\)/g, '').trim();
@@ -1020,6 +1031,35 @@ function priceAnswer(a: BuildPacketArgs): { text: string; links: Array<{ label: 
   return {
     text: `I don’t have resale prices for ${title}: the StubHub and Vivid Seats listing data I use has no listings for this ${noun} right now.${official} You can see what resale sellers are asking with the links below, and if you send me a price you find, I’ll tell you how it compares.`,
     links,
+  };
+}
+
+/** The answer to "how much?" from the resale market: where prices start for their number, when that was read, and the next step. */
+function marketPriceAnswer(a: BuildPacketArgs): { text: string; links: Array<{ label: string; url: string }> } {
+  const m = a.market!;
+  const c = m.context!;
+  const cur = c.current!;
+  const q = a.quantity;
+  const n = qtyWord(q);
+  const floor = cur.priceCents;
+  // The floor is for listings of at least this many tickets: a price for their number. Otherwise it's where prices
+  // start, and seats for their whole group may cost more.
+  const forThem = q === 1 || (m.basis !== null && m.basis !== 'single' && basisSize(m.basis) >= q);
+  const when = isStale(c) || cur.timeKnown === false ? (cur.timeKnown === false ? 'in the latest listings I have' : `as of ${checkedAt(cur.at, a.timeZone)}`) : `when I checked ${hoursAgo(a.observedAt, cur.at)}`;
+  const all = q === 2 ? 'both' : `all ${n}`;
+  const lead = q === 1
+    ? `Tickets start at ${formatUsd(floor)} a ticket before fees on StubHub and Vivid Seats, ${when}.`
+    : forThem
+      ? `Tickets for ${n} start at ${formatUsd(floor)} a ticket before fees, so about ${formatUsd(floor * q)} for ${all}, on StubHub and Vivid Seats ${when}.`
+      : `Tickets start at ${formatUsd(floor)} a ticket before fees on StubHub and Vivid Seats, ${when}; ${n} seats together can cost more.`;
+  const title = (a.eventParts?.title ?? a.eventLabel).replace(/\s*\([^)]*\)/g, '').trim();
+  const pages = marketplaceLinks(a.marketplaceIds, { eventName: title, quantity: q, noun: a.eventNoun ?? 'event' });
+  return {
+    text: `${lead} Fees are added at checkout. Tell me your budget and where you’d like to sit, and I’ll pick the seats.`,
+    links: [
+      { label: pages.stubhub.label, url: pages.stubhub.url },
+      { label: pages.vividseats.label, url: pages.vividseats.url },
+    ],
   };
 }
 
@@ -1087,7 +1127,9 @@ function followUpQuestions(a: BuildPacketArgs): string[] {
   // A listing with a readable total gets its verdict and one next step (Oct 10 framework, B8): the timing questions
   // only when they asked about timing, never as a buy-or-wait tail on "is this a good deal?".
   const judging = !!sub && sub.perTicketCents != null && !a.trendAsked;
-  const timingMatters = !askedOther && !(a.link && a.asks?.worth) && !judging && (a.policy.clarificationNeeded?.length || (a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down' && scopeFits(a)));
+  // Asked only of someone who raised timing (live Oct 17): falling prices alone don't make "when do you need tickets
+  // sorted by?" their question.
+  const timingMatters = !askedOther && !(a.link && a.asks?.worth) && !judging && (!!a.policy.clarificationNeeded?.length || (!!a.trendAsked && !!a.market?.visible && a.market.context?.adequacy === 'sufficient' && a.market.context.direction === 'down' && scopeFits(a)));
   // The two timing unknowns are one question, so the email ends on one next step, not a questionnaire (launch E).
   const askDeadline = timingMatters && a.priorities.decisionDeadline === null && a.policy.decision !== 'buy_now';
   const askRisk = timingMatters && a.priorities.mustAttend === null && a.priorities.waitRiskTolerance === null && !a.travelling && a.policy.decision !== 'buy_now';
@@ -2166,7 +2208,8 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   if (realistic) claims.push({ id: 'C_REALISTIC', kind: 'market_price', text: realistic, values: { budgetCents: a.priorities.budgetTotalCents }, scope: { quantity: q, seatZone: null, feeBasis: 'listed_before_fees', observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['listed_prices_before_fees'], customerVisible: true });
   const price = priceAnswer(a);
   if (price) {
-    claims.push({ id: 'C_PRICE_ANSWER', kind: 'coverage', text: price.text, values: { faceMinCents: a.faceValue?.minCents ?? null }, scope: { quantity: q, seatZone: null, feeBasis: a.faceValue ? 'face_value_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['no_resale_listings', 'search_page_not_a_listing'], customerVisible: true, url: price.links[0]!.url, linkLabel: price.links[0]!.label });
+    const fromMarket = !!a.market?.context?.current;
+    claims.push({ id: 'C_PRICE_ANSWER', kind: fromMarket ? 'market_price' : 'coverage', text: price.text, values: { faceMinCents: a.faceValue?.minCents ?? null, floorCents: fromMarket ? a.market!.context!.current!.priceCents : null }, scope: { quantity: q, seatZone: null, feeBasis: fromMarket ? 'listed_before_fees' : a.faceValue ? 'face_value_before_fees' : null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: fromMarket ? ['listed_prices_before_fees', 'market_statistics_not_listings'] : ['no_resale_listings', 'search_page_not_a_listing'], customerVisible: true, url: price.links[0]!.url, linkLabel: price.links[0]!.label });
     claims.push({ id: 'C_PRICE_ANSWER_ALT', kind: 'coverage', text: price.links[1]!.label, values: {}, scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs }, evidenceIds: [], methodVersion: null, limitations: ['search_page_not_a_listing'], customerVisible: true, url: price.links[1]!.url, linkLabel: price.links[1]!.label });
     // Said once: the answer carries the official price and that there are no resale listings.
     for (const c of claims) if (c.id === 'C_FACE') c.customerVisible = false;

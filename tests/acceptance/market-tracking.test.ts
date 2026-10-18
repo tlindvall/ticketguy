@@ -261,7 +261,8 @@ describe('resale market tracking', () => {
     // The event and the link they sent in one line at the top, then the answer.
     // What we couldn't see comes before the market, so the figures aren't read as that listing's (post-#54 L01).
     expect(body.startsWith('Hey,\n\nMetro Testers vs. Boston\nTest Garden, New York · Friday, October 30, at 7:30 p.m. · 2 tickets · from the StubHub link you sent\n\nFor two, the cheapest listings I can see start at $130 a ticket before fees (about $260 for two), from a recent read and easing. That’s where the market starts, not a verdict on yours. I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works), and I’ll tell you straight whether it’s a good price.\n\n')).toBe(true);
-    expect(body).toContain('My read: ');
+    // No "My read:" label (live Oct 17: it read like a form).
+    expect(body).not.toContain('My read:');
     expect(body).toContain('- Lowest asking price with two or more tickets, checked Sep 22, 11:00 AM EDT: $130 a ticket before fees');
     expect(body).not.toContain('fair price');
     // The ask is made once, in the lead; not again as a question at the end.
