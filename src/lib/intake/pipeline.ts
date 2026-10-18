@@ -1462,8 +1462,8 @@ export class Concierge {
         ].filter((x): x is string => !!x);
         const ask = 'If you’re looking at tickets somewhere else, send me the price and what they include and I’ll check them.';
         const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        // The same sentence the full reply uses, so a follow-up hears its requirements the same way.
-        const reqText = toCheck.length ? `I haven’t been able to check ${toCheck.length === 1 ? 'this' : 'these'} against any seats yet: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
+        // What they asked for that nothing here checks, as what to check before paying (never "haven’t been able to check").
+        const reqText = toCheck.length ? `I can’t check seats for this one myself, so check ${toCheck.length === 1 ? 'this' : 'these'} before you pay: ${joinRequirements(toCheck.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.` : null;
         // Their "did you check Saturday too?" is answered on this route as on every other (audit second pass).
         const text = ['Hey,', lead, ...(typoNote ? [typoNote] : []), ...(altDateNote ? [altDateNote] : []), ...(url ? [`${official ? `Event page on ${official.seller}` : 'Event page'}: ${url}`] : []), checks, ...(reqText ? [reqText] : []), ...limits, ask].join('\n\n');
         const html = ['<p style="margin:0 0 18px;">Hey,</p>', `<p style="margin:0 0 18px;"><strong>${esc(lead)}</strong></p>`, ...(typoNote ? [`<p style="margin:0 0 18px;">${esc(typoNote)}</p>`] : []), ...(altDateNote ? [`<p style="margin:0 0 18px;">${esc(altDateNote)}</p>`] : []), ...(url ? [`<p style="margin:0 0 18px;"><a href="${esc(url)}">${official ? `Event page on ${esc(official.seller)}` : 'Event page'}</a></p>`] : []), `<p style="margin:0 0 18px;">${esc(checks)}</p>`, ...(reqText ? [`<p style="margin:0 0 18px;">${esc(reqText)}</p>`] : []), ...limits.map((l) => `<p style="margin:0 0 18px;">${esc(l)}</p>`), `<p style="margin:0 0 18px;">${esc(ask)}</p>`].join('\n');

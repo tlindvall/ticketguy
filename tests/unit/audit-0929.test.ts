@@ -31,7 +31,7 @@ describe('TG-B03/B04: the budget is checked against the group total; a venue-wid
     const read = claim(p, 'C_READ');
     // What that price would come to for five, not a sellable five-seat offer; one sample doesn't prove the market.
     // The floor itself, with its age, is in the market lines above; the read doesn't repeat it (PW-EMAIL-FOCUS-01).
-    expect(read).toContain('My read: your budget is $600 for five ($120 a ticket); at that price, five come to $608.75 before fees, over it before any fees.');
+    expect(read).toContain('Your budget is $600 for five ($120 a ticket); at the cheapest listed price, five come to $608.75 before fees, over it before any fees.');
     expect(read).not.toContain('$121.75');
     expect(read).toContain('That doesn’t prove nothing cheaper exists now, but I haven’t seen anything within it.');
     expect(read).not.toMatch(/fair|better deal|\$140|won’t cover/);
@@ -40,7 +40,7 @@ describe('TG-B03/B04: the budget is checked against the group total; a venue-wid
     const p = buildPacket(args({ quantity: 2, priorities: priorities(18000) }, ctx(8489, { basis: 'pair', adequacy: 'sufficient' })));
     const read = claim(p, 'C_READ');
     // Never a standalone "under budget" (remediation review §3), and no "$X left for fees" arithmetic (Oct 15 review).
-    expect(read).toContain('at that price, two come to $169.78 before fees; fees aren’t in that, so the checkout total decides whether it fits your $180.');
+    expect(read).toContain('At the cheapest listed price, two come to $169.78 before fees; fees aren’t in that, so the checkout total decides whether it fits your $180.');
     expect(read).not.toMatch(/\$10\.22|left for fees|which leaves/);
     expect(read).not.toContain('$84.89');
     expect(read).not.toMatch(/fair|\$98|under your/);

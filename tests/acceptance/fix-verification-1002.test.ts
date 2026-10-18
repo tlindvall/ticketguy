@@ -97,7 +97,7 @@ describe('FV-R1-03: a listing link with no market, asked buy or wait', () => {
     if (!r.ok) throw new Error(r.errors.join('; '));
     const text = r.textBody.split('\nTicket Guy\n')[0]!;
     expect(text).toContain('I couldn’t match the StubHub listing you picked in the listing data I can see, so reply with its price for two with fees and its section and row (a screenshot works)');
-    expect(text).not.toMatch(/What follows is|resale market when I last checked|haven’t been able to check this against|can’t see live resale listings|most you’d pay|I can’t open StubHub/);
+    expect(text).not.toMatch(/What follows is|resale market when I last checked|haven’t been able to check this against|I don’t have seats to recommend yet that meet|can’t see live resale listings|most you’d pay|I can’t open StubHub/);
     expect(text.match(/screenshot/g)).toHaveLength(1);
     // Nothing known about Ticketmaster's sale but that it's open: not sent there (live Oct 6).
     expect(text).not.toMatch(/Ticketmaster also sells|can’t see its seats/);

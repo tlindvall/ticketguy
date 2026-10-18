@@ -57,7 +57,7 @@ describe('the staffed comparison pilot', () => {
     const provider = new RecordingProvider();
     const c = makeConcierge(h, { env: liveEnv({ STAFF_COMPARISON_OWNER: '', EMAIL_TEST_RECIPIENT_ALLOWLIST: 'nobody-owns@customer.example' }), provider });
     const r = await run(c, 'nobody-owns@customer.example');
-    expect(r.advice?.bodyText).toContain('I haven’t been able to check these against any seats yet');
+    expect(r.advice?.bodyText).toContain('I don’t have seats to recommend yet that meet everything you asked for');
     expect(r.advice?.bodyText).not.toContain('a person on our team');
     expect(r.offered).toHaveLength(0);
     expect(r.state).not.toBe('manual_attention');
@@ -68,7 +68,7 @@ describe('the staffed comparison pilot', () => {
     const c = makeConcierge(h, { env: liveEnv({ EMAIL_TEST_RECIPIENT_ALLOWLIST: 'pilot1@customer.example' }), provider });
     const r = await run(c, 'pilot1@customer.example');
     const body = r.advice!.bodyText;
-    expect(body).toContain('I haven’t been able to check these against any seats yet: 3 seats together and $450 in total for all 3, once fees are added.');
+    expect(body).toContain('I don’t have seats to recommend yet that meet everything you asked for: 3 seats together and $450 in total for all 3, once fees are added.');
     expect(body).toContain('So you don’t have to do the shopping: a person on our team is now looking for seats that meet all of them, checking sellers by hand. They’ll reply in this thread with the options they find and their all-in totals, or tell you plainly if nothing fits. The team replies from 9am to 9pm ET.');
     // They aren't asked to go and find seats themselves.
     expect(body).not.toContain('Found seats you like?');

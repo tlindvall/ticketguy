@@ -185,7 +185,7 @@ describe('the Sep 30 latest-commit live QA (post-#56), replayed exactly', () => 
     const body = all('V03');
     expect(body).toContain('a “parking only” listing is a parking pass, not a ticket to the game, so it won’t get either of you in');
     expect(body).toContain('$190 for both');
-    expect(said('V03')).not.toMatch(/Found seats you like|price watch|haven’t been able to check|send me the listing|comparable history/i);
+    expect(said('V03')).not.toMatch(/Found seats you like|price watch|haven’t been able to check|I don’t have seats to recommend yet that meet|send me the listing|comparable history/i);
   });
 
   it('A11-F2: the updated example: four tickets, $70 before fees + $36 = $316, $79 each, delivery by 4pm, no market', () => {

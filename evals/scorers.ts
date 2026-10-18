@@ -82,6 +82,8 @@ export function previewCardProblems(e: { html: string; text: string }): string[]
   if (!details.split(' · ')[0]!.trim()) why.push('recommendation: venue not in the card as text');
   return why;
 }
+/** Coverage notes that read as the system talking (live Oct 15). */
+const SYSTEM_TALK: Array<[RegExp, string]> = [[/haven[’']t been able to check/i, 'haven’t been able to check'], [/Nothing I can check automatically/i, 'Nothing I can check automatically']];
 const questionsIn = (reply: string) => reply.split('\n----\n').flatMap((body) => body.match(/[^.!?\n]*\?(?=\s|$)/g)?.filter((s) => !/https?:/.test(s)) ?? []);
 
 export const perEmail = [
@@ -147,6 +149,15 @@ export const perEmail = [
   // Oct 15 (Rangers vs Ducks): a reply with no listing, no link and no next step. Only where a step expects it.
   perTurn('has_a_link', (tu) => (tu.expect?.hasLink && tu.reply.trim() ? { ok: urlsIn(tu.reply).length ? 1 : 0, why: 'no link in the reply' } : null)),
   perTurn('has_next_step', (tu) => (tu.expect?.hasNextStep && tu.reply.trim() ? { ok: hasNextStep(tu.reply) ? 1 : 0, why: 'no question and no action to take' } : null)),
+  /**
+   * System talk in a customer email (live Oct 15: "I haven’t been able to check this against any seats yet: $150 in total
+   * for both…" as the headline). Whatever happened is said in plain words, from the answer, never as a coverage note.
+   */
+  perTurn('no_coverage_talk', (tu) => {
+    if (!tu.emails.length) return null;
+    const hits = tu.emails.flatMap((e) => SYSTEM_TALK.filter(([re]) => re.test(e.text) || re.test(e.html)).map(([, said]) => `${e.cls}: "${said}"`));
+    return { ok: hits.length ? 0 : 1, why: hits.join('; ') };
+  }),
   perTurn('at_most_one_question', (tu) => (tu.reply.trim() ? { ok: questionsIn(tu.reply).length <= 1 ? 1 : 0, why: `${questionsIn(tu.reply).length} questions` } : null)),
   perTurn('one_email_per_message', (tu) => (isEmailStep(tu) && tu.emails.length ? { ok: tu.emails.length <= 1 ? 1 : 0, why: `${tu.emails.length} emails: ${tu.emails.map((e) => e.cls).join(', ')}` } : null)),
   // Design (DECISION_LOG #76, #82): every sent email is signed (full on the first reply, short after); every answer
