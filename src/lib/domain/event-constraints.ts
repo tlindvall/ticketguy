@@ -1,3 +1,4 @@
+import { spellCommon } from './spelling';
 import { BEFORE_RE, dateWindowFor, localDateParts, toIsoDate, WEEKS_AHEAD_RE } from './dates';
 
 /**
@@ -88,7 +89,7 @@ export function unglue(text: string): string {
     .map((part, i) =>
       i % 2
         ? part
-        : part
+        : spellCommon(part)
             .replace(new RegExp(`\\b${MONTHS}(\\d)`, 'gi'), '$1 $2')
             .replace(/\b(after|before|by|not|at|from|until|than|and|or|to|kids?|children|ages?|aged|sec|section|row|seats?)(\d)/gi, '$1 $2')
             .replace(/\b(all)(two|three|four|five|six|seven|eight)\b/gi, '$1 $2'),

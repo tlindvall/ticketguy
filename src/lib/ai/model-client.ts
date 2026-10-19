@@ -2,7 +2,7 @@ import { modelPhrasebook } from '@/lib/lexicon/lexicon';
 import type { z } from 'zod';
 import { EXTRACTION_SCHEMA, deadlineInstantFrom, type ExtractionInput, type Extractor } from './extraction';
 import type { RequestExtraction } from '@/lib/domain/types';
-import { spellWeekdays } from '@/lib/domain/dates';
+import { spellCommon } from '@/lib/domain/spelling';
 import { ResponseBlocksSchema, type ResponseBlocks } from '@/lib/advice/renderer';
 import type { Drafter, DraftContext } from './drafting';
 import type { AdvicePacket } from '@/lib/advice/packet';
@@ -190,7 +190,8 @@ export class ModelExtractor implements Extractor {
     const parsed = read.data;
     // "2026-10-16" for "by Friday" is the end of that day where the venue is (audit gap 12).
     // "this thrusday" is Thursday, for the date reader and in what we say back (#150).
-    if (parsed.dateExpression) parsed.dateExpression = spellWeekdays(parsed.dateExpression);
+    // "nest home game" is the next home game, said back that way (live Oct 19).
+    if (parsed.dateExpression) parsed.dateExpression = spellCommon(parsed.dateExpression);
     parsed.decisionDeadline = deadlineInstantFrom(parsed.decisionDeadline, input.venueTimeZone ?? 'America/New_York');
     // Defensive: the model may only echo URLs literally present in the message.
     const present = new Set([...input.text.matchAll(/https?:\/\/[^\s<>"')]+/gi)].map((m) => m[0]));

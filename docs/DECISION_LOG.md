@@ -1789,3 +1789,27 @@ or "whether waiting is worth it".
 **Verified:** `tests/unit/timing-advice.test.ts` (the live case: the price is the first line after the event; no timing
 talk or questions unless raised; asked, they come back). Expectations changed on purpose in `audit-0929` and
 `market-tracking` (no label, the budget sentence's wording).
+
+## 89. Typos in the words the readers key on are fixed once, before any of them reads the text (Oct 19)
+
+Live email, Oct 19: "when is the nest home game for the giants?" got "Giants tickets nest home game. Got it." and "Which
+game: Thu, Nov 12 … or Sun, Nov 22 …, and how many tickets?".
+
+- **The "Got it." line is pre-#192 code.** Main can't produce it: the play-back has read "You're after…" since #192, and the
+  answer gate holds any "Got it." line. `render.yaml` has `autoDeploy: false`, so a merge reaches customers only when it is
+  deployed from Render.
+- **"nest" missed "next"**, so two games were offered back. The rules key on exact spellings, one word at a time (weekdays
+  had their own fixer). Now `spellCommon` (`src/lib/domain/spelling.ts`) runs in `unglue`, which every reader of the
+  customer's text goes through (`flat`, `eventConstraints`), outside links:
+  - weekdays, as before;
+  - "next" mistyped (nest, nxt, enxt…) only before a word that says what comes next (game, home, show, weekend…), so a
+    real nest stays a nest; "home" mistyped before a game word;
+  - slang and misspellings (tix, tonite, tmrw…), and anything one keystroke from a request word of six letters or more
+    with the same first letter (tickets, tonight, tomorrow, weekend, together, cheapest…), except real words one key away
+    ("paying" is not "playing").
+  - The model's date phrase is spelled the same way, so "nest home game" is said back as "the next home game".
+
+**Eval:** `next-home-game-typo` (core), the customer's exact words.
+
+**Verified:** `tests/acceptance/next-home-typo-1019.test.ts`: with two Giants home games, the reply names the next one and
+never asks which. It fails without the fix.
