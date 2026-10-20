@@ -1001,7 +1001,8 @@ function notWatchingLine(reason: string | null, quantity: number): string {
  */
 /** "Do tickets still exist?", "is it sold out?", "r there still tix": a question about whether there are any at all (#147). */
 export const AVAILABILITY_ASKED = /\b(?:do|are|is) (?:there )?(?:any )?(?:tickets?|tix|seats?) (?:still )?(?:exist|available|left)\b|\b(?:still|any) (?:tickets?|tix|seats?) (?:left|available|out there)\b|\b(?:is it|are they|it's|it’s) sold out\b|\bsold out\?|\b(?:r|are|is) there (?:still|any)\b|\bcan (?:i|we) still (?:get|buy)\b|\bstill (?:exist|available)\b/i;
-export const PRICE_ASKED = /\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seats?|prices?) (?:like|going for|at)\b|\bhow much (?:are|is|do|would|for)\b|\bwhat(?:'s|’s| is| are) the (?:price|prices|cost|going rate)\b|\bhow (?:expensive|pricey)\b|\bwhat do (?:tickets|seats) (?:cost|go for|run)\b|\bprice check\b|\b(?:selling|going|trading|listed|priced) (?:for|at)\b|\bgoing rate\b|\b(?:ticket|resale) prices\b/i;
+// "Can you find any cheap tickets…?" asks what they cost as surely as "how much?" (live Oct 20).
+export const PRICE_ASKED = /\b(?:any|some|the)\s+cheap(?:est|er)?\s+(?:tickets?|seats?|ones?)\b|\b(?:any|some)\s+(?:affordable|inexpensive|budget)\s+(?:tickets?|seats?)\b|\bwhat(?:'s|’s| is| are) (?:the )?(?:tickets?|seats?|prices?) (?:like|going for|at)\b|\bhow much (?:are|is|do|would|for)\b|\bwhat(?:'s|’s| is| are) the (?:price|prices|cost|going rate)\b|\bhow (?:expensive|pricey)\b|\bwhat do (?:tickets|seats) (?:cost|go for|run)\b|\bprice check\b|\b(?:selling|going|trading|listed|priced) (?:for|at)\b|\bgoing rate\b|\b(?:ticket|resale) prices\b/i;
 
 /**
  * "How much are resale tickets selling for Mind Enterprises tonight?" with no listings to name (live Oct 10: the
@@ -2246,7 +2247,7 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
         // No resale in the email: the official sale is the answer. With a budget, access needs, a seat preference or a
         // watch it's a place to look, not a recommendation (TG-B01, PW-EMAIL-FOCUS-01).
         : a.priorities.budgetTotalCents != null || a.accessibilityRequired || a.seatingPreference || a.watchStatus
-        ? `${a.official.seller} also lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
+        ? `${a.official.seller} lists it as on general sale, but I can’t see whether it has seats left, or what they cost, so check ${listJoin(['the all-in total', ...(a.accessibilityRequired ? ['the access you need'] : []), ...(a.seatingPreference ? ['the seats'] : [])])} there before you buy.`
         : `It’s on general sale on ${a.official.seller}. I can’t see whether it has seats left, but if it does, that’s where I’d buy.`,
       values: { seller: a.official.seller, sameSeller: sameSeller ? 1 : 0 },
       scope: { quantity: q, seatZone: null, feeBasis: compared?.faceValue ? 'face_value_before_fees' : null, observedAt: obs },
@@ -2580,14 +2581,16 @@ export function buildPacket(a: BuildPacketArgs): AdvicePacket {
   // A listing link they sent is theirs too: the one ask for its price and seats covers it (FV-R1-03: "I haven't
   // been able to check this against any seats yet: 2 seats together" under the StubHub link it was about).
   // Seats already named for them say what is and isn't checked; "I haven't checked this against any seats" would contradict them.
-  if (a.requirements?.length && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !(a.togetherOver && a.togetherOver.comparableTotalCents !== null) && !(a.closestOver && a.closestOver.comparableTotalCents !== null) && !picksAnswer(a)) {
+  // With nothing read at all, the price answer says so and where to look; a list of what they asked for that nothing was
+  // checked against only stood in its way (live Oct 20: "I don't have seats to recommend yet that meet … GA standing").
+  if (a.requirements?.length && !priceAnswer(a) && !a.subject && !(a.link && !a.link.eventPage) && !(a.textOffers && a.textOffers.length >= 2) && !(a.best && a.best.comparableTotalCents !== null) && !(a.togetherOver && a.togetherOver.comparableTotalCents !== null) && !(a.closestOver && a.closestOver.comparableTotalCents !== null) && !picksAnswer(a)) {
     const reqs = a.requirements;
     claims.push({
       id: 'C_REQS',
       kind: 'coverage',
       // Plain words, true whether the listings were read or not (fix plan Phase 0: "I haven't been able to check this
       // against any seats yet" led the live Ducks reply). The next step follows it.
-      text: `I don’t have seats to recommend yet that meet ${reqs.length === 1 ? 'what you asked for' : 'everything you asked for'}: ${joinRequirements(reqs.map((r) => r.replace(/^./, (c) => c.toLowerCase())))}.`,
+      text: `I don’t have seats to recommend yet that meet ${reqs.length === 1 ? 'what you asked for' : 'everything you asked for'}: ${joinRequirements(reqs.map((r) => r.replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase())))}.`,
       values: { requirements: reqs.length },
       scope: { quantity: q, seatZone: null, feeBasis: null, observedAt: obs },
       evidenceIds: [],

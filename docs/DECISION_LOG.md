@@ -1813,3 +1813,35 @@ game: Thu, Nov 12 … or Sun, Nov 22 …, and how many tickets?".
 
 **Verified:** `tests/acceptance/next-home-typo-1019.test.ts`: with two Giants home games, the reply names the next one and
 never asks which. It fails without the fix.
+
+## 90. "Any cheap tickets … tonight?" goes ahead on two, says the event once, and with no data says where to look (Oct 20)
+
+Two live emails, Oct 20, "can you find any cheap tickets to tallest man on earth at webster hall tonight?":
+1. "You're after The Tallest Man On Earth tickets for Tuesday, October 20." then "That's The Tallest Man on Earth at
+   Webster Hall in New York, tonight at 9 p.m." then "How many tickets do you need, and do they need to be together?"
+2. After the count: "I don't have seats to recommend yet that meet what you asked for: gA standing." as the headline, then
+   "Ticketmaster also lists it…", "I can't see live resale listings for this show yet…" and two questions.
+
+**Decisions.**
+- **"Cheap tickets" is a price question** (`PRICE_ASKED`: "any/some/the cheap(est) tickets/seats", "any affordable
+  tickets"). A price question already goes ahead on two, said once, and with nothing read gets the price answer: no resale
+  prices for the show right now, the StubHub and Vivid Seats pages, send a price you find. "Find the best tickets" is not
+  one: "best" still asks the goal.
+- **No list of unchecked requirements when nothing was read.** C_REQS stays out wherever the price answer speaks; a
+  requirement at a general-admission show ("GA standing") said nothing.
+- **Acronyms keep their capitals** when a requirement is lowercased into a sentence ("GA standing", not "gA standing").
+- **"Ticketmaster lists it as on general sale"**, without an "also" that pointed at nothing.
+- **The event is said once**: with the event settled, "That's … tonight at 9 p.m." opens the clarification and the request
+  isn't played back above it. With a "doesn't fit" note, the play-back stays: it carries the party and needs.
+- **Not changed:** a bare request with no count and no price question ("Rangers tickets on Oct 3 please") still asks how
+  many, folded into one question. Assuming two everywhere broke the "best tickets" goal question, the screenshot-count
+  ask and the three-rounds hand-off (16 tests); that is a product decision to take separately, with the eval.
+
+**Why no data for this show** (not changed here): a small club show may not be on SeatData at all, may not have matched
+on the first request, or the day's calls may have run out. The request page's market section and
+`scripts/diagnose-market-tracking.ts` say which.
+
+**Eval:** `cheap-tickets-show-no-count` (core), the same shape on a world show.
+
+**Verified:** `tests/unit/cheap-tonight-1020.test.ts` (price question, no C_REQS or coverage line with the price answer,
+"GA" kept, the event named once; the last fails without the fix).
