@@ -29,6 +29,10 @@ export const CORE: Scenario[] = [
   // Live email, Oct 19, the customer's exact words, typo included: "nest" is "next". The reply played back "Giants tickets
   // nest home game. Got it." and asked which of two games; the answer is the next home game.
   { id: 'next-home-game-typo', capability: 'event-discovery', tags: ['live'], steps: [{ text: 'when is the nest home game for the giants?', expect: { eventId: EV.giantsCowboys, mustMentionAny: ['Oct 4', 'October 4'], forbid: ['Which game', 'Got it', 'nest'] } }] },
+  // Live email, Oct 20: "can you find any cheap tickets to tallest man on earth at webster hall tonight?" got "How many
+  // tickets do you need?" for a show that night, then a no-data reply headed "…what you asked for: gA standing". Same
+  // shape on a world show: cheap tickets for one show, no count. Two is assumed and said; never asked, never "gA".
+  { id: 'cheap-tickets-show-no-count', capability: 'recommendation', tags: ['live'], now: '2027-01-13T17:00:00Z', steps: [{ text: 'can you find any cheap tickets to bruno mars at the forum tonight?', expect: { eventId: EV.brunoForum, quantity: 2, forbid: ['How many tickets', 'gA ', 'You’re after'] } }] },
   // Live email, Oct 13 (that run was hit by the tracing outage).
   { id: 'next-game-question', capability: 'event-discovery', tags: ['live'], steps: [{ text: 'when is the next rangers game in new york?', expect: { eventId: EV.rangersPreseason, mustMentionAny: ['Oct 3', 'October 3', '10/3'] } }] },
   // Live thread, Oct 15 14:06-14:21 ET. Steps 3 and 4 are the customer's exact words; steps 1 and 2 are paraphrased
